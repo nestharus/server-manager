@@ -1,0 +1,41 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+uv.lock
+
+# JavaScript / TypeScript
+node_modules/
+.turbo/
+bun.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+.tmp/
+.refs/
+
+# Pre-research legacy code (kept in repo for reference but not part of the new architecture)
+# daemon/ and forms/ are historical artifacts from before the research-first workflow
