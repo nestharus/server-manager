@@ -184,6 +184,115 @@ def serialize_embed(embed: Any) -> dict[str, Any]:
     }
 
 
+def list_or_empty(value: Any) -> list[Any]:
+    if value is None:
+        return []
+
+    try:
+        return list(value)
+    except TypeError:
+        return []
+
+
+def serialize_partial_emoji(emoji: Any) -> dict[str, Any] | None:
+    if emoji is None:
+        return None
+
+    return {
+        "name": getattr(emoji, "name", None),
+        "id": getattr(emoji, "id", None),
+        "animated": bool(getattr(emoji, "animated", False)),
+    }
+
+
+def serialize_select_option(option: Any) -> dict[str, Any]:
+    return {
+        "label": getattr(option, "label", None),
+        "value": getattr(option, "value", None),
+        "description": getattr(option, "description", None),
+        "emoji": serialize_partial_emoji(getattr(option, "emoji", None)),
+        "default": bool(getattr(option, "default", False)),
+    }
+
+
+def serialize_select_default_value(value: Any) -> dict[str, Any]:
+    value_type = getattr(value, "type", None)
+    return {
+        "id": getattr(value, "id", None),
+        "type": safe_str(getattr(value_type, "name", value_type)),
+    }
+
+
+def serialize_button(component: Any) -> dict[str, Any]:
+    component_type = getattr(component, "type", None)
+    style = getattr(component, "style", None)
+
+    return {
+        "type": safe_str(getattr(component_type, "name", component_type)),
+        "id": getattr(component, "id", None),
+        "custom_id": getattr(component, "custom_id", None),
+        "label": getattr(component, "label", None),
+        "style": safe_str(getattr(style, "name", style)),
+        "emoji": serialize_partial_emoji(getattr(component, "emoji", None)),
+        "disabled": bool(getattr(component, "disabled", False)),
+        "url": getattr(component, "url", None),
+        "sku_id": getattr(component, "sku_id", None),
+    }
+
+
+def serialize_select_menu(component: Any) -> dict[str, Any]:
+    component_type = getattr(component, "type", None)
+    type_name = safe_str(getattr(component_type, "name", component_type))
+    if type_name == "select":
+        type_name = "string_select"
+
+    return {
+        "type": type_name,
+        "id": getattr(component, "id", None),
+        "custom_id": getattr(component, "custom_id", None),
+        "placeholder": getattr(component, "placeholder", None),
+        "min_values": getattr(component, "min_values", None),
+        "max_values": getattr(component, "max_values", None),
+        "disabled": bool(getattr(component, "disabled", False)),
+        "options": [serialize_select_option(option) for option in list_or_empty(getattr(component, "options", None))],
+        "channel_types": [
+            safe_str(getattr(channel_type, "name", channel_type))
+            for channel_type in list_or_empty(getattr(component, "channel_types", None))
+        ],
+        "default_values": [
+            serialize_select_default_value(value)
+            for value in list_or_empty(getattr(component, "default_values", None))
+        ],
+    }
+
+
+def serialize_component_fallback(component: Any) -> dict[str, Any]:
+    component_type = getattr(component, "type", None)
+    return {
+        "type": safe_str(getattr(component_type, "name", component_type)),
+        "id": getattr(component, "id", None),
+    }
+
+
+def serialize_action_row(component: Any) -> dict[str, Any]:
+    component_type = getattr(component, "type", None)
+    return {
+        "type": safe_str(getattr(component_type, "name", component_type)),
+        "id": getattr(component, "id", None),
+        "children": [serialize_component(child) for child in list_or_empty(getattr(component, "children", None))],
+    }
+
+
+def serialize_component(component: Any) -> dict[str, Any]:
+    if isinstance(component, discord.ActionRow):
+        return serialize_action_row(component)
+    if isinstance(component, discord.Button):
+        return serialize_button(component)
+    if isinstance(component, discord.SelectMenu):
+        return serialize_select_menu(component)
+    return serialize_component_fallback(component)
+
+
 def serialize_message(message: Any) -> dict[str, Any]:
     return {
         "id": message.id,
@@ -193,6 +302,7 @@ def serialize_message(message: Any) -> dict[str, Any]:
         "content": getattr(message, "content", None),
         "attachments": [serialize_attachment(item) for item in getattr(message, "attachments", [])],
         "embeds": [serialize_embed(item) for item in getattr(message, "embeds", [])],
+        "components": [serialize_component(item) for item in list_or_empty(getattr(message, "components", None))],
         "pinned": bool(getattr(message, "pinned", False)),
         "tts": bool(getattr(message, "tts", False)),
         "type": safe_str(getattr(message, "type", None)),
