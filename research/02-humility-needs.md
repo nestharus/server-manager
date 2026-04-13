@@ -7,6 +7,7 @@ and the emerging OCR requirement.
 ## Source material
 
 - `research/01-problem-space.md` — broad problem-space taxonomy
+- `research/04-ocr-backends.md` — OCR backend comparison and shortlist
 - `NOTES.md` — discovered server facts from inspection
 - `DECISIONS.md#D4` — MVP scope answers from user
 - User conversation — activity tracking, waitlists, officer structure
@@ -104,12 +105,14 @@ done by hand in spreadsheets.
 - Activity rules are per-chapter configuration (stored in DB, not YAML —
   officers edit from Discord, not Git)
 
-**OCR backend**: *Pending*. A dedicated research pass
-(`research/04-ocr-backends.md`) is comparing Tesseract, PaddleOCR,
-EasyOCR, hosted Vision APIs, and Claude/Gemini Vision. Backend selection
-is blocked on that report. The proposal should treat OCR as an
-abstraction boundary — a pluggable extraction service whose concrete
-backend is decided after research lands.
+**OCR backend**: Research is now complete
+(`research/04-ocr-backends.md`). The strongest shortlist is:
+**PaddleOCR** as the best self-hosted candidate to benchmark first,
+**Google Cloud Vision** as the best managed OCR baseline, and **one
+LLM-vision track** (`Gemini Vision` or `Claude Vision`) as a
+structured-extraction comparison with strict verification. The proposal
+should keep OCR as an abstraction boundary and defer the final backend
+choice until Humility benchmarks a retained corpus of real screenshots.
 
 ## Open questions resolved
 
@@ -145,3 +148,12 @@ Activity tracking implies:
 - OCR → external API or self-hosted costs (TBD pending backend research)
 - Web UI is v1 scope → need frontend stack decision
 - Cloud-hosted daemon → stateless container + managed database
+
+## Proposal-stage OCR decision boundary
+
+1. **OCR backend choice** — research is complete. Candidates narrowed
+   to: (a) a classical OCR path centered on `PaddleOCR`; (b) a managed
+   OCR baseline using `Google Cloud Vision`; (c) one LLM-vision
+   comparative track (`Gemini Vision` or `Claude Vision`) with strict
+   verification. Final backend selection still requires corpus-based
+   evaluation and is not settled in synthesis.
