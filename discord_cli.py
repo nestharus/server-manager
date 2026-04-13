@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 ENV_PATH = Path(__file__).with_name(".env")
 MAX_READ_LIMIT = 200
 DEFAULT_READ_LIMIT = 50
+GATEWAY_TIMEOUT_SECONDS = 30
 
 load_dotenv(ENV_PATH)
 
@@ -312,7 +313,17 @@ async def run_gateway_command(
         finally:
             await client.close()
 
-    await client.start(token, reconnect=False)
+    try:
+        await asyncio.wait_for(
+            client.start(token, reconnect=False),
+            timeout=GATEWAY_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        await client.close()
+        raise CLIError(
+            "timeout_error",
+            f"Gateway connection timed out after {GATEWAY_TIMEOUT_SECONDS}s",
+        )
 
     if "error" in result:
         raise result["error"]

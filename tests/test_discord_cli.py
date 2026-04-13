@@ -499,3 +499,38 @@ def test_run_gateway_command_propagates_handler_errors_and_still_closes_client(m
         run(discord_cli.run_gateway_command(handler))
 
     close_spy.assert_awaited_once()
+
+
+def test_run_gateway_command_raises_cli_error_on_gateway_timeout(monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "token")
+    monkeypatch.setenv("DISCORD_GUILD_ID", "900000000000000001")
+
+    close_spy = AsyncMock()
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self._events = {}
+
+        def event(self, fn):
+            self._events[fn.__name__] = fn
+            return fn
+
+        def get_guild(self, guild_id):
+            return None
+
+        async def close(self):
+            await close_spy()
+
+        async def start(self, token, reconnect=False):
+            await asyncio.sleep(999)
+
+    monkeypatch.setattr(discord_cli.discord, "Client", FakeClient)
+    monkeypatch.setattr(discord_cli, "GATEWAY_TIMEOUT_SECONDS", 0.1)
+
+    async def handler(client, resolved_guild):
+        return {"status": "ok"}
+
+    with pytest.raises(discord_cli.CLIError, match="timed out"):
+        run(discord_cli.run_gateway_command(handler))
+
+    close_spy.assert_awaited_once()
