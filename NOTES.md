@@ -15,3 +15,4 @@
   - `channels` and `overview` primarily depend on `Intents.guilds` and guild/cache state.
   - `read` centers on `abc.Messageable.history()` and documented channel permissions like `read_message_history`; the gathered docs did not establish `Intents.message_content` as a `history()` requirement.
   - `integrations` centers on `Guild.integrations()` plus `manage_guild`; `Intents.integrations` only affects integration gateway events.
+  - Phase 7 roles research: `guild.roles` is populated from `GUILD_CREATE` under `Intents.guilds`; `Role.members` is cache-derived from `guild._members` and is incomplete without chunking or other member-cache population.
