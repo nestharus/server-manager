@@ -77,6 +77,39 @@ def make_channel(
     return channel
 
 
+def make_role(
+    *,
+    role_id,
+    name,
+    color,
+    hoist,
+    position,
+    permissions,
+    managed,
+    mentionable,
+    is_default,
+    is_bot_managed,
+    is_integration,
+    is_premium_subscriber,
+    created_at,
+):
+    role = Mock()
+    role.id = role_id
+    role.name = name
+    role.color = Mock(value=color)
+    role.hoist = hoist
+    role.position = position
+    role.permissions = Mock(value=permissions)
+    role.managed = managed
+    role.mentionable = mentionable
+    role.created_at = created_at
+    role.is_default = Mock(return_value=is_default)
+    role.is_bot_managed = Mock(return_value=is_bot_managed)
+    role.is_integration = Mock(return_value=is_integration)
+    role.is_premium_subscriber = Mock(return_value=is_premium_subscriber)
+    return role
+
+
 @pytest.fixture
 def parser():
     return discord_cli.build_parser()
@@ -86,14 +119,53 @@ def parser():
 def guild_fixture():
     created_at = datetime(2022, 4, 1, 12, 30, tzinfo=timezone.utc)
     joined_at = datetime(2023, 1, 2, 8, 15, tzinfo=timezone.utc)
+    role_created_at = datetime(2022, 5, 6, 9, 45, tzinfo=timezone.utc)
 
-    helper_role = Mock()
-    helper_role.id = 10
-    helper_role.name = "Helper"
-
-    bot_role = Mock()
-    bot_role.id = 20
-    bot_role.name = "Bots"
+    everyone_role = make_role(
+        role_id=1,
+        name="@everyone",
+        color=0,
+        hoist=False,
+        position=0,
+        permissions=1,
+        managed=False,
+        mentionable=False,
+        is_default=True,
+        is_bot_managed=False,
+        is_integration=False,
+        is_premium_subscriber=False,
+        created_at=role_created_at,
+    )
+    helper_role = make_role(
+        role_id=10,
+        name="Helper",
+        color=65280,
+        hoist=True,
+        position=2,
+        permissions=8,
+        managed=False,
+        mentionable=True,
+        is_default=False,
+        is_bot_managed=False,
+        is_integration=False,
+        is_premium_subscriber=False,
+        created_at=role_created_at,
+    )
+    bot_role = make_role(
+        role_id=20,
+        name="Bots",
+        color=1193046,
+        hoist=False,
+        position=1,
+        permissions=16,
+        managed=True,
+        mentionable=False,
+        is_default=False,
+        is_bot_managed=True,
+        is_integration=True,
+        is_premium_subscriber=True,
+        created_at=role_created_at,
+    )
 
     owner = make_member(
         member_id=1,
@@ -230,7 +302,7 @@ def guild_fixture():
     guild.member_count = 42
     guild.channels = [general, support, voice]
     guild.threads = [thread]
-    guild.roles = [helper_role, bot_role]
+    guild.roles = [everyone_role, helper_role, bot_role]
     guild.members = [owner, human, bot_one, bot_two]
     guild.premium_tier = 2
     guild.premium_subscription_count = 5
@@ -249,6 +321,11 @@ def guild_fixture():
         "thread": thread,
         "messages": [first_message, second_message],
         "integration": integration,
+        "roles": {
+            "everyone": everyone_role,
+            "helper": helper_role,
+            "bot": bot_role,
+        },
     }
 
 
@@ -300,6 +377,7 @@ def test_build_parser_recognizes_all_contract_subcommands(parser):
         "find-channel",
         "read",
         "integrations",
+        "roles",
     }
 
 
@@ -314,6 +392,12 @@ def test_read_subcommand_accepts_channel_and_optional_limit(parser):
     assert parsed.command == "read"
     assert parsed.channel == "general"
     assert parsed.limit == 25
+
+
+def test_roles_subcommand_is_recognized(parser):
+    parsed = parser.parse_args(["roles"])
+
+    assert parsed.command == "roles"
 
 
 def test_overview_handler_returns_expected_contract_fields(guild_fixture):
@@ -421,6 +505,89 @@ def test_integrations_handler_returns_type_and_enabled_status(guild_fixture):
     assert result["integrations"][0]["id"] == integration.id
     assert result["integrations"][0]["type"] == integration.type
     assert result["integrations"][0]["enabled"] is True
+
+
+def test_roles_handler_is_public_async(guild_fixture):
+    handler = require_public_handler("roles")
+
+    assert handler is not None
+
+
+def test_roles_handler_returns_role_count(guild_fixture):
+    handler = require_public_handler("roles")
+    guild = guild_fixture["guild"]
+
+    result = run(handler(guild, argparse.Namespace()))
+
+    assert result["count"] == len(guild.roles)
+    assert len(result["roles"]) == len(guild.roles)
+
+
+def test_roles_handler_serializes_role_fields(guild_fixture):
+    handler = require_public_handler("roles")
+    guild = guild_fixture["guild"]
+    helper_role = guild_fixture["roles"]["helper"]
+
+    result = run(handler(guild, argparse.Namespace()))
+    helper_entry = next(entry for entry in result["roles"] if entry["id"] == helper_role.id)
+
+    assert helper_entry["id"] == helper_role.id
+    assert isinstance(helper_entry["id"], int)
+    assert helper_entry["name"] == helper_role.name
+    assert isinstance(helper_entry["name"], str)
+    assert helper_entry["color"] == helper_role.color.value
+    assert isinstance(helper_entry["color"], int)
+    assert helper_entry["hoist"] is helper_role.hoist
+    assert isinstance(helper_entry["hoist"], bool)
+    assert helper_entry["position"] == helper_role.position
+    assert isinstance(helper_entry["position"], int)
+    assert helper_entry["permissions"] == helper_role.permissions.value
+    assert isinstance(helper_entry["permissions"], int)
+    assert helper_entry["managed"] is helper_role.managed
+    assert isinstance(helper_entry["managed"], bool)
+    assert helper_entry["mentionable"] is helper_role.mentionable
+    assert isinstance(helper_entry["mentionable"], bool)
+
+
+def test_roles_handler_includes_boolean_helpers(guild_fixture):
+    handler = require_public_handler("roles")
+    guild = guild_fixture["guild"]
+    everyone_role = guild_fixture["roles"]["everyone"]
+    bot_role = guild_fixture["roles"]["bot"]
+
+    result = run(handler(guild, argparse.Namespace()))
+    role_entries = {entry["id"]: entry for entry in result["roles"]}
+
+    everyone_entry = role_entries[everyone_role.id]
+    assert everyone_entry["is_default"] is True
+    assert isinstance(everyone_entry["is_default"], bool)
+    assert everyone_entry["is_bot_managed"] is False
+    assert isinstance(everyone_entry["is_bot_managed"], bool)
+    assert everyone_entry["is_integration"] is False
+    assert isinstance(everyone_entry["is_integration"], bool)
+    assert everyone_entry["is_premium_subscriber"] is False
+    assert isinstance(everyone_entry["is_premium_subscriber"], bool)
+
+    bot_entry = role_entries[bot_role.id]
+    assert bot_entry["is_default"] is False
+    assert isinstance(bot_entry["is_default"], bool)
+    assert bot_entry["is_bot_managed"] is True
+    assert isinstance(bot_entry["is_bot_managed"], bool)
+    assert bot_entry["is_integration"] is True
+    assert isinstance(bot_entry["is_integration"], bool)
+    assert bot_entry["is_premium_subscriber"] is True
+    assert isinstance(bot_entry["is_premium_subscriber"], bool)
+
+
+def test_roles_handler_serializes_created_at_iso8601(guild_fixture):
+    handler = require_public_handler("roles")
+    guild = guild_fixture["guild"]
+    helper_role = guild_fixture["roles"]["helper"]
+
+    result = run(handler(guild, argparse.Namespace()))
+    helper_entry = next(entry for entry in result["roles"] if entry["id"] == helper_role.id)
+
+    assert helper_entry["created_at"] == helper_role.created_at.isoformat()
 
 
 def test_run_gateway_command_closes_client_on_success(monkeypatch):

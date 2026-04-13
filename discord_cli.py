@@ -225,6 +225,24 @@ def serialize_integration(integration: Any) -> dict[str, Any]:
     }
 
 
+def serialize_role(role: Any) -> dict[str, Any]:
+    return {
+        "id": role.id,
+        "name": role.name,
+        "color": role.color.value,
+        "hoist": role.hoist,
+        "position": role.position,
+        "permissions": role.permissions.value,
+        "managed": role.managed,
+        "mentionable": role.mentionable,
+        "is_default": role.is_default(),
+        "is_bot_managed": role.is_bot_managed(),
+        "is_integration": role.is_integration(),
+        "is_premium_subscriber": role.is_premium_subscriber(),
+        "created_at": iso_or_none(getattr(role, "created_at", None)),
+    }
+
+
 def combined_channels(guild: discord.Guild) -> list[Any]:
     return [*list(getattr(guild, "channels", [])), *list(getattr(guild, "threads", []))]
 
@@ -414,6 +432,14 @@ async def fetch_integrations(guild: discord.Guild, _: argparse.Namespace) -> dic
     }
 
 
+async def fetch_roles(guild: discord.Guild, _: argparse.Namespace) -> dict[str, Any]:
+    roles = [serialize_role(role) for role in getattr(guild, "roles", [])]
+    return {
+        "count": len(roles),
+        "roles": roles,
+    }
+
+
 def command_specs() -> dict[str, Callable[[discord.Guild, argparse.Namespace], Awaitable[dict[str, Any]]]]:
     return {
         "overview": fetch_overview,
@@ -422,6 +448,7 @@ def command_specs() -> dict[str, Callable[[discord.Guild, argparse.Namespace], A
         "find-channel": fetch_find_channel,
         "read": fetch_read,
         "integrations": fetch_integrations,
+        "roles": fetch_roles,
     }
 
 
@@ -447,6 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("bots", "List bot members"),
         ("channels", "List guild channels and threads"),
         ("integrations", "List guild integrations"),
+        ("roles", "List guild roles"),
     ):
         subparser = subparsers.add_parser(name, help=help_text)
         subparser.set_defaults(func=run_command)
