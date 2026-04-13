@@ -1,6 +1,6 @@
 # NOTES.md - agent-maintained log of discovered facts
 
-Last updated: 2026-04-13
+Last updated: 2026-04-11
 
 ## Guild
 
@@ -8,37 +8,41 @@ Last updated: 2026-04-13
 - ID: `900000000000000001`
 - Owner: `nestharus` (user id `900000000000000002`)
 - Created: 2022-04-04
-- Member count during this sweep: 83
+- Member count during the original sweep: 83
 - Premium tier: 1
 
-## Bots and Integrations
+## Ticketing
 
-- 12 bots observed during the sweep.
-- HumilityTicketBot matches ticketsbot.net on Discord-side identity: app/bot id `954933581501849610`.
-- Redundant bot pairs called out by the original AI:
-  - Apollo + sesh for calendar/events
-  - Hydra + Zira for reaction-role or form-related automation
-- Multiple bot records showed duplicated `Robots` role names in their member-role lists.
-
-## Tickets Investigation
-
-- `#support` contains a `2023-12-22` HumilityTicketBot panel embed titled `Click to open a ticket`.
-- `#support` topic is `Create a support ticket here.`
-- `#support` had no restrictive overwrite during the sweep; only `@everyone` with `allow: 0` and `deny: 0`.
+- `ticketsbot.net` was discontinued on `2025-03-05`.
+- `panel.ticketsbot.net` returned `404` for the user during this investigation.
+- `#support` contains a `2023-12-22` HumilityTicketBot embed titled `Click to open a ticket`.
 - `#panels` contains a `2022-04-04` HumilityTicketBot embed titled `General Support`.
+- `#ticket-logs` contains only a small number of historical tickets, including ticket `3` on `2025-04-11` opened by `nestharus`.
 - `#templates` was empty during the sweep.
-- `#ticket-logs` showed historical tickets including ticket `3` on `2025-04-11`, opened by `nestharus`.
-- Ticket `1` had an archive link on `panel.ticketsbot.net`; newer tickets did not, suggesting transcript/archive behavior changed after 2022.
 
-## Gather and First-Party Applications
+## Bot Activity Audit
 
-- Gather is managed through `gather.sh` and is externally controlled via Discord OAuth, not through Discord messages the agent can edit.
-- The agent can inspect Gather's Discord-side footprint, but not its internal dashboard configuration.
-- A first-party replacement would need an `applications` subsystem in this repo so forms can be defined in-repo and managed through code.
+- Hydra (`547905866255433758`): zero visible messages across the scanned channels.
+- Gather (`868195275464900618`): zero visible messages across the scanned channels.
+- Apollo (`475744554910351370`): zero visible messages across the scanned channels.
+- sesh (`616754792965865495`): 2 visible messages, both in `#moderation-commands`, both promotional/premium notices.
+- Zira (`275813801792634880`): 15 visible messages, all in `#admin-chat`, consisting of old setup actions and premium notices.
 
-## CLI Research
+## Roles and Structure
 
-- `discord.py 2.7.1` exposes message history on `TextChannel`, `VoiceChannel`, `StageChannel`, and `Thread`, but not on `CategoryChannel` or `ForumChannel`.
-- In this repo, `combined_channels(guild)` mixes `guild.channels` and `guild.threads`, so any scan across "all channels" includes both history-capable objects and non-messageable containers.
-- `discord.abc.Messageable.history()` paginates in chunks of up to 100 messages per request and raises `discord.Forbidden` on unreadable channel history.
-- Forum activity lives on child threads, not on the forum container itself.
+- The staff stack starts with `Administrator`, `Moderator`, `Staff`, and `Trial Mod`.
+- The chapter stack includes `Chapter Officer`, `Chapter Member`, `Chapter Guild War`, `Chapter Applicant`, `Chapter`, and `Chapter Public`.
+- There are two separate `Robots` roles; one functions as the effective permissions container for bots and one is used as a hoisted visual separator.
+
+## Chapter Scaffolding
+
+- The `GUILD TEMPLATE` category is hidden from `@everyone` and exposed to chapter roles such as `Chapter Officer`.
+- The category contains structure for chapter operations, but the template channels are empty.
+- No evidence was found that real chapter applications or populated chapter spaces have ever been used.
+
+## Working Conclusions
+
+- The user wants bot-consolidation planning but does not want to rotate the bot token right now.
+- `Hydra`, `Apollo`, and `sesh` appear unused from Discord-visible evidence.
+- `Gather` has no Discord-visible activity, but it may still have external dashboard configuration.
+- A first-party applications subsystem should replace Gather only after the flow is designed and tested.
