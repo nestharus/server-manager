@@ -17,7 +17,6 @@ questions:
     label: What is your timezone?
     required: true
     options:
-      - UTC-12:00
       - UTC-11:00
       - UTC-10:00
       - UTC-09:00
@@ -43,7 +42,6 @@ questions:
       - UTC+11:00
       - UTC+12:00
       - UTC+13:00
-      - UTC+14:00
   - id: daily_events
     type: multi_select
     label: Which daily events do you attend?
