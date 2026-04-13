@@ -15,5 +15,9 @@ dev = [
     "pytest",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+only-include = ["discord_cli.py", "daemon"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]

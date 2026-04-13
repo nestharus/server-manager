@@ -73,3 +73,23 @@ Last updated: 2026-04-13
 - The planned daemon features directly imply the `guilds` and `members` intents. The current design does not directly imply `message_content`, even though `discord_cli.py` enables it for read-only inspection commands.
 - `discord.py` slash commands live on `app_commands.CommandTree`; the local docs say `CommandTree.sync()` must be called for commands to appear, and `app_commands.guilds(...)` determines whether commands sync as guild commands rather than global ones.
 - The current env split is: `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID` are loaded in `discord_cli.py` via `.env`, `DATABASE_PATH` is resolved in `daemon/db.py`, and repo YAML remains separate in `daemon/config.py`.
+
+## Applications Research
+
+- Research note `research/18-applications.md` captures the current applications-subsystem problem space for the planned `daemon/applications.py` module without proposing an implementation.
+- Current Discord docs and installed `discord.py 2.7.1` no longer support the old assumption that modals are text-only: the newer component docs and local library source both document select components inside modals, even though `docs/DAEMON_DESIGN.md` still describes selects as follow-up-only.
+- Discord’s interaction callback rules do not allow `MODAL` as a direct response to `MODAL_SUBMIT`, so the design doc’s `modal -> select menus -> modal -> etc.` language is only valid when the later modal is opened from a subsequent component interaction rather than directly from the modal submission itself.
+- Discord’s thread creation APIs treat message-attached threads as public or announcement threads; private threads are created without a source message. That conflicts with the current design phrase "private thread off that message".
+- `daemon/applications.py` now exists with the smoke-test contract: `ApplicationModal`, `ApplicationReviewView`, and async `setup_applications(bot)`.
+- `ApplicationReviewView(submission_id)` is implemented as a persistent `timeout=None` view with four direct buttons using `app:<action>:<submission_id>` custom IDs for `claim`, `interview`, `approve`, and `deny`.
+- `daemon/db.py` now exposes the application-flow helpers the proposal expects: `create_submission(...) -> int`, `update_submission_refs(...)`, `transition_submission_status(...) -> bool`, `load_active_submission_ids()`, and `has_active_submission()`.
+
+## Package Entry Research
+
+- Research note `research/19-daemon-main.md` captures the package-entry problem space for moving the deleted root `daemon.py` behavior into `daemon/__main__.py` without proposing an implementation.
+- Hookpoint note `research/19-hookpoints.md` narrows the exact port surface: carry forward the deleted `daemon.py` constants, import-time `.env` load, `RuntimeConfig`, `get_runtime_config()`, `build_intents()`, bot-owned startup state, `/ping`, and `main()` orchestration into `daemon/__main__.py`, with only three intended changes: `BASE_PATH/ENV_PATH` shift to `parent.parent`, `HumilityDaemonBot` renames to `HumilityBot`, and `setup_hook()` must call `setup_applications(self)` before guild sync.
+- The only remaining live coupling to the deleted root `daemon.py` is `tests/test_daemon_entry.py` loading it by filesystem path; there are no other runtime imports of the old root file, while live code now points at `daemon.__main__` through the `TYPE_CHECKING` import in `daemon.applications`.
+- The current live import pressure is `daemon.applications` type-checking against `from daemon.__main__ import HumilityBot`; the old deleted class name was `HumilityDaemonBot`, but the visible old tests only require exactly one `commands.Bot` subclass and do not constrain its name.
+- Local Python 3.12.3 runtime checks confirmed that `python -m daemon` executes `daemon/__main__.py` with `__name__ == "__main__"` and `__package__ == "daemon"`.
+- The same local checks also confirmed a subtle hazard: during `python -m daemon`, a later runtime import of `daemon.__main__` can execute the file a second time under the module name `daemon.__main__`, producing a second module instance and re-running top-level side effects such as `load_dotenv()`.
+- `docs/DAEMON_DESIGN.md` and its Railway start example still describe the old root-file launch path (`daemon.py`, `python daemon.py`); those references remain useful as behavior documentation but are stale as the final execution path.

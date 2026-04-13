@@ -1,5 +1,5 @@
 import asyncio
-import importlib.util
+import importlib
 import inspect
 import sys
 from pathlib import Path
@@ -15,9 +15,9 @@ except ModuleNotFoundError:  # pragma: no cover - dependency should exist in nor
     commands = None
 
 
-DAEMON_ENTRY_PATH = Path(__file__).resolve().parents[1] / "daemon.py"
-EXPECTED_ENV_PATH = DAEMON_ENTRY_PATH.with_name(".env")
-EXPECTED_BASE_PATH = DAEMON_ENTRY_PATH.resolve().parent
+DAEMON_MODULE_NAME = "daemon.__main__"
+EXPECTED_BASE_PATH = Path(__file__).resolve().parents[1]
+EXPECTED_ENV_PATH = EXPECTED_BASE_PATH / ".env"
 EXPECTED_GUILD_ID = 900000000000000001
 
 
@@ -26,26 +26,18 @@ def run(coro):
 
 
 def import_daemon_entry(monkeypatch, *, dotenv_loader=None):
-    if not DAEMON_ENTRY_PATH.exists():
-        pytest.fail(f"Could not import daemon.py: {DAEMON_ENTRY_PATH} does not exist")
-
     loader = dotenv_loader or Mock()
     monkeypatch.setattr("dotenv.load_dotenv", loader)
 
-    module_name = "daemon_entry_under_test"
+    module_name = DAEMON_MODULE_NAME
     sys.modules.pop(module_name, None)
-
-    spec = importlib.util.spec_from_file_location(module_name, DAEMON_ENTRY_PATH)
-    if spec is None or spec.loader is None:  # pragma: no cover - defensive
-        pytest.fail(f"Could not import daemon.py: missing module spec for {DAEMON_ENTRY_PATH}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
+    sys.modules.pop(module_name.split(".", 1)[0], None)
+    importlib.invalidate_caches()
 
     try:
-        spec.loader.exec_module(module)
+        module = importlib.import_module(module_name)
     except Exception as exc:  # pragma: no cover - import failures should fail loudly
-        pytest.fail(f"Could not import daemon.py: {exc!r}")
+        pytest.fail(f"Could not import {module_name}: {exc!r}")
 
     return module, loader
 
@@ -55,11 +47,13 @@ def require_runtime_config_loader(module):
         loader = getattr(module, name, None)
         if loader is not None:
             if not callable(loader):
-                pytest.fail(f"daemon.py {name} must be callable")
+                pytest.fail(f"{DAEMON_MODULE_NAME} {name} must be callable")
             return loader
     pytest.fail(
         "Missing expected config helper. Tried: "
-        "daemon.py:get_config, daemon.py:get_runtime_config, daemon.py:load_runtime_config"
+        f"{DAEMON_MODULE_NAME}:get_config, "
+        f"{DAEMON_MODULE_NAME}:get_runtime_config, "
+        f"{DAEMON_MODULE_NAME}:load_runtime_config"
     )
 
 
@@ -68,27 +62,24 @@ def require_intents_builder(module):
         builder = getattr(module, name, None)
         if builder is not None:
             if not callable(builder):
-                pytest.fail(f"daemon.py {name} must be callable")
+                pytest.fail(f"{DAEMON_MODULE_NAME} {name} must be callable")
             return builder
-    pytest.fail("Missing expected intents helper. Tried: daemon.py:build_intents, daemon.py:make_intents")
+    pytest.fail(
+        "Missing expected intents helper. Tried: "
+        f"{DAEMON_MODULE_NAME}:build_intents, {DAEMON_MODULE_NAME}:make_intents"
+    )
 
 
 def require_bot_subclass(module):
     if commands is None:  # pragma: no cover - defensive
         pytest.fail("discord.ext.commands is required for daemon entry tests")
 
-    matches = [
-        (name, value)
-        for name, value in vars(module).items()
-        if inspect.isclass(value) and issubclass(value, commands.Bot) and value is not commands.Bot
-    ]
-
-    if not matches:
-        pytest.fail("daemon.py must define a commands.Bot subclass for startup-owned state")
-    if len(matches) > 1:
-        names = ", ".join(name for name, _ in matches)
-        pytest.fail(f"daemon.py defines multiple Bot subclasses; expected exactly one. Found: {names}")
-    return matches[0]
+    bot_type = getattr(module, "HumilityBot", None)
+    if bot_type is None:
+        pytest.fail(f"{DAEMON_MODULE_NAME} must export HumilityBot")
+    if not inspect.isclass(bot_type) or not issubclass(bot_type, commands.Bot) or bot_type is commands.Bot:
+        pytest.fail(f"{DAEMON_MODULE_NAME}.HumilityBot must be a commands.Bot subclass")
+    return "HumilityBot", bot_type
 
 
 def patch_attr_if_present(monkeypatch, owner, name, replacement):
@@ -173,7 +164,7 @@ def test_build_intents_enables_guilds_and_members_without_message_content(monkey
 
 def test_main_uses_repo_root_default_database_path_and_always_closes_db(monkeypatch):
     module, _ = import_daemon_entry(monkeypatch)
-    bot_class_name, _ = require_bot_subclass(module)
+    require_bot_subclass(module)
 
     sentinel_config = object()
     connection = Mock()
@@ -191,7 +182,9 @@ def test_main_uses_repo_root_default_database_path_and_always_closes_db(monkeypa
     monkeypatch.setattr("daemon.db.open_database", open_database)
     monkeypatch.setattr("daemon.db.close_database", close_database)
 
-    forbidden_resolver = Mock(side_effect=AssertionError("daemon.py must not call resolve_database_config()"))
+    forbidden_resolver = Mock(
+        side_effect=AssertionError(f"{DAEMON_MODULE_NAME} must not call resolve_database_config()")
+    )
     patch_attr_if_present(monkeypatch, module, "resolve_database_config", forbidden_resolver)
     monkeypatch.setattr("daemon.db.resolve_database_config", forbidden_resolver)
 
@@ -211,7 +204,7 @@ def test_main_uses_repo_root_default_database_path_and_always_closes_db(monkeypa
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(module, bot_class_name, FakeBot)
+    monkeypatch.setattr(module, "HumilityBot", FakeBot)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "token")
     monkeypatch.setenv("DISCORD_GUILD_ID", str(EXPECTED_GUILD_ID))
     monkeypatch.delenv("DATABASE_PATH", raising=False)
@@ -239,7 +232,7 @@ def test_main_uses_repo_root_default_database_path_and_always_closes_db(monkeypa
 
 def test_main_prefers_database_path_from_environment(monkeypatch):
     module, _ = import_daemon_entry(monkeypatch)
-    bot_class_name, _ = require_bot_subclass(module)
+    require_bot_subclass(module)
 
     events = []
     db_path = Path("/tmp/custom-daemon.db")
@@ -286,7 +279,7 @@ def test_main_prefers_database_path_from_environment(monkeypatch):
             events.append(("exit_bot", exc_type))
             return False
 
-    monkeypatch.setattr(module, bot_class_name, FakeBot)
+    monkeypatch.setattr(module, "HumilityBot", FakeBot)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "token")
     monkeypatch.setenv("DISCORD_GUILD_ID", str(EXPECTED_GUILD_ID))
     monkeypatch.setenv("DATABASE_PATH", str(db_path))
