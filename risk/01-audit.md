@@ -5,84 +5,76 @@ Assessor: claude-opus (audit)
 
 ## Verdict
 
-**MEDIUM**
+**LOW**
 
-The proposal has strong structural controls — bounded mutation wrappers, saga-based provisioning, append-only audit intent, explicit claim-visibility helpers, and OCR hallucination checks — but two specific gaps require small, contained amendments before implementation: (1) no mechanism to prevent secrets from leaking into structured logs, audit event payloads, or exception tracebacks, and (2) no Discord API rate-limit handling or retry/backoff strategy for the bursty mutation paths (provisioning, reconciliation, role assignment). Both are fixable without a rewrite, but both have realistic operational blast radius if left unaddressed.
+The proposal demonstrates deliberate attention to the audit-risk surface. Credentials are env-var-only with explicit scrubbing rules for logs and audit rows. Visible Discord mutations are funneled through a single bounded wrapper with per-operation audit events. The OCR pipeline isolates failures from the gateway client. The main residual concerns are (a) audit-trail append-only semantics enforced by convention rather than DB constraint, (b) no per-invoker rate limit on OCR uploads, and (c) staging/production separation relying entirely on environment variables without a code-level guard. None of these concerns have a realistic exploit path that would cause data loss or security breach given the proposal's operational context: single-tenant, single-developer, trusted daemon as the only DB writer. Each concern is addressable with a contained proposal edit, not a rewrite.
 
 ## Findings
 
-### Finding 1 — Secret leakage into logs and audit events
+### Finding 1 — Audit trail append-only is convention, not enforced
 
 - **Severity**: MEDIUM
-- **Section of proposal**: §9 (Deployment — secrets management), §10 (Observability), §3 (Data model — `audit.audit_events`)
-- **Description**: The proposal stores `DISCORD_BOT_TOKEN`, `SUPABASE_SERVICE_KEY`, `GOOGLE_CLOUD_VISION_KEY`, and `GEMINI_API_KEY` as Railway env vars and reads them at runtime. §10 defines structured log fields that do not include secrets. However, `audit.audit_events` has `error_text TEXT` and `request_json JSONB` columns that capture mutation context. The mutation safety wrapper (§8) records a planned event before the operation and a succeeded/failed event after — including the error. An unhandled exception during a Discord REST call, a Supabase client call, or a Google/Gemini HTTP request could include authorization headers, connection strings, or API keys in the traceback string that lands in `error_text`. Similarly, `request_json` captures the request payload, but no boundary is defined between the raw HTTP request and what gets persisted.
-- **Why it matters**: A single unhandled exception during an authenticated API call could write a bot token or service key into a Postgres row. Anyone with DB read access — including future web dashboards, log exports, staging snapshots shared for debugging, or a compromised Supabase dashboard session — would see the credential. The bot token grants full Administrator-level access to the live Humility guild. The prior assessment rated this LOW by assuming modern drivers don't echo secrets in errors; that assumption is fragile. `httpx`, `aiohttp`, and `requests` all include the full URL (potentially with query-string API keys) in connection error messages. Google Vision and Gemini client libraries may include auth context in verbose error modes.
-- **Recommendation**: Add an explicit requirement that (a) the mutation wrapper sanitizes `error_text` by stripping known secret patterns and truncating raw tracebacks to application-level context, (b) `request_json` captures logical operation parameters (target IDs, intended state), never raw HTTP payloads or headers, and (c) structured log output passes through a secret-scrubbing filter before serialization. This is a small addition to §8 and §10, not a rewrite.
+- **Section of proposal**: §3, §8, §9
+- **Description**: `audit.audit_events` is described as "append-only by convention in v1." RLS is explicitly disabled. The daemon service role has unrestricted UPDATE and DELETE access to audit rows. No DB-level trigger, rule, or policy prevents mutation of historical audit records.
+- **Why it matters**: A code bug in the daemon (not an external attacker — the daemon is the only writer) could UPDATE or DELETE audit rows, silently destroying the safety-net trail that the mutation wrapper depends on for post-incident forensics. If a provisioning or role-mutation bug occurs and the same bug path corrupts the audit record, the operator loses both the safety control and the evidence of what happened.
+- **Recommendation**: Add a DB-level constraint. The simplest option is a row-level trigger on `audit.audit_events` that raises an exception on UPDATE or DELETE. Alternatively, grant the daemon's Supabase service role INSERT-only on the `audit` schema and use a separate restricted role for reads. This is a one-paragraph schema addition, not a rewrite.
 
-### Finding 2 — No Discord API rate-limit or retry strategy
-
-- **Severity**: MEDIUM
-- **Section of proposal**: §7 (Chapter provisioning), §5 (Tickets — transcript reconciliation), §8 (Shared infrastructure — mutation wrapper)
-- **Description**: The provisioning saga creates 6 roles, 1 category, multiple channels, applies per-channel overwrites, posts an application panel, and pins it — 15–25+ Discord REST calls in rapid succession. Ticket close-time transcript reconciliation (§5) fetches full thread message history, which can be paginated and bursty. The mutation safety wrapper (§8) records audit events around each call, but no mention is made of handling HTTP 429 responses, implementing exponential backoff, respecting `X-RateLimit-Remaining` headers, or queuing mutations to stay under per-route bucket limits.
-- **Why it matters**: Discord rate limits are per-route and per-resource. Role creation, channel creation, and permission overwrite updates each have tight per-guild limits. A provisioning run that hits a 429 without retry logic will leave the saga in a partially completed state with a `failed` step. The saga's resume path handles this, but the operator must manually intervene each time. Worse, if the wrapper retries naively without respecting `Retry-After`, the daemon could be temporarily banned from the route. A reconnect-loop bug (acknowledged in §10 metrics) that triggers reconciliation on each reconnect could amplify rate-limit pressure into sustained API lockout. The prior assessment rated this LOW by noting that saga resume handles failures; that's true for correctness but doesn't address the operational cost of frequent manual resume cycles or the risk of API-level penalties.
-- **Recommendation**: Add a requirement that the mutation wrapper includes rate-limit-aware retry with `Retry-After` header respect and per-route queuing. The provisioning saga should describe a pacing strategy (e.g., minimum inter-call delay for bulk create steps). This is a contained addition to §8 and §7.
-
-### Finding 3 — Audit trail append-only claim not enforced at DB level
+### Finding 2 — No per-invoker rate limit on OCR uploads
 
 - **Severity**: LOW
-- **Section of proposal**: §3 (Data model — `audit.audit_events`), §9 (Deployment — RLS disabled)
-- **Description**: The proposal states `audit.audit_events` is append-only. The schema defines the table with standard columns but no trigger, rule, or `REVOKE UPDATE, DELETE` preventing modification. §9 disables RLS in v1. The daemon's DB connection uses a service role with full DML privileges.
-- **Why it matters**: The append-only property is a code convention, not a database constraint. For v1 with a single writer this is acceptable — the convention holds if the code respects it. The risk escalates if a future web dashboard, migration script, or debugging session uses the same connection role.
-- **Recommendation**: Accept as written for v1, LOW severity. A `REVOKE UPDATE, DELETE ON audit.audit_events FROM <daemon_role>` during phase 0 implementation would close this cheaply. No proposal amendment required.
+- **Section of proposal**: §6 (Phase 2a)
+- **Description**: `/activity upload` copies the attachment to Supabase Storage, then dispatches to Google Cloud Vision. The proposal describes Discord rate-limit awareness for outbound mutations but does not describe any per-user, per-chapter, or per-time-window limit on inbound upload volume. An officer with upload permission could submit dozens of images in rapid succession.
+- **Why it matters**: Rapid uploads could exhaust Google Cloud Vision quota (1,000 free images/month, then billed), generate unexpected costs on the Gemini fallback path in Phase 2b, and create a backlog of review-required rows that degrades the officer workflow. The blast radius is contained to the activity subsystem (§10 confirms OCR failures don't crash the gateway), but cost and operator burden are real.
+- **Recommendation**: Add a sentence to §6 specifying a per-chapter or per-officer upload throttle (e.g., N uploads per chapter per hour) enforced at the command handler level before the image reaches storage or the OCR provider. Accept as LOW because the officer pool is small and trusted, and the mutation wrapper's blast-radius isolation already prevents cascading failure.
 
-### Finding 4 — No explicit image size or dimension limits before preprocessing
-
-- **Severity**: LOW
-- **Section of proposal**: §6 (Activity tracking — OCR pipeline steps 1–2)
-- **Description**: The OCR pipeline receives an image via slash command, copies it to Supabase Storage, then runs preprocessing that includes 2x upscale. No explicit pixel dimension or file size limit is stated before the upscale step. Discord's practical attachment limit is 25 MB, but a 25 MB PNG could decode to very large pixel dimensions. Upscaling 2x quadruples memory.
-- **Why it matters**: §10 says OCR runs in a bounded async task queue with timeouts and exception isolation, so a memory spike kills the task, not the gateway client. The blast radius is bounded. Repeated large uploads could still degrade daemon responsiveness within the task queue.
-- **Recommendation**: Accept as LOW given the task isolation in §10. The implementation should add a max pixel dimension check before upscale as a defensive measure. No proposal amendment required.
-
-### Finding 5 — Gemini prompt injection through adversarial image text
+### Finding 3 — Staging/production separation is env-var-only
 
 - **Severity**: LOW
-- **Section of proposal**: §6 (Activity tracking — OCR pipeline step 7)
-- **Description**: Gemini fallback receives the original image plus classical OCR text and a strict JSON schema prompt. Adversarial text embedded in a screenshot could attempt to manipulate the Gemini prompt.
-- **Why it matters**: The attack surface is narrow: only chapter officers can upload via `/activity upload`. The hallucination controls in step 8 validate output against independent structural evidence — quoted text must exist in OCR source, row counts must be consistent, scores must match format, and rows are checked against roster candidates. A prompt injection that bypasses all four validation layers simultaneously while producing valid JSON matching the strict schema is not a realistic attack.
-- **Recommendation**: Accept as LOW. The structural output validation is the correct defense. The implementation should use system-level instructions rather than user-level for the Gemini prompt to further reduce injection surface. No proposal amendment required.
+- **Section of proposal**: §9, §11
+- **Description**: Staging and production are distinguished solely by which `DISCORD_GUILD_ID` and `SUPABASE_DB_URL` values are set in environment variables. There is no code-level guard (e.g., a startup assertion that the connected guild ID matches an expected environment label, or a schema-level environment tag) to prevent a misconfigured local `.env` from pointing the daemon at the production guild and database simultaneously.
+- **Why it matters**: A developer running the daemon locally with a stale or wrong `.env` could execute mutations — including provisioning, role changes, or audit writes — against production. Given that the developer is also the sole operator and guild owner, the realistic blast radius is self-inflicted cleanup, not an adversarial exploit. But the proposal's own mutation-safety design philosophy ("bounded, audited, confirmed") would benefit from a startup guard that catches environment misconfiguration before any mutation runs.
+- **Recommendation**: Add a startup check that logs the resolved environment label (staging vs. production) and optionally asserts against an `ENVIRONMENT` env var. This is a minor enhancement, not a blocking concern. Accept as LOW given single-operator context.
 
-### Finding 6 — Parameterized query requirement not stated
-
-- **Severity**: LOW
-- **Section of proposal**: §3 (Data model), §4–§7 (subsystem descriptions)
-- **Description**: User-supplied data — application answers, ticket descriptions, in-game names, correction notes — flows into the database. The proposal does not explicitly require parameterized queries or prohibit string interpolation in SQL.
-- **Why it matters**: In the Python/Postgres ecosystem, parameterized queries are standard with asyncpg, SQLAlchemy, or psycopg. The risk is that the proposal's silence could allow an ad-hoc implementation using f-strings for query building, especially in the OCR row insertion path where multiple columns come from parsed external input.
-- **Recommendation**: Accept as LOW. This is standard engineering practice enforced by library choice. Worth a one-line addition to §8 during any proposal revision: "All database writes use parameterized queries; no user input is interpolated into SQL strings."
-
-### Finding 7 — Staging/production separation relies solely on env var configuration
+### Finding 4 — Transaction boundaries for multi-step workflows not specified
 
 - **Severity**: LOW
-- **Section of proposal**: §9 (Deployment), §11 (Testing strategy)
-- **Description**: Production and staging are separated by env vars: different `DISCORD_GUILD_ID`, `SUPABASE_DB_URL`, etc. No runtime guard prevents a misconfigured staging daemon from connecting to production resources.
-- **Why it matters**: For a single-developer project this is standard and acceptable. A misconfigured deploy connecting to the production guild with Administrator privileges could execute mutations against real members and channels.
-- **Recommendation**: Accept as LOW. A startup validation of `DISCORD_GUILD_ID` against an expected value per deployment target could be added during implementation. No proposal amendment required.
+- **Section of proposal**: §4, §7, §8
+- **Description**: Application approval is described as a bounded mutation sequence: add member role, remove applicant role, insert chapter_members row, record status transition, DM applicant, post terminal embed, archive thread. The proposal does not specify which of these steps run within a single DB transaction versus as separate commits. Similarly, provisioning (§7) writes multiple DB rows across `chapters`, `chapter_roles`, `chapter_channels`, `application_forms`, and `application_form_versions` during a single run.
+- **Why it matters**: If the daemon crashes between inserting the `chapter_members` row and recording the status transition, the DB state is internally inconsistent. The Discord mutations (role add, DM, thread archive) are inherently non-transactional, so the proposal correctly records them via the audit trail. But the pure-DB writes within a single logical operation should be atomic to prevent partial-commit corruption.
+- **Recommendation**: Add a sentence to §8 or §4 stating that all DB writes within one logical operation (approval, denial, provisioning) execute within a single Postgres transaction. Discord API calls remain outside the transaction boundary and are reconcilable via audit events. This is implicit good practice but worth making explicit given the audit focus.
 
-### Finding 8 — Transcript raw_event_json capture scope
+### Finding 5 — Gemini fallback has a bounded prompt-injection surface
 
 - **Severity**: LOW
-- **Section of proposal**: §5 (Tickets — transcript persistence), §3 (Data model — `ticket_messages`)
-- **Description**: `ticket_messages.raw_event_json JSONB` stores the full Discord gateway event payload for each message. This could contain metadata beyond the thread conversation — nonces, interaction data, and referenced message content from reply chains.
-- **Why it matters**: The privacy boundary is the private thread itself: only thread members can post, so `raw_event_json` captures content from participants who consented to the ticket interaction. The data stays in Postgres and is not sent to third parties. No path exists from ticket content to the OCR pipeline or to public channels. The claim-visibility helper limits who can access the thread.
-- **Recommendation**: Accept as written, LOW severity. The private thread model is the correct access-control boundary.
+- **Section of proposal**: §6 (Phase 2b)
+- **Description**: The Gemini fallback receives "the original image plus classical OCR output" and is asked to return structured JSON rows. A malicious image could contain text designed to manipulate the vision LLM's extraction (e.g., injected text overlays that instruct the model to add or modify rows). The proposal describes hallucination controls: reject when quoted text can't be grounded in classical OCR, reject when row count diverges, reject when scores violate expectations.
+- **Why it matters**: The grounding controls described in §6 Phase 2b are the correct mitigation. Gemini output is validated against the classical OCR baseline, so an injected instruction would need to simultaneously fool both the classical OCR confidence check (which wouldn't flag text it can read clearly) and the grounding validator. The residual risk is that a carefully crafted overlay passes classical OCR cleanly but manipulates Gemini's interpretation. At Humility's volume and trust model (officer-uploaded images from known games), this is theoretical.
+- **Recommendation**: Accept as written, LOW severity. The grounding validation, officer review for flagged rows, and the explicit "no auto-punishment" rule (§14) together mean a hallucinated row results in a flag for officer review, not silent data corruption. If the gold corpus evaluation (§11) reveals that Gemini outputs ever diverge from classical OCR on clean images, that is the signal to tighten grounding rules.
+
+### Finding 6 — Forever retention without a data-deletion procedure
+
+- **Severity**: LOW
+- **Section of proposal**: §3, §4, §5, §14
+- **Description**: The proposal implements the user's "keep everything forever" decision (D4) with soft deletes across all tables. Application answers, ticket transcripts, member identities, and in-game names are retained indefinitely. There is no described procedure for responding to a data-deletion request from a Discord member who leaves the guild and asks for their data to be removed.
+- **Why it matters**: Humility is a private gaming guild, not a commercial service, so GDPR/CCPA formal compliance is unlikely to be required. However, a former member could request deletion of their application answers or ticket content. Without a documented deletion procedure, the operator would need to manually scrub records. The "forever" design is correct for operational audit needs; the gap is purely procedural.
+- **Recommendation**: Accept as written, LOW severity. This is an operational procedure question, not an architectural flaw. If a deletion request occurs, the operator can archive or null out PII fields on specific records. The proposal's soft-delete pattern already supports this without schema changes.
+
+### Finding 7 — Token leakage paths are well-addressed
+
+- **Severity**: LOW
+- **Section of proposal**: §8, §9, §10
+- **Description**: The proposal describes three independent layers preventing secret leakage: (1) `request_json` stores logical parameters only, never raw HTTP/vendor payloads; (2) `error_text` is sanitized before persistence; (3) structured logs pass through the same secret-scrubbing filter before emission. Railway stores all secrets; local `.env` is dev-only.
+- **Why it matters**: This is a positive finding. The three-layer approach means a single implementation bug in one layer does not expose secrets if the other layers are intact. The scrubbing filter is described as shared between log emission and audit persistence, reducing the chance of divergent behavior.
+- **Recommendation**: Accept as written, LOW severity. Implementation should ensure the scrubbing filter is tested against known secret patterns (bearer tokens, connection strings, API keys) as part of the unit test strategy described in §11.
 
 ## Overall assessment
 
-Two findings are MEDIUM: secret leakage into error paths (Finding 1) and absent Discord rate-limit handling (Finding 2). Both identify specific, realistic operational hazards — a bot token persisted in an audit row from a connection error traceback, or a provisioning saga failing repeatedly mid-run due to unhandled 429s requiring repeated manual resume. Neither requires a proposal rewrite. Finding 1 needs a sanitization requirement added to §8 and §10. Finding 2 needs a rate-limit-aware retry requirement added to §8 and a pacing note in §7.
+Seven findings: one MEDIUM, six LOW. The MEDIUM finding (audit trail enforced by convention only) is the most material concern because audit integrity is a foundational assumption of the mutation-safety design. However, the realistic attack path is a daemon code bug corrupting its own audit trail, not an external adversary — the daemon is the only DB writer, and there is no untrusted client in v1. The fix is a contained schema addition (one trigger or one restricted grant), not a rewrite.
 
-The remaining six findings are LOW. The proposal's structural defenses — bounded mutation wrapper with pre/post audit events, saga-based provisioning with tracked resume/rollback, OCR hallucination controls validated against independent evidence, claim-visibility helpers for thread membership, explicit per-channel overwrites rather than category inheritance, soft-delete discipline, and async task isolation for OCR — are credible and specific to the risks of running an Administrator-privileged bot on a live guild.
+The remaining LOW findings are either already mitigated by described controls (Gemini grounding, blast-radius isolation, secret scrubbing) or are proportionate gaps given Humility's single-tenant, single-operator context (staging guard, upload throttle, deletion procedure, transaction explicitness).
 
-The overall verdict is **MEDIUM** because Findings 1 and 2 require proposal amendments. The amendments are contained additions to existing sections (§7, §8, §10), not architectural changes. Once addressed, the residual risk profile would be LOW.
+No finding forces a rewrite or blocks implementation. The MEDIUM finding requires a small, contained proposal edit (adding DB-enforced append-only semantics to the audit schema). With that edit, all material concerns drop to LOW. The overall verdict is **LOW**.
 
 ## What a LOW verdict requires
 
-The verdict would be LOW if: (a) the proposal included an explicit secret-scrubbing requirement for `error_text`, `request_json`, and structured log output, ensuring no secret can persist in any durable store or log stream; and (b) the proposal included a rate-limit-aware retry and pacing requirement for the mutation wrapper and provisioning saga, ensuring Discord 429 responses are handled automatically rather than requiring operator intervention per failed step.
+The verdict is LOW because every material concern has either (a) no realistic attack/data-loss path given the proposal's described controls, or (b) a mitigation already described in the proposal that reduces the residual risk to negligible. The one MEDIUM finding (audit append-only enforcement) has a contained fix that does not force structural changes to any other section of the proposal. The combination of bounded mutation wrapper, secret scrubbing, blast-radius isolation, officer-reviewed OCR, and no-auto-punishment policy provides defense in depth that makes the residual risk from any single gap negligible.

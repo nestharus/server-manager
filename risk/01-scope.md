@@ -7,82 +7,89 @@ Assessor: claude-opus (scope)
 
 **MEDIUM**
 
-The proposal targets the right four pain points, sequences them defensibly, and keeps anti-scope clean. But the ticket subsystem is built for demand that doesn't exist (4 types against 3 tickets in 4 years), the OCR pipeline is the heaviest single deliverable yet treated as a routine middle phase, and the provisioning saga carries enterprise-grade resume/rollback for an operation that will run single-digit times. With trimming in tickets and provisioning plus honest phasing of OCR, the scope becomes achievable; without those adjustments the implementation budget is tight enough to risk stalling.
+The revised proposal has addressed most concerns from the earlier risk round: tickets are trimmed to `server_support` only, activity tracking is split into 2a/2b, provisioning drops the saga/resume/rollback engine, and transcript capture is simplified to close-time fetch. The scope is now much closer to achievable. The verdict remains MEDIUM because two unresolved concerns compound: the web-form contingency for application intake is a real scope expansion risk that hasn't been sized, and the ticket subsystem is building infrastructure for a workflow that has generated 3 cases in 4 years. Neither alone would block a LOW, but together they create enough budget uncertainty to warrant trimming before implementation begins.
 
 ## Findings
 
-### Finding 1 — Ticket subsystem is over-scoped for evidenced demand
-
-- **Severity**: MEDIUM
-- **Direction**: TOO BIG
-- **Section of proposal**: §5 (Tickets subsystem)
-- **Description**: The proposal builds four ticket types (`server_support`, `moderator`, `chapter_support`, `chapter_incident`) with full real-time transcript capture via gateway events, close-time reconciliation, `Trial Mod` read-only permission scaffolding, and ticket-to-application promotion. NOTES.md records 3 tickets in 4 years. The `moderator` type routes to an empty role. `chapter_support` and `chapter_incident` require chapters to exist, but no chapters exist and won't until Phase 4 — after Phase 3 ships tickets.
-- **Why it matters**: Each ticket type requires its own routing logic, queue-channel placement, permission configuration, panel creation, and end-to-end testing. Four types quadruple the implementation surface for the subsystem with the weakest evidence of demand. Three of four types target organizational structures (moderators, chapters) that don't exist yet, producing code that passes tests but has never been exercised by real users.
-- **Recommendation**: Ship v1 with `server_support` only. The schema can define all four enum values now — the cut is in handler code, panel creation, permission scaffolding, and testing. Add `chapter_support` and `chapter_incident` alongside Phase 4 provisioning, when chapters exist to route to. Defer `moderator` until the Moderator role is staffed.
-
-### Finding 2 — OCR pipeline is the heaviest deliverable but under-acknowledged
+### Finding 1 — Web-form contingency is unsized scope risk
 
 - **Severity**: MEDIUM
 - **Direction**: OTHER
-- **Section of proposal**: §6 (Activity tracking subsystem)
-- **Description**: The 9-step OCR pipeline includes: preprocessing (crop, grayscale, contrast, upscale, deskew), Google Vision integration, geometric row parsing by y-axis clustering and x-position sorting, per-row confidence scoring, three-way outcome routing, Gemini fallback with hallucination controls, roster fuzzy matching, a 5-button correction UI, and activity rule evaluation with consecutive/rolling modes. The geometric row parser is novel engineering with no cited library or reference. This is more technically uncertain than any other subsystem.
-- **Why it matters**: The proposal sequences this as Phase 2, implying comparable effort to Phase 1 (applications) or Phase 3 (tickets). It is likely 2-3x either. The geometric parser alone — clustering OCR word boxes into rows, separating names from scores, handling header rows and UI chrome — could take as long as the entire applications subsystem. If Phase 2 stalls on parsing accuracy, every subsequent phase is delayed.
-- **Recommendation**: Accept the scope (the pain justifies it) but split Phase 2 into 2a (upload, store in Supabase Storage, Vision API call, basic row extraction) and 2b (confidence scoring, Gemini fallback, correction UI, rule evaluation). Phase 2a is demoable and delivers partial value — officers can upload screenshots and see extraction results. Phase 2b adds the reliability and automation layers. This split prevents the OCR pipeline from becoming a monolithic blocker.
+- **Section of proposal**: §4 (Applications subsystem), §14 (Anti-scope)
+- **Description**: The proposal bets on Discord's newer component model (file upload, radio groups, checkbox groups in modals) for application forms. §16 acknowledges that `discord.py 2.7.1` support for these components is unverified. If the library cannot expose the required inputs, "richer web forms move into v1 as the replacement surface for the application intake workflow." The proposal correctly says this wouldn't change the data model or review flow, but the web surface itself — hosting, Discord OAuth, CORS, a frontend framework or static client, and styling — is not budgeted in the phase plan or cost model.
+- **Why it matters**: This is a binary decision with material scope impact. If the contingency triggers, it adds an estimated 1-2 weeks of implementation work on top of Phase 1, which is already the densest feature phase. A one-person team discovering mid-Phase 1 that they need a web surface creates schedule pressure that cascades into later phases. The anti-scope in §14 excludes "general web reviewer dashboards" but explicitly carves out this intake form — so it's not anti-scope leakage, it's acknowledged-but-unsized scope.
+- **Recommendation**: Resolve this during hookpoint research, before Phase 1 starts. If `discord.py` can't handle the required components, size the web fallback as an explicit Phase 1 sub-deliverable with its own definition of done. If `discord.py` can handle them, delete the contingency language. The decision should be made before implementation begins, not discovered during it.
 
-### Finding 3 — Provisioning saga is over-engineered for actual use frequency
+### Finding 2 — Ticket subsystem has weak demand evidence
+
+- **Severity**: MEDIUM
+- **Direction**: TOO BIG
+- **Section of proposal**: §5 (Tickets subsystem), §12 Phase 3
+- **Description**: The research found 3 tickets across 4 years. ticketsbot.net is dead, but the historical volume suggests the capability was barely used even when available. The proposal has already trimmed to `server_support` only and simplified transcript capture to close-time fetch, which is the lightest credible implementation. Phase 3 still requires: a full state machine (open/claimed/closed), claim mechanics shared with applications, queue embeds, private thread lifecycle, paginated transcript persistence at close, requester-left-server handling, and end-to-end testing.
+- **Why it matters**: The incremental cost is lower than a greenfield ticket system because the claim helper and thread infrastructure exist from Phase 1. But Phase 3 still competes for engineering attention with hardening applications and activity tracking — the subsystems with daily operational pain. At ~1 ticket per year, it may never repay its implementation cost.
+- **Recommendation**: Keep `server_support` tickets in v1 scope but explicitly mark Phase 3 as deferrable if Phases 1-2b consume more budget than planned. If applications and activity tracking run long, a pinned "DM an admin for support" message covers the ticket gap with zero engineering cost. Revisit ticket demand 3 months after applications and activity tracking are live.
+
+### Finding 3 — Roster management commands are unsequenced
 
 - **Severity**: LOW
-- **Direction**: TOO BIG
-- **Section of proposal**: §7 (Chapter provisioning subsystem)
-- **Description**: Provisioning includes an 8-step saga with `provisioning_runs` and `provisioning_steps` tables, per-step audit events, automatic resume-from-failure, reverse-ordered rollback with human-residue detection, dry-run cap checks with internal guardrails, and YAML/JSON spec attachment parsing. Humility has zero chapters. Realistic chapter creation volume is 1-3 chapters in the first year.
-- **Why it matters**: At single-digit use, the operator will be watching every step in real time. Manual cleanup of a few Discord roles and channels after a failed step is trivial. The resume/rollback state machine, partial-resource detection, and "archive rather than delete if humans interacted" logic adds substantial implementation and testing weight for a path that will execute a handful of times.
-- **Recommendation**: Keep the `provisioning_runs` table for audit. Cut `provisioning_steps`, automatic resume, and automatic rollback from v1. A sequential create script that records created Discord IDs and supports a manual `/chapters cleanup <run_id>` command delivers the same operational value. Upgrade to saga if chapter volume ever justifies it.
-
-### Finding 4 — Discord component model bet is load-bearing but unverified
-
-- **Severity**: MEDIUM
-- **Direction**: OTHER
-- **Section of proposal**: §4 (Applications subsystem), §16 (Open questions)
-- **Description**: The synthesis (research/02) required "Web UI for forms (richer than Discord modals)." The proposal drops web UI to anti-scope (§14) and bets on Discord's newer component model — file upload, radio groups, checkbox groups in modals. §16 acknowledges that discord.py 2.7.1 support for these components is unverified. The entire form rendering strategy depends on this assumption.
-- **Why it matters**: If discord.py 2.7.1 doesn't expose file upload or radio/checkbox components in modals, the form rendering collapses to text-only modals — the exact limitation the research identified as insufficient. The proposal reads as though Discord modals will definitely work, when the underlying capability is listed as an open question.
-- **Recommendation**: Not a scope cut — this is a hookpoint-phase verification item. But the proposal should name a fallback explicitly: if Discord's component model doesn't support the required input types via discord.py, web forms enter v1 scope as a replacement, not a v2 addition. Without this fallback acknowledgment, the anti-scope boundary is silently conditional.
-
-### Finding 5 — Chapter-scoped tickets built before chapters exist
-
-- **Severity**: MEDIUM
 - **Direction**: ENTANGLED
-- **Section of proposal**: §5 (Tickets), §12 (Sequencing)
-- **Description**: `chapter_support` and `chapter_incident` route to chapter officer roles and place panels in chapter member-facing channels. Phase 3 (tickets) ships before Phase 4 (provisioning). No chapters, chapter channels, or chapter officer roles exist at Phase 3 completion. These ticket types cannot be tested against real routing or exercised by real users until Phase 4 is done.
-- **Why it matters**: Building ticket types against organizational structure that hasn't been created means the routing code is validated only against mocks or stubs. When chapters are finally provisioned, the ticket routing may need adjustment — but tickets are "done" and attention has moved on. This is a sequencing entanglement: the ticket subsystem has a hidden dependency on provisioning that the proposal doesn't acknowledge.
-- **Recommendation**: Defer chapter-scoped ticket types to Phase 4 or a Phase 4.5, where they can be built and tested against real chapter infrastructure. This aligns with Finding 1's recommendation to ship `server_support` only in Phase 3.
+- **Section of proposal**: §6 (Activity tracking subsystem), §12 (Sequencing plan)
+- **Description**: Section 6 describes `/chapter roster link`, `rename`, `remove`, and `import` as first-class operational concerns: "the daemon should treat roster quality as a first-class operational concern, not as an afterthought behind OCR." But these commands don't appear in the Phase 2a or 2b definitions of done (§12). Phase 2a lists "roster bindings from applications" as a dependency, implying approved applicants auto-populate the roster. But real officers will also need to link existing members who joined before the system, rename players whose in-game names change, and correct OCR mismatches.
+- **Why it matters**: If roster commands land in Phase 2a, they add scope to an already well-defined phase. If they land in Phase 2b, Phase 2a extraction summaries will show unmatched players with no correction path, making the phase less useful. This is a small gap but creates ambiguity about when the activity subsystem is operationally complete.
+- **Recommendation**: Explicitly sequence `/chapter roster link` and `/chapter roster rename` into Phase 2a's definition of done — they're prerequisites for useful extraction summaries. Defer `/chapter roster import` (CSV) to Phase 2b or later; manual link commands cover early-stage roster building.
 
-### Finding 6 — Cost-benefit of ticket transcript infrastructure
+### Finding 4 — Observability depth exceeds single-operator need
 
 - **Severity**: LOW
 - **Direction**: TOO BIG
-- **Section of proposal**: §5 (Tickets subsystem)
-- **Description**: Transcript capture uses a hybrid approach: real-time gateway event writes for every message in ticket threads, plus close-time reconciliation to backfill missed events. This requires gateway event listeners, message storage (`ticket_messages` table), and a reconciliation pass. For a server with ~1 ticket per year, this is substantial infrastructure for minimal content.
-- **Why it matters**: The hybrid transcript approach is well-designed for a high-volume ticket system. At Humility's volume, a close-time-only full-history fetch (no gateway listeners) would capture the same content with simpler implementation. The real-time component only matters if tickets generate enough messages that some could be missed during a daemon restart — unlikely at current volume.
-- **Recommendation**: Simplify to close-time-only transcript capture in v1. If ticket volume grows enough that daemon restarts during active conversations become a concern, add gateway event writes then.
+- **Section of proposal**: §10 (Observability)
+- **Description**: The proposal specifies Prometheus-style counters and gauges (15+ named metrics), a health endpoint reporting gateway heartbeat and DB connectivity, 7 alerting scenarios, structured JSON logging with secret scrubbing, and blast-radius isolation between subsystems. This is a production-quality observability stack for a bot serving 84 members with one operator.
+- **Why it matters**: Structured logging and secret scrubbing are justified — the bot has high privilege and the forever-retention requirement means audit data integrity matters. But Prometheus metrics, a formal health endpoint, and alerting rules are overhead for a system where the single operator will notice failures through Discord interactions not working. Railway provides built-in deploy logs, crash detection, and automatic restarts. The implementation time for the full observability spec is modest but real.
+- **Recommendation**: Keep structured JSON logging and secret scrubbing (both are load-bearing for audit correctness). Keep a minimal health endpoint if Railway requires one for always-on service health checks. Defer Prometheus-style metrics and formal alerting rules until there's a concrete debugging need that logs don't cover. Add metrics incrementally when a specific subsystem proves hard to debug from logs alone.
 
-### Finding 7 — Activity screenshot storage growth is manageable
+### Finding 5 — Existing bot boundary is implicit, not explicit
 
 - **Severity**: LOW
 - **Direction**: OTHER
-- **Section of proposal**: §9, §17 (Deployment, Cost model)
-- **Description**: Forever retention (D4) means activity screenshots accumulate indefinitely. At 150-600 images/month at ~0.5-2MB each, storage grows 75MB-1.2GB/month. Supabase free tier provides 1GB storage. The cost model recommends Pro tier ($25/month, 100GB storage) for production.
-- **Why it matters**: If the project starts on free tier "briefly" (§17's cheapest option), storage will saturate within 1-3 months of active OCR uploads. This isn't a problem on Pro tier but shortens the free-tier runway.
-- **Recommendation**: Accept. The cost model correctly recommends Pro tier. No scope change needed.
+- **Section of proposal**: §2 (Architecture), §4-§7 (Subsystems)
+- **Description**: Captcha.bot and AmariBot are explicit keeps (per NOTES.md and research). The proposal never mentions either by name. The boundary is implicitly clean: Captcha.bot handles server entry verification (Guest → Member roles), while the daemon handles chapter membership (Chapter Applicant → Chapter Member roles). AmariBot handles Discord-side XP/leveling, while the daemon handles in-game activity OCR. But this boundary is never stated.
+- **Why it matters**: During implementation, the developer needs to know which roles and permission surfaces are owned by which bot. If the daemon accidentally assigns a role that Captcha.bot uses for its verification flow, or if role hierarchy positioning puts chapter roles above the verification stack, the bots could interfere with each other. The risk is low at Humility's scale, but the proposal should make the boundary explicit.
+- **Recommendation**: Add a short subsection (one paragraph) to §8 or §15 naming Captcha.bot and AmariBot, listing which roles and channels they own, and confirming the daemon will not modify those resources. This is documentation scope, not implementation scope.
+
+### Finding 6 — Activity 2a/2b split is well-calibrated
+
+- **Severity**: LOW
+- **Direction**: TOO BIG (mitigated)
+- **Section of proposal**: §6, §12 Phases 2a/2b
+- **Description**: The revised proposal splits the OCR subsystem into Phase 2a (upload, store, Vision, basic extraction) and Phase 2b (confidence scoring, Gemini fallback, correction UI, rule evaluation). Phase 2a delivers operator-visible value — officers can upload screenshots and see extraction results — without requiring calibrated thresholds, fallback routing, or the full correction UI.
+- **Why it matters**: This is exactly the right decomposition. Phase 2a proves storage and OCR integration against real screenshots. Phase 2b adds trust and automation. If 2b slips, officers still have durable extraction summaries they can review and correct manually — already better than the current spreadsheet.
+- **Recommendation**: Accept. This addresses the previous review's major OCR concern.
+
+### Finding 7 — Provisioning simplification is proportionate
+
+- **Severity**: LOW
+- **Direction**: TOO BIG (mitigated)
+- **Section of proposal**: §7, §12 Phase 4
+- **Description**: The revised proposal drops the saga state machine, automatic resume-from-midpoint, and generic reverse-ordered rollback. Instead, it records created resource IDs incrementally and offers explicit cleanup for failed runs. Phase 4 is sequenced last with the widest dependency surface.
+- **Why it matters**: This is right-sized for Humility's expected chapter volume (low single digits). Manual cleanup of a failed provisioning run using recorded IDs is practical when runs happen rarely. The audit trail is preserved without the implementation weight of an orchestration engine.
+- **Recommendation**: Accept. If the owner creates chapters frequently enough that manual cleanup becomes painful, upgrade to a more automated path then.
+
+### Finding 8 — Forever retention is sustainable at this scale
+
+- **Severity**: LOW
+- **Direction**: OTHER
+- **Section of proposal**: §3 (Data model), §17 (Cost model)
+- **Description**: D4 locks forever retention. At 84 members with daily activity logs, the largest table (activity_log) grows at roughly 30k rows/year per chapter. Screenshot storage at 150-600 images/month at ~1MB average is 150MB-600MB/month. The cost model recommends Supabase Pro ($25/month, 100GB storage) for production.
+- **Why it matters**: At this scale, forever retention is a non-issue for years. The schema uses soft deletes and archive timestamps. No TTL is needed. Supabase Pro handles the storage growth comfortably. The one note: if the project starts on free tier "briefly" (§17's cheapest option), screenshot storage will saturate free-tier limits within 2-3 months of active OCR uploads.
+- **Recommendation**: Accept. The cost model correctly recommends Pro tier for production. No scope change needed, but the proposal could note that free-tier runway shortens quickly once activity uploads begin.
 
 ## Overall assessment
 
-The proposal correctly identifies the four pain points — applications, activity tracking, tickets, and provisioning — and builds each with appropriate architectural depth. The schema is well-reasoned, the sequencing follows Option C correctly, and the anti-scope boundaries are clean. Applications and activity tracking are well-calibrated to evidenced pain.
+The revised proposal has meaningfully improved since the first risk round. Tickets are trimmed to `server_support` only. Activity tracking is split into 2a/2b with proportionate definitions of done. Provisioning drops the enterprise-grade saga in favor of recorded IDs and explicit cleanup. Transcript capture is simplified to close-time fetch. These changes directly address the previous review's major findings.
 
-The verdict is MEDIUM because of three compounding concerns. First, the ticket subsystem builds four types with full transcript infrastructure for a workflow averaging less than one ticket per year, consuming implementation budget that could go toward hardening OCR or applications. Second, the OCR pipeline — the most technically uncertain and implementation-heavy subsystem — is treated as a routine Phase 2 when it deserves explicit phasing acknowledgment. Third, the provisioning saga carries resume/rollback machinery for an operation that will run a handful of times.
+The verdict remains MEDIUM because of two compounding concerns. First, the web-form contingency for application intake is a binary decision with material scope impact that hasn't been resolved or sized — if it triggers mid-Phase 1, it adds real work that isn't budgeted. Second, the ticket subsystem is still building production infrastructure for a workflow averaging less than one case per year, competing for engineering attention with subsystems that have daily operational pain.
 
-These concerns compound into an implementation budget that is tight for one person plus agent. Any one concern alone would be LOW. Together they create enough schedule risk that the later phases (tickets, provisioning) could drag while early phases (applications) accumulate unaddressed maintenance needs.
-
-With the recommended trims — one ticket type, simplified provisioning, and split OCR phasing — the remaining scope is credibly achievable, well-proportioned, and properly sequenced. The verdict would move to LOW.
+These are softer concerns than the first review identified. Neither is a fundamental scope error — they're budget risks. With the phased sequencing already in place, the practical impact is manageable: if Phase 1 runs long because the web form triggers, Phase 3 naturally slips, and the total scope self-adjusts. The explicit path to LOW is resolving the web-form question during hookpoint research and marking Phase 3 as deferrable.
 
 ## What a LOW verdict requires
 
