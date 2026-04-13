@@ -105,3 +105,70 @@ pain point around activity tracking.
 - Waitlists and officer workflows are part of initial scope.
 - Activity thresholds are per-chapter configuration.
 - OCR backend selection is deferred to dedicated research.
+
+---
+
+## D5 — 2026-04-11 — Activity tracking (OCR) is an in-scope primary requirement
+
+**Context**: During the phase-1 synthesis conversation, the user
+revealed that they spend daily time tracking in-game activity points
+by hand in a spreadsheet, and strongly wants a screenshot-upload →
+OCR → threshold-flagging workflow. This was NOT in the original scope
+statements and does not appear in any pre-research drafts.
+
+**Decision**:
+- Activity tracking is a first-class subsystem, peer with
+  applications, tickets, and chapter provisioning.
+- OCR backend selection is a dedicated research question, not a
+  proposal-time guess.
+- Activity thresholds are per-chapter configuration.
+- MVP priority ordering between the four subsystems remains open until
+  the proposal phase locks sequencing.
+
+**Consequences**:
+- A second research task is added to phase 1: OCR backend options for
+  game-screenshot extraction. Runs via `gpt-high`.
+- Cost modeling for the project now includes per-image vision API
+  usage.
+- Schema design must accommodate per-chapter activity rules and
+  per-member daily logs.
+
+---
+
+## D6 — 2026-04-11 — Phase 2 gate: locked decisions for proposal phase
+
+**Context**: After `research/04-ocr-backends.md` landed, the user
+answered the OCR architecture question and named Google Cloud Vision as
+the classical baseline. The remaining phase-2 questions were left
+unanswered, so the AI took defaults in order to unblock proposal
+writing.
+
+### User-specified
+
+- **OCR architecture**: Mixed — classical OCR primary, vision LLM
+  fallback on low-confidence or ambiguous screenshots.
+- **Classical OCR backend**: Google Cloud Vision
+  (`DOCUMENT_TEXT_DETECTION`).
+- **Vision LLM fallback baseline**: Gemini 3 Flash Preview on the paid
+  tier.
+
+### Defaults (not contradicted by user)
+
+- **MVP sequencing**: Option C — foundations first, then feature
+  delivery in this order: applications → activity tracking → tickets →
+  chapter provisioning.
+- **Waitlist semantics**: pre-decision holding pattern; waitlist is not
+  an approval state.
+- **Additional v1 guild-management tools**: none beyond applications,
+  tickets, chapter provisioning, and activity tracking.
+- **Synthesis review**: `research/02-humility-needs.md` sections 4 and
+  7 accepted as-written.
+
+### Consequences
+
+- Phase 2 is complete and proposal writing can begin.
+- The proposal prompt must treat Google Cloud Vision as the classical
+  OCR baseline and Gemini 3 Flash Preview as the fallback comparative
+  track.
+- If any default is later corrected by the user, the proposal must be
+  revised and the full risk gate rerun.
