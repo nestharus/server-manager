@@ -77,6 +77,44 @@ def make_channel(
     return channel
 
 
+def make_activity_author(*, user_id, username=None, display_name=None, bot=True):
+    author = MagicMock()
+    author.id = user_id
+    author.name = username or f"user-{user_id}"
+    author.bot = bot
+    author.display_name = display_name or author.name
+    author.__str__.return_value = f"{author.name}#0001"
+    return author
+
+
+def make_activity_message(*, message_id, author_id, created_at, content=None, bot=True):
+    message = Mock()
+    message.id = message_id
+    message.created_at = created_at
+    message.edited_at = None
+    message.author = make_activity_author(user_id=author_id, bot=bot)
+    message.content = content or f"message-{message_id}"
+    message.attachments = []
+    message.embeds = []
+    message.pinned = False
+    message.tts = False
+    message.type = "default"
+    message.jump_url = f"https://discord.invalid/messages/{message_id}"
+    return message
+
+
+def make_history_channel(*, channel_id, name, messages=None, history_side_effect=None, history_capable=True):
+    channel = Mock()
+    channel.id = channel_id
+    channel.name = name
+    channel.history_capable = history_capable
+    if history_side_effect is not None:
+        channel.history = Mock(side_effect=history_side_effect)
+    else:
+        channel.history = Mock(return_value=async_iter(messages or []))
+    return channel
+
+
 def make_role(
     *,
     role_id,
@@ -373,6 +411,7 @@ def test_build_parser_recognizes_all_contract_subcommands(parser):
     assert subcommands == {
         "overview",
         "bots",
+        "bot-activity",
         "channels",
         "find-channel",
         "read",
@@ -392,6 +431,23 @@ def test_read_subcommand_accepts_channel_and_optional_limit(parser):
     assert parsed.command == "read"
     assert parsed.channel == "general"
     assert parsed.limit == 25
+
+
+def test_bot_activity_subparser_exists(parser):
+    parsed = parser.parse_args(["bot-activity", "123", "--per-channel-limit", "25"])
+
+    assert parsed.command == "bot-activity"
+    assert parsed.bot_id == 123
+    assert parsed.per_channel_limit == 25
+    assert parsed.func is discord_cli.run_command
+
+
+def test_bot_activity_handler_is_async():
+    assert inspect.iscoroutinefunction(discord_cli.fetch_bot_activity)
+
+
+def test_bot_activity_in_command_specs():
+    assert "bot-activity" in discord_cli.command_specs()
 
 
 def test_roles_subcommand_is_recognized(parser):
@@ -588,6 +644,307 @@ def test_roles_handler_serializes_created_at_iso8601(guild_fixture):
     helper_entry = next(entry for entry in result["roles"] if entry["id"] == helper_role.id)
 
     assert helper_entry["created_at"] == helper_role.created_at.isoformat()
+
+
+def test_is_history_capable_text_channel():
+    channel = Mock(spec=discord_cli.discord.TextChannel)
+
+    assert discord_cli.is_history_capable_channel(channel) is True
+
+
+def test_is_history_capable_voice_channel():
+    channel = Mock(spec=discord_cli.discord.VoiceChannel)
+
+    assert discord_cli.is_history_capable_channel(channel) is True
+
+
+def test_is_history_capable_stage_channel():
+    channel = Mock(spec=discord_cli.discord.StageChannel)
+
+    assert discord_cli.is_history_capable_channel(channel) is True
+
+
+def test_is_history_capable_thread():
+    channel = Mock(spec=discord_cli.discord.Thread)
+
+    assert discord_cli.is_history_capable_channel(channel) is True
+
+
+def test_is_history_capable_category_excluded():
+    channel = Mock(spec=discord_cli.discord.CategoryChannel)
+
+    assert discord_cli.is_history_capable_channel(channel) is False
+
+
+def test_is_history_capable_forum_excluded():
+    channel = Mock(spec=discord_cli.discord.ForumChannel)
+
+    assert discord_cli.is_history_capable_channel(channel) is False
+
+
+def test_bot_activity_zero_results(monkeypatch):
+    bot_id = 42
+    other_message = make_activity_message(
+        message_id=1001,
+        author_id=9001,
+        created_at=datetime(2024, 4, 2, 10, 0, tzinfo=timezone.utc),
+    )
+    eligible = make_history_channel(
+        channel_id=101,
+        name="general",
+        messages=[other_message],
+        history_capable=True,
+    )
+    ineligible = make_history_channel(
+        channel_id=102,
+        name="forum",
+        messages=[],
+        history_capable=False,
+    )
+
+    monkeypatch.setattr(discord_cli, "combined_channels", lambda guild: [eligible, ineligible])
+    monkeypatch.setattr(
+        discord_cli,
+        "is_history_capable_channel",
+        lambda channel: channel.history_capable,
+    )
+
+    result = run(
+        discord_cli.fetch_bot_activity(
+            Mock(),
+            argparse.Namespace(bot_id=bot_id, per_channel_limit=100),
+        )
+    )
+
+    eligible.history.assert_called_once_with(limit=100)
+    ineligible.history.assert_not_called()
+    assert result == {
+        "bot_id": bot_id,
+        "total_messages_seen": 0,
+        "last_seen": None,
+        "per_channel": [],
+        "samples": [],
+    }
+
+
+def test_bot_activity_finds_messages(monkeypatch):
+    bot_id = 42
+    older = make_activity_message(
+        message_id=1001,
+        author_id=bot_id,
+        created_at=datetime(2024, 4, 2, 9, 0, tzinfo=timezone.utc),
+        content="older",
+    )
+    newest = make_activity_message(
+        message_id=1002,
+        author_id=bot_id,
+        created_at=datetime(2024, 4, 2, 11, 0, tzinfo=timezone.utc),
+        content="newest",
+    )
+    middle = make_activity_message(
+        message_id=1003,
+        author_id=bot_id,
+        created_at=datetime(2024, 4, 2, 10, 0, tzinfo=timezone.utc),
+        content="middle",
+    )
+    non_match = make_activity_message(
+        message_id=1004,
+        author_id=9001,
+        created_at=datetime(2024, 4, 2, 12, 0, tzinfo=timezone.utc),
+    )
+    admin = make_history_channel(
+        channel_id=201,
+        name="admin-chat",
+        messages=[newest, older, non_match],
+    )
+    logs = make_history_channel(
+        channel_id=202,
+        name="logs",
+        messages=[middle],
+    )
+
+    monkeypatch.setattr(discord_cli, "combined_channels", lambda guild: [admin, logs])
+    monkeypatch.setattr(discord_cli, "is_history_capable_channel", lambda channel: True)
+
+    result = run(
+        discord_cli.fetch_bot_activity(
+            Mock(),
+            argparse.Namespace(bot_id=bot_id, per_channel_limit=100),
+        )
+    )
+
+    assert result["bot_id"] == bot_id
+    assert result["total_messages_seen"] == 3
+    assert result["last_seen"] == newest.created_at.isoformat()
+    assert result["per_channel"] == [
+        {
+            "channel_id": admin.id,
+            "channel_name": admin.name,
+            "count": 2,
+            "last_seen": newest.created_at.isoformat(),
+        },
+        {
+            "channel_id": logs.id,
+            "channel_name": logs.name,
+            "count": 1,
+            "last_seen": middle.created_at.isoformat(),
+        },
+    ]
+    assert result["samples"] == [
+        discord_cli.serialize_message(newest),
+        discord_cli.serialize_message(middle),
+        discord_cli.serialize_message(older),
+    ]
+
+
+def test_bot_activity_forbidden_channel_skipped(monkeypatch):
+    bot_id = 42
+
+    class FakeForbidden(Exception):
+        pass
+
+    allowed_message = make_activity_message(
+        message_id=1001,
+        author_id=bot_id,
+        created_at=datetime(2024, 4, 2, 10, 0, tzinfo=timezone.utc),
+    )
+    allowed = make_history_channel(
+        channel_id=301,
+        name="allowed",
+        messages=[allowed_message],
+    )
+    blocked = make_history_channel(
+        channel_id=302,
+        name="blocked",
+        history_side_effect=FakeForbidden("no access"),
+    )
+
+    monkeypatch.setattr(discord_cli.discord, "Forbidden", FakeForbidden)
+    monkeypatch.setattr(discord_cli, "combined_channels", lambda guild: [blocked, allowed])
+    monkeypatch.setattr(discord_cli, "is_history_capable_channel", lambda channel: True)
+
+    result = run(
+        discord_cli.fetch_bot_activity(
+            Mock(),
+            argparse.Namespace(bot_id=bot_id, per_channel_limit=100),
+        )
+    )
+
+    blocked.history.assert_called_once_with(limit=100)
+    allowed.history.assert_called_once_with(limit=100)
+    assert result["total_messages_seen"] == 1
+    assert result["per_channel"] == [
+        {
+            "channel_id": allowed.id,
+            "channel_name": allowed.name,
+            "count": 1,
+            "last_seen": allowed_message.created_at.isoformat(),
+        }
+    ]
+
+
+def test_bot_activity_invalid_limit():
+    with pytest.raises(discord_cli.CLIError):
+        run(
+            discord_cli.fetch_bot_activity(
+                Mock(),
+                argparse.Namespace(bot_id=42, per_channel_limit=0),
+            )
+        )
+
+
+def test_bot_activity_samples_limited(monkeypatch):
+    bot_id = 42
+    messages = [
+        make_activity_message(
+            message_id=2000 + offset,
+            author_id=bot_id,
+            created_at=datetime(2024, 4, 2, 23 - offset, 0, tzinfo=timezone.utc),
+        )
+        for offset in range(12)
+    ]
+    channel = make_history_channel(
+        channel_id=401,
+        name="busy-bot",
+        messages=messages,
+    )
+
+    monkeypatch.setattr(discord_cli, "combined_channels", lambda guild: [channel])
+    monkeypatch.setattr(discord_cli, "is_history_capable_channel", lambda channel: True)
+
+    result = run(
+        discord_cli.fetch_bot_activity(
+            Mock(),
+            argparse.Namespace(bot_id=bot_id, per_channel_limit=100),
+        )
+    )
+
+    assert result["total_messages_seen"] == 12
+    assert len(result["samples"]) == 10
+    assert result["samples"] == [discord_cli.serialize_message(message) for message in messages[:10]]
+
+
+def test_bot_activity_per_channel_sorted(monkeypatch):
+    bot_id = 42
+    alpha = make_history_channel(
+        channel_id=501,
+        name="alpha",
+        messages=[
+            make_activity_message(
+                message_id=3001,
+                author_id=bot_id,
+                created_at=datetime(2024, 4, 2, 10, 0, tzinfo=timezone.utc),
+            ),
+            make_activity_message(
+                message_id=3002,
+                author_id=bot_id,
+                created_at=datetime(2024, 4, 2, 9, 0, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+    beta = make_history_channel(
+        channel_id=502,
+        name="beta",
+        messages=[
+            make_activity_message(
+                message_id=3003,
+                author_id=bot_id,
+                created_at=datetime(2024, 4, 2, 11, 0, tzinfo=timezone.utc),
+            ),
+            make_activity_message(
+                message_id=3004,
+                author_id=bot_id,
+                created_at=datetime(2024, 4, 2, 8, 0, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+    gamma = make_history_channel(
+        channel_id=503,
+        name="gamma",
+        messages=[
+            make_activity_message(
+                message_id=3005,
+                author_id=bot_id,
+                created_at=datetime(2024, 4, 2, 12, 0, tzinfo=timezone.utc),
+            )
+        ],
+    )
+
+    monkeypatch.setattr(discord_cli, "combined_channels", lambda guild: [gamma, alpha, beta])
+    monkeypatch.setattr(discord_cli, "is_history_capable_channel", lambda channel: True)
+
+    result = run(
+        discord_cli.fetch_bot_activity(
+            Mock(),
+            argparse.Namespace(bot_id=bot_id, per_channel_limit=100),
+        )
+    )
+
+    assert [entry["channel_id"] for entry in result["per_channel"]] == [
+        beta.id,
+        alpha.id,
+        gamma.id,
+    ]
 
 
 def test_run_gateway_command_closes_client_on_success(monkeypatch):
