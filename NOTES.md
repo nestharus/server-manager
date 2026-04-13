@@ -1,18 +1,37 @@
-# Notes
+# NOTES.md - agent-maintained log of discovered facts
 
-- Target guild: Humility (`900000000000000001`) per [AGENTS.md](/home/nes/discord/AGENTS.md).
-- `discord_cli.py` is the reusable local CLI surface for Discord inspection and management work.
-- Initial scaffold implements `overview` and reserves `bots`, `channels`, `find-channel`, `read`, and `integrations` as stubs.
-- Research report for the Discord CLI problem space is in [research/05-discord-cli.md](/home/nes/discord/research/05-discord-cli.md).
-- Local `uv` resolution currently exposes `discord.py` `2.7.1` even though `pyproject.toml` only requires `>=2.3`.
-- Phase 6 added contract tests in [tests/test_discord_cli.py](/home/nes/discord/tests/test_discord_cli.py) based only on [proposals/05-discord-cli.md](/home/nes/discord/proposals/05-discord-cli.md) and [research/05-discord-cli-needs.md](/home/nes/discord/research/05-discord-cli-needs.md).
-- Current implementation gaps exposed by that test suite:
-  - `read` parser does not yet accept the required `channel` positional or optional `--limit`.
-  - Only `fetch_overview` is publicly exposed; contract tests expect async per-command handlers for `bots`, `channels`, `find-channel`, `read`, and `integrations`.
-  - `fetch_overview` does not yet match the proposed pure handler shape of `(guild, args)`.
-- Key research findings:
-  - `bots` depends on privileged member access (`Intents.members`) because it is a member-list problem.
-  - `channels` and `overview` primarily depend on `Intents.guilds` and guild/cache state.
-  - `read` centers on `abc.Messageable.history()` and documented channel permissions like `read_message_history`; the gathered docs did not establish `Intents.message_content` as a `history()` requirement.
-  - `integrations` centers on `Guild.integrations()` plus `manage_guild`; `Intents.integrations` only affects integration gateway events.
-  - Phase 7 roles research: `guild.roles` is populated from `GUILD_CREATE` under `Intents.guilds`; `Role.members` is cache-derived from `guild._members` and is incomplete without chunking or other member-cache population.
+Last updated: 2026-04-11
+
+## Guild
+
+- Name: Humility
+- ID: `900000000000000001`
+- Owner: `nestharus` (user id `900000000000000002`)
+- Created: 2022-04-04
+- Member count during this sweep: 83
+- Premium tier: 1
+
+## Bots and Integrations
+
+- 12 bots observed during the sweep.
+- HumilityTicketBot matches ticketsbot.net on Discord-side identity: app/bot id `954933581501849610`.
+- Redundant bot pairs called out by the original AI:
+  - Apollo + sesh for calendar/events
+  - Hydra + Zira for reaction-role or form-related automation
+- Multiple bot records showed duplicated `Robots` role names in their member-role lists.
+
+## Tickets Investigation
+
+- `#support` contains a `2023-12-22` HumilityTicketBot panel embed titled `Click to open a ticket`.
+- `#support` topic is `Create a support ticket here.`
+- `#support` had no restrictive overwrite during the sweep; only `@everyone` with `allow: 0` and `deny: 0`.
+- `#panels` contains a `2022-04-04` HumilityTicketBot embed titled `General Support`.
+- `#templates` was empty during the sweep.
+- `#ticket-logs` showed historical tickets including ticket `3` on `2025-04-11`, opened by `nestharus`.
+- Ticket `1` had an archive link on `panel.ticketsbot.net`; newer tickets did not, suggesting transcript/archive behavior changed after 2022.
+
+## Gather and First-Party Applications
+
+- Gather is managed through `gather.sh` and is externally controlled via Discord OAuth, not through Discord messages the agent can edit.
+- The agent can inspect Gather's Discord-side footprint, but not its internal dashboard configuration.
+- A first-party replacement would need an `applications` subsystem in this repo so forms can be defined in-repo and managed through code.
