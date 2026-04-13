@@ -2,31 +2,32 @@
 
 ## Overall: LOW
 
-No finding reaches MEDIUM or HIGH. The command can proceed to
-implementation as proposed.
+No finding reaches MEDIUM or HIGH. The revised proposal's 10000 upper
+bound on `--per-channel-limit` addresses the prior shortcut MEDIUM
+finding. The command can proceed to implementation as proposed.
 
 ## Findings
 
-### Finding 1: Unbounded per-channel-limit allows large API request volume
+### Finding 1: Per-channel-limit bounded at 10000 — prior MEDIUM resolved
 - Risk level: LOW
-- Description: The proposal explicitly recommends *not* clamping
-  `--per-channel-limit` to `MAX_READ_LIMIT` (200). A caller can pass
-  values like `2000`, which at `ceil(N/100)` pages per channel across
-  the full guild surface could produce hundreds of Discord REST
-  requests in a single invocation. For a guild with 42 scannable
-  channels and `--per-channel-limit 2000`, the worst case is ~840
-  `/messages` requests. Discord's per-route rate limits (typically
-  5 req/5s per channel) and global rate limits could cause significant
-  back-pressure and extend execution time well past
-  `GATEWAY_TIMEOUT_SECONDS` (30s).
-- Recommendation: The risk is LOW because `discord.py` already handles
-  rate-limit 429 responses with automatic retry and backoff, so the
-  command will slow down rather than fail or get the bot banned. The
-  30-second gateway timeout provides a natural ceiling — scans that
-  exceed it will abort cleanly via `asyncio.TimeoutError`. No change
-  is required before implementation. If operational experience shows
-  abuse, a reasonable upper bound (e.g. 2000) can be added later as a
-  backward-compatible constraint.
+- Description: The prior shortcut assessment rated the unbounded
+  `--per-channel-limit` as MEDIUM because values like `100000` could
+  produce thousands of paginated REST requests with no practical benefit.
+  The revised proposal adds a hard upper bound of 10000 with explicit
+  validation (`args.per_channel_limit <= 10000`), raising `CLIError`
+  on violation. At the worst case of 10000 per channel across ~42
+  scannable channels, this means ~4200 paginated `/messages` requests
+  (ceil(10000/100) × 42). That is a large but finite scan.
+  `discord.py`'s built-in rate-limit backoff prevents 429 bans, and the
+  30-second `GATEWAY_TIMEOUT_SECONDS` provides a natural execution
+  ceiling — scans exceeding it abort cleanly via `asyncio.TimeoutError`.
+  The 10000 cap eliminates the effectively-unbounded scenario while
+  preserving the audit-depth flexibility the command is designed for.
+- Recommendation: No change required. The upper bound adequately
+  addresses the prior MEDIUM finding. Note: the current implementation
+  at `discord_cli.py:447-448` validates `> 0` but does not yet enforce
+  the `<= 10000` check specified in the proposal. The implementation
+  should add this validation to match the proposal.
 
 ### Finding 2: Message content exposure in samples
 - Risk level: LOW
@@ -40,9 +41,7 @@ implementation as proposed.
   message content. The CLI is a local tool authenticated with the same
   bot token, so anyone running `bot-activity` already has the same
   access as someone running `read` on each channel individually. No
-  change is required. If content sensitivity becomes a concern, a
-  future `--no-samples` flag or a content-truncation option would be
-  a clean extension point.
+  change is required.
 
 ### Finding 3: Silent Forbidden skipping hides partial coverage
 - Risk level: LOW
@@ -53,8 +52,7 @@ implementation as proposed.
   permission-restricted channels.
 - Recommendation: The risk is LOW because the proposal explicitly
   identifies this as a known tradeoff and names `skipped` as a future
-  extension point. For an audit tool, silent gaps could matter, but
-  the v1 scope is reasonable — the bot typically has
+  extension point. The v1 scope is reasonable — the bot typically has
   `read_message_history` on most channels it's deployed to inspect.
   No change is required before implementation.
 
@@ -66,8 +64,7 @@ implementation as proposed.
   args.bot_id` (integer equality), not interpolated into strings or
   queries. There is no path from this argument to command injection,
   SQL injection, or API parameter manipulation.
-- Recommendation: No change required. The typing is correct as
-  proposed.
+- Recommendation: No change required.
 
 ### Finding 5: Strictly read-only — no data integrity risk
 - Risk level: LOW
@@ -76,8 +73,7 @@ implementation as proposed.
   (send, edit, delete, ban, kick, role change, etc.). It does not
   write to local disk, databases, or caches. The anti-scope section
   explicitly excludes all mutation behavior.
-- Recommendation: No change required. The read-only constraint is
-  well-enforced by the design.
+- Recommendation: No change required.
 
 ### Finding 6: Command fits the existing permission model
 - Risk level: LOW
@@ -88,5 +84,4 @@ implementation as proposed.
   token, operate within the bot's Discord permissions. The bot's
   Discord-side permissions (specifically `read_message_history`)
   govern what channels can be scanned, enforced by the API itself.
-- Recommendation: No change required. The command does not bypass or
-  weaken the existing permission model.
+- Recommendation: No change required.

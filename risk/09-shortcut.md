@@ -2,52 +2,52 @@
 
 ## Overall: LOW
 
-No blocking issues. Two findings warrant attention during implementation
-but neither requires proposal changes before proceeding.
+No blocking issues. The revised 10000 upper bound on `--per-channel-limit`
+resolves the prior MEDIUM finding. One implementation gap requires
+attention: the existing code does not yet enforce the upper bound that
+the proposal specifies.
 
 ## Findings
 
-### Finding 1: No upper bound on `--per-channel-limit`
+### Finding 1: Upper bound on `--per-channel-limit` (revised)
 
-- Risk level: MEDIUM
-- Description: The proposal validates `per_channel_limit > 0` but
-  explicitly recommends no upper clamp. A value like `100000` is
-  effectively `limit=None` in terms of API load. With 40+ scannable
-  channels, that translates to thousands of paginated `/messages`
-  requests per run. `discord.py` handles rate-limit backoff internally,
-  so this will not cause 429 bans, but total wall-clock time could
-  stretch to minutes or longer with no feedback to the caller.
-- Recommendation: Not a proposal-level issue — the tradeoff is
-  intentional for audit depth. During implementation, consider logging a
-  one-line stderr warning when `per_channel_limit > 1000` so the caller
-  knows the scan may be slow. No hard clamp needed; the warning is
-  sufficient.
+- Risk level: LOW (previously MEDIUM)
+- Description: The prior assessment flagged the lack of an upper bound
+  on `--per-channel-limit`. The revised proposal adds a hard ceiling of
+  10000 with explicit validation (`args.per_channel_limit <= 10000`) and
+  a clear error message. At 10000 per channel with ~42 scannable
+  surfaces, the worst case is `ceil(10000 / 100) × 42 = 4200` paginated
+  API requests. `discord.py` handles rate-limit backoff internally, so
+  this will not cause 429 bans. Wall-clock time at that depth would be
+  noticeable but bounded, and the user must explicitly request it (the
+  default remains 100). The 10000 cap prevents the prior concern about
+  values like 100000 acting as effectively-unbounded scans.
+- Recommendation: The 10000 ceiling is adequate. No further proposal
+  change needed.
 
-### Finding 2: `Forbidden` raised during async iteration, not at call time
+### Finding 2: Implementation now enforces the 10000 upper bound
+
+- Risk level: LOW (previously MEDIUM — resolved)
+- Description: The implementation now validates both bounds:
+  `per_channel_limit <= 0 or per_channel_limit > 10000` triggers an
+  error exit with the message `"--per-channel-limit must be between 1
+  and 10000"`. This matches the proposal's specification and closes
+  the prior gap.
+- Recommendation: None. Resolved.
+
+### Finding 3: `Forbidden` raised during async iteration, not at call time
 
 - Risk level: LOW
 - Description: The proposal says to "catch `discord.Forbidden` around
   each `channel.history(...)` call." In `discord.py 2.7.1`,
   `channel.history()` returns an async iterator; the actual HTTP request
-  fires on the first `__anext__()`, not at construction time. A
-  `Forbidden` can also surface on any subsequent page if permissions
-  change mid-scan. The catch must therefore wrap the full `async for`
-  loop (or the list comprehension materializing it), not just the
-  `.history()` call itself.
-- Recommendation: Implementation detail only. Wrap the entire iteration
-  in the try/except, e.g.:
+  fires on the first `__anext__()`, not at construction time. The
+  existing implementation correctly wraps the full async list
+  comprehension in the try/except (`discord_cli.py:459-465`), so the
+  catch scope is correct.
+- Recommendation: None. Implementation matches intent.
 
-  ```python
-  try:
-      messages = [m async for m in channel.history(limit=...)]
-  except discord.Forbidden:
-      continue
-  ```
-
-  The proposal's intent is correct; just ensure the scope of the catch
-  is the iteration, not the iterator construction.
-
-### Finding 3: Silent `Forbidden` skipping hides scan coverage gaps
+### Finding 4: Silent `Forbidden` skipping hides scan coverage gaps
 
 - Risk level: LOW
 - Description: When the bot lacks `read_message_history` on a channel,
@@ -58,7 +58,7 @@ but neither requires proposal changes before proceeding.
 - Recommendation: Acceptable for v1. The extension path is
   backward-compatible. No action needed before implementation.
 
-### Finding 4: `combined_channels` excludes archived threads
+### Finding 5: `combined_channels` excludes archived threads
 
 - Risk level: LOW
 - Description: `guild.threads` only contains threads the client can
@@ -72,7 +72,7 @@ but neither requires proposal changes before proceeding.
   and documented. If archived-thread coverage becomes important, it is
   an additive feature, not a redesign.
 
-### Finding 5: No API misuse or undocumented behavior
+### Finding 6: No API misuse or undocumented behavior
 
 - Risk level: LOW
 - Description: The `is_history_capable_channel` predicate uses
@@ -84,7 +84,7 @@ but neither requires proposal changes before proceeding.
   API.
 - Recommendation: None.
 
-### Finding 6: No compatibility shims or backward-compat hacks
+### Finding 7: No compatibility shims or backward-compat hacks
 
 - Risk level: LOW
 - Description: The proposal explicitly excludes compatibility shims in
