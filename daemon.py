@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import discord
 from discord import app_commands
@@ -69,7 +69,7 @@ class HumilityDaemonBot(commands.Bot):
         *,
         guild_id: int,
         config: DaemonConfig,
-        conn: Any,
+        conn: sqlite3.Connection,
         intents: discord.Intents,
         base_path: Path | None = None,
     ) -> None:
