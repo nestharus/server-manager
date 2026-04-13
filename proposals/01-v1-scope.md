@@ -2,13 +2,13 @@
 
 ## 1. Executive summary
 
-Humility v1 should be a single always-on Discord daemon on Railway, backed by Supabase Postgres, with Supabase Storage for durable image evidence. Its scope is narrow: replace Gather, replace the broken ticket bot path, automate chapter creation, and remove the manual screenshot-to-spreadsheet activity workflow.
+Humility v1 should be a single always-on Discord daemon on Railway, backed by Supabase Postgres, with Supabase Storage for durable screenshot evidence. Its scope stays anchored to the four validated problem areas: applications, activity tracking, tickets, and chapter provisioning. The shape does not change: Discord remains the primary operator surface, `discord_cli.py` remains a sibling inspection tool, Postgres remains the system of record, and Discord messages and threads remain operator projections over durable records.
 
-Discord remains the operator surface. `discord_cli.py` survives as a sibling inspection tool. The daemon owns live interactions, durable workflow state, transcript capture, OCR orchestration, and bounded Discord mutations. Postgres is the system of record; Discord messages and threads are operator projections over that record.
+This revision trims implementation surface where the risk review showed overbuild. Applications remain the first fully realized workflow. Activity tracking is split into Phase 2a and Phase 2b so the OCR subsystem does not become one monolithic blocker. Tickets ship in v1 with `server_support` only. `chapter_support` and `chapter_incident` wait until real chapter infrastructure exists; `moderator` waits until the `Moderator` role is actually staffed. Ticket transcript capture is simplified to close-time full-history fetch in v1 rather than real-time gateway mirroring plus reconciliation.
 
-The sequence should follow the accepted Option C. Phase 0 delivers the daemon skeleton, schema, migrations, CI, logging, and `/daemon-ping`. Phase 1 delivers one working chapter application flow. Phase 2 adds screenshot OCR and flagging. Phase 3 adds the four ticket types. Phase 4 automates chapter provisioning. That order keeps the highest-risk visible-write surface last while reusing the same interaction, claim, and audit foundations.
+Chapter provisioning also stays in scope, but the v1 shape is narrower than the original proposal. Humility currently has no live chapters, so the first chapter used for applications and activity tracking is a one-time manual bootstrap dependency created from the existing template structure before provisioning automation ships. Phase 4 then automates subsequent chapter creation with auditability, dry-run validation, explicit confirmation, and recorded created-resource IDs, but without a heavyweight resume/rollback engine that Humility's expected chapter volume does not justify.
 
-The cost profile is modest. Railway and Supabase dominate spend. Google Vision primary OCR should stay near zero at MVP volume. Gemini fallback should also stay low because it only runs on ambiguous uploads. The complexity budget therefore belongs in correctness: auditability, reversible mutation patterns, transcript retention, schema versioning, and controlled OCR escalation.
+The cost profile is still modest. Railway and Supabase dominate spend. Google Vision primary OCR should stay near zero at MVP volume, and Gemini fallback should remain low if escalation is reserved for ambiguous uploads. The complexity budget therefore belongs in correctness and operational safety: durable records, schema versioning, secret-scrubbed audit/logging, bounded Discord mutations, rate-limit-aware execution, and reversible operator actions where reversal is justified.
 
 ## 2. High-level architecture
 
@@ -25,7 +25,7 @@ Discord Slash Commands / Buttons / Modals / Messages
                        | interaction handlers      |
                        | OCR orchestrator          |
                        | mutation safety wrapper   |
-                       | transcript/audit writers  |
+                       | audit / transcript writer |
                        +------------+--------------+
                                     |                \
                                     |                 \
@@ -38,7 +38,7 @@ Discord Slash Commands / Buttons / Modals / Messages
                         |                       |
                         v                       v
             Google Cloud Vision         Gemini 3 Flash Preview
-         DOCUMENT_TEXT_DETECTION        fallback for low-confidence
+         DOCUMENT_TEXT_DETECTION        fallback for ambiguous OCR
 
 
 discord_cli.py
@@ -47,17 +47,17 @@ discord_cli.py
   +--------------------------------------> Supabase Postgres / Discord API
 ```
 
-The Discord gateway is the upstream event source. Slash commands, buttons, modal submits, thread events, and relevant messages arrive through one long-running `discord.py` process. That keeps interaction latency low and keeps transcript capture and claim updates in one place.
+The Discord gateway is the upstream event source for live workflows. Slash commands, buttons, modal submits, thread events, and relevant member events arrive through one long-running `discord.py` process. That keeps interaction latency low and keeps review flows, claim transitions, and bounded Discord writes in one place.
 
-The daemon is the only live write service in v1. It owns workflow state machines, persistence, OCR routing, and visible Discord mutations. There is no separate API service because the accepted scope does not justify a second always-on surface yet.
+The daemon is the only live write service in v1. It owns workflow state machines, persistence, OCR routing, transcript capture at ticket close, and visible Discord mutations. There is no second always-on API service in v1. If application input has to move to richer web forms because the required Discord components are not actually supported through the chosen library, that web surface is a narrow replacement for the application intake workflow; the operator workflow, review actions, and durable state remain centered on the daemon and the same Postgres records.
 
 Supabase Postgres is the source of truth. Applications, tickets, OCR uploads, activity rows, flags, provisioning runs, and audit events land there as durable records. Supabase Storage holds screenshot evidence because Discord attachment URLs are not the forever-retention path.
 
-Google Cloud Vision is the primary OCR engine. Gemini 3 Flash Preview is the fallback only for ambiguous uploads. `discord_cli.py` remains a separate, read-mostly inspection tool for audits, diagnostics, and state comparison.
+Google Cloud Vision is the primary OCR engine. Gemini 3 Flash Preview is the fallback only for ambiguous uploads, and only after the Phase 2b confidence and validation path exists. `discord_cli.py` remains a separate, read-mostly inspection tool for audits, diagnostics, and state comparison.
 
 ## 3. Data model
 
-The schema should live in Postgres under `app` and `audit` schemas. `audit.audit_events` is append-only. All user-visible records use soft-delete or archival timestamps instead of hard delete.
+The schema should live in Postgres under `app` and `audit` schemas. `audit.audit_events` is append-only by convention in v1 and stores logical mutation context, not raw transport payloads. All user-visible records use soft-delete or archival timestamps instead of hard delete. All database writes use parameterized queries; no user input is interpolated into SQL strings.
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS app;
@@ -72,39 +72,26 @@ CREATE TYPE app.application_status AS ENUM (
     'waitlist',
     'approved',
     'denied',
-    'withdrawn',
-    'promoted'
+    'withdrawn'
 );
 
 CREATE TYPE app.ticket_type AS ENUM (
-    'server_support',
-    'moderator',
-    'chapter_support',
-    'chapter_incident'
+    'server_support'
 );
 
 CREATE TYPE app.ticket_status AS ENUM (
     'open',
     'claimed',
-    'closed',
-    'promoted'
+    'closed'
 );
 
 CREATE TYPE app.provisioning_status AS ENUM (
     'planned',
+    'validated',
     'running',
     'completed',
     'failed',
-    'rolled_back'
-);
-
-CREATE TYPE app.provisioning_step_status AS ENUM (
-    'planned',
-    'running',
-    'completed',
-    'failed',
-    'rolled_back',
-    'skipped'
+    'cleaned_up'
 );
 
 CREATE TYPE app.activity_upload_status AS ENUM (
@@ -194,8 +181,6 @@ CREATE TABLE app.chapter_roles (
 CREATE TABLE app.chapter_channels (
     chapter_id UUID PRIMARY KEY REFERENCES app.chapters(id),
     applications_queue_discord_channel_id BIGINT NOT NULL REFERENCES app.discord_channels(discord_channel_id),
-    chapter_support_queue_discord_channel_id BIGINT NOT NULL REFERENCES app.discord_channels(discord_channel_id),
-    chapter_incident_queue_discord_channel_id BIGINT NOT NULL REFERENCES app.discord_channels(discord_channel_id),
     officer_lobby_discord_channel_id BIGINT NOT NULL REFERENCES app.discord_channels(discord_channel_id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     archived_at TIMESTAMPTZ
@@ -313,9 +298,7 @@ CREATE UNIQUE INDEX application_blacklist_active_idx
 CREATE TABLE app.tickets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     ticket_type app.ticket_type NOT NULL,
-    chapter_id UUID REFERENCES app.chapters(id),
     requester_discord_user_id BIGINT NOT NULL REFERENCES app.discord_users(discord_user_id),
-    handler_role_discord_id BIGINT NOT NULL REFERENCES app.discord_roles(discord_role_id),
     current_status app.ticket_status NOT NULL,
     subject TEXT,
     opening_message_json JSONB NOT NULL,
@@ -326,7 +309,6 @@ CREATE TABLE app.tickets (
     queue_message_discord_id BIGINT,
     thread_discord_channel_id BIGINT REFERENCES app.discord_channels(discord_channel_id),
     requester_left_server_at TIMESTAMPTZ,
-    promoted_to_application_id UUID REFERENCES app.applications(id),
     closed_at TIMESTAMPTZ,
     closed_by_discord_user_id BIGINT REFERENCES app.discord_users(discord_user_id),
     close_reason TEXT,
@@ -348,8 +330,7 @@ CREATE TABLE app.ticket_messages (
     embeds_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL,
     edited_at TIMESTAMPTZ,
-    deleted_at TIMESTAMPTZ,
-    raw_event_json JSONB NOT NULL DEFAULT '{}'::jsonb
+    deleted_at TIMESTAMPTZ
 );
 
 CREATE INDEX ticket_messages_ticket_lookup_idx
@@ -414,7 +395,7 @@ CREATE TABLE app.activity_log (
     player_name_normalized TEXT NOT NULL,
     parsed_points INTEGER NOT NULL CHECK (parsed_points >= 0),
     parser_source TEXT NOT NULL CHECK (parser_source IN ('google_vision', 'gemini_fallback', 'manual')),
-    row_confidence NUMERIC(5,4) NOT NULL CHECK (row_confidence >= 0 AND row_confidence <= 1),
+    row_confidence NUMERIC(5,4) CHECK (row_confidence IS NULL OR (row_confidence >= 0 AND row_confidence <= 1)),
     quoted_source_text TEXT NOT NULL,
     row_status app.activity_row_status NOT NULL,
     correction_note TEXT,
@@ -460,31 +441,15 @@ CREATE TABLE app.provisioning_runs (
     confirmed_by_discord_user_id BIGINT REFERENCES app.discord_users(discord_user_id),
     chapter_id UUID REFERENCES app.chapters(id),
     spec_json JSONB NOT NULL,
-    dry_run_report_json JSONB NOT NULL,
+    validation_report_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_resources_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    cleanup_report_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     current_status app.provisioning_status NOT NULL,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
-    rollback_of_run_id UUID REFERENCES app.provisioning_runs(id),
+    cleaned_up_at TIMESTAMPTZ,
     failure_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE app.provisioning_steps (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    provisioning_run_id UUID NOT NULL REFERENCES app.provisioning_runs(id),
-    step_order INTEGER NOT NULL CHECK (step_order > 0),
-    step_key TEXT NOT NULL,
-    current_status app.provisioning_step_status NOT NULL,
-    discord_resource_kind TEXT,
-    discord_resource_id BIGINT,
-    db_table_name TEXT,
-    db_row_primary_key TEXT,
-    request_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    started_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    UNIQUE (provisioning_run_id, step_order),
-    UNIQUE (provisioning_run_id, step_key)
 );
 
 CREATE TABLE audit.audit_events (
@@ -511,39 +476,32 @@ CREATE INDEX audit_events_lookup_idx
 
 Table notes and nullability:
 
-- `app.discord_users`: durable user identity snapshot. Nullable profile fields cover backfill or departed users. Soft-delete equivalent: `left_guild_at`.
-- `app.discord_roles`: local mirror of Discord role IDs so chapter bindings can use foreign keys. Nullable `position_snapshot` covers partial backfills. Soft-delete column: `archived_at`.
-- `app.discord_channels`: same pattern for channels and threads. Nullable `parent_discord_channel_id` covers top-level categories. Soft-delete column: `archived_at`.
-- `app.chapters`: canonical chapter row. Nullable `officer_lobby_discord_channel_id` and `created_by_discord_user_id` cover imported or pre-provisioning records. Soft-delete column: `archived_at`.
-- `app.chapter_roles`: one row per chapter mapping the six chapter role IDs. Nullable nothing except `archived_at`; the row is incomplete if any role ID is missing. Soft-delete column: `archived_at`.
-- `app.chapter_channels`: one row per active chapter mapping the required queue and officer channels. Nullable nothing except `archived_at`; v1 treats these channels as mandatory. Soft-delete column: `archived_at`.
-- `app.chapter_members`: roster plus in-game identity binding. Nullable `left_at`, `left_reason`, and `created_from_application_id` because active members have not left and some members will predate the daemon. Soft-delete equivalent: `left_at`.
-- `app.application_forms`: stable per-chapter form identity. Nullable `current_version_id` only during initial draft creation. Soft-delete column: `archived_at`.
-- `app.application_form_versions`: immutable version snapshots. Nullable `created_by_discord_user_id` for imports from repo YAML or migration scripts.
-- `app.applications`: durable submission record and current state. Claim, review-thread, waitlist, and decision fields are nullable until the workflow reaches those states. Soft-delete column: `archived_at`.
-- `app.application_status_history`: append-only transition log. Nullable `from_status` covers the initial insert; nullable actor covers system transitions.
-- `app.application_blacklist`: per-chapter blacklist. Nullable `source_application_id` covers manual policy additions; removal fields stay null until removal. Soft-delete equivalent: `removed_at`.
-- `app.tickets`: canonical ticket case record. Nullable `chapter_id` covers global ticket types; claim, thread, and close fields stay null until used. Soft-delete column: `archived_at`.
-- `app.ticket_messages`: transcript store. Nullable `author_discord_user_id` because deleted users or webhooks may lack a durable user row. Nullable `content_markdown`, `edited_at`, and `deleted_at` because attachment-only messages exist and not every message is edited or deleted.
-- `app.activity_rules`: compact rule grammar stored as rows, not free-form scripts. Soft-delete column: `archived_at`.
-- `app.activity_uploads`: one screenshot ingestion record. Discord source IDs are nullable for future backfills; OCR payloads are nullable until processing completes. Soft-delete column: `archived_at`.
-- `app.activity_log`: one parsed row from one upload. Nullable `chapter_member_id` covers unmatched names; correction fields stay null until a human edits the row. Soft-delete equivalent: `superseded_at`.
-- `app.activity_flags`: derived rule breach records. Review refs and resolution fields are nullable until the flag is posted and resolved. Soft-delete column: `archived_at`.
-- `app.provisioning_runs`: saga header for chapter creation and archival. Nullable `confirmed_by_discord_user_id`, `chapter_id`, `started_at`, `completed_at`, `rollback_of_run_id`, and `failure_reason` because not every planned run is confirmed or completed.
-- `app.provisioning_steps`: step ledger for resume and rollback. Most resource reference columns are nullable because some steps only validate or write DB state.
-- `audit.audit_events`: immutable audit trail for every bounded mutation. Nullable target IDs and snapshots because some events are planning or failure records before the target exists.
+- `app.discord_users`, `app.discord_roles`, and `app.discord_channels` are durable Discord identity mirrors. Soft-delete equivalents are `left_guild_at` or `archived_at`.
+- `app.chapters`, `app.chapter_roles`, and `app.chapter_channels` define the current chapter graph. `chapter_channels` stores only the channels v1 actually depends on: the applications queue and officer lobby. Chapter-scoped ticket queues are deferred with the ticket types that need them.
+- `app.application_forms` and `app.application_form_versions` keep form definitions in Postgres, not YAML. `schema_json` stores the logical form shape. `component_plan_json` stores the derived rendering plan for a specific version and remains document-shaped JSONB rather than a dumping ground for data with stable columns.
+- `app.applications`, `app.application_status_history`, and `app.application_blacklist` keep the application workflow durable and queryable forever. `answers_json` and `attachments_json` are immutable submission snapshots tied to one form version.
+- `app.tickets` and `app.ticket_messages` store only the `server_support` ticket workflow in v1. Transcript capture is a normalized message history fetched at close time rather than a raw gateway-event archive.
+- `app.activity_rules`, `app.activity_uploads`, `app.activity_log`, and `app.activity_flags` separate known structure from document payloads. Rules stay column-backed; OCR provider payloads stay in JSONB because their structure is vendor-defined.
+- `app.activity_log.row_confidence` is nullable so Phase 2a can persist basic extraction before Phase 2b calibration and fallback logic lands.
+- `app.provisioning_runs` keeps the requested spec, dry-run validation report, created resource IDs, and any explicit cleanup report in one row. This preserves auditability without a per-step saga table.
+- `audit.audit_events.request_json` stores logical operation parameters only: target IDs, intended state, operator context, and safe audit metadata. It never stores raw HTTP payloads, raw headers, or vendor request bodies.
+- `audit.audit_events.error_text` stores a sanitized application-level summary only. Secrets, tokens, connection strings, raw headers, and raw tracebacks are scrubbed or truncated before persistence.
 
 ## 4. Applications subsystem
 
-Application forms should be DB-stored, not YAML-backed in production. YAML remains useful as an import format, but it is the wrong system of record for a Railway-hosted workflow that needs versioning, auditability, and live chapter provisioning. Each chapter’s active form lives in `application_forms` + immutable `application_form_versions`. A form edit creates a new version row; it never rewrites history.
+Application forms should be DB-stored, not YAML-backed in production. YAML remains useful as a bootstrap or import format, but it is not the system of record for a Railway-hosted workflow that needs versioning, auditability, and live chapter management. Each chapter's active form lives in `application_forms` plus immutable `application_form_versions`. A form edit creates a new version row; it never rewrites history.
 
-The user surface is `/apply chapter:<chapter>`, with autocomplete limited to active, non-archived chapters. The slash command performs three checks before opening the first interaction: the chapter exists and is active, the applicant is not blacklisted for that chapter, and the applicant has no active application in `draft`, `submitted`, `claimed`, `interview`, or `waitlist`. The blacklist is checked again on final submit to close the race where staff blacklists the user while they are midway through the form.
+The first operational dependency is explicit: Humility currently has no live chapters. Before Phase 1 starts, one staging chapter and any first production seed chapter needed for rollout must be manually bootstrapped from the existing template structure and inserted into `chapters`, `chapter_roles`, and `chapter_channels`. Applications do not pretend that chapter infrastructure already exists; they depend on that one-time bootstrap until automated provisioning ships later.
 
-Rendering uses Discord’s current modal capabilities, not the older text-only assumption. The form planner should support string input, numeric input, single-select, multi-select, radio, checkbox, and file upload components. The planner turns one form version into one or more interaction pages constrained by Discord component limits. If a form fits inside one modal, it stays one modal. If it exceeds modal limits, the daemon opens a sequenced interaction session: modal page 1, then component follow-up or modal page 2 from the next interaction. The important design rule is that the form model is logical and stable; the component plan is a derived rendering artifact stored alongside the version. That lets the form change while keeping the historical render plan for old submissions.
+The preferred user surface is `/apply chapter:<chapter>`, with autocomplete limited to active, non-archived chapters. The slash command performs three checks before opening the first interaction: the chapter exists and is active, the applicant is not blacklisted for that chapter, and the applicant has no active application in `draft`, `submitted`, `claimed`, `interview`, or `waitlist`. The blacklist is checked again on final submit to close the race where staff blacklists the user while they are mid-flow.
 
-On `/apply`, the daemon creates an `applications` row in `draft` with the target `application_form_version_id`, applicant ID, and empty answers. Each completed interaction page updates `answers_json`. Final submit transitions `draft -> submitted`, stamps `submitted_at`, and writes the immutable answer snapshot. This preserves abandoned starts, allows resume logic later without redesigning the schema, and gives staff a truthful audit trail about whether a user ever opened the form.
+Rendering uses Discord's current interaction components if the chosen library actually supports the required inputs. The logical form planner should support string input, numeric input, single-select, multi-select, radio, checkbox, and file upload components. The planner turns one form version into one or more interaction pages constrained by Discord limits. If a form fits inside one modal, it stays one modal. If it exceeds modal limits, the daemon uses a sequenced interaction session across later component interactions. The important rule is that the form model is logical and stable; the component plan is a derived rendering artifact stored alongside the version.
 
-Once submitted, the daemon posts a review embed in the chapter’s applications queue channel and creates a private review thread in the same parent channel. The thread is created as a private thread, not a message-attached public thread. The queue message contains the chapter, applicant, submission time, current state, a compact answer summary, and buttons: `Claim`, `Interview`, `Waitlist`, `Approve`, `Deny`. The embed also includes a link or mention to the private thread. The thread is seeded with the applicant, all chapter officers for that chapter, the bot itself, and any preserved central override members configured by policy. Because claim-based visibility only works if ordinary reviewers do not have `MANAGE_THREADS`, the channel permission model must avoid handing `MANAGE_THREADS` to every handler role.
+The component fallback is explicit, not a handwave. If hookpoint verification shows that the required Discord input components are not actually exposed through the chosen `discord.py` surface, richer web forms move into v1 as the replacement surface for the application intake workflow. That fallback uses the same `application_forms`, `application_form_versions`, and `applications` records. It does not reintroduce YAML as the source of truth, does not create a compatibility fork, and does not move officer review out of Discord. Discord remains the review, claim, decision, and audit surface either way.
+
+On `/apply`, the daemon creates an `applications` row in `draft` with the target `application_form_version_id`, applicant ID, and empty answers. Each completed interaction page updates `answers_json`. Final submit transitions `draft -> submitted`, stamps `submitted_at`, and writes the immutable answer snapshot. This preserves abandoned starts and gives staff a truthful audit trail about whether a user opened the form and how far they got.
+
+Once submitted, the daemon posts a review embed in the chapter applications queue and creates a private review thread in the same parent channel. The thread is created as a private thread, not a message-attached public thread. The queue message contains the chapter, applicant, submission time, current state, and a compact answer summary. Buttons are `Claim`, `Interview`, `Waitlist`, `Approve`, and `Deny`. The embed also links or mentions the private thread. The thread is seeded with the applicant, all chapter officers for that chapter, the bot itself, and any preserved central override users configured by policy.
 
 State machine:
 
@@ -565,137 +523,156 @@ State machine:
 - `waitlist -> denied`
 - any active state -> `withdrawn` only by applicant or staff
 
-The distinction between `interview` and `waitlist` must be operational, not cosmetic. `interview` means an officer is actively working the case and expects a follow-up conversation or extra evidence; the claimer remains the active owner. `waitlist` means the application is paused for capacity, timing, or chapter demand reasons; the application is not approved and is not currently “in interview.” When an application moves to `waitlist`, the daemon should re-expand thread membership from the claimer-only set back to chapter officers so another officer can later pick it up without staff-side manual repair.
+The distinction between `interview` and `waitlist` must be operational, not cosmetic. `interview` means an officer is actively working the case and expects a follow-up conversation or extra evidence; the claimer remains the active owner. `waitlist` means the application is paused for capacity, timing, or chapter demand reasons; it is not approved and is not currently "in interview." When an application moves to `waitlist`, the daemon re-expands thread membership from the claimer-only set back to chapter officers so another officer can later pick it up without staff-side repair.
 
 `Claim` uses the shared claim-visibility helper. On success, the application transitions to `claimed`, stores `claimed_by_discord_user_id`, and narrows the review thread to the applicant, the claimer, the bot, and any explicitly preserved override users. `Interview` transitions the record without changing the answer snapshot and posts the follow-up request in-thread.
 
-`Approve` must be a bounded mutation sequence, not raw Discord calls scattered through the handler. The daemon adds the chapter’s `member_role_id` and base `chapter_role_id`, removes the chapter `applicant_role_id`, inserts or updates the `chapter_members` row using the submitted in-game name, records the status transition, DMs the applicant with the outcome, posts a terminal embed in the thread, and archives the thread. The daemon should not auto-assign `guild_war_role_id`; that remains chapter-policy specific and manual unless a later requirement justifies it.
+`Approve` is a bounded mutation sequence, not raw Discord calls scattered through the handler. The daemon adds the chapter `member_role_id` and base `chapter_role_id`, removes the chapter `applicant_role_id`, inserts or updates the `chapter_members` row using the submitted in-game name, records the status transition, DMs the applicant with the outcome, posts a terminal embed in the thread, and archives the thread. The daemon does not auto-assign `guild_war_role_id`; that remains manual unless a later requirement justifies it.
 
 `Deny` opens a short staff modal requiring a reason and allowing a `Blacklist this applicant for this chapter` checkbox. The reason is stored in both `applications.decision_reason` and `application_status_history.note`. If the checkbox is selected, the daemon inserts an `application_blacklist` row tied back to the application. The daemon DMs the applicant with the reason, marks the application denied, posts the denial in-thread, and archives the thread.
 
-Retention is full. Nothing is hard-deleted. Old applications remain queryable forever. “Deleting” a queue message or archiving a thread is a Discord UX action, not data deletion. The DB record, status history, answer snapshot, and denial or waitlist notes remain intact.
-
-Form schema evolution is handled by immutable version snapshots. If Dark Nemesis changes a timezone question from select to radio next month, the new version becomes active for new applicants only. Old submissions still render exactly as answered because the old `schema_json` and `component_plan_json` stay attached to the submission’s `application_form_version_id`.
+Retention is full. Nothing is hard-deleted. Old applications remain queryable forever. "Deleting" a queue message or archiving a thread is a Discord UX action, not data deletion. The DB record, status history, answer snapshot, and denial or waitlist notes remain intact.
 
 ## 5. Tickets subsystem
 
-Tickets and applications should share the same queue-thread-claim foundation, but they should remain separate state machines and tables because their routing, transcript needs, and terminal actions differ.
+Tickets and applications should share the same queue, thread, and claim foundation, but they remain separate state machines and tables because their routing and terminal actions differ. The v1 ticket scope is intentionally narrow: only `server_support` ships.
 
-The four ticket types are:
+Deferred ticket types are explicit:
 
-- `server_support`: global support requests routed to `Staff`.
-- `moderator`: reports and moderator-facing cases routed to `Moderator`; `Trial Mod` gets read-only visibility at the queue parent but cannot speak in threads.
-- `chapter_support`: chapter-level support routed to the selected chapter’s officer role.
-- `chapter_incident`: chapter-level incident or conflict cases routed to the selected chapter’s officer role, with the stronger expectation that central staff may later inspect via override.
+- `chapter_support` and `chapter_incident` wait until real chapter infrastructure exists and there is real operator demand to route into it.
+- `moderator` waits until the `Moderator` role is actually staffed.
 
-The primary open surface should be one slash command plus persistent panels. `/ticket open type:<type> chapter?:<chapter> subject:<text> description:<text>` is the universal fallback. Persistent panels should live in the existing global `#support` surface for `server_support` and `moderator`, and in each chapter’s member-facing channel for `chapter_support` and `chapter_incident`. Buttons reduce friction for ordinary members. Slash commands remain necessary for accessibility, autocomplete, and operator backfill.
+The primary v1 open surface is one slash command plus one persistent panel in the existing global support surface: `/ticket open subject:<text> description:<text>`. The daemon writes the `tickets` row first, posts a queue embed second, and creates the private thread third. The queue message is the operator anchor; the thread holds the case conversation.
 
-Ticket creation writes the `tickets` row first, posts a queue embed second, and creates the private thread third. For `moderator` tickets, the parent queue channel permissions must distinguish `SEND_MESSAGES_IN_THREADS` from `SEND_MESSAGES`; `Trial Mod` gets read visibility while denied thread posting.
+Claim mechanics are shared with applications. The common helper receives the thread, requester, claimer, and preserved-user set, then mutates explicit private-thread membership. It does not assume that role-based visibility alone is enough, because the goal is to narrow the case after claim.
 
-Claim mechanics are shared with applications. The common helper receives the thread, requester, claimer, and a preserved-user set, then mutates explicit private-thread membership. It must not assume that role-based visibility alone is enough, because the goal is to narrow the case after claim.
+Transcript persistence is simplified for v1. The daemon does not mirror every ticket-thread message in real time. Instead, on close it fetches the full thread history through the Discord API, paginates until complete, persists the normalized transcript into `ticket_messages`, then marks the ticket `closed` and archives the thread. At Humility's current ticket volume, this delivers the retention requirement with much less infrastructure than live mirroring plus reconciliation. If ticket volume later rises enough that close-time-only capture is no longer adequate, real-time transcript mirroring can be added as a future expansion rather than shipped speculatively in v1.
 
-Transcript persistence should use a hybrid approach. The daemon listens to gateway message-create, message-update, and message-delete events for any thread channel linked to an open ticket and writes those into `ticket_messages` in near real time. On close, the daemon runs a reconciliation pass over the full thread history to backfill missed events and confirm the transcript is complete before final archive. Gateway events give freshness; close-time reconciliation gives durability if the process restarts.
-
-Close flow: the closer clicks `Close`, supplies a reason, the daemon persists the close record, posts a terminal summary, reconciles transcript history, marks the ticket `closed`, and archives the thread. The queue message is edited to reflect closure. Tickets are never hard-deleted. The transcript remains in `ticket_messages` even if the thread eventually auto-archives or is manually removed later.
+Close flow: the closer clicks `Close`, supplies a reason, the daemon persists the close record, fetches and stores the full thread history, posts a terminal summary, marks the ticket `closed`, edits the queue message to reflect closure, and archives the thread. Tickets are never hard-deleted.
 
 If the requester leaves the server mid-ticket, the ticket remains valid. The daemon marks `requester_left_server_at`, updates the queue embed, and stops assuming the user can be re-added to the private thread. Staff can continue discussing and close the case. Any final DM attempt is best-effort and logged. A user leaving the guild is not a reason to lose the ticket record.
 
-Ticket-to-application promotion should exist, but as a controlled handoff rather than magical conversion. A staffer can click `Promote to Application`, choose the target chapter, and the daemon creates a linked `applications` record prefilled with the ticket’s description plus any structured fields that can be safely mapped. The requester then receives a button or slash-command shortcut to finish the real chapter application form. The original ticket transitions to `promoted`, links to the new application, and closes. This preserves the conversation and prevents staff from manually copying context around.
-
 ## 6. Activity tracking subsystem
 
-The input surface should be an officer-only slash command, not DM, and not “post images anywhere and hope the bot sees them.” The core command should be `/activity upload chapter:<chapter> date:<YYYY-MM-DD> image:<attachment>`. It should only be executable by chapter officers for that chapter, `Staff`, or `Administrator`. The command can be run from the chapter officer lobby or a global staff ops channel; the channel context is recorded, but the chapter argument is explicit so the upload is never inferred from channel name alone.
+The input surface is an officer-only slash command, not DM, and not "post images anywhere and hope the bot sees them." The core command is `/activity upload chapter:<chapter> date:<YYYY-MM-DD> image:<attachment>`. It is executable only by chapter officers for that chapter, `Staff`, or `Administrator`. The command can run from the chapter officer lobby or a global staff ops channel; the channel context is recorded, but the chapter argument is explicit so the upload is never inferred from channel name alone.
 
 Roster binding is ongoing, not one-time. `chapter_members` is initially seeded from approved applications, but officers need explicit maintenance commands for roster corrections and late links: `/chapter roster link`, `/chapter roster rename`, `/chapter roster remove`, and `/chapter roster import` from a simple CSV attachment if needed. Activity tracking depends on a maintained `(chapter, in_game_name, discord_user_id)` mapping. The daemon should therefore treat roster quality as a first-class operational concern, not as an afterthought behind OCR.
 
-OCR pipeline:
+The OCR subsystem is explicitly split into two deliverables.
+
+### Phase 2a: upload, store, Vision, basic extraction
+
+Phase 2a is the minimum useful ingestion path:
 
 1. Receive the image through the slash command. Immediately copy the attachment into Supabase Storage, hash it, create the `activity_uploads` row in `received`, and acknowledge the interaction.
-2. Run optional preprocessing. V1 should support chapter-configurable crop rectangles, grayscale normalization, contrast boost, 2x upscale for small text, and light deskew if the detected angle is materially off-axis. Preprocessing stays conservative; it should never overwrite the stored original.
-3. Call Google Cloud Vision `DOCUMENT_TEXT_DETECTION` on the preprocessed image.
-4. Parse rows using geometric grouping, not line breaks alone. The parser should cluster words by y-axis overlap into row bands, sort tokens in each row by x-position, treat the rightmost numeric cluster as the score column, and treat the remaining visible text to the left as the player name. Header rows and obviously non-row UI chrome are filtered by regexes and minimum numeric confidence.
-5. Compute row confidence. Each row gets a score derived from OCR token confidences, whether exactly one numeric score was found, whether the parsed name matches a current roster entry exactly or fuzzily, and whether the row shape matches the chapter’s expected table pattern.
-6. Decide among three outcomes per upload: accept directly, flag for officer review, or escalate to Gemini. Direct accept only happens when the parser finds a coherent row set and the rows meet confidence and validation thresholds. Flag-for-review is used when the rows are usable but imperfect, for example unknown names or low-confidence digits. Gemini escalation is used when the classical result is too weak to trust without a second extraction path.
-7. Gemini 3 Flash Preview fallback receives the original image plus the classical OCR text blocks and a strict JSON schema. The prompt requires an array of rows with `player_name`, `score`, `quoted_source_text`, `row_index_guess`, and `confidence_reason`. The model is instructed to quote only visible text and to omit rows it cannot justify.
-8. Hallucination controls are mandatory. The daemon rejects fallback output when quoted text cannot be found in either the image-derived OCR text or the model’s own span references, when row count differs too far from the classical parse without explanation, or when the score format violates chapter expectations. The daemon should also compare Gemini rows back against roster candidates and run a second-pass validation that no accepted score row lacks an auditable text basis.
-9. Persist final rows into `activity_log`, link matched rows to `chapter_members`, leave unmatched rows with `chapter_member_id NULL`, update `activity_uploads.current_status`, and then evaluate active `activity_rules` for the affected chapter and date window.
+2. Run conservative preprocessing only when needed. V1 should support chapter-configurable crop rectangles, grayscale normalization, and contrast boost. More aggressive transforms are deferred until there is evidence they improve Humility screenshots.
+3. Call Google Cloud Vision `DOCUMENT_TEXT_DETECTION` on the stored or preprocessed image.
+4. Produce a basic row extraction using conservative heuristics that try to recover `(player_name, score)` pairs without yet claiming calibrated confidence. The goal of Phase 2a is durable ingestion and operator-visible extraction, not fully trusted automation.
+5. Persist the upload record, provider payload, and extracted rows, and post an officer-visible summary that shows what was extracted and what still needs review.
 
-The rule language should be row-backed in the database, not YAML and not a free-form DSL. V1 only needs a compact grammar expressed by columns: metric, operator, threshold, window length, and required breach count. “Flag anyone under 50 points for 3 consecutive days” becomes `metric_name='points'`, `comparison_operator='lt'`, `threshold_value=50`, `window_days=3`, `breach_count_required=3`, `evaluation_mode='consecutive'`.
+Phase 2a is intentionally smaller than the full OCR ambition. It proves storage, provider integration, and basic parsing against real screenshots before the system grows confidence scoring, fallback logic, and rule automation.
 
-Flag output should post to the chapter’s officer lobby or designated activity review channel stored on the rule. DM is the wrong primary surface because activity management is a chapter workflow, not a private one-person workflow. The bot posts one summary embed per upload or per rule evaluation batch, then opens or links a review thread when manual correction is needed.
+### Phase 2b: confidence scoring, fallback, correction, rule evaluation
 
-Mis-scanned rows must be correctable from Discord. V1 should support row-level correction buttons on the review message: `Link Member`, `Edit Score`, `Add Missing Row`, `Reject Row`, and `Confirm Upload`. Each button opens a focused modal for one correction. Corrections create new `activity_log` versions by superseding the prior row; they do not overwrite history.
+Phase 2b turns ingestion into a trustworthy operational workflow:
 
-If a screenshot contains a new player before the roster is updated, the row is stored as `unmatched`, displayed in the review UI, and can be linked to a Discord user later. The upload is still retained. Unknown names are a review problem, not a discard condition.
+1. Add row confidence scoring derived from OCR token quality, row shape, numeric parse quality, and roster match quality.
+2. Add the three-way routing decision: accept directly, flag for review, or escalate to Gemini.
+3. Add Gemini 3 Flash Preview fallback for ambiguous uploads only, passing the original image plus classical OCR output and requiring strict JSON rows with quoted evidence.
+4. Add hallucination controls. Fallback output is rejected when quoted text cannot be grounded in the classical OCR text, when row count diverges materially without explanation, or when scores violate chapter expectations.
+5. Add Discord correction tools: `Link Member`, `Edit Score`, `Add Missing Row`, `Reject Row`, and `Confirm Upload`.
+6. Add `activity_rules` evaluation and officer-visible flag posting.
 
-Historical backfill is allowed. Officers can upload an image with an explicit past `date:` value, and the daemon processes it normally. If a current row already exists for that member and day, the new corrected value supersedes the prior active row rather than deleting it. That supports backfill and correction without violating full-retention requirements.
+No hardcoded OCR thresholds are presented as validated design truths. Any starter threshold values introduced during implementation are calibration inputs only and must be tuned against a retained Humility gold corpus before they are treated as operational defaults.
+
+The rule language stays row-backed in the database, not YAML and not a free-form DSL. V1 only needs a compact grammar expressed by columns: metric, operator, threshold, window length, and required breach count. "Flag anyone under 50 points for 3 consecutive days" becomes `metric_name='points'`, `comparison_operator='lt'`, `threshold_value=50`, `window_days=3`, `breach_count_required=3`, `evaluation_mode='consecutive'`.
+
+Flag output should post to the chapter officer lobby or designated activity review channel stored on the rule. DM is the wrong primary surface because activity management is a chapter workflow, not a private one-person workflow. Corrections create new `activity_log` versions by superseding the prior row; they do not overwrite history.
+
+Historical backfill is allowed. Officers can upload an image with an explicit past `date:` value, and the daemon processes it normally. If a current row already exists for that member and day, the new corrected value supersedes the prior active row rather than deleting it.
 
 ## 7. Chapter provisioning subsystem
 
-Chapter creation should start from an admin-only slash command, not from the CLI. Provisioning is a visible-write workflow that benefits from inline preview, confirmation, progress updates, and audit linkage inside Discord where the operator already is. The CLI can still help generate or validate a chapter spec locally, but it should not be the primary mutation trigger.
+Chapter creation should still start from an admin-only slash command, not from the CLI. Provisioning is a visible-write workflow that benefits from inline preview, confirmation, progress updates, and audit linkage inside Discord where the operator already is. The CLI can still help inspect or validate state locally, but it is not the primary mutation trigger.
 
-The entrypoint should be `/chapters create spec:<attachment>`. The attachment is a YAML or JSON spec containing chapter name, slug, game, initial officers, form questions, activity rules, and any non-default channel options. This keeps the trigger to one command while still allowing structured nested input. The daemon validates the spec, runs a dry-run capacity check, writes `provisioning_runs.current_status='planned'`, posts a preview back to the requester, and only starts the visible writes after an explicit `Confirm` button press by an authorized admin.
+The entrypoint is `/chapters create spec:<attachment>`. The attachment is a YAML or JSON spec containing chapter name, slug, game, initial officers, form questions, activity rules, and any non-default channel options. This keeps the trigger to one command while still allowing structured nested input. YAML is acceptable as an operator input format here; it is not a production source of truth after import.
 
-The create saga runs these steps in order, each with a `provisioning_steps` row and paired audit events:
+The first manual bootstrap dependency is explicit and separate from automation. Because Humility currently has no live chapters, one staging chapter and any first production seed chapter needed for rollout must be created manually from the existing `GUILD TEMPLATE` structure before Phase 1 or Phase 2 can operate against real chapter data. Phase 4 then automates subsequent chapter creation and makes later chapter setup repeatable.
+
+The v1 automated create path is sequential and auditable, but intentionally lighter than the original saga:
+
+1. Validate the spec and run a dry-run cap check.
+2. Write `provisioning_runs.current_status='planned'` with the submitted spec and validation report.
+3. Show the requester a preview and require an explicit `Confirm` button from an authorized admin before visible writes begin.
+4. After confirmation, create the chapter resources in order while updating one `provisioning_runs` row with created Discord IDs and status.
+
+The create flow runs these steps in order:
 
 1. Create the six chapter-specific roles cloned from templates and renamed with the chapter prefix.
 2. Create the chapter category with base overwrites.
-3. Create the chapter channels from the template plus the extra queue channels required for v1.
-4. Apply channel-level overwrites explicitly to every created channel. The design should not rely on category inheritance alone because that is exactly the kind of permission drift trap the research identified.
+3. Create the minimum v1 channels required for chapter operation, including the applications queue and officer lobby.
+4. Apply channel-level overwrites explicitly to every created channel. The design does not rely on category inheritance alone because permission drift was one of the researched failure modes.
 5. Write the `chapters`, `chapter_roles`, and `chapter_channels` rows to Postgres.
 6. Insert the application form and first immutable form version.
 7. Insert the initial activity rules.
 8. Post the application panel in the chapter applications channel and pin it.
 
-This is not transactional in the database sense because Discord mutations are external side effects. The right model is a saga with resume and rollback support. Each step records created Discord IDs and DB IDs. If step 6 fails after channels already exist, the run lands in `failed`, the progress message tells the operator exactly which step failed, and the operator can choose `Resume` or `Rollback`.
+Each successful step records any created Discord IDs into `created_resources_json` on the run row as soon as they exist. That preserves auditability and gives operators a clean cleanup target if the run fails mid-way.
 
-Resume is the primary recovery path. The daemon should first attempt to reuse already-created resources recorded in completed provisioning steps. It should only create a missing role or channel when the recorded step is absent or explicitly failed before resource creation.
+What v1 does not do is pretend Humility needs an enterprise-grade orchestration engine. There is no automatic resume-from-midpoint state machine and no generic reverse-ordered rollback framework. If a create run fails after creating some resources, the daemon marks the run `failed`, reports the failing step and the already-created resource IDs, and leaves the operator with an explicit cleanup path instead of hidden automation.
 
-Rollback is explicit and reverse-ordered. The daemon should remove the application panel, archive or delete newly created empty channels, delete newly created roles if no members have been assigned, and mark any DB rows archived. If the provisioning run reached a point where humans may already have interacted with the created channels, rollback should prefer archival and disablement over destructive deletion. The guiding rule is to avoid silently destroying human-created residue.
+Cleanup is explicit and run-scoped. A follow-up admin action can use the recorded IDs from `created_resources_json` to archive or delete the resources created by that failed run, then mark the run `cleaned_up` with a `cleanup_report_json` summary. That keeps the operator in control and stays proportionate to Humility's expected chapter volume.
 
-Chapter archival uses the same saga framework. It marks the chapter archived in Postgres, disables new applications and tickets for that chapter, archives queues and category channels, records the archive reason, and leaves historical application, ticket, roster, and activity data intact forever.
+Role and category caps must still be checked before confirmation. The dry run should compute `current + projected` counts against Discord's hard caps and also enforce internal guardrails. A sensible v1 rule is to fail chapter creation when the resulting server would exceed 240 roles or 45 categories, leaving headroom for emergencies and future system roles rather than aiming for literal maximums.
 
-Role and category caps must be checked before confirmation. The dry run should compute `current + projected` counts against Discord’s hard caps and also enforce internal guardrails. A sensible v1 rule is to fail chapter creation when the resulting server would exceed 240 roles or 45 categories, leaving headroom for emergencies and future system roles rather than aiming for the literal maximums.
-
-Provisioning UX should be explicit. The requester sees an ephemeral validation summary immediately, then a progress message showing step-by-step completion with links to created resources as they become available. The final summary includes the created role IDs, channel IDs, and any warnings such as role-headroom percentage.
+Provisioning UX should be explicit. The requester sees an ephemeral validation summary immediately, then a progress message showing high-level completion with links to created resources as they become available. The final summary includes the created role IDs, channel IDs, and any warnings such as remaining role or category headroom.
 
 ## 8. Shared infrastructure
 
 The claim-visibility helper should be a shared service used by both applications and tickets. Its interface should accept the thread ID, requester user ID, optional claimer user ID, the set of preclaim handler user IDs, and the set of preserved override user IDs, and return the before/after membership snapshot plus unresolved members. The helper owns thread membership reconciliation only. It does not own state-machine transitions.
 
-Every visible Discord mutation should go through a mutation safety wrapper. The wrapper records a `planned` audit event before the mutation, executes exactly one bounded Discord API operation, captures the resulting snapshot or error, and records a `succeeded`, `failed`, or `rolled_back` event after the operation.
+Every visible Discord mutation should go through a mutation safety wrapper. The wrapper records a `planned` audit event before the mutation, executes exactly one bounded Discord API operation, captures the resulting safe snapshot or safe failure summary, and records a `succeeded`, `failed`, or `rolled_back` event after the operation.
 
-Bounded mutation patterns are non-negotiable because the bot will operate with high privilege. Helpers must target one concrete object and one concrete intended change. Example: `add_role(member_id, role_id)` is acceptable; `sync_roles_for_all_members(chapter_id)` is not a v1 helper. `set_channel_overwrite(channel_id, target_role_id, overwrite_payload)` is acceptable; “clone all overwrites from category to every channel in the server” is not. The code should make bulk operations impossible by default and require explicitly enumerated targets even inside provisioning runs.
+Bounded mutation patterns are non-negotiable because the bot will operate with high privilege. Helpers must target one concrete object and one concrete intended change. Example: `add_role(member_id, role_id)` is acceptable; `sync_roles_for_all_members(chapter_id)` is not a v1 helper. `set_channel_overwrite(channel_id, target_role_id, overwrite_payload)` is acceptable; "clone all overwrites from category to every channel in the server" is not. The code should make bulk operations impossible by default and require explicitly enumerated targets even inside provisioning runs.
 
-Background jobs should use Railway Cron for scheduled work rather than an in-process scheduler. The live daemon remains one process. Scheduled evaluation tasks such as daily waitlist reminders, transcript reconciliation sweeps, and periodic activity-flag recomputation should run as one-shot management commands in ephemeral Railway cron containers against the same repo and database. That avoids leader-election problems and missed schedules during daemon reconnects.
+The mutation wrapper must also be Discord-rate-limit aware. It includes retry and backoff behavior that respects `Retry-After`, uses per-route or per-resource pacing for bursty paths, and avoids naive rapid retries. Provisioning, transcript-history fetches, and any reconciliation path that can issue many Discord calls in sequence must run through queued or paced execution rather than assuming the library will make rate-limit pressure irrelevant.
+
+Audit and mutation payload boundaries are explicit:
+
+- `request_json` stores logical operation parameters only: target IDs, intended state, safe operator context, and internal operation metadata.
+- `request_json` never stores raw HTTP payloads, raw headers, raw Discord REST bodies, or vendor request bodies.
+- `error_text` stores a sanitized application-level summary only.
+- Secrets, tokens, headers, connection strings, and raw tracebacks are scrubbed or truncated before landing in audit rows or logs.
+
+Background jobs should use Railway Cron for scheduled work rather than an in-process scheduler. The live daemon remains one process. Scheduled evaluation tasks such as long-wait reminders or periodic activity-rule recomputation should run as one-shot management commands in ephemeral Railway cron containers against the same repo and database.
 
 ## 9. Deployment
 
-Dockerfile sketch: `python:3.12-slim` base, minimal system image packages for preprocessing, pinned Python dependencies, source plus migrations copied in, Alembic run in a release step, entrypoint `python -m daemon`.
+Dockerfile sketch: `python:3.12-slim` base, minimal system image packages for image preprocessing, pinned Python dependencies, source plus migrations copied in, Alembic run in a release step, entrypoint `python -m daemon`.
 
 Railway service configuration:
 
-- One always-on web-less worker service for the daemon.
+- One always-on worker service for the daemon.
 - Start command: `python -m daemon`.
 - Release command: `alembic upgrade head`.
 - Region: same region family as Supabase to minimize DB latency.
-- Health check: expose a tiny in-process HTTP `/healthz` endpoint from the daemon that reports last gateway heartbeat, DB connectivity, and whether the bot is in a reconnect loop. This stays inside the same process; it does not justify a separate API service.
+- Health check: expose a tiny in-process `/healthz` endpoint from the daemon that reports last gateway heartbeat, DB connectivity, and whether the bot is in a reconnect loop.
 
 Supabase project layout:
 
 - One production project and one staging project.
 - Schemas: `app` for operational tables, `audit` for append-only audit history.
-- Storage buckets: `activity-evidence` for screenshots; optional future buckets for ticket or application attachments if those become required.
-- Row-level security: disabled on `app` and `audit` tables in v1 because only the trusted daemon service role uses them. If a future web app is added, expose read models or views with RLS then instead of retrofitting policies under time pressure.
+- Storage buckets: `activity-evidence` for screenshots.
+- Row-level security: disabled on `app` and `audit` tables in v1 because only the trusted daemon service role uses them. If a future web app adds untrusted clients, introduce read models or views with RLS then rather than retrofitting it under time pressure.
 
 Secrets management:
 
 - Railway stores `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `SUPABASE_DB_URL`, `SUPABASE_SERVICE_KEY`, `GOOGLE_CLOUD_VISION_KEY`, and `GEMINI_API_KEY`.
 - The daemon reads secrets only from Railway environment variables in production.
 - Local `.env` remains for development and the read-only CLI only.
-- Supabase storage and DB access should use separate credentials if practical: least-privilege runtime DB user plus service-role-backed storage operations.
+- Structured log serialization and any log export path must pass through the same secret-scrubbing filter that protects `audit.audit_events.error_text`.
 
-Migration tool: Alembic. The schema is relational, versioned, and expected to evolve under active development. Alembic is the least surprising migration tool in the Python/Postgres stack and fits the project’s expected future direction better than hand-written bootstrapping scripts.
+Migration tool: Alembic. The schema is relational, versioned, and expected to evolve under active development. Alembic is the least surprising migration tool in the Python/Postgres stack and fits the project's future direction better than ad hoc bootstrapping scripts.
 
 Monorepo layout:
 
@@ -709,18 +686,21 @@ Monorepo layout:
 
 Logs should be structured JSON to stdout so Railway captures them cleanly. Minimum fields: timestamp, severity, subsystem, guild ID, chapter ID when relevant, object IDs, OCR provider, audit operation name, and exception class.
 
+Structured logs pass through a secret-scrubbing filter before serialization or export. That filter removes or masks secrets, tokens, authorization headers, connection strings, and similar sensitive values, and truncates raw tracebacks down to application-level context before any log line is emitted or any `error_text` field is persisted. The goal is durable observability without durable credential leakage.
+
 Metrics should be exposed from the same lightweight health server as Prometheus-style counters and gauges. The important v1 metrics are:
 
 - command invocations by command name and result
 - active applications by state
-- active tickets by type and state
+- active tickets by state
 - claim operations and failures
 - OCR upload counts by outcome
 - Google Vision latency and error rate
 - Gemini escalation rate
-- row confidence distribution
+- row confidence distribution once Phase 2b lands
 - unmatched roster row count
 - mutation wrapper failures by operation type
+- Discord rate-limit retries by route family
 - gateway reconnect count and current session age
 
 Alerting should wake the owner for only the truly operational failures:
@@ -728,44 +708,54 @@ Alerting should wake the owner for only the truly operational failures:
 - daemon process down or stuck reconnecting
 - Supabase DB connectivity lost for sustained duration
 - migration failure on deploy
-- Google Vision quota/auth failures causing all activity uploads to fail
+- Google Vision quota or auth failures causing all activity uploads to fail
 - Gemini auth failure only if fallback is frequently needed
-- audit wrapper failure rate above a threshold for role or channel mutations
+- mutation wrapper failure rate above a threshold for role or channel mutations
+- sustained Discord rate-limit failures despite wrapper backoff
 
 The blast radius boundaries should be strict. Activity tracking failures must not take down applications or tickets. OCR work should run in a bounded async task queue with timeouts and exception isolation. A failed OCR upload becomes a failed upload record and an officer-visible error message. It does not crash the gateway client or block unrelated interactions.
 
 ## 11. Testing strategy
 
-Unit tests should cover the places where correctness can be decided without Discord: application and ticket state transitions, claim-membership planning logic, form-version rendering plans, activity row parsing, OCR escalation thresholds, activity-rule evaluation, provisioning dry-run validation, and mutation-wrapper audit behavior.
+Unit tests should cover the places where correctness can be decided without Discord: application and ticket state transitions, claim-membership planning logic, form-version rendering plans, activity row parsing, OCR escalation routing, activity-rule evaluation, provisioning dry-run validation, mutation-wrapper audit behavior, secret scrubbing, and rate-limit-aware retry behavior.
 
-Integration tests should sit above unit tests and below a real Discord server. Discord API calls should sit behind narrow service helpers so tests can run against fake guild/channel/thread objects and stubbed REST responses.
+Integration tests should sit above unit tests and below a real Discord server. Discord API calls should sit behind narrow service helpers so tests can run against fake guild, channel, thread, and rate-limit responses. Transcript-close tests should verify that a close operation paginates the full thread history and persists normalized rows. Provisioning tests should verify that created-resource IDs are recorded incrementally and that explicit cleanup uses only recorded IDs rather than implicit discovery.
 
-Staging should exist. The cleanest v1 choice is a separate staging Discord guild plus the staging Supabase project. A sandbox category inside the production Humility guild is not good enough for provisioning, permission, and role-cap tests because it cannot safely reproduce the real visible-write surface. The production guild is the wrong place to test role-cloning failures.
+Staging should exist. The cleanest v1 choice is a separate staging Discord guild plus the staging Supabase project. A sandbox category inside the production Humility guild is not good enough for provisioning, permission, and role-cap tests because it cannot safely reproduce the real visible-write surface.
 
 Manual first-deploy checklist:
 
 - `/daemon-ping` responds.
-- one chapter form opens and submits correctly.
+- the one-time staging chapter bootstrap exists before applications or activity rollout.
+- one chapter form opens and submits correctly through the Discord path, or through the approved web fallback if the Discord component surface is insufficient.
 - review embed and private thread are created.
 - claim narrows thread membership correctly.
-- approve adds the intended roles and removes applicant role.
+- approve adds the intended roles and removes the applicant role.
 - deny captures reason and optionally blacklists.
-- ticket creation, claim, transcript capture, and close work for all four types.
-- one activity upload succeeds on the classical path.
-- one low-confidence upload escalates to Gemini and lands in review.
-- one chapter provisioning dry run passes and one staging chapter create/rollback cycle completes.
+- one Phase 2a activity upload stores evidence and basic extraction.
+- one Phase 2b ambiguous upload escalates to Gemini, lands in review, and supports row correction.
+- one `server_support` ticket can be opened, claimed, closed, and persisted via close-time transcript fetch.
+- one failed chapter provisioning run records created IDs, and one explicit cleanup cycle completes in staging.
 
 OCR accuracy measurement needs a retained gold corpus. Before the subsystem is trusted, Humility should assemble a labeled screenshot set from its real games and scoreboards. The daemon then measures row precision, score accuracy, roster match rate, fallback rate, and human-correction rate. Ambiguous rows should be flagged, not guessed.
 
-## 12. Sequencing plan (Option C)
+## 12. Sequencing plan
 
 ### Phase 0: foundations
 
-Definition of done: Railway deploys a single daemon service, Supabase schema exists, Alembic is wired, structured logging is live, `/daemon-ping` works in staging and production, and audit events can be written.
+Definition of done: Railway deploys a single daemon service, Supabase schema exists, Alembic is wired, structured logging is live, `/daemon-ping` works in staging and production, the mutation wrapper can write safe audit events, and the secret-scrubbing filter is active for both logs and persisted failures.
 
 Demoable outcome: the owner can invoke `/daemon-ping`, inspect the live build version, and verify DB connectivity and health metrics.
 
-Dependencies for next phase: stable Discord auth, stable DB connectivity, migrations, and the mutation wrapper skeleton.
+Dependencies for next phase: stable Discord auth, stable DB connectivity, migrations, safe audit writes, and the mutation wrapper skeleton with rate-limit-aware execution.
+
+### Phase 0.5: one-time manual chapter bootstrap
+
+Definition of done: one staging chapter, and any first production seed chapter needed for rollout, exists manually with the minimum required roles and channels, and the matching `chapters`, `chapter_roles`, and `chapter_channels` rows are in Postgres.
+
+Demoable outcome: applications and activity uploads have a real chapter target without waiting on provisioning automation.
+
+Dependencies for next phase: validated template assumptions and a clean record of the manually created Discord IDs.
 
 ### Phase 1: applications
 
@@ -773,94 +763,109 @@ Definition of done: one active chapter has a working form, `/apply` opens the fo
 
 Demoable outcome: a staging applicant completes the full flow from slash command to approval and role assignment.
 
-Dependencies for next phase: claim helper, audit logging for role mutations, and stable thread handling.
+Dependencies for next phase: claim helper, audit logging for role mutations, stable thread handling, and confirmed applicant input surface. If the Discord component surface is insufficient, the narrow web-form fallback must be in place before this phase is considered done.
 
-### Phase 2: activity tracking
+### Phase 2a: activity ingestion
 
-Definition of done: officers can upload screenshots, evidence is stored durably, Google Vision path works, Gemini fallback works, rows persist to `activity_log`, active rules compute flags, and officers can correct rows from Discord.
+Definition of done: officers can upload screenshots, evidence is stored durably, the Google Vision path works, basic row extraction persists to `activity_log`, and officers receive an extraction summary even when trust is not yet high enough for automation.
 
-Demoable outcome: one real or staging screenshot produces accepted rows and a rule-based flag summary.
+Demoable outcome: one real or staging screenshot is uploaded, stored, OCR'd, and rendered into a durable extraction summary.
 
-Dependencies for next phase: storage integration, async job isolation, roster bindings from applications, and stable officer-channel posting.
+Dependencies for next phase: storage integration, roster bindings from applications, and stable officer-channel posting.
+
+### Phase 2b: activity automation
+
+Definition of done: confidence scoring, Gemini fallback, manual correction UI, and rule evaluation are live, and ambiguous uploads are flagged rather than silently accepted.
+
+Demoable outcome: one low-confidence screenshot escalates, passes grounded validation, and results in a correctable officer review flow plus rule-based flag output.
+
+Dependencies for next phase: retained evaluation corpus, calibrated thresholds, and reliable review-thread or review-message actions.
 
 ### Phase 3: tickets
 
-Definition of done: all four ticket types can be opened, routed, claimed, transcripted, promoted where appropriate, and closed with full transcript retention.
+Definition of done: `server_support` tickets can be opened, routed, claimed, transcripted at close time, and closed with full retention.
 
-Demoable outcome: a member opens each ticket type, staff claims it, messages appear in `ticket_messages`, and the ticket closes cleanly.
+Demoable outcome: a member opens a support ticket, staff claims it, the case thread is closed, and the full transcript lands in `ticket_messages`.
 
-Dependencies for next phase: shared claim helper, queue/thread infrastructure, and close-time reconciliation logic.
+Dependencies for next phase: shared claim helper, queue/thread infrastructure, and stable close-time full-history fetch.
 
 ### Phase 4: chapter provisioning automation
 
-Definition of done: an admin can submit a chapter spec, receive a dry-run preview, confirm creation, watch progress, and end with a fully provisioned chapter including roles, channels, form, activity rules, and application panel. Resume and rollback paths both work in staging.
+Definition of done: an admin can submit a chapter spec, receive a dry-run preview, confirm creation, watch progress, and end with a fully provisioned chapter including roles, channels, form, activity rules, and application panel. If a run fails, the created resource IDs are recorded and can drive an explicit cleanup action.
 
-Demoable outcome: a new staging chapter appears end to end from one confirmed provisioning run, then archives cleanly.
+Demoable outcome: a new staging chapter appears end to end from one confirmed provisioning run, and one failed run can be cleaned up explicitly using the recorded IDs.
 
-Dependencies: everything earlier. Provisioning consumes the form engine, activity-rule model, mutation safety wrapper, and audit system. It should not land before those subsystems exist for real.
+Dependencies: everything earlier. Provisioning consumes the form engine, activity-rule model, mutation wrapper, audit system, and validated chapter template assumptions. It should not land before those subsystems exist for real.
 
 ## 13. Rollback plan
 
 Phase 0 rollback is redeploying the prior Railway image and, if needed, rolling back to the previous Alembic revision only when the newer schema is not yet in use. Because this is the foundation phase, DB rollback should be treated cautiously and only for clearly reversible migrations.
 
+Phase 0.5 rollback is manual because the bootstrap is manual. If the seed chapter setup is wrong, correct or recreate that specific bootstrap chapter before later phases depend on it. The proposal does not pretend that the first bootstrap is automated.
+
 Phase 1 rollback is redeploying the previous daemon image and disabling the application slash command and panel if needed. Existing application data remains in Postgres. If a role-mutation bug appears, corrective role removals are executed through the same bounded mutation wrapper with audit events, not through ad hoc scripts.
 
-Phase 2 rollback is disabling `/activity upload` and any review buttons while leaving all stored evidence and parsed rows intact. No data needs to be destroyed. If the OCR parser is wrong, corrected rows supersede prior rows and the subsystem can be paused without affecting applications or tickets.
+Phase 2a rollback is disabling `/activity upload` while leaving all stored evidence and extracted rows intact. Phase 2b rollback is disabling fallback, correction buttons, and rule evaluation while preserving the underlying uploads and row data.
 
-Phase 3 rollback is disabling ticket panel buttons and slash commands, then leaving already-open tickets readable while staff closes or migrates them manually. Transcript capture data remains.
+Phase 3 rollback is disabling the ticket panel and slash command, then leaving already-open tickets readable while staff closes them manually. Transcript data already captured at close remains.
 
-Phase 4 rollback is provisioning-run specific. If a create run fails, the operator either resumes or rolls back that exact run. Rollback walks `provisioning_steps` in reverse order, removes the application panel, archives or deletes empty created channels, removes unused created roles, archives any written chapter rows, and records `rolled_back` audit events. If humans have already begun using the created chapter, rollback archives rather than deletes.
+Phase 4 rollback is explicit cleanup, not hidden orchestration. If a create run fails, the operator reviews `created_resources_json`, then runs the specific cleanup action for that run or performs the equivalent manual cleanup using the recorded IDs. Cleanup archives or deletes created resources as appropriate for that exact run and records the result in `cleanup_report_json`.
 
 ## 14. Anti-scope (explicitly out of v1)
 
-- Full moderation system. Research and decisions explicitly put moderation outside the first build; moderator tickets are in scope, but a full moderation bot is not.
-- Web reviewer dashboards. Discord is the operator surface in v1; adding a web UI creates extra surface area before the core workflows are proven.
+- `chapter_support` and `chapter_incident` tickets. They wait until chapters exist and there is real demand to route into them.
+- `moderator` tickets. They wait until the `Moderator` role is actually staffed.
+- Full moderation system. Research and decisions explicitly put moderation outside the first build.
+- Real-time ticket transcript mirroring plus reconciliation. V1 uses close-time full-history fetch only.
+- Automatic provisioning resume engines and generic rollback orchestration. V1 records created IDs and uses explicit cleanup instead.
+- General web reviewer dashboards. Discord is the operator surface in v1. The only web surface that may enter v1 is the narrow application-form fallback if required Discord components are unavailable through `discord.py`.
 - Multi-guild tenancy. The daemon is for Humility guild `900000000000000001`, not a generic SaaS.
-- Arbitrary OCR provider plug-in marketplace. The OCR boundary should be clean, but v1 only needs Google Vision primary and Gemini fallback.
-- Automatic punishments or kicks from activity rules. v1 flags members for officer review; it does not auto-enforce.
-- Cross-chapter transfer workflow. Officers can manually resolve transfers in v1; dedicated transfer flows can come later if they become a real pain point.
-- Analytics dashboards beyond operational summaries. v1 needs durable records and inspections, not BI tooling.
-- Public applicant portals or applicant self-service status pages. Discord DMs and thread outcomes are sufficient for v1.
+- SQLite or local-first fallback. Postgres is the system of record.
+- YAML as the production source of truth. YAML may be used as import or operator input only.
+- Compatibility shims, dual-write paths, feature flags for old behavior, or other transitional support layers.
+- Hardcoded OCR acceptance thresholds presented as settled design truths. Thresholds are calibration inputs validated against retained screenshot evidence.
+- Automatic punishments or kicks from activity rules. V1 flags members for officer review; it does not auto-enforce.
 - Spreadsheet sync. The goal is to replace the manual spreadsheet workflow, not keep two systems in parallel.
 
 ## 15. Risks and mitigations
 
-- OCR accuracy risk. Mitigation: classical OCR primary, strict escalation thresholds, row-level confidence, gold-corpus evaluation, and manual correction UI before trusting ambiguous rows.
+- Secret leakage into audit rows or logs. Mitigation: `request_json` is logical-parameters only, `error_text` is sanitized before persistence, and structured logs pass through the same secret-scrubbing filter before emission or export.
+- Discord rate-limit pressure during provisioning or transcript fetch. Mitigation: all visible writes and bursty fetch paths use the mutation wrapper with `Retry-After` respect, paced execution, and per-route retry/backoff rather than ad hoc retries.
+- OCR accuracy risk. Mitigation: split the subsystem into 2a and 2b, keep Google Vision as the primary deterministic layer, calibrate any thresholds against a retained gold corpus, and flag ambiguity instead of guessing.
 - Player-to-Discord identity mapping risk. Mitigation: make `chapter_members` and roster linking explicit, seed from approved applications, and treat unmatched rows as review-required rather than auto-linked guesses.
-- Supabase vendor dependency. Mitigation: keep the schema in plain Postgres, use Alembic, avoid Supabase-only SQL tricks in core tables, and keep storage object references portable.
-- Google Vision and Gemini vendor dependency. Mitigation: keep OCR orchestration behind one subsystem boundary, store raw OCR payloads, and make fallback invocation explicit so a different provider can replace it later if needed.
-- Role and category cap growth. Mitigation: dry-run cap checks with internal guardrails below Discord hard limits, and use threads for cases instead of per-item channels.
+- Discord component support risk for applications. Mitigation: verify the actual `discord.py` surface during hookpoint work, and if required components are missing, move applicant input to the scoped web fallback in v1 instead of shipping degraded text-only forms.
+- Manual bootstrap dependency risk. Mitigation: make the seed chapter setup explicit in sequencing, keep the bootstrap narrow, and record the created Discord IDs before later phases rely on them.
+- Role and category cap growth. Mitigation: dry-run cap checks with internal guardrails below Discord hard limits, and keep v1 ticket scope narrow so provisioning does not create unnecessary per-chapter queues.
 - Permission drift over time. Mitigation: channel overwrites are applied explicitly by provisioning, audited, and later inspectable via `discord_cli.py`; do not rely on category inheritance staying correct forever.
 - Bounded-mutation bug while the bot has Administrator. Mitigation: all visible writes go through one wrapper, helper interfaces only accept concrete targets, and no bulk mutation helper is exposed in v1.
-- Waitlist aging and UX friction. Mitigation: separate `waitlist` from `interview`, log reasons, re-expand reviewer visibility on waitlist, and run scheduled reminders for long-waiting cases.
-- Daemon restart or disconnect during transcript capture. Mitigation: gateway event writes plus close-time reconciliation, so missed live events can be backfilled.
+- Ticket transcript loss before close. Mitigation: keep ordinary handlers from deleting ticket threads, fetch full history before archive on close, and accept that close-time capture is proportionate at Humility's current ticket volume.
 - Requester leaves the server mid-ticket or application. Mitigation: treat Discord membership as mutable but keep durable user IDs and records; closure and audit do not depend on the user still being present.
 
 ## 16. Open questions for hookpoint phase
 
 - Which pieces of the existing `daemon/` draft are worth preserving as implementation hookpoints, especially the current config loader, claim helper, and application review view?
-- Does `discord.py 2.7.1` already expose enough stable helpers for the richer modal components this proposal assumes, especially file upload and radio/checkbox support?
-- Are there OSS reference implementations for claim-based private-thread workflows that are operationally cleaner than the current draft helper?
-- What is the exact existing meaning of the six chapter template roles in Humility’s live guild, especially the distinction between `Chapter`, `Chapter Public`, and `Chapter Member`?
+- What is the thinnest acceptable operator path for editing DB-backed application forms after initial bootstrap and provisioning, without reintroducing YAML as the source of truth?
+- Does `discord.py 2.7.1` expose every required application input component through stable APIs, and if not, what is the cleanest narrow web-form fallback that preserves the same contracts and review flow?
+- What is the exact meaning of the six chapter template roles in Humility's live guild, especially the distinction between `Chapter`, `Chapter Public`, and `Chapter Member`?
 - Should activity review posts live in each chapter officer lobby or in one global staff-ops review channel with chapter tagging?
-- Is there any pre-research data worth importing from Gather or ticketsbot exports before v1 goes live?
-- What is the right staging guild topology so provisioning, role hierarchy, and moderator-ticket permissions can be tested without production risk?
-- Does the current `discord_cli.py` command structure already have natural seams for DB-backed inspection commands, or should a small shared read-model layer be introduced first?
+- Is there any historical data worth importing from Gather or ticket exports before v1 goes live?
+- What is the right staging guild topology so provisioning, role hierarchy, and application review permissions can be tested without production risk?
 
 ## 17. Cost model
 
 Assumptions:
 
 - one always-on Railway worker
-- one production Supabase project, one free staging project
+- one production Supabase project, one staging project
 - low MVP volume: roughly 150 to 600 activity screenshots per month
 - Google Vision used on all uploads
-- Gemini used only on a minority of ambiguous uploads
+- Gemini used only on a minority of ambiguous uploads after Phase 2b
+- no second always-on service in v1
 
 Estimated monthly cost:
 
 - Railway: about `$5-10/month` for one small always-on service.
-- Supabase: production should be budgeted as paid once the daemon becomes the operational system of record; assume about `$25/month` for prod, with staging on free. The absolute cheapest MVP could start on free, but that is not the recommendation once real retention and audit matter.
+- Supabase: production should be budgeted as paid once the daemon becomes the operational system of record; assume about `$25/month` for prod, with staging on free.
 - Google Cloud Vision: effectively `$0/month` under the first 1,000 images, and still likely only `$0-2/month` at MVP volume.
 - Gemini 3 Flash Preview fallback: about `$1/month` at MVP volume if fallback stays rare.
 
@@ -868,4 +873,4 @@ Recommended operating total: about `$31-38/month`.
 
 Cheapest plausible early total if production remains on free tier briefly: about `$6-13/month`.
 
-The cost model is therefore dominated by the hosting and database choices, not by OCR. That supports the proposal’s choice to optimize for operational correctness and retention rather than over-optimizing per-image spend.
+The simplified ticket and provisioning scopes reduce engineering burden more than they reduce hosting spend. The cost model is still dominated by hosting and database choices, not by OCR. That supports the proposal's choice to optimize for operational correctness, retention, and safe automation rather than over-optimizing per-image spend.
