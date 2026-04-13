@@ -1058,3 +1058,333 @@ def test_run_gateway_command_raises_cli_error_on_gateway_timeout(monkeypatch):
         run(discord_cli.run_gateway_command(handler))
 
     close_spy.assert_awaited_once()
+
+
+def _require_serializer(name):
+    serializer = getattr(discord_cli, name, None)
+    if serializer is None:
+        pytest.fail(f"discord_cli.{name} is missing from the serialization contract")
+    return serializer
+
+
+def test_serialize_component_dispatches_action_row(monkeypatch):
+    serializer = _require_serializer("serialize_component")
+    row = MagicMock(spec=discord_cli.discord.ActionRow)
+    dispatched = {"type": "action_row", "id": 111, "children": []}
+    target = Mock(return_value=dispatched)
+
+    monkeypatch.setattr(discord_cli, "serialize_action_row", target)
+
+    assert serializer(row) == dispatched
+    target.assert_called_once_with(row)
+
+
+def test_serialize_component_dispatches_button(monkeypatch):
+    serializer = _require_serializer("serialize_component")
+    button = MagicMock(spec=discord_cli.discord.Button)
+    dispatched = {"type": "button", "id": 222}
+    target = Mock(return_value=dispatched)
+
+    monkeypatch.setattr(discord_cli, "serialize_button", target)
+
+    assert serializer(button) == dispatched
+    target.assert_called_once_with(button)
+
+
+def test_serialize_component_dispatches_select_menu(monkeypatch):
+    serializer = _require_serializer("serialize_component")
+    select_menu = MagicMock(spec=discord_cli.discord.SelectMenu)
+    dispatched = {"type": "string_select", "id": 333}
+    target = Mock(return_value=dispatched)
+
+    monkeypatch.setattr(discord_cli, "serialize_select_menu", target)
+
+    assert serializer(select_menu) == dispatched
+    target.assert_called_once_with(select_menu)
+
+
+def test_serialize_component_falls_back_for_unknown_component(monkeypatch):
+    serializer = _require_serializer("serialize_component")
+    component = MagicMock()
+    dispatched = {"type": "action_row", "id": 444}
+    target = Mock(return_value=dispatched)
+
+    monkeypatch.setattr(discord_cli, "serialize_component_fallback", target)
+
+    assert serializer(component) == dispatched
+    target.assert_called_once_with(component)
+
+
+def test_serialize_action_row_returns_type_id_and_children(monkeypatch):
+    serializer = _require_serializer("serialize_action_row")
+    first = MagicMock()
+    second = MagicMock()
+    row = MagicMock(spec=discord_cli.discord.ActionRow)
+    row.type = discord_cli.discord.ComponentType.action_row
+    row.id = 111
+    row.children = [first, second]
+    child_serializer = Mock(side_effect=[{"type": "button", "id": 222}, {"type": "string_select", "id": 333}])
+
+    monkeypatch.setattr(discord_cli, "serialize_component", child_serializer)
+
+    assert serializer(row) == {
+        "type": "action_row",
+        "id": 111,
+        "children": [
+            {"type": "button", "id": 222},
+            {"type": "string_select", "id": 333},
+        ],
+    }
+    assert [call.args[0] for call in child_serializer.call_args_list] == [first, second]
+
+
+def test_serialize_button_interactive_button_shape(monkeypatch):
+    serializer = _require_serializer("serialize_button")
+    emoji = MagicMock(spec=discord_cli.discord.PartialEmoji)
+    button = MagicMock(spec=discord_cli.discord.Button)
+    button.type = discord_cli.discord.ComponentType.button
+    button.id = 222
+    button.custom_id = "ticket:create_general"
+    button.label = "General Support"
+    button.style = discord_cli.discord.ButtonStyle.primary
+    button.emoji = emoji
+    button.disabled = False
+    button.url = None
+    button.sku_id = None
+    emoji_serializer = Mock(return_value={"name": "🎫", "id": None, "animated": False})
+
+    monkeypatch.setattr(discord_cli, "serialize_partial_emoji", emoji_serializer)
+
+    assert serializer(button) == {
+        "type": "button",
+        "id": 222,
+        "custom_id": "ticket:create_general",
+        "label": "General Support",
+        "style": "primary",
+        "emoji": {"name": "🎫", "id": None, "animated": False},
+        "disabled": False,
+        "url": None,
+        "sku_id": None,
+    }
+    emoji_serializer.assert_called_once_with(emoji)
+
+
+def test_serialize_button_link_button_shape(monkeypatch):
+    serializer = _require_serializer("serialize_button")
+    button = MagicMock(spec=discord_cli.discord.Button)
+    button.type = discord_cli.discord.ComponentType.button
+    button.id = 223
+    button.custom_id = None
+    button.label = "Open Docs"
+    button.style = discord_cli.discord.ButtonStyle.link
+    button.emoji = None
+    button.disabled = True
+    button.url = "https://example.com/docs"
+    button.sku_id = None
+    emoji_serializer = Mock(return_value=None)
+
+    monkeypatch.setattr(discord_cli, "serialize_partial_emoji", emoji_serializer)
+
+    assert serializer(button) == {
+        "type": "button",
+        "id": 223,
+        "custom_id": None,
+        "label": "Open Docs",
+        "style": "link",
+        "emoji": None,
+        "disabled": True,
+        "url": "https://example.com/docs",
+        "sku_id": None,
+    }
+    emoji_serializer.assert_called_once_with(None)
+
+
+def test_serialize_button_includes_sku_id_when_present(monkeypatch):
+    serializer = _require_serializer("serialize_button")
+    button = MagicMock(spec=discord_cli.discord.Button)
+    button.type = discord_cli.discord.ComponentType.button
+    button.id = 224
+    button.custom_id = None
+    button.label = "Premium Upgrade"
+    button.style = discord_cli.discord.ButtonStyle.premium
+    button.emoji = None
+    button.disabled = False
+    button.url = None
+    button.sku_id = 987654321
+    emoji_serializer = Mock(return_value=None)
+
+    monkeypatch.setattr(discord_cli, "serialize_partial_emoji", emoji_serializer)
+
+    result = serializer(button)
+
+    assert result["sku_id"] == 987654321
+    assert result["style"] == "premium"
+
+
+def test_serialize_select_menu_returns_contract_shape(monkeypatch):
+    serializer = _require_serializer("serialize_select_menu")
+    first_option = MagicMock(spec=discord_cli.discord.SelectOption)
+    second_option = MagicMock(spec=discord_cli.discord.SelectOption)
+    first_default = MagicMock(spec=discord_cli.discord.SelectDefaultValue)
+    second_default = MagicMock(spec=discord_cli.discord.SelectDefaultValue)
+    menu = MagicMock(spec=discord_cli.discord.SelectMenu)
+    menu.type = discord_cli.discord.ComponentType.string_select
+    menu.id = 333
+    menu.custom_id = "ticket:type"
+    menu.placeholder = "Choose a ticket type"
+    menu.min_values = 1
+    menu.max_values = 2
+    menu.disabled = False
+    menu.options = [first_option, second_option]
+    menu.channel_types = [
+        discord_cli.discord.ChannelType.text,
+        discord_cli.discord.ChannelType.voice,
+    ]
+    menu.default_values = [first_default, second_default]
+    option_serializer = Mock(
+        side_effect=[
+            {"label": "General", "value": "general", "description": None, "emoji": None, "default": False},
+            {"label": "Billing", "value": "billing", "description": "Payment questions", "emoji": None, "default": True},
+        ]
+    )
+    default_value_serializer = Mock(
+        side_effect=[
+            {"id": 10, "type": "user"},
+            {"id": 20, "type": "role"},
+        ]
+    )
+
+    monkeypatch.setattr(discord_cli, "serialize_select_option", option_serializer)
+    monkeypatch.setattr(discord_cli, "serialize_select_default_value", default_value_serializer)
+
+    assert serializer(menu) == {
+        "type": "string_select",
+        "id": 333,
+        "custom_id": "ticket:type",
+        "placeholder": "Choose a ticket type",
+        "min_values": 1,
+        "max_values": 2,
+        "disabled": False,
+        "options": [
+            {"label": "General", "value": "general", "description": None, "emoji": None, "default": False},
+            {"label": "Billing", "value": "billing", "description": "Payment questions", "emoji": None, "default": True},
+        ],
+        "channel_types": ["text", "voice"],
+        "default_values": [
+            {"id": 10, "type": "user"},
+            {"id": 20, "type": "role"},
+        ],
+    }
+    assert [call.args[0] for call in option_serializer.call_args_list] == [first_option, second_option]
+    assert [call.args[0] for call in default_value_serializer.call_args_list] == [first_default, second_default]
+
+
+def test_serialize_select_option_returns_contract_shape(monkeypatch):
+    serializer = _require_serializer("serialize_select_option")
+    emoji = MagicMock(spec=discord_cli.discord.PartialEmoji)
+    option = MagicMock(spec=discord_cli.discord.SelectOption)
+    option.label = "General Support"
+    option.value = "general"
+    option.description = "Open a general support ticket"
+    option.emoji = emoji
+    option.default = True
+    emoji_serializer = Mock(return_value={"name": "🎫", "id": None, "animated": False})
+
+    monkeypatch.setattr(discord_cli, "serialize_partial_emoji", emoji_serializer)
+
+    assert serializer(option) == {
+        "label": "General Support",
+        "value": "general",
+        "description": "Open a general support ticket",
+        "emoji": {"name": "🎫", "id": None, "animated": False},
+        "default": True,
+    }
+    emoji_serializer.assert_called_once_with(emoji)
+
+
+def test_serialize_partial_emoji_returns_none_for_none():
+    serializer = _require_serializer("serialize_partial_emoji")
+
+    assert serializer(None) is None
+
+
+def test_serialize_partial_emoji_returns_name_id_and_animated():
+    serializer = _require_serializer("serialize_partial_emoji")
+    emoji = MagicMock(spec=discord_cli.discord.PartialEmoji)
+    emoji.name = "party"
+    emoji.id = 123456789
+    emoji.animated = True
+
+    assert serializer(emoji) == {
+        "name": "party",
+        "id": 123456789,
+        "animated": True,
+    }
+
+
+def test_serialize_component_fallback_returns_type_and_id():
+    serializer = _require_serializer("serialize_component_fallback")
+    component = MagicMock()
+    component.type = discord_cli.discord.ComponentType.action_row
+    component.id = 999
+
+    assert serializer(component) == {
+        "type": "action_row",
+        "id": 999,
+    }
+
+
+def test_serialize_message_includes_empty_components_list_when_missing():
+    serializer = _require_serializer("serialize_message")
+    message = make_activity_message(
+        message_id=4001,
+        author_id=42,
+        created_at=datetime(2026, 4, 13, 1, 2, 3, tzinfo=timezone.utc),
+        content="hello",
+    )
+
+    result = serializer(message)
+
+    assert "components" in result
+    assert result["components"] == []
+
+
+def test_serialize_message_includes_serialized_components(monkeypatch):
+    serializer = _require_serializer("serialize_message")
+    first = MagicMock()
+    second = MagicMock()
+    message = make_activity_message(
+        message_id=4002,
+        author_id=42,
+        created_at=datetime(2026, 4, 13, 1, 2, 3, tzinfo=timezone.utc),
+        content="with components",
+    )
+    message.components = [first, second]
+    component_serializer = Mock(
+        side_effect=[
+            {"type": "action_row", "id": 1, "children": []},
+            {"type": "button", "id": 2},
+        ]
+    )
+
+    monkeypatch.setattr(discord_cli, "serialize_component", component_serializer)
+
+    result = serializer(message)
+
+    assert result["components"] == [
+        {"type": "action_row", "id": 1, "children": []},
+        {"type": "button", "id": 2},
+    ]
+    assert [call.args[0] for call in component_serializer.call_args_list] == [first, second]
+
+
+def test_serialize_select_default_value_returns_id_and_type():
+    serializer = _require_serializer("serialize_select_default_value")
+    value = MagicMock(spec=discord_cli.discord.SelectDefaultValue)
+    value.id = 555
+    value.type = discord_cli.discord.SelectDefaultValueType.user
+
+    assert serializer(value) == {
+        "id": 555,
+        "type": "user",
+    }
