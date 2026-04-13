@@ -118,17 +118,21 @@ bot_activity_parser.set_defaults(func=run_command)
 The handler should validate:
 
 - `args.per_channel_limit > 0`
+- `args.per_channel_limit <= 10000`
 
 On invalid input, raise:
 
 ```python
-CLIError("usage_error", "--per-channel-limit must be greater than zero", exit_code=1)
+CLIError("usage_error", "--per-channel-limit must be between 1 and 10000", exit_code=1)
 ```
 
-Recommendation: do not clamp `--per-channel-limit` to `MAX_READ_LIMIT`.
-`read` is an interactive message dump command; `bot-activity` is an
-audit command and should accept deeper scan windows such as `500` or
-`2000` when explicitly requested.
+Recommendation: do not clamp `--per-channel-limit` to `MAX_READ_LIMIT`
+(200), but do enforce 10000 as a hard upper bound. `read` is an
+interactive message dump command; `bot-activity` is an audit command and
+should accept deeper scan windows such as `500` or `2000` when
+explicitly requested. The 10000 ceiling prevents effectively-unbounded
+scans (e.g. `100000`) that would produce thousands of paginated API
+requests across 40+ channels with no practical benefit over the cap.
 
 ### 2. Eligible channel selection
 

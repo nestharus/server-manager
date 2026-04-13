@@ -446,6 +446,8 @@ async def fetch_read(guild: discord.Guild, args: argparse.Namespace) -> dict[str
 async def fetch_bot_activity(guild: discord.Guild, args: argparse.Namespace) -> dict[str, Any]:
     if args.per_channel_limit <= 0:
         raise CLIError("usage_error", "--per-channel-limit must be greater than zero", exit_code=1)
+    if args.per_channel_limit > 10000:
+        raise CLIError("usage_error", "--per-channel-limit must be between 1 and 10000", exit_code=1)
 
     total_messages_seen = 0
     last_seen: datetime | None = None

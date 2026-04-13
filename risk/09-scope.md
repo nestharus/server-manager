@@ -54,7 +54,20 @@
    original session used `--per-channel-limit 2000`. This is a
    deliberate, documented design choice rather than an oversight.
 
-6. **Anti-scope section is thorough** (no issue)
+6. **Upper bound of 10000 is well-scoped** (no issue)
+   The revised proposal adds `args.per_channel_limit <= 10000` as a
+   hard ceiling, enforced via `CLIError` following the existing
+   validation pattern (`fetch_read` rejects `--limit <= 0` the same
+   way). The rationale is clearly stated: values like `100000` would
+   produce thousands of paginated API requests across 40+ channels with
+   no practical benefit over the cap. The bound is high enough to
+   accommodate the deepest audit windows confirmed in the needs
+   synthesis (2000) with substantial headroom, while preventing
+   effectively-unbounded scans. The revision is minimal and targeted —
+   it addresses exactly the concern flagged by the prior shortcut
+   assessment without introducing any additional features or complexity.
+
+7. **Anti-scope section is thorough** (no issue)
    The proposal explicitly excludes 13 categories of work including
    mutations, new dependencies, full-history scans, archived-thread
    discovery, forum reads, new serializers, additional CLI flags, shim
@@ -62,9 +75,10 @@
    corresponds to a plausible extension that could have inflated scope.
    The tradeoffs section acknowledges limitations (bounded scan window,
    no archived threads, silent Forbidden skipping) without proposing
-   fixes, deferring them to future iterations if needed.
+   fixes, deferring them to future iterations if needed. The upper bound
+   addition does not conflict with any anti-scope item.
 
-7. **Silent Forbidden skipping is acceptable for v1** (LOW risk)
+8. **Silent Forbidden skipping is acceptable for v1** (LOW risk)
    Silently skipping channels where `discord.Forbidden` is raised means
    the output could reflect partial coverage without the caller knowing.
    However, the needs synthesis confirms the bot has Administrator
@@ -78,4 +92,8 @@
 Accept. The proposal is tightly scoped to the bot footprint audit use
 case, follows existing CLI patterns without introducing new
 infrastructure, and explicitly excludes adjacent concerns that could
-have expanded scope. No findings require changes before implementation.
+have expanded scope. The revised upper bound of 10000 on
+`--per-channel-limit` cleanly addresses the prior shortcut assessment's
+MEDIUM finding without expanding scope — the validation uses the
+existing `CLIError` pattern and the ceiling is well-justified. No
+findings require changes before implementation.
