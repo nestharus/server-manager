@@ -1,72 +1,87 @@
 # Research prompt — OCR backend options for game-screenshot activity extraction
 
-You are a `gpt-high` research worker. Your job is to produce a
-decision-enabling comparison of OCR backends, not to make the final
-choice.
-
-## Output
-
-Write your report to `research/04-ocr-backends.md`.
-
-## Context
-
-The Humility Discord server needs to track per-player activity points
-from game screenshots. Members currently do this manually via a
-spreadsheet. The target workflow: a member uploads a screenshot of a
-game's activity/points screen, the system extracts `(player_name, score)`
-pairs, and logs them for daily tracking and compliance flagging.
-
-These are **dense, stylized game screenshots** — not generic documents.
-Expect custom fonts, decorative backgrounds, varying layouts across
-game updates, and potentially overlapping text elements. The system
-needs to reliably extract structured data (player names and numeric
-scores) from this visual noise.
-
-## Requirements
-
-Compare at least the following backends:
-
-1. **Tesseract** (open-source, self-hosted)
-2. **PaddleOCR** (open-source, self-hosted)
-3. **EasyOCR** (open-source, self-hosted)
-4. **Hosted Vision APIs** (Google Cloud Vision, AWS Textract, Azure
-   Computer Vision)
-5. **Claude Vision / Gemini Vision** (LLM-based multimodal extraction)
-
-For each backend, evaluate:
-
-- **Accuracy on stylized game text**: How well does it handle custom
-  fonts, colored text on complex backgrounds, non-standard layouts?
-- **Structured output support**: Can it directly produce `(name, score)`
-  pairs, or does it require post-processing?
-- **Cost modeling**: Per-image cost at 50, 500, and 5000 images/month.
-  Include self-hosting compute costs for open-source options.
-- **Privacy and data retention**: Where does the image data go? What
-  are the retention policies? Is there a compliance risk for a Discord
-  community?
-- **Self-hosting burden**: Setup complexity, maintenance overhead,
-  GPU requirements, container size.
-- **Failure modes**: What happens when extraction fails? Partial
-  results? Silent errors? How detectable are failures?
-- **Latency**: Per-image processing time for typical game screenshots.
-
-## Deliverables
-
-Your report should include:
-
-1. A comparison matrix covering all backends and evaluation criteria
-2. A shortlist of 2-3 backends recommended for further investigation,
-   with reasoning
-3. Open questions that need answers before a final backend can be
-   selected
-4. Known risks and mitigations for each shortlisted option
+You are a research agent evaluating backends for a specific OCR task.
+**Produce a decision-enabling comparison. Do not pick the winner.**
 
 ## Hard rules
 
-- You are the researcher. Do your own work — do not delegate to other
-  agents or suggest that someone else should investigate.
-- Do NOT inspect the Discord server or run any Discord commands.
-- Do NOT propose the final backend architecture — that is a later phase.
-- Do NOT implement anything — this is research only.
-- Focus on the specific use case (game screenshot activity extraction),
-  not generic OCR capabilities.
+**YOU are the researcher. YOU do the research yourself.**
+Do not launch, spawn, dispatch, or report on any other agent.
+
+Your deliverable is a single markdown file: `research/04-ocr-backends.md`.
+
+- **DO** read `NOTES.md`, `AGENTS.md`, `DECISIONS.md`, and
+  `research/02-humility-needs.md` for context
+- **DO** write the research report to `research/04-ocr-backends.md`
+- **DO NOT** modify any file other than `research/04-ocr-backends.md`
+- **DO NOT** launch subprocesses
+- **DO NOT** pick the winner — present the options for the user
+
+## The OCR Task
+
+Humility is a gaming community Discord server. The owner manually tracks
+per-member daily activity points from in-game leaderboard screenshots.
+The screenshots show:
+
+- Tabular data: player names (in-game names, may be Unicode) and numeric
+  scores
+- Dense layout: many rows, sometimes overlapping or partially occluded
+- Variable quality: phone photos of screens, cropped screenshots, dark
+  backgrounds
+- Game-specific UI: the leaderboard format varies by game (Pixel Brave,
+  Headless Knight, Sea of Stars, etc.)
+
+The OCR task is: extract (player_name, score) pairs from a screenshot
+reliably enough to replace manual spreadsheet entry.
+
+## What to Compare
+
+Evaluate these categories of backend:
+
+### 1. Classical OCR engines
+- **Google Cloud Vision** (`DOCUMENT_TEXT_DETECTION`) — hosted, per-image pricing
+- **Tesseract** (self-hosted, open source)
+- **PaddleOCR** (self-hosted, open source, multilingual)
+- **EasyOCR** (self-hosted, open source)
+
+### 2. Vision LLMs
+- **Gemini (Flash/Pro)** — structured JSON output, vision input
+- **Claude (Haiku/Sonnet)** — vision input, structured output
+- **GPT-4o** — vision input
+
+### 3. Mixed architectures
+- Classical OCR primary + vision LLM fallback on low confidence
+- Vision LLM primary with classical OCR validation
+
+## Evaluation Criteria
+
+For each option, assess:
+
+1. **Accuracy on dense tabular game UIs** — can it handle the specific
+   screenshot types described above?
+2. **Structured output** — does it natively return structured data
+   (JSON), or does it return raw text that needs post-processing?
+3. **Cost at MVP scale** — ~5-20 screenshots/day, ~84 members
+4. **Cost at scale** — 100+ screenshots/day
+5. **Latency** — how long per image?
+6. **Reliability** — uptime, rate limits, error modes
+7. **Privacy** — does the provider train on input data?
+8. **Self-hosting complexity** — if self-hosted, what does deployment look like?
+9. **Unicode / multilingual support** — player names may be in any language
+10. **Hallucination risk** — for LLM-based options, can the model
+    fabricate rows that aren't in the image?
+
+## Output Format
+
+Write `research/04-ocr-backends.md` with:
+
+1. **Task description** — what the OCR system needs to do
+2. **Comparison table** — all options side-by-side on the evaluation criteria
+3. **Architecture options** — classical-only, LLM-only, mixed, with
+   pros/cons of each
+4. **Cost modeling** — concrete numbers at MVP and at-scale volumes
+5. **Recommendation for further investigation** — which 2-3 options
+   the proposal author should consider most seriously, and why
+6. **Open questions** — what the user needs to decide
+
+Do not exceed 3000 words.
