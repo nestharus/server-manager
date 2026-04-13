@@ -1,6 +1,28 @@
+# Secrets
 .env
-.venv/
+.env.*
+!.env.example
+
+# Python
 __pycache__/
 *.pyc
-.cache/
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 uv.lock
+
+# JavaScript / TypeScript
+node_modules/
+.turbo/
+
+# Workspace / generated
+.tmp/
+worktrees/
+.DS_Store
