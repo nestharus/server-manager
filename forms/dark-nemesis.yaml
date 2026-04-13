@@ -1,0 +1,75 @@
+# forms/dark-nemesis.yaml
+#
+# Reconstructed from the original Gather form for the Dark Nemesis chapter
+# (user pasted the contents on 2026-04-11).
+# Gather.sh is offline; this YAML is now the authoritative definition.
+
+id: dark-nemesis
+title: Dark Nemesis Chapter Application
+questions:
+  - id: in_game_name
+    type: short
+    label: What is your in-game name?
+    required: true
+    max_length: 128
+  - id: timezone
+    type: select
+    label: What is your timezone?
+    required: true
+    options:
+      - UTC-12:00
+      - UTC-11:00
+      - UTC-10:00
+      - UTC-09:00
+      - UTC-08:00
+      - UTC-07:00
+      - UTC-06:00
+      - UTC-05:00
+      - UTC-04:00
+      - UTC-03:00
+      - UTC-02:00
+      - UTC-01:00
+      - UTC+00:00
+      - UTC+01:00
+      - UTC+02:00
+      - UTC+03:00
+      - UTC+04:00
+      - UTC+05:00
+      - UTC+06:00
+      - UTC+07:00
+      - UTC+08:00
+      - UTC+09:00
+      - UTC+10:00
+      - UTC+11:00
+      - UTC+12:00
+      - UTC+13:00
+      - UTC+14:00
+  - id: daily_events
+    type: multi_select
+    label: Which daily events do you attend?
+    required: true
+    options:
+      - Guild Events (ie Abyss Hunting Ground)
+      - PvP Events (ie Temple of Eternity)
+      - PvE Events (ie Mystery Realm)
+      - Casual Events (ie Fishing)
+  - id: hours_per_day
+    type: number
+    label: How many hours do you play per day?
+    required: true
+    max_length: 2
+  - id: launch_budget_usd
+    type: number
+    label: What was your budget for launch in USD?
+    required: true
+    max_length: 20
+  - id: monthly_budget_usd
+    type: number
+    label: What is your monthly budget in USD?
+    required: true
+    max_length: 20
+  - id: pvp_mmorpg_experience
+    type: long
+    label: What is your experience with PvP MMORPGs?
+    required: false
+    max_length: 2048
