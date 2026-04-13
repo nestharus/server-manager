@@ -301,7 +301,26 @@ def resolve_channel(guild: discord.Guild, selector: str) -> Any:
 
 
 def channel_kind(channel: Any) -> str:
-    return "thread" if channel in getattr(getattr(channel, "guild", None), "threads", []) else "thread" if "thread" in str(channel.type) else "channel"
+    threads = getattr(getattr(channel, "guild", None), "threads", None)
+    try:
+        if threads is not None and channel in threads:
+            return "thread"
+    except TypeError:
+        pass
+
+    return "thread" if "thread" in str(getattr(channel, "type", "")) else "channel"
+
+
+def is_history_capable_channel(channel: Any) -> bool:
+    return isinstance(
+        channel,
+        (
+            discord.TextChannel,
+            discord.VoiceChannel,
+            discord.StageChannel,
+            discord.Thread,
+        ),
+    )
 
 
 async def run_gateway_command(
@@ -424,6 +443,61 @@ async def fetch_read(guild: discord.Guild, args: argparse.Namespace) -> dict[str
     }
 
 
+async def fetch_bot_activity(guild: discord.Guild, args: argparse.Namespace) -> dict[str, Any]:
+    if args.per_channel_limit <= 0:
+        raise CLIError("usage_error", "--per-channel-limit must be greater than zero", exit_code=1)
+
+    total_messages_seen = 0
+    last_seen: datetime | None = None
+    per_channel = []
+    matched_messages = []
+
+    for channel in combined_channels(guild):
+        if not is_history_capable_channel(channel):
+            continue
+
+        try:
+            matches = [
+                message
+                async for message in channel.history(limit=args.per_channel_limit)
+                if message.author.id == args.bot_id
+            ]
+        except discord.Forbidden:
+            continue
+
+        if not matches:
+            continue
+
+        channel_last_seen = max(message.created_at for message in matches)
+        if last_seen is None or channel_last_seen > last_seen:
+            last_seen = channel_last_seen
+
+        total_messages_seen += len(matches)
+        matched_messages.extend(matches)
+
+        serialized_channel = serialize_channel(channel, kind=channel_kind(channel))
+        per_channel.append(
+            {
+                "channel_id": serialized_channel["id"],
+                "channel_name": serialized_channel["name"],
+                "count": len(matches),
+                "last_seen": iso_or_none(channel_last_seen),
+            }
+        )
+
+    per_channel.sort(key=lambda item: (item["count"], item["last_seen"]), reverse=True)
+
+    matched_messages.sort(key=lambda message: message.created_at, reverse=True)
+
+    return {
+        "bot_id": args.bot_id,
+        "total_messages_seen": total_messages_seen,
+        "last_seen": iso_or_none(last_seen),
+        "per_channel": per_channel,
+        "samples": [serialize_message(message) for message in matched_messages[:10]],
+    }
+
+
 async def fetch_integrations(guild: discord.Guild, _: argparse.Namespace) -> dict[str, Any]:
     integrations = [serialize_integration(item) for item in await guild.integrations()]
     return {
@@ -447,6 +521,7 @@ def command_specs() -> dict[str, Callable[[discord.Guild, argparse.Namespace], A
         "channels": fetch_channels,
         "find-channel": fetch_find_channel,
         "read": fetch_read,
+        "bot-activity": fetch_bot_activity,
         "integrations": fetch_integrations,
         "roles": fetch_roles,
     }
@@ -487,6 +562,11 @@ def build_parser() -> argparse.ArgumentParser:
     read_parser.add_argument("channel")
     read_parser.add_argument("--limit", type=int, default=DEFAULT_READ_LIMIT)
     read_parser.set_defaults(func=run_command)
+
+    bot_activity_parser = subparsers.add_parser("bot-activity", help="Scan channels for activity by a bot")
+    bot_activity_parser.add_argument("bot_id", type=int)
+    bot_activity_parser.add_argument("--per-channel-limit", type=int, default=100)
+    bot_activity_parser.set_defaults(func=run_command)
 
     return parser
 

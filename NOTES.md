@@ -1,6 +1,6 @@
 # NOTES.md - agent-maintained log of discovered facts
 
-Last updated: 2026-04-11
+Last updated: 2026-04-13
 
 ## Guild
 
@@ -35,3 +35,10 @@ Last updated: 2026-04-11
 - Gather is managed through `gather.sh` and is externally controlled via Discord OAuth, not through Discord messages the agent can edit.
 - The agent can inspect Gather's Discord-side footprint, but not its internal dashboard configuration.
 - A first-party replacement would need an `applications` subsystem in this repo so forms can be defined in-repo and managed through code.
+
+## CLI Research
+
+- `discord.py 2.7.1` exposes message history on `TextChannel`, `VoiceChannel`, `StageChannel`, and `Thread`, but not on `CategoryChannel` or `ForumChannel`.
+- In this repo, `combined_channels(guild)` mixes `guild.channels` and `guild.threads`, so any scan across "all channels" includes both history-capable objects and non-messageable containers.
+- `discord.abc.Messageable.history()` paginates in chunks of up to 100 messages per request and raises `discord.Forbidden` on unreadable channel history.
+- Forum activity lives on child threads, not on the forum container itself.
