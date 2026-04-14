@@ -65,6 +65,102 @@ check_flat_pattern() {
   fi
 }
 
+extract_s3_backend_block() {
+  local file="$1"
+
+  if [[ ! -f "${file}" ]]; then
+    return 1
+  fi
+
+  awk '
+    BEGIN {
+      in_backend = 0
+      depth = 0
+    }
+
+    !in_backend && /backend[[:space:]]*"s3"[[:space:]]*\{/ {
+      in_backend = 1
+    }
+
+    in_backend {
+      print
+
+      opens = gsub(/\{/, "{")
+      closes = gsub(/\}/, "}")
+      depth += opens - closes
+
+      if (depth == 0) {
+        exit
+      }
+    }
+  ' "${file}"
+}
+
+check_backend_block_pattern() {
+  local file="$1"
+  local pattern="$2"
+  local description="$3"
+  local backend_block=""
+
+  if [[ ! -f "${file}" ]]; then
+    fail "${description} (${file} missing)"
+    return
+  fi
+
+  backend_block=$(extract_s3_backend_block "${file}")
+
+  if [[ -z "${backend_block}" ]]; then
+    fail "${description} (backend \"s3\" block missing)"
+    return
+  fi
+
+  if printf '%s\n' "${backend_block}" | grep -Eq "${pattern}"; then
+    pass "${description}"
+  else
+    fail "${description}"
+  fi
+}
+
+check_backend_block_pattern_absent() {
+  local file="$1"
+  local pattern="$2"
+  local description="$3"
+  local backend_block=""
+
+  if [[ ! -f "${file}" ]]; then
+    fail "${description} (${file} missing)"
+    return
+  fi
+
+  backend_block=$(extract_s3_backend_block "${file}")
+
+  if [[ -z "${backend_block}" ]]; then
+    fail "${description} (backend \"s3\" block missing)"
+    return
+  fi
+
+  if printf '%s\n' "${backend_block}" | grep -Eq "${pattern}"; then
+    fail "${description}"
+  else
+    pass "${description}"
+  fi
+}
+
+extract_assignment_value() {
+  local file="$1"
+  local key_name="$2"
+
+  awk -v key_name="${key_name}" '
+    $0 ~ "^[[:space:]]*" key_name "[[:space:]]*=" {
+      sub(/^[[:space:]]*[^=]+=[[:space:]]*/, "", $0)
+      sub(/[[:space:]]*(#|\/\/).*$/, "", $0)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+      print
+      exit
+    }
+  ' "${file}"
+}
+
 check_required_files() {
   check_file_exists "${INFRA_DIR}/main.tf" "infra/main.tf exists"
   check_file_exists "${INFRA_DIR}/variables.tf" "infra/variables.tf exists"
@@ -90,9 +186,30 @@ check_main_tf() {
   check_flat_pattern "${main_tf}" \
     'backend[[:space:]]*"s3"[[:space:]]*\{' \
     'main.tf configures an s3 remote state backend'
-  check_flat_pattern "${main_tf}" \
-    'backend[[:space:]]*"s3"[[:space:]]*\{.*(endpoint|endpoints)[[:space:]]*=' \
-    'main.tf uses an S3-compatible backend endpoint setting'
+  check_backend_block_pattern_absent "${main_tf}" \
+    '^[[:space:]]*bucket[[:space:]]*=' \
+    'main.tf backend block does not hardcode bucket'
+  check_backend_block_pattern_absent "${main_tf}" \
+    '^[[:space:]]*key[[:space:]]*=' \
+    'main.tf backend block does not hardcode key'
+  check_backend_block_pattern_absent "${main_tf}" \
+    '^[[:space:]]*endpoints?[[:space:]]*=' \
+    'main.tf backend block does not hardcode endpoint settings'
+  check_backend_block_pattern "${main_tf}" \
+    '^[[:space:]]*region[[:space:]]*=' \
+    'main.tf backend block sets region'
+  check_backend_block_pattern "${main_tf}" \
+    '^[[:space:]]*skip_credentials_validation[[:space:]]*=[[:space:]]*true([[:space:]]|$)' \
+    'main.tf backend block sets skip_credentials_validation = true'
+  check_backend_block_pattern "${main_tf}" \
+    '^[[:space:]]*skip_metadata_api_check[[:space:]]*=[[:space:]]*true([[:space:]]|$)' \
+    'main.tf backend block sets skip_metadata_api_check = true'
+  check_backend_block_pattern "${main_tf}" \
+    '^[[:space:]]*skip_region_validation[[:space:]]*=[[:space:]]*true([[:space:]]|$)' \
+    'main.tf backend block sets skip_region_validation = true'
+  check_backend_block_pattern "${main_tf}" \
+    '^[[:space:]]*skip_requesting_account_id[[:space:]]*=[[:space:]]*true([[:space:]]|$)' \
+    'main.tf backend block sets skip_requesting_account_id = true'
 }
 
 check_variables_tf() {
@@ -149,6 +266,51 @@ check_tfvars() {
   check_line_pattern "${production_tfvars}" \
     '^[[:space:]]*location[[:space:]]*=[[:space:]]*"fsn1"[[:space:]]*$' \
     'production sets location = "fsn1"'
+}
+
+check_backend_tfbackend_files() {
+  local staging_backend="${INFRA_DIR}/environments/staging/backend.tfbackend"
+  local production_backend="${INFRA_DIR}/environments/production/backend.tfbackend"
+  local staging_key=""
+  local production_key=""
+
+  check_file_exists "${staging_backend}" "staging backend.tfbackend exists"
+  check_line_pattern "${staging_backend}" \
+    '^[[:space:]]*bucket[[:space:]]*=' \
+    'staging backend.tfbackend sets bucket'
+  check_line_pattern "${staging_backend}" \
+    '^[[:space:]]*key[[:space:]]*=' \
+    'staging backend.tfbackend sets key'
+  check_line_pattern "${staging_backend}" \
+    '^[[:space:]]*endpoints[[:space:]]*=' \
+    'staging backend.tfbackend sets endpoints'
+
+  check_file_exists "${production_backend}" "production backend.tfbackend exists"
+  check_line_pattern "${production_backend}" \
+    '^[[:space:]]*bucket[[:space:]]*=' \
+    'production backend.tfbackend sets bucket'
+  check_line_pattern "${production_backend}" \
+    '^[[:space:]]*key[[:space:]]*=' \
+    'production backend.tfbackend sets key'
+  check_line_pattern "${production_backend}" \
+    '^[[:space:]]*endpoints[[:space:]]*=' \
+    'production backend.tfbackend sets endpoints'
+
+  if [[ ! -f "${staging_backend}" || ! -f "${production_backend}" ]]; then
+    fail 'staging and production backend.tfbackend files use different key values'
+    return
+  fi
+
+  staging_key=$(extract_assignment_value "${staging_backend}" "key")
+  production_key=$(extract_assignment_value "${production_backend}" "key")
+
+  if [[ -z "${staging_key}" || -z "${production_key}" ]]; then
+    fail 'staging and production backend.tfbackend files use different key values'
+  elif [[ "${staging_key}" == "${production_key}" ]]; then
+    fail 'staging and production backend.tfbackend files use different key values'
+  else
+    pass 'staging and production backend.tfbackend files use different key values'
+  fi
 }
 
 check_for_hardcoded_secrets() {
@@ -223,6 +385,7 @@ main() {
   check_variables_tf
   check_cluster_tf
   check_tfvars
+  check_backend_tfbackend_files
   check_for_hardcoded_secrets
   run_terraform_validate
 

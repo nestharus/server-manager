@@ -26,13 +26,25 @@ variable "location" {
 }
 
 variable "control_plane_count" {
-  description = "Number of control plane nodes."
+  description = "Number of control plane nodes (odd number for HA)"
   type        = number
+  default     = 3
+
+  validation {
+    condition     = var.control_plane_count > 0 && var.control_plane_count % 2 == 1
+    error_message = "Control plane count must be a positive odd number."
+  }
 }
 
 variable "worker_count" {
-  description = "Number of worker nodes."
+  description = "Number of worker nodes"
   type        = number
+  default     = 3
+
+  validation {
+    condition     = var.worker_count > 0
+    error_message = "Worker count must be at least 1."
+  }
 }
 
 variable "control_plane_server_type" {

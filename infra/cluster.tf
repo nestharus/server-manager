@@ -33,24 +33,18 @@ locals {
 }
 
 module "cluster" {
-  # Newer kube-hetzner releases require a newer hcloud provider line than the
-  # replayed `~> 1.49` pin. v2.15.3 keeps the root module compatible.
   source  = "kube-hetzner/kube-hetzner/hcloud"
-  version = "2.15.3"
+  version = "~> 2.0"
 
   providers = {
     hcloud = hcloud
   }
 
-  hcloud_token  = var.hcloud_token
-  cluster_name  = var.cluster_name
+  hcloud_token   = var.hcloud_token
+  cluster_name       = "${var.cluster_name}-${var.environment}"
   network_region = var.network_zone
 
-  # The pinned module accepts one existing Hetzner SSH key id. The wrapper keeps
-  # the root interface as a list so environments can stay additive.
-  hcloud_ssh_key_id = length(var.ssh_key_ids) > 0 ? tostring(var.ssh_key_ids[0]) : null
-  ssh_public_key    = var.ssh_public_key
-  ssh_private_key   = var.ssh_private_key
+  ssh_hcloud_key_ids = var.ssh_key_ids
 
   # Embedded etcd becomes HA once the control plane count reaches three; staging
   # can stay single-node while production uses the same module path.

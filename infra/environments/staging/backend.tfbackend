@@ -1,0 +1,6 @@
+bucket = "humility-terraform-state"
+key    = "humility/staging/terraform.tfstate"
+
+endpoints = {
+  s3 = "https://fsn1.your-objectstorage.com"
+}

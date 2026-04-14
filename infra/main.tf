@@ -8,15 +8,11 @@ terraform {
     }
   }
 
-  # Hetzner Object Storage is S3-compatible, so the standard s3 backend works
-  # here. Keep concrete bucket keys and credentials outside source and pass them
-  # during `tofu init` with environment-specific backend config.
+  # Hetzner Object Storage is S3-compatible. Keep only environment-
+  # independent backend settings here and pass bucket/key/endpoints via
+  # `tofu init -backend-config=environments/<env>/backend.tfbackend`.
   backend "s3" {
-    bucket = "humility-terraform-state"
-    key    = "humility/ENVIRONMENT/terraform.tfstate"
     region = "fsn1"
-
-    endpoint = "https://fsn1.your-objectstorage.com"
 
     force_path_style            = true
     skip_credentials_validation = true
