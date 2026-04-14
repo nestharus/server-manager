@@ -1,0 +1,7 @@
+# Production overlay — references base manifests with production settings
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base/monitoring
+  - ../../base/secrets
+# Production uses base values as-is (30d retention, 20Gi storage)
