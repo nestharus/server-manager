@@ -4,11 +4,6 @@ variable "vultr_api_key" {
   sensitive   = true
 }
 
-variable "ssh_key_id" {
-  description = "Vultr SSH key ID (pre-registered)"
-  type        = string
-}
-
 variable "environment" {
   description = "Deployment environment name."
   type        = string
