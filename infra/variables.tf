@@ -7,6 +7,10 @@ variable "vultr_api_key" {
 variable "environment" {
   description = "Deployment environment name."
   type        = string
+  validation {
+    condition     = contains(["dev", "staging", "production"], var.environment)
+    error_message = "Environment must be dev, staging, or production."
+  }
 }
 
 variable "cluster_name" {

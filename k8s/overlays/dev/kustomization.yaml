@@ -1,0 +1,95 @@
+# Dev overlay — smallest footprint, fast iteration
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base/monitoring
+  - ../../base/secrets
+patches:
+  # Dev: minimal storage, short retention, tiny requests/limits.
+  - target:
+      kind: HelmRelease
+      name: kube-prometheus-stack
+      namespace: monitoring
+    patch: |-
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      metadata:
+        name: kube-prometheus-stack
+        namespace: monitoring
+      spec:
+        interval: 10m
+        timeout: 5m
+        values:
+          prometheus:
+            prometheusSpec:
+              retention: 24h
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 192Mi
+                limits:
+                  cpu: 200m
+                  memory: 384Mi
+          grafana:
+            resources:
+              requests:
+                cpu: 20m
+                memory: 64Mi
+              limits:
+                cpu: 75m
+                memory: 128Mi
+          alertmanager:
+            alertmanagerSpec:
+              retention: 24h
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 48Mi
+                limits:
+                  cpu: 30m
+                  memory: 96Mi
+          prometheusOperator:
+            resources:
+              requests:
+                cpu: 15m
+                memory: 64Mi
+              limits:
+                cpu: 50m
+                memory: 128Mi
+          kube-state-metrics:
+            resources:
+              requests:
+                cpu: 15m
+                memory: 32Mi
+              limits:
+                cpu: 50m
+                memory: 64Mi
+          prometheus-node-exporter:
+            resources:
+              requests:
+                cpu: 10m
+                memory: 16Mi
+              limits:
+                cpu: 30m
+                memory: 32Mi
+  - target:
+      kind: HelmRelease
+      name: sealed-secrets-controller
+      namespace: sealed-secrets
+    patch: |-
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      metadata:
+        name: sealed-secrets-controller
+        namespace: sealed-secrets
+      spec:
+        interval: 10m
+        timeout: 3m
+        values:
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 25m
+              memory: 32Mi

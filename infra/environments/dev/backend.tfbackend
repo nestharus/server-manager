@@ -1,0 +1,7 @@
+# tofu init -backend-config=environments/dev/backend.tfbackend
+bucket    = "server-manager-tfstate"
+key       = "infra/dev/terraform.tfstate"
+# TODO: Replace with actual Vultr Object Storage endpoint after bucket creation.
+endpoints = {
+  s3 = "https://ewr1.vultrobjects.com"
+}
