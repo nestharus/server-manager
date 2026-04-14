@@ -1,0 +1,77 @@
+import sys
+from http import HTTPStatus
+from pathlib import Path
+
+import httpx
+import pytest
+from fastapi import FastAPI
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.settings import Settings
+
+
+def test_test_settings_fixture_produces_valid_settings_object(test_settings: Settings) -> None:
+    assert isinstance(test_settings, Settings)
+    assert test_settings.discord_bot_token
+    assert test_settings.discord_guild_id > 0
+    assert test_settings.supabase_db_url
+    assert test_settings.supabase_service_key
+
+
+def test_app_fixture_returns_fastapi_instance(app: FastAPI) -> None:
+    assert isinstance(app, FastAPI)
+
+
+@pytest.mark.asyncio()
+async def test_app_fixture_has_v1_router_mounted(client: httpx.AsyncClient) -> None:
+    response = await client.get("/api/v1/health")
+
+    assert response.status_code == HTTPStatus.OK
+
+
+@pytest.mark.asyncio()
+async def test_client_fixture_can_make_http_requests(client: httpx.AsyncClient) -> None:
+    response = await client.request("GET", "/api/v1/health")
+
+    assert response.request.method == "GET"
+    assert response.request.url.path == "/api/v1/health"
+    assert response.status_code == HTTPStatus.OK
+
+
+@pytest.mark.asyncio()
+async def test_client_fixture_reaches_health_endpoint(
+    client: httpx.AsyncClient,
+    test_settings: Settings,
+) -> None:
+    response = await client.get("/api/v1/health")
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json() == {
+        "status": "ok",
+        "service": test_settings.app_name,
+        "version": test_settings.app_version,
+    }
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("post", "/api/v1/chapters", {"name": "Humility Seattle", "slug": "humility-seattle"}),
+        ("get", "/api/v1/chapters", None),
+        ("get", "/api/v1/chapters/1", None),
+        ("patch", "/api/v1/chapters/1", {"version": 0}),
+        ("post", "/api/v1/chapters/1/archive", None),
+    ],
+)
+async def test_chapter_endpoint_stubs_are_reachable_via_client(
+    client: httpx.AsyncClient,
+    method: str,
+    path: str,
+    json_body: dict[str, object] | None,
+) -> None:
+    kwargs = {"json": json_body} if json_body is not None else {}
+    response = await getattr(client, method)(path, **kwargs)
+
+    assert response.status_code == HTTPStatus.NOT_IMPLEMENTED
