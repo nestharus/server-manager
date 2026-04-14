@@ -1,0 +1,10 @@
+# chapters.yaml — registry of active chapters.
+#
+# This file is the source of truth for which chapters exist and how they
+# are wired up. It is read by the daemon on startup and on `/reload`.
+#
+# Populated by `discord-cli chapters create <slug>` once chapter
+# provisioning exists. Start empty: the server currently has chapter
+# templates and roles, but no active provisioned chapters.
+
+chapters: []
