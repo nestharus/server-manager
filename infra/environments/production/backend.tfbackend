@@ -1,6 +1,7 @@
-bucket = "humility-terraform-state"
-key    = "humility/production/terraform.tfstate"
-
+# tofu init -backend-config=environments/production/backend.tfbackend
+bucket    = "server-manager-tfstate"
+key       = "infra/production/terraform.tfstate"
+# TODO: Replace with actual Vultr Object Storage endpoint after bucket creation.
 endpoints = {
-  s3 = "https://fsn1.your-objectstorage.com"
+  s3 = "https://ewr1.vultrobjects.com"
 }

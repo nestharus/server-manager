@@ -1,7 +1,7 @@
-environment               = "staging"
-cluster_name              = "humility"
-location                  = "fsn1"
-control_plane_count       = 1
-worker_count              = 1
-control_plane_server_type = "cpx21"
-worker_server_type        = "cpx22"
+# Staging environment — small VKE cluster
+environment  = "staging"
+cluster_name = "humility"
+region       = "ewr"          # New Jersey
+worker_plan  = "vc2-1c-2gb"   # 1 vCPU, 2 GB — $10/mo
+min_nodes    = 1
+max_nodes    = 2

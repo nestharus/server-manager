@@ -1,69 +1,17 @@
-locals {
-  cluster_id = "${var.cluster_name}-${var.environment}"
+# Vultr Kubernetes Engine (VKE) — managed control plane, free.
+# We pay only for worker nodes. No kube-hetzner needed.
 
-  control_plane_nodepools = [
-    {
-      name        = "${local.cluster_id}-control-plane"
-      server_type = var.control_plane_server_type
-      location    = var.location
-      labels = [
-        "cluster=${var.cluster_name}",
-        "environment=${var.environment}",
-        "role=control-plane",
-      ]
-      taints = []
-      count  = var.control_plane_count
-    }
-  ]
+resource "vultr_kubernetes" "cluster" {
+  region           = var.region
+  label            = "${var.cluster_name}-${var.environment}"
+  ha_controlplanes = var.environment == "production"
 
-  agent_nodepools = [
-    {
-      name        = "${local.cluster_id}-worker"
-      server_type = var.worker_server_type
-      location    = var.location
-      labels = [
-        "cluster=${var.cluster_name}",
-        "environment=${var.environment}",
-        "role=worker",
-      ]
-      taints = []
-      count  = var.worker_count
-    }
-  ]
-}
-
-module "cluster" {
-  source  = "kube-hetzner/kube-hetzner/hcloud"
-  version = "~> 2.0"
-
-  providers = {
-    hcloud = hcloud
+  node_pools {
+    node_quantity = var.min_nodes
+    plan          = var.worker_plan
+    label         = "${var.cluster_name}-${var.environment}-workers"
+    auto_scaler   = var.max_nodes > var.min_nodes
+    min_nodes     = var.min_nodes
+    max_nodes     = var.max_nodes
   }
-
-  hcloud_token   = var.hcloud_token
-  cluster_name   = "${var.cluster_name}-${var.environment}"
-  k3s_version    = var.k3s_version
-  network_region = var.network_zone
-
-  hcloud_ssh_key_id = var.ssh_key_ids[0]
-
-  # Control plane count is environment-specific; staging can stay single-node,
-  # while production reaches HA once it runs 3+ nodes.
-  control_plane_nodepools = local.control_plane_nodepools
-  agent_nodepools         = local.agent_nodepools
-
-  # kube-hetzner creates the private Hetzner network and subnets around this
-  # network region, so the root only needs to keep the region explicit.
-  load_balancer_location = var.location
-  load_balancer_type     = "lb11"
-  ingress_controller     = "traefik"
-
-  # Keep the API load balancer seam separate from the ingress controller so
-  # later ingress changes do not require revisiting control plane access.
-  use_control_plane_lb                  = var.control_plane_count > 1
-  control_plane_lb_enable_public_interface = true
-
-  create_kubeconfig       = false
-  automatically_upgrade_os = var.control_plane_count > 1
-  placement_group_disable = var.control_plane_count == 1 && var.worker_count == 1
 }

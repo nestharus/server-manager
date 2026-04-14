@@ -1,7 +1,7 @@
-environment               = "production"
-cluster_name              = "humility"
-location                  = "fsn1"
-control_plane_count       = 3
-worker_count              = 3          # 3 workers for workload distribution
-control_plane_server_type = "cpx22"    # 2 vCPU, 4 GB — EUR7.99/mo
-worker_server_type        = "cpx32"    # 4 vCPU, 8 GB — EUR13.99/mo
+# Production environment — VKE cluster with autoscaling
+environment  = "production"
+cluster_name = "humility"
+region       = "ewr"          # New Jersey
+worker_plan  = "vc2-2c-4gb"   # 2 vCPU, 4 GB — $20/mo
+min_nodes    = 3
+max_nodes    = 6
