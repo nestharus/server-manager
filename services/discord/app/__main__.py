@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
+import sys
 
 import discord
 from pydantic import ValidationError
@@ -27,6 +29,9 @@ async def main() -> int:
 
     bot = HumilityBot(settings)
 
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, lambda: loop.create_task(bot.close()))
+
     try:
         try:
             await bot.start(settings.discord_bot_token)
@@ -46,4 +51,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
