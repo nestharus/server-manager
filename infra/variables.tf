@@ -50,13 +50,19 @@ variable "worker_count" {
 variable "control_plane_server_type" {
   description = "Hetzner server type for control plane nodes."
   type        = string
-  default     = "cpx21"
+  default     = "cpx22" # 2 vCPU, 4 GB RAM — EUR7.99/mo (cpx21 discontinued Jan 2026)
 }
 
 variable "worker_server_type" {
   description = "Hetzner server type for worker nodes."
   type        = string
-  default     = "cpx21"
+  default     = "cpx32" # 2 vCPU, 8 GB RAM — EUR13.99/mo (cpx31 discontinued Jan 2026)
+}
+
+variable "k3s_version" {
+  description = "Pinned k3s version for kube-hetzner."
+  type        = string
+  default     = "v1.35.3+k3s1" # Current stable as of April 2026
 }
 
 variable "network_zone" {

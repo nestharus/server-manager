@@ -41,13 +41,14 @@ module "cluster" {
   }
 
   hcloud_token   = var.hcloud_token
-  cluster_name       = "${var.cluster_name}-${var.environment}"
+  cluster_name   = "${var.cluster_name}-${var.environment}"
+  k3s_version    = var.k3s_version
   network_region = var.network_zone
 
-  ssh_hcloud_key_ids = var.ssh_key_ids
+  hcloud_ssh_key_id = var.ssh_key_ids[0]
 
-  # Embedded etcd becomes HA once the control plane count reaches three; staging
-  # can stay single-node while production uses the same module path.
+  # Control plane count is environment-specific; staging can stay single-node,
+  # while production reaches HA once it runs 3+ nodes.
   control_plane_nodepools = local.control_plane_nodepools
   agent_nodepools         = local.agent_nodepools
 

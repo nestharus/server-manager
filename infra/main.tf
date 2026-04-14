@@ -19,6 +19,12 @@ terraform {
     skip_metadata_api_check     = true
     skip_region_validation      = true
     skip_requesting_account_id  = true
+
+    # NOTE: Hetzner Object Storage does not guarantee the conditional-write
+    # semantics (`If-None-Match`) that OpenTofu's native lockfile uses.
+    # Keep native state locking disabled and rely on CI / operational
+    # serialization to prevent concurrent applies.
+    use_lockfile = false
   }
 }
 
