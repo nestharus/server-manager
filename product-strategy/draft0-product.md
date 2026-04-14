@@ -1,0 +1,412 @@
+# Draft 0 Product Proposal
+
+Status: evolving draft built from `.tmp/partitions/0000.md` upward.
+
+## Current Final Direction
+
+The durable product direction is a research-first Discord server management system for the Humility guild. The session begins with a much narrower bootstrap CLI and then drifts into an early daemon prototype, but the durable direction only starts after the user forces a reset to research, Humility-specific synthesis, proposal, risk review, and then implementation.
+
+Late in the session, another durable product constraint becomes explicit: the system must be usable through two first-class surfaces. Humans can use the web UI directly, but users should also be able to operate the system through their own agents, without the platform paying inference costs on their behalf.
+
+## Service Architecture
+
+- Initial shape at bootstrap:
+  - Local Python CLI (`discord_cli.py`) as the first operator interface to Discord
+  - Bot-token authentication, not user-account automation or self-bot behavior
+  - Live-server inspection as the first use case
+- Early problem frame from the user:
+  - multiple bots already installed
+  - broken support integration
+  - admin-chat history and bot docs need inspection
+  - need to identify what "HumilityTicketBot" actually is
+- This CLI-first shape is later superseded by the API + Discord daemon + web app architecture, but it remains the starting point for server inspection and operational debugging.
+- Even at the CLI stage, the product is dealing with a pre-existing production Discord guild rather than a greenfield server.
+- First replacement sketch created during bootstrap:
+  - keep CLI for inspection
+  - add a persistent Discord daemon for slash commands, buttons, and modals
+  - define application forms in YAML
+  - post submissions into reviewer channels with approve/reject actions
+- Tickets begin to get folded into the same self-owned daemon vision, not as a separate SaaS dependency.
+- By the end of the early prototype phase, the product sketch had expanded into three major assistant-managed areas:
+  - applications
+  - tickets
+  - chapter provisioning
+- Important later correction: this first daemon sketch is not yet research-backed and the session later resets specifically because it moved into solutioning too early.
+- Later product-surface clarification:
+  - the web app should be AI-friendly rather than human-only
+  - the API is a product surface, not just backend plumbing behind the UI
+  - user-supplied agents should be able to call the same system that humans use through the UI
+  - server-side hosted inference is not part of this interaction model
+
+## Tech Stack
+
+- Python selected by the user over Node in the first turn sequence.
+- `discord.py` chosen for the initial bot-connected CLI.
+- Local `.env`-driven configuration for bot token and guild ID.
+- `uv` and `pyproject.toml` adopted almost immediately after bootstrap instead of an ad hoc venv-only setup.
+- Early prototype stack added:
+  - YAML form files in repo
+  - long-running `discord.py` daemon package
+  - SQLite for runtime state
+  - Railway as the first hosting target
+- Formal research later corrects one stale implementation assumption: Discord modals in 2026 are richer than text-only, so some of the prototype application UX work was based on outdated constraints.
+
+## Data Model And Backend Patterns
+
+- Early observed server-side domain model:
+  - chapter-related roles already exist (`Chapter Officer`, `Chapter Member`, `Chapter Guild War`, `Chapter Applicant`, `Chapter`, `Chapter Public`)
+  - `GUILD TEMPLATE` category exists as structural scaffolding with empty template channels
+  - support panel and ticket logs exist, but reflect only a small amount of testing activity
+- Early application-replacement sketch proposed form definitions in YAML plus persisted submissions, but the persistence choice is later revisited.
+- After user correction, the early product model becomes:
+  - applications are distinct from tickets
+  - tickets split into server support, moderator tickets, chapter support tickets, and chapter moderation incidents
+  - both applications and tickets use claim-based handling
+  - chapters are first-class entities with routing, roles, template cloning, and per-chapter blacklist behavior
+- The first formal problem-space research later reframes the product around recurring Discord-community pain:
+  - onboarding/gating conflicts with Discord built-ins
+  - moderation accountability and burnout
+  - lack of native structured intake/applications
+  - role/channel/category caps in multi-chapter servers
+  - third-party bot EOL and lock-in risk
+- That research also identifies an underserved niche aligned with Humility:
+  - chapter creation and archival
+  - chapter ownership and override rules
+  - per-chapter officer tooling
+  - unified application + moderation + provisioning flows
+- Humility-specific synthesis then sharpens the actual product scope:
+  - chapter membership should generally use officer-reviewed full applications
+  - retained operational data matters
+  - the acute pains are applications, tickets, and chapter provisioning
+  - OCR-backed activity tracking is a real requirement because the user is doing it by hand in spreadsheets
+- The first formal proposal turns those needs into four concrete product subsystems:
+  - applications
+  - tickets
+  - activity tracking
+  - chapter provisioning
+- User correction later in the same proposal cycle: do not reduce scope; phase and validate it instead.
+- The first implemented API slice initially follows the `java-interview-setup` pattern:
+  - optimistic locking via `version` column on the entity row
+  - row-level timestamps / update metadata assumptions nearby
+- Later the user explicitly rejects that shape for the long-term product data model:
+  - business rows should stay clean of framework-ish audit/version columns
+  - user activity actions and user activity state changes should be modeled explicitly
+  - optimistic locking should use an activity-derived ETag / hash rather than a row counter
+- Resulting late-session data-model direction:
+  - entity tables contain business data only
+  - activity tables carry action history, state-change history, actor identity, timestamp, and hash lineage
+  - clients update with an ETag/activity hash and receive `409` on stale writes
+  - auditability and optimistic locking become one mechanism rather than two parallel systems
+
+## Monorepo Shape
+
+- Before the monorepo architecture exists, the repo starts as a single Python project with:
+  - `discord_cli.py`
+  - `pyproject.toml`
+  - repo-local `AGENTS.md`
+- This matters because later monorepo and multi-service decisions are layered on top of a Python-first operator tool, not a frontend-first app.
+- The durable monorepo target later becomes:
+  - `services/api` for the FastAPI mutation gateway
+  - `services/discord` for the Discord daemon / gateway adapter
+  - `apps/web` for the TanStack web UI
+  - `packages/shared-types` for generated/shared contracts
+  - repo root for orchestration, planning, and workspace tooling only
+
+## Product Strategy Workflow
+
+- Late in the session, the repo also gains a generalized product-strategy workflow adapted from the user's RFQ strategy process.
+- Durable intent of that workflow:
+  - separate files/instructions for proposer, problem alignment, problem expansion, philosophy alignment, philosophy expansion, and orchestration
+  - product definition should be iterated through an explicit alignment loop rather than improvised from infrastructure and feature proposals alone
+- Important caveat:
+  - the first attempt to actually run that workflow was done incorrectly as a collapsed single-agent cycle and was rejected by the user
+  - only the generalized templates and the initial `problem.md` / `philosophy.md` seeds should be treated as dependable draft-0 material from this session
+
+## What Was Actually Built And Proven
+
+- Early CLI inspection was able to enumerate existing channel/category structure and integrations on the live server.
+- Known early observed external bot/integration surface includes at least:
+  - ticketsbot.net / custom-named `HumilityTicketBot`
+  - Gather
+- The first real audit established:
+  - Humility had 83 members at the time of inspection
+  - `HumilityTicketBot` matched ticketsbot.net app id `954933581501849610`
+  - `#support` contained a ticket panel
+  - `#ticket-logs` showed only a few self-opened/self-closed test tickets
+  - `#templates` was empty
+  - `GUILD TEMPLATE` channels were empty
+- Bot activity scan found:
+  - Hydra: no visible activity
+  - Apollo: no visible activity
+  - Gather: no visible channel activity
+  - sesh: only minor promo output
+  - Zira: setup/admin output consistent with silent reaction-role use
+- Ticket-system diagnosis became specific:
+  - the existing `#support` panel message was a legacy ticketsbot.net v1 panel from 2023
+  - after reusing the same bot token/app in tickets.bot v2, the old message's opaque `custom_id` no longer mapped to anything in v2
+  - the failure was therefore a stale-panel migration issue, not a generic Discord permission problem
+- User recovered the old Dark Nemesis Gather form content, which became the first concrete application contract.
+- Prototype artifacts produced in this phase included:
+  - `forms/dark-nemesis.yaml`
+  - `docs/DAEMON_DESIGN.md`
+  - `chapters.yaml`
+  - `daemon/` modules for config, DB, claim helper, and applications
+- The prototype daemon was booted locally and did sync slash commands to the Humility guild.
+- The applications prototype claimed support for:
+  - `/apply <chapter>`
+  - YAML-driven question loading
+  - SQLite-backed submissions
+  - review actions (`Claim`, `Interview`, `Approve`, `Deny`)
+  - role mutation and private review mechanics
+- This implementation existed, but it was produced before the later formal research-first reset and is not the durable final baseline.
+- Research later corrects another earlier claim: Gather was deprecated/not maintained, but not conclusively "fully offline" in the same way ticketsbot.net was.
+- Synthesis artifacts later add product detail the prototype did not have:
+  - waitlist state as part of the application lifecycle
+  - chapter-management tooling beyond intake alone
+  - OCR-based activity logging tied to per-chapter thresholds and flags
+- First clearly proven post-reset implementation: the chapters API.
+- What that implementation covered:
+  - chapter contracts with optimistic locking/version semantics
+  - FastAPI CRUD endpoints
+  - archive flow via soft-delete semantics
+  - in-memory repository and service layer for initial API behavior
+- Verification evidence:
+  - 22 contract-level tests
+  - independent pytest pass
+  - CodeRabbit review loop iterated until findings on the new code were addressed
+  - draft PR opened and branch squashed to a single commit
+- Proposal-stage product decisions worth carrying forward:
+  - form authoring should live in YAML in-repo, with published snapshots stored durably
+  - applications use an explicit lifecycle including waitlist
+  - ticket handling and application handling share claim primitives but remain distinct workflows
+  - chapter provisioning should be a first-class subsystem, not an admin afterthought
+- Later cross-cutting product decision worth carrying forward:
+  - every meaningful UI action should have a corresponding structured API endpoint
+  - OpenAPI/Pydantic contracts are part of the product surface because outside agents are expected clients
+- Later design work that reached proposal/risk maturity but not trusted implementation:
+  - the activity/audit model was researched, proposed, revised with audit addenda, and reached 3x LOW
+  - but the eventual code changes intended to apply it were caught in the chaotic non-worktree portion of the session and should not be treated as proven implementation
+
+## Testing And Review Model
+
+- No formal testing/review workflow yet in the bootstrap turns.
+- Early validation method was direct CLI execution against the live guild.
+- During the daemon prototype, validation was still ad hoc:
+  - import/compile checks
+  - local daemon boot test
+  - live slash-command sync against the guild
+- There was still no contract-first test suite, no separate test/code agents, and no formal review gate.
+- After the reset, the intended product-validation path becomes research artifact -> Humility synthesis -> proposal -> 3x risk gate -> hookpoint research -> implementation.
+- The first real implementation after reset uses the intended separation:
+  - orchestrator defines contracts
+  - one agent writes tests from contracts only
+  - a separate agent writes implementation against contracts + tests
+  - local pytest verifies
+  - CodeRabbit CLI is rerun until clean enough to proceed
+
+## User Corrections And Decision Changes
+
+- The user chose Python explicitly.
+- The user clarified that the target was a real existing server with several bots, broken integrations, role/template drift, and support-flow issues to inspect.
+- Early operational emphasis was on looking around first, not starting with a blank bot feature set.
+- The user also pushed the repo toward `uv`/`pyproject.toml` conventions very early.
+- Practical correction from live testing: commands that force full `guild.chunk()` are not viable as a default on this server; inspection tools need partial/targeted reads.
+- The user clarified that `GUILD TEMPLATE` is a template cloned for chapters and includes role/bot setup scaffolding.
+- The user approved investigation into bot consolidation and asked for Gather replacement sketching, but only after understanding how the current setup was used.
+- The user repeatedly emphasized a hands-off operating model: they wanted the assistant, not dashboards/SaaS UIs, to own ongoing configuration work.
+- The user explicitly corrected a core misunderstanding: applications and tickets were two different systems.
+- The user also pushed back on excessive questioning and expected the assistant to infer defaults from the existing server and prior context.
+- The user clarified that application forms are game-specific and that bringing up a new chapter should be simple and AI-assisted.
+- At partition `0112`, the user explicitly reset the project:
+  - Dark Nemesis should not anchor the design
+  - SQLite/local-first thinking does not fit a 24/7 cloud system
+  - the team needs to research the problem space before proposing product shape
+- In synthesis, the user further clarified:
+  - chapter entry should still be a full application flow
+  - all retained operational data is worth keeping
+  - officer workflows matter more than moderator workflows right now
+  - waitlists and other chapter-management tools are part of the real operational need
+- At partition `0186`, the user corrects the process again: the proposal does not go back to the user for approval; the risk assessment is the review.
+- Later in this range, the user also locks broader product-shape decisions:
+  - UI is in v1 scope
+  - Python/FastAPI is preferred over Rust
+  - `ai-workflow` is the main backend structural reference, with selected ideas borrowed from `java-interview-setup`
+- Another important user constraint arrives at partition `0241`: in the monorepo, Python and JavaScript code should not live at the repo root; the root is orchestration/documentation only.
+- During implementation, the user adds another non-negotiable workflow rule: one CodeRabbit pass is not enough, and the feature branch should be continuously amended/squashed so CodeRabbit always reviews the clean current diff.
+- In the later platform loop, the user adds another load-bearing product correction:
+  - people should be able to use the product either through the UI or through their own agents
+  - the platform should expose structured endpoints rather than embedding hosted inference into every workflow
+- Still later, the user adds another load-bearing model correction:
+  - row-level `version`, timestamp, and audit metadata are not the preferred long-term product model
+  - activity tables should distinguish user actions from resulting state changes
+  - optimistic locking should derive from that activity model instead
+
+## Open Product Questions
+
+- Which existing bot/integration capabilities should be replaced versus retained?
+- How much of the current server information architecture should be preserved versus reorganized?
+- What should replace Gather for applications, if anything?
+- How should chapter creation work in the future: manual clone, automated provisioning, or something hybrid?
+- Which existing silent bots are actually providing value through dashboards or DM-only workflows rather than channel-visible activity?
+- Should tickets be rebuilt inside the custom system rather than continuing with tickets.bot v2?
+- Which parts of the early daemon prototype are worth preserving after the workflow reset?
+- Which Humility pain is actually the first MVP driver: applications, tickets, moderation, or chapter provisioning?
+- What additional non-OCR guild-management tools belong in v1 versus later phases?
+- How much of the daemon-centric proposal survives once the API + web monorepo shape is adopted?
+- Which pieces of the initial scaffold are canonical product foundations versus just transport for future phased PRs?
+- What API affordances beyond ordinary OpenAPI exposure are needed to make third-party agent usage practical?
+- How should agent access be authorized without reintroducing dashboard-heavy manual administration?
+- How should the action/state-change split be exposed in APIs without making ordinary CRUD clients painful?
+- What is the clean migration path from the already-built chapters API `version` semantics to activity-hash ETags?
+
+## Chronological Notes
+
+- `0000-0009`
+- Product starts as "give the assistant a safe operational interface to Discord" rather than "design a net-new bot product from scratch."
+- Guild under management: Humility (`900000000000000001`).
+- Initial likely external dependency identified: custom-named `HumilityTicketBot` appears to front ticketsbot.net.
+- Early bootstrap assumes direct server inspection on the live guild after enabling privileged intents.
+- `0010-0019`
+- The first repo/tooling normalization happens immediately after invite/permission setup:
+  - bot invited successfully
+  - admin-level bot permissions confirmed
+  - `uv` replaces the first raw venv workflow
+  - initial repo-local `AGENTS.md` added
+- `0020-0029`
+- First real read-only audit reveals:
+  - established category/channel structure already exists
+  - third-party integrations such as Gather are active
+  - the guild is large enough that full-member chunking hangs, forcing the CLI toward targeted inspection patterns
+- `0030-0047`
+- Key early product facts uncovered:
+  - the support failure is not local misconfiguration; ticketsbot.net itself was discontinued on 2025-03-05
+  - most chapter/application infrastructure appears unactivated rather than heavily used
+  - the server already contains chapter roles and a hidden template category for cloning
+  - early replacement thinking shifts toward a custom applications subsystem with a persistent daemon, YAML-defined forms, and reviewer workflow
+- This same range also contains the first overreach: solution sketching begins before formal research/proposal/risk work, which the user later rejects.
+- `0048-0062`
+- Migration debugging on tickets uncovers a concrete design lesson:
+  - third-party dashboard-owned systems break the "assistant can manage the server for me" goal
+  - reusing a bot token across vendor generations does not preserve old interaction state
+  - stale message components can survive in Discord even when the backing vendor state is gone
+- Product implication: ownership needs to move toward repo-controlled definitions and a daemon the assistant can actually change.
+- `0063-0111`
+- The session escalates from diagnosis into build-first design and implementation:
+  - Firecrawl is used to read tickets.bot docs after simpler web tools fail
+  - loss of historical ticket data is accepted
+  - Gather is treated as gone and the Dark Nemesis application form is reconstructed
+  - the system is decomposed into applications, tickets, chapters, and claim helpers
+- User corrections in this block are load-bearing:
+  - applications and tickets are separate
+  - ticket handling differs by scope and role
+  - chapter creation should be easy to automate
+- By `0111`, a local applications daemon prototype exists, but the process has still bypassed the formal research/proposal/risk workflow that the repo later adopts.
+- `0112-0146`
+- Hard product reset:
+  - the user rejects solutioning-first behavior
+  - repo governance is rewritten around formal research/proposal/risk flow
+  - pre-research code is preserved only as draft material for later hookpoint evaluation
+- The first formal problem-space report establishes the durable product frame:
+  - communities fail from fragmented workflows more than missing raw features
+  - Humility's likely niche is multi-chapter governance with low lock-in
+  - Discord-native interaction capabilities are better than initially assumed
+- `0147-0174`
+- Humility-specific synthesis converts the generic research into concrete product scope:
+  - applications stay central
+  - tickets stay central
+  - chapter provisioning is elevated to equal importance
+  - OCR-based activity tracking is added as a first-class requirement
+- OCR research does not settle a single immutable backend yet, but it makes clear that cost is not the deciding factor at Humility's scale and that validation/correctness matter more.
+- `0175-0240`
+- The first formal proposal is written and revised through multiple risk loops.
+- Durable product choices that emerge here:
+  - four-subsystem scope: applications, tickets, activity tracking, chapter provisioning
+  - YAML-authored forms with durable runtime snapshots
+  - waitlist and blacklist as real application concerns
+  - activity tracking treated as a product feature, not just back-office admin work
+- Process correction in this range is important:
+  - the user states explicitly that the risk gate, not the user, reviews the proposal
+  - proposal revisions are driven by audit/scope/shortcut risk findings
+- Late in the range, product structure shifts again:
+  - UI moves into v1
+  - the project becomes a monorepo target with API + Discord daemon + web app rather than a single daemon-centric product surface
+- `0241-0279`
+- The user tightens the interpretation of scope:
+  - scope problems should be solved by phases and validation gates, not by shrinking the product
+  - CodeRabbit, linting, and testing practices from `ai-workflow` should be absorbed
+- Reference-repo decisions become concrete product structure:
+  - API service using FastAPI and layered architecture
+  - Discord daemon using `discord.py`
+  - web app in v1 using TanStack
+  - root-level orchestration/documents only, with language-specific code under `services/` and `apps/`
+- The repo is initialized as a monorepo, pushed to `nestharus/server-manager`, and the implementation workflow is updated to require separate test-writer and code-writer invocations.
+- Process caveat: scaffolding begins before the earlier proposal/risk loop has cleanly reached all-LOW, so some early structure is directionally correct but not fully risk-cleared.
+- `0280-0352`
+- The first concrete subsystem shipped under the new workflow is the chapters API.
+- This range proves several durable product-development practices:
+  - contract-first design
+  - separate test-writer and code-writer invocations
+  - optimistic-locking behavior encoded in tests
+  - CodeRabbit CLI loop rerun until the substantive new-code findings are fixed
+- What was actually proven:
+  - chapter CRUD
+  - archive behavior
+  - optimistic locking and conflict handling
+  - soft-delete semantics
+- The output was pushed as PR `#1` (`feat/chapters-api`) with a final squashed commit after repeated CodeRabbit review.
+- `0353-0367`
+- Product delivery pauses while infrastructure assumptions are reopened:
+  - the user challenges why Supabase is present at all
+  - hosting cost becomes a primary concern
+  - the project is reframed as one application that may sit inside a broader platform modernization effort, not just a standalone Discord service
+- `0368-0435`
+- The application is explicitly repositioned as one workload on a broader enterprise platform.
+- Product implication:
+  - the Discord/server-management system still matters, but its delivery path now depends on platform bootstrap phases and broader architecture choices
+  - the bot is no longer the whole system; it is a consumer of foundational platform capabilities
+- `0436-0575`
+- A concrete platform foundation proposal is written, risk-cleared, and then partially implemented before more churn arrives.
+- Product implication in this stretch:
+  - near-term application work is subordinated to getting the platform bootstrap into a deployable state
+  - the first foundation branch moves from Hetzner assumptions toward Vultr VKE as practical provider constraints appear
+  - the repo proves that infrastructure work is now a critical dependency for further product delivery, not a side concern
+- `0576-0605`
+- Environment and release semantics are revised again:
+  - `dev` becomes the default persistent environment for application development, E2E, and LLM-assisted UI QA
+  - `staging` is narrowed to on-demand benchmark/performance validation rather than always-on manual QA
+- The user also adds a durable product-shape decision in this range:
+  - the future web app must be usable both by humans and by users' own agents
+  - that reinforces the API-first interpretation of the FastAPI/contracts architecture
+- Near the end of this block, discovery of the `base-application` repo changes the expected hosting architecture again, which in turn delays product implementation because the backend is now expected to fit a larger platform-cluster and GitOps model.
+- `0606-0620`
+- The planning unit changes again from "the product" to a portfolio of initiatives:
+  - an initiative map is created with 19 initiatives across 6 phases
+  - the Discord-management application is now explicitly downstream of platform bootstrap, GitOps, secrets, application-cluster provisioning, artifact management, CI/CD, release management, and database work
+- Product implication:
+  - "Discord bot in production" is no longer an immediate next step after the chapters API
+  - the product is treated as a dependent workload inside a larger phased platform plan
+  - the draft 0 product proposal therefore needs to capture both the application shape and the fact that its delivery path is gated by multiple platform initiatives
+- `0621-0659`
+- Execution speed increases sharply:
+  - feature and planning branches are merged directly into `main`
+  - Phase 1 initiative proposals are written and risk-cleared
+  - the RFQ strategy workflow is copied and then generalized for this project
+- Product-strategy-specific durable outcome in this band:
+  - `claude-opus` is treated as the right model for generalizing the product-strategy workflow
+  - generalized templates plus initial `problem.md` and `philosophy.md` are produced
+- `0660-0705`
+- The product data model becomes much more explicit:
+  - database-stack research rejects Prisma Client Python as archived/unmaintained
+  - user pushes for a cleaner audit/versioning story than the existing chapters API uses
+  - the activity/audit proposal settles on action records plus state-change records and ETag-based optimistic locking
+- In parallel, the product is also being repositioned through the new strategy workflow rather than just through infrastructure and API proposals.
+- `0706-0755`
+- The session enters a process-failure phase:
+  - product strategy is initially run incorrectly as a collapsed single-agent cycle
+  - the user rejects that and requires a full restart of the product-strategy workflow without simplification
+  - overlapping non-worktree agent runs contaminate trust in late outputs
+  - the repository is eventually force-reset to an empty root commit because the user no longer trusts the accumulated implementation state
+- Practical consequence for draft 0:
+  - keep the product-strategy workflow itself as a durable decision
+  - keep the seed `problem.md` / `philosophy.md` as likely useful raw material
+  - do not treat late product-strategy review/proposal outputs from the chaotic period as authoritative
