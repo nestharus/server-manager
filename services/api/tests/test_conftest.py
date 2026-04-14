@@ -24,15 +24,15 @@ def test_app_fixture_returns_fastapi_instance(app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio()
-async def test_app_fixture_has_v1_router_mounted(client: httpx.AsyncClient) -> None:
-    response = await client.get("/api/v1/health")
+async def test_app_fixture_has_v1_router_mounted(async_client: httpx.AsyncClient) -> None:
+    response = await async_client.get("/api/v1/health")
 
     assert response.status_code == HTTPStatus.OK
 
 
 @pytest.mark.asyncio()
-async def test_client_fixture_can_make_http_requests(client: httpx.AsyncClient) -> None:
-    response = await client.request("GET", "/api/v1/health")
+async def test_client_fixture_can_make_http_requests(async_client: httpx.AsyncClient) -> None:
+    response = await async_client.request("GET", "/api/v1/health")
 
     assert response.request.method == "GET"
     assert response.request.url.path == "/api/v1/health"
@@ -41,10 +41,10 @@ async def test_client_fixture_can_make_http_requests(client: httpx.AsyncClient) 
 
 @pytest.mark.asyncio()
 async def test_client_fixture_reaches_health_endpoint(
-    client: httpx.AsyncClient,
+    async_client: httpx.AsyncClient,
     test_settings: Settings,
 ) -> None:
-    response = await client.get("/api/v1/health")
+    response = await async_client.get("/api/v1/health")
 
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {
@@ -66,12 +66,12 @@ async def test_client_fixture_reaches_health_endpoint(
     ],
 )
 async def test_chapter_endpoint_stubs_are_reachable_via_client(
-    client: httpx.AsyncClient,
+    async_client: httpx.AsyncClient,
     method: str,
     path: str,
     json_body: dict[str, object] | None,
 ) -> None:
     kwargs = {"json": json_body} if json_body is not None else {}
-    response = await getattr(client, method)(path, **kwargs)
+    response = await getattr(async_client, method)(path, **kwargs)
 
     assert response.status_code == HTTPStatus.NOT_IMPLEMENTED

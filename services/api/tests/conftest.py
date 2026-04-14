@@ -5,6 +5,7 @@ import pytest
 import pytest_asyncio
 from _pytest.monkeypatch import MonkeyPatch
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.api.v1.router import router as v1_router
 from app.core.factory import create_app
@@ -38,8 +39,14 @@ def app(test_settings: Settings) -> FastAPI:
     return application
 
 
+@pytest.fixture()
+def client(app: FastAPI) -> Iterator[TestClient]:
+    with TestClient(app) as c:
+        yield c
+
+
 @pytest_asyncio.fixture()
-async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+async def async_client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as test_client:
         yield test_client
