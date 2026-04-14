@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -7,6 +9,7 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
     api_prefix: str = "/api/v1"
+    humility_env: str = "production"
 
     discord_bot_token: str = Field(..., repr=False)
     discord_guild_id: int
@@ -19,3 +22,8 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None, repr=False)
     z_ai_api_key: str | None = Field(default=None, repr=False)
     minimax_api_key: str | None = Field(default=None, repr=False)
+
+
+def get_settings() -> Settings:
+    """Return a Settings instance loaded from environment variables."""
+    return Settings()

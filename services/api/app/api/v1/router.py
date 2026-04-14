@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import health
+from app.api.v1.endpoints import chapters, health
 
 router = APIRouter()
 router.include_router(health.router, tags=["health"])
+router.include_router(chapters.router, tags=["chapters"])
