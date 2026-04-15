@@ -1,0 +1,36 @@
+Starting CodeRabbit review in plain text mode...
+
+Review directory: /home/nes/projects/server-manager/worktrees/feat-read-components
+
+Connecting to review service
+Setting up
+Preparing sandbox
+Summarizing
+Tools completed
+Reviewing
+
+============================================================================
+File: risk/12-scope.md
+Line: 12 to 17
+Type: potential_issue
+
+Comment:
+Minor inconsistency: helper count.
+
+Line 12 states "seven new helpers" but Finding 3 (line 51) states "Eight new functions." The list in lines 12-15 does enumerate eight functions: serialize_component, serialize_action_row, serialize_button, serialize_select_menu, serialize_select_option, serialize_select_default_value, serialize_partial_emoji, serialize_component_fallback.
+
+
+
+📝 Proposed fix
+
+-Nothing in the proposed change touches command wiring, dispatch, or
+-Discord write paths. The seven new helpers (serialize_component,
++Nothing in the proposed change touches command wiring, dispatch, or
++Discord write paths. The eight new helpers (serialize_component,
+
+Prompt for AI Agent:
+Verify each finding against the current code and only fix it if needed.
+
+In @risk/12-scope.md around lines 12 - 17, Update the inaccurate helper count in the documentation: change the phrase "seven new helpers" to "eight new helpers" (or otherwise make the counts consistent) to match the actual list of functions serialize_component, serialize_action_row, serialize_button, serialize_select_menu, serialize_select_option, serialize_select_default_value, serialize_partial_emoji, and serialize_component_fallback and the mention in Finding 3.
+
+Review completed: 1 finding ✔

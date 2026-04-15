@@ -1,6 +1,6 @@
 # NOTES.md - agent-maintained log of discovered facts
 
-Last updated: 2026-04-13
+Last updated: 2026-04-15
 
 ## Guild
 
@@ -93,3 +93,8 @@ Last updated: 2026-04-13
 - Local Python 3.12.3 runtime checks confirmed that `python -m daemon` executes `daemon/__main__.py` with `__name__ == "__main__"` and `__package__ == "daemon"`.
 - The same local checks also confirmed a subtle hazard: during `python -m daemon`, a later runtime import of `daemon.__main__` can execute the file a second time under the module name `daemon.__main__`, producing a second module instance and re-running top-level side effects such as `load_dotenv()`.
 - `docs/DAEMON_DESIGN.md` and its Railway start example still describe the old root-file launch path (`daemon.py`, `python daemon.py`); those references remain useful as behavior documentation but are stale as the final execution path.
+
+## Library Facts
+
+- `discord.py` 2.7.x exposes `Message.components` as a read-only list of `discord.Component` subclasses; classic ticket panels are typically `ActionRow -> Button/SelectMenu`, but 2.6+ also allows v2 top-level components such as `SectionComponent` and `Container`.
+
