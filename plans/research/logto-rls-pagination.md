@@ -195,7 +195,7 @@ For this platform, the right conclusion is narrower:
 - do not treat it as an authorization-system substitute
 - do not let it change the platform recommendation toward a more robust stack
 
-If the platform were optimizing for the RFQ-style baseline of "ship app auth quickly with organizations and RBAC," Logto would remain a credible option.
+If the platform were optimizing for a simpler baseline of "ship app auth quickly with organizations and RBAC," Logto would remain a credible option.
 
 Given the user's stated preference for the more robust 2026 direction, the recommendation is:
 
