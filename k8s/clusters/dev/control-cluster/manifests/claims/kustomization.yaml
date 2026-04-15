@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: dev-control-cluster-claims-slot
+    literals:
+      - gitops.foundation.slot=crossplane-cluster-claims
+      - gitops.foundation.owner=application-cluster-provisioning
+      - gitops.foundation.path=clusters/dev/control-cluster/manifests/claims
+      - gitops.foundation.singleSecretPathRequired=true
