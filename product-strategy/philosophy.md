@@ -146,6 +146,7 @@ Some principles can pull in different directions in specific contexts:
 - **2 vs 3**: Live-server safety (don't break running systems) can conflict with no compatibility shims (don't maintain old patterns). Resolution: migration tooling makes the transition safe, but the system does not maintain the old path indefinitely. Safe doesn't mean permanent.
 - **7 vs 9**: Delegated authority (require scoped approval) can conflict with volunteer-aware design (minimize approval gates). Resolution: delegation reduces total approval load by distributing it — officers approve within their scope without central bottleneck, reducing both individual and aggregate attention cost.
 - **6 vs 9**: Trust and safety (audit everything, require review) can conflict with volunteer-aware design (minimize friction). Resolution: the level of review scales with the severity of the action. Low-risk state transitions (e.g., routine activity flagging) are automated; high-risk decisions (e.g., membership denial, officer removal) require human judgment.
+- **6 vs 12**: Trust and safety (audit trails for consequential actions) can conflict with graceful degradation (subsystem failure doesn't cascade). Resolution: audit enforcement scales with action severity. Consequential decisions — approvals, denials, escalations — block when audit storage is unavailable rather than proceed unrecorded. Routine automated transitions proceed with deferred audit entries, tolerating temporary audit unavailability without cascading the outage.
 
 ---
 

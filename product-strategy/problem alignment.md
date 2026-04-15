@@ -141,3 +141,4 @@ For each sub-problem or interaction that the proposal reveals within an existing
 | 10 | Delegated Authority and Governance | §10 |
 | 11 | Platform Constraints and Moving-Target Risk | §11 |
 | 12 | Cross-workflow State and Operational Continuity | §12 |
+| 13 | Live Configuration Safety and Temporal Integrity | §13 |

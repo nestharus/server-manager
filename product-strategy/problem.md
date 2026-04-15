@@ -74,6 +74,10 @@ A multi-chapter server with officer tiers, special squads, archive spaces, bot r
 
 The core difficulty is that Discord provides tools to set permissions but no tools to reason about the aggregate effect of accumulated permission decisions over time. There is no native concept of "intended permission state" against which actual state can be audited, and no mechanism to detect when a temporary override has become permanent.
 
+This single-phenomenon description understates the difficulty. When an "intended permission state" is introduced, permission discrepancies split into two distinct categories that require fundamentally different operational responses. Permissions that have diverged from a declared intent have a clear resolution path: compare actual state to intended state and correct the discrepancy. But permissions that were set directly in Discord without any corresponding intent have no resolution path at all — the operator must first determine whether the permission should exist, then either create an intent to formalize it or remove it.
+
+The migration challenge is itself significant. Any community that adopts a declared-intent model inherits the full history of unmanaged permission decisions. These existing permissions must be individually classified and brought into the managed set before the system can provide complete coverage. Until that migration completes, the community operates in a hybrid state where some permissions are managed and others are not — and the boundary between the two must be visible to operators or it becomes a new source of confusion.
+
 ---
 
 ## §8 Vendor Lock-in, Migration, and Data Portability
@@ -117,3 +121,13 @@ The core difficulty is designing against a substrate that moves. Any system buil
 Across all operational domains, the recurring issue is that decisions span multiple subsystems but state is fragmented. An application leads to a membership decision that affects chapter rosters, which affects activity tracking, which may trigger a ticket. These relationships exist in the community's operational logic but not in any single bot or built-in feature.
 
 The core difficulty is not building individual subsystems — it is maintaining coherent state across their boundaries. When application data lives in one bot, ticket data in another, and roster data in a spreadsheet, no single system can answer "what is this member's full operational history?" Operational continuity requires that cross-subsystem relationships are first-class, not reconstructed by officers from memory.
+
+---
+
+## §13 Live Configuration Safety and Temporal Integrity
+
+Communities change their operational rules while operations are in progress. Application forms are updated mid-review cycle, compliance thresholds are adjusted while evaluations are running, ticket routing is modified while cases are open, and authority templates shift as staff availability changes. These changes are routine and necessary — communities learn and adapt continuously.
+
+The core difficulty is that a configuration change on a live system can silently corrupt the semantic integrity of in-flight operations. When an application form's fields change while submissions are pending review, the submitted responses may no longer correspond to the questions that were asked. When compliance rules change mid-season, evaluations that already ran correctly under the old parameters become inconsistent with evaluations that haven't run yet. The operation didn't fail — its meaning changed underneath it.
+
+This is not a versioning problem in the storage sense. It is an operational safety problem: ensuring that work begun under one set of rules completes under those same rules, while new work begins under the updated rules. The difficulty is compounded by the fact that configuration changes are not isolated — a single policy update may affect multiple subsystems simultaneously, and the set of in-flight operations affected is not obvious until the change is attempted.
