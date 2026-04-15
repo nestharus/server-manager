@@ -18,12 +18,16 @@ The proposal adopts a two-stream model:
 - business tables such as `chapters` become current-state projections,
   not the authority for concurrency or historical reconstruction
 - optimistic locking moves from row `version` columns to an
-  activity-derived opaque head hash exposed as an HTTP `ETag` and
+  activity-derived opaque head value exposed as an HTTP `ETag` and
   enforced with `If-Match`
 
 This is a clean break. The platform should not keep row-versioning and
 activity-derived versioning in production together. The initiative
 exists to remove that split authority.
+
+The first aggregate migrated (chapters) is explicitly a proof-of-concept.
+Patterns established here will be refined when a second aggregate adopts
+the model.
 
 ## 2. Scope of Activity/Audit Model
 
@@ -38,15 +42,26 @@ In scope:
 - define optimistic locking via activity-derived `ETag` values instead
   of row `version` columns
 - define how business-entity tables stay free of framework metadata
-- define actor attribution, request capture, and accepted-change diff
+  (except `created_at`, which is retained as a business field)
+- define actor attribution, request capture, and accepted-change
   capture
 - define the indexing and query model for normal reads, audit reads, and
   concurrency checks
-- define the migration impact on the existing chapters API
+- define the migration impact on the existing chapters API as a
+  proof-of-concept for the model
+- define the projection-rebuild contract
 
 This initiative does not implement the model, write migrations, or add
 UI surfaces. It defines the canonical architecture that later hookpoint
 and implementation work must follow.
+
+Out of scope for the initial aggregate (deferred to second-aggregate
+adoption):
+
+- hash-chain head validation (first aggregate uses sequence-number
+  concurrency)
+- canonical serialization specification
+- multi-aggregate transactional patterns
 
 ## 3. Canonical model and authority boundaries
 
@@ -99,9 +114,9 @@ The proposal recommends three storage layers:
 3. projection/head helpers
 
 The helper layer should include an `aggregate_heads` table keyed by
-`(aggregate_type, aggregate_id)` carrying the latest accepted sequence,
-latest accepted state-change id, and current opaque head hash. This is
-infrastructure metadata and belongs outside business tables.
+`(aggregate_type, aggregate_id)` carrying the latest accepted sequence
+and latest accepted state-change id. This is infrastructure metadata
+and belongs outside business tables.
 
 ## 4. Write model and optimistic locking
 
@@ -115,28 +130,35 @@ business-body field.
 - the server compares `If-Match` to the current aggregate head
 - mismatch fails before any new accepted state change is appended
 
-The canonical validator is the aggregate's current head hash derived
-from accepted state changes. It is not a row version and it is not a
-timestamp. Clients treat it as opaque.
-
 Once the API adopts HTTP preconditions, stale writes should return
 `412 Precondition Failed`, not `409 Conflict`.
 
-### Head-hash model
+### Phased concurrency validator
 
-The head validator should be a hash-chain head carried by accepted state
-changes and surfaced through `aggregate_heads`.
+The concurrency validator is phased across aggregate adoptions:
 
-Each accepted state change stores:
+**Phase 1 (chapters — this initiative):** The head validator is a
+monotonic sequence number stored in `aggregate_heads.current_seq`. The
+ETag value is derived from this sequence number (e.g., the sequence
+number itself, or a simple encoding of it). Clients treat it as opaque.
 
-- `aggregate_seq`
-- `previous_head_hash`
-- `head_hash`
+This approach is simpler, avoids the canonical-serialization problem
+entirely for the first aggregate, and is sufficient to prove the
+concurrency model.
 
-The new `head_hash` is computed from the prior head plus a canonical
-representation of the accepted state change. The platform must define a
-stable canonical serialization for this computation before
-implementation; without that, the validator is not trustworthy.
+**Phase 2 (second aggregate — future initiative):** If the platform
+requires corruption-detection or cross-system verification, a
+hash-chain head model may be introduced. At that point, the platform
+must define a stable canonical serialization specification covering:
+
+- serialization format (e.g., JCS / RFC 8785)
+- key ordering rules
+- null vs absent-field handling
+- numeric representation (integer vs float, precision)
+- hash algorithm (e.g., SHA-256)
+
+The sequence-number validator from Phase 1 can coexist or be migrated.
+The ETag remains opaque to clients in both phases.
 
 ### Canonical write path
 
@@ -144,7 +166,7 @@ For a mutation against one aggregate, the write path should be:
 
 1. validate the request and actor context
 2. read the current aggregate head
-3. compare `If-Match` to the current head hash
+3. compare `If-Match` to the current head value
 4. append an `activity_actions` row
 5. if accepted, append one or more `activity_state_changes` rows
 6. update `aggregate_heads`
@@ -159,12 +181,22 @@ chapters API needs immediate read-your-write behavior and a stable new
 
 ### Multi-aggregate actions
 
-Some actions will legitimately emit changes to more than one aggregate.
-The model supports that by linking many state changes to one action.
-However, concurrency remains aggregate-scoped. A request touching
-multiple aggregates must validate and append changes in one database
-transaction or fail cleanly. This initiative does not introduce a
-general workflow-orchestration or saga framework.
+The model structurally supports linking many state changes to one
+action, which means a single action can touch multiple aggregates.
+However, the transactional semantics and failure handling for
+multi-aggregate writes are explicitly deferred. No second aggregate
+exists yet, and specifying transaction-boundary decisions before the
+platform understands its actual cross-aggregate needs risks locking in
+premature patterns.
+
+When a second aggregate is proposed, a follow-on initiative must define:
+
+- whether cross-aggregate writes share a transaction or use compensation
+- what "fail cleanly" means for partial multi-aggregate failures
+- whether a saga or workflow framework is warranted
+
+This initiative scopes concurrency and writes to single-aggregate
+operations only.
 
 ## 5. Clean business tables, actor attribution, and diff capture
 
@@ -178,18 +210,18 @@ They should not carry:
 - actor ids
 - request ids or correlation ids
 - framework timestamps used only for audit bookkeeping
-- activity hashes
-- append-only sequence metadata
+- activity hashes or sequence metadata
 
 For chapters, the projection table should hold only the current chapter
 fields that matter to business behavior, such as name, slug, status,
-and Discord bindings. Concurrency and history metadata belong in
-`aggregate_heads` and the activity streams.
+Discord bindings, and `created_at`.
 
-This proposal also treats `created_at` as history metadata unless a
-domain explicitly requires it as a business field. For the existing
-chapters API, creation time should come from activity history rather
-than from the canonical business projection.
+`created_at` is retained on the projection table as a business field.
+"When was this chapter created?" is a domain question that should be
+answerable with a simple projection-table read, not a join against the
+activity stream. Concurrency and history metadata (version, actor,
+sequence) belong in `aggregate_heads` and the activity streams;
+`created_at` does not.
 
 ### Actor attribution
 
@@ -211,17 +243,29 @@ gives a durable chain from actor to action to accepted facts.
 
 ### Diff capture
 
-The accepted-change stream should capture two distinct artifacts:
+The accepted-change stream captures two related artifacts:
 
 - `payload_json`: the canonical accepted fact used to advance the
-  aggregate and rebuild projections
-- `diff_json`: a field-level business diff used for human audit display
+  aggregate and rebuild projections — this is the source of truth
+- `diff_json`: a field-level business diff derived from `payload_json`
+  by comparing the new payload against the previous state, used for
+  human audit display
 
-The payload is the reconstruction primitive. The diff is the audit
-readability primitive. The proposal should not rely on diff-only events
-for rebuild, and it should not rely on full before/after row snapshots
-as the default representation. Full snapshots may still be justified for
-specific aggregates later, but they are not the default model.
+**Relationship:** `diff_json` is always derived from `payload_json`.
+It is computed at write time by diffing the new accepted state against
+the prior projection. `diff_json` is never independently computed or
+independently authoritative. If the two were ever to disagree, the
+`payload_json` is correct and `diff_json` should be recomputed.
+
+The head value (sequence number in Phase 1, optionally hash in Phase 2)
+is computed from `aggregate_heads.current_seq`, not from `payload_json`
+or `diff_json` content. This decouples the concurrency primitive from
+payload serialization.
+
+The proposal should not rely on diff-only events for rebuild, and it
+should not rely on full before/after row snapshots as the default
+representation. Full snapshots may still be justified for specific
+aggregates later, but they are not the default model.
 
 Request capture must be redacted. Tokens, secrets, and opaque external
 credentials do not belong in audit rows.
@@ -260,14 +304,11 @@ On `activity_state_changes`:
 - primary key on `id`
 - unique index on `(aggregate_type, aggregate_id, aggregate_seq)`
 - index on `(aggregate_type, aggregate_id, recorded_at DESC)`
-- unique index on `(aggregate_type, aggregate_id, head_hash)`
 - index on `action_id`
 
 On `aggregate_heads`:
 
 - primary key on `(aggregate_type, aggregate_id)`
-- unique or otherwise strictly controlled storage of the current
-  `head_hash`
 
 Projection tables keep business indexes only. For chapters, that
 includes the kinds of indexes the business surface already needs, such
@@ -285,11 +326,14 @@ Append-only storage improves historical correctness but increases:
 
 That cost is acceptable only if the platform commits to projections and
 repair tooling as first-class concerns. This proposal assumes that
-commitment.
+commitment, with rebuild tooling delivered as a follow-on (see §8).
 
 ## 7. Migration impact on the existing chapters API
 
 This initiative is a contract break for the current chapter surface.
+The chapters migration is explicitly a proof-of-concept for the activity
+model. Patterns established here will be refined when a second aggregate
+adopts the model.
 
 Today the chapter API is row-versioned:
 
@@ -304,14 +348,14 @@ Under this proposal, the chapters API changes as follows:
 - `VersionedMixin` leaves `ChapterRead` and `ChapterUpdate`
 - `version` is removed from request and response bodies
 - chapter reads return an `ETag` header carrying the current aggregate
-  head hash
+  head value (sequence-based in Phase 1)
 - chapter mutations require `If-Match`
 - stale chapter mutations return `412 Precondition Failed`
 - `POST /api/v1/chapters/{id}/archive` becomes a preconditioned mutation
   as well; it should not remain an unguarded write while the rest of the
   aggregate is concurrency-protected
-- `created_at` leaves the canonical chapter business DTO and becomes
-  historical metadata derived from the activity stream
+- `created_at` remains on the chapter projection table and in the
+  business DTO
 
 This must be a single cutover. The platform should not accept both body
 `version` and `If-Match`, and it should not preserve both row-version
@@ -335,7 +379,46 @@ The current chapter repository pattern of `replace(..., version + 1)`
 is superseded by append accepted action, append accepted state change,
 advance aggregate head, and refresh the projection.
 
-## 8. Tradeoffs, failure modes, and downstream implications
+## 8. Projection rebuild contract and operational tooling
+
+### Rebuild contract
+
+Projection rebuild is a required capability for production safety. The
+contract is defined here; implementation is a follow-on deliverable.
+
+**Rebuild strategy:** Replay-from-zero. Rebuild reads the full ordered
+`activity_state_changes` stream for an aggregate and recomputes the
+projection by applying each accepted payload in sequence. This is
+identical to what the live write path does for a single state change,
+applied iteratively.
+
+**Code sharing:** The projection-update logic used by the live write
+path (step 7 in §4) must be the same code used by rebuild. There must
+not be a separate "rebuild projection" implementation. A single
+function takes an accepted state change and updates the projection;
+the live path calls it once per write, and rebuild calls it in a loop.
+
+**Divergence detection:** After rebuild, the rebuilt projection is
+compared to `aggregate_heads.current_seq`. If the final replayed
+sequence does not match the current head, the rebuild is marked as
+failed and requires investigation. For the first aggregate (chapters),
+manual comparison is sufficient.
+
+**When rebuild runs:**
+
+- on-demand for repair after suspected projection corruption
+- during schema migrations that change projection shape
+- as a verification step in staging before production deployment
+
+### Tooling phasing
+
+For the first aggregate (chapters, small table), rebuild can be a
+management command or script. Automated rebuild scheduling, progress
+tracking, and production safety interlocks are deferred to the
+second-aggregate initiative when table sizes make manual repair
+impractical.
+
+## 9. Tradeoffs, failure modes, and downstream implications
 
 ### Tradeoffs
 
@@ -348,14 +431,12 @@ advance aggregate head, and refresh the projection.
 
 ### Failure modes
 
-- If canonical serialization for the head hash is unstable, clients will
-  see false stale-write failures or incorrect validator reuse.
+- If the sequence-based head value is not atomically incremented, clients
+  will see false stale-write failures.
 - If accepted state changes and projection/head updates are not
   transactionally aligned, reads can drift from the accepted ledger.
 - If action request capture is too raw, the audit tables will leak
   secrets or store low-signal noise.
-- If multi-aggregate writes are partially committed, the audit chain may
-  show an accepted action without a coherent set of accepted facts.
 - If rebuild tooling is weak, projection corruption becomes hard to
   repair despite the append-only ledger.
 
@@ -368,9 +449,9 @@ advance aggregate head, and refresh the projection.
 - audit/history endpoints or views become a first-class product surface,
   because business DTOs stop carrying historical framework fields
 - operational tooling must include replay/rebuild procedures for
-  projections and head repair
+  projections and head repair (follow-on deliverable for first aggregate)
 
-## 9. What is explicitly out of scope
+## 10. What is explicitly out of scope
 
 The following are not part of this initiative:
 
@@ -385,8 +466,13 @@ The following are not part of this initiative:
 - replaying the full ledger on ordinary GET/list requests
 - introducing framework metadata back into business rows "for
   convenience"
+- hash-chain head validation and canonical serialization (deferred to
+  second-aggregate adoption)
+- multi-aggregate transactional semantics (deferred to when a second
+  aggregate exists)
+- automated rebuild tooling (manual is sufficient for first aggregate)
 
-## 10. Recommendation
+## 11. Recommendation
 
 Adopt the split append-only model now as the canonical platform
 direction:
@@ -394,10 +480,14 @@ direction:
 - `activity_actions` for attempted operations and actor attribution
 - `activity_state_changes` for accepted business facts and audit history
 - `aggregate_heads` for current concurrency validation
-- projection tables for current business reads
+  (sequence-number-based for Phase 1)
+- projection tables for current business reads, including `created_at`
 - `ETag`/`If-Match` as the only optimistic-locking contract
 
 That gives Humility one coherent answer to history, attribution, and
 concurrency. The cost is real, but the alternative is a mixed authority
 model that keeps versioning, audit, and business state coupled in the
 same mutable rows.
+
+Chapters is the proof-of-concept. The second aggregate refines the
+pattern.
