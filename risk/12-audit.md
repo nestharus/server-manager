@@ -12,6 +12,7 @@ identified findings are low severity.
 ## Findings
 
 ### Finding 1: Enum `.name` access on unexpected values
+
 - Severity: LOW
 - Description: The proposal uses string enum names via `component.type`,
   `component.style`, and `channel_types` entries. In discord.py, these
@@ -28,6 +29,7 @@ identified findings are low severity.
   blocking.
 
 ### Finding 2: `getattr` guards against missing attributes
+
 - Severity: LOW
 - Description: The proposal sources data via `getattr(message,
   "components", [])`, which is consistent with the existing serializer
@@ -38,6 +40,7 @@ identified findings are low severity.
 - Recommendation: No action required.
 
 ### Finding 3: No data leakage risk
+
 - Severity: LOW
 - Description: The serializer only reads public attributes already
   exposed by discord.py's read-only component model. No tokens, secrets,
@@ -47,6 +50,7 @@ identified findings are low severity.
 - Recommendation: No action required.
 
 ### Finding 4: Fallback does not recurse into Components v2
+
 - Severity: LOW
 - Description: The proposal explicitly limits the fallback to
   `{type, id}` for unrecognized component classes and states it must not
@@ -57,6 +61,7 @@ identified findings are low severity.
   the correct choice.
 
 ### Finding 5: `ActionRow.children` may contain `TextInput`
+
 - Severity: LOW
 - Description: The research documents that `ActionRow.children` is typed
   as `list[Button | SelectMenu | TextInput]`. The proposal dispatches
@@ -68,6 +73,7 @@ identified findings are low severity.
   intentional and documented in the anti-scope section.
 
 ### Finding 6: Contract stability of `"children"` key name
+
 - Severity: LOW
 - Description: The proposal uses `"children"` inside `ActionRow` instead
   of `"components"` (which is the Discord API's raw payload key name).
@@ -80,6 +86,7 @@ identified findings are low severity.
   serialization schema, not the raw Discord API.
 
 ### Finding 7: Empty arrays are always emitted
+
 - Severity: LOW
 - Description: The proposal mandates `options: []`, `channel_types: []`,
   and `default_values: []` on all select menu types, even when those
@@ -90,6 +97,7 @@ identified findings are low severity.
   documented in the proposal.
 
 ### Finding 8: No crash path from `None` components list
+
 - Severity: LOW
 - Description: `message.components` is always initialized as a list in
   discord.py (never `None`), and the proposal additionally guards with
