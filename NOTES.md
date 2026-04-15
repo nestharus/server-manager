@@ -1,6 +1,6 @@
 # NOTES.md - agent-maintained log of discovered facts
 
-Last updated: 2026-04-11
+Last updated: 2026-04-13
 
 ## Guild
 
@@ -46,3 +46,7 @@ Last updated: 2026-04-11
 - `Hydra`, `Apollo`, and `sesh` appear unused from Discord-visible evidence.
 - `Gather` has no Discord-visible activity, but it may still have external dashboard configuration.
 - A first-party applications subsystem should replace Gather only after the flow is designed and tested.
+
+## Library Facts
+
+- `discord.py` 2.7.x exposes `Message.components` as a read-only list of `discord.Component` subclasses; classic ticket panels are typically `ActionRow -> Button/SelectMenu`, but 2.6+ also allows v2 top-level components such as `SectionComponent` and `Container`.
