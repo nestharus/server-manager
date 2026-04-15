@@ -124,6 +124,26 @@ Anti-goal: monolithic coupling where a single failure mode brings down all commu
 
 ---
 
+## Principle 13: Derived State Transparency *(provisionally added — pending user confirmation)*
+
+Operational state that influences decisions should be derived from observable evidence through transparent, deterministic computation rather than directly assessed or assigned by authority. The computation itself — inputs, rules, parameters — must be inspectable by operators.
+
+When the system computes a trust level, evaluates compliance, or detects permission drift, the inputs, the computation rules, and the output are all visible. Operators configure the computation; the system executes it deterministically. When inputs or parameters change, the system recomputes rather than preserving stale results. No operational state depends on an officer's subjective assessment when an objective derivation from evidence is possible.
+
+Anti-goal: operational state that exists because someone said so. If a state can be derived from evidence, it should be — and the derivation should be visible.
+
+---
+
+## Principle 14: Graduated Consequence *(provisionally added — pending user confirmation)*
+
+System responses to operational discrepancies should offer proportional options between the extremes. Binary responses — compliant or removed, match or mismatch, active or archived — are insufficient for real operational governance.
+
+When the system detects a discrepancy (compliance violation, permission drift, declining activity, governance concern), it provides multiple response levels calibrated to severity and context. Operators choose the appropriate level. Low-severity discrepancies may warrant notification only; moderate cases may flag for review; severe cases may trigger automated protective action. Each domain defines its own graduation, but the principle is consistent: there is always an intermediate option between ignoring and maximum consequence.
+
+Anti-goal: all-or-nothing enforcement. A system that can only ignore or escalate forces officers into uncomfortable binary choices and trains them to ignore problems until they become crises.
+
+---
+
 ## Principle Interactions
 
 Principles reinforce each other in predictable ways:
@@ -135,6 +155,10 @@ Principles reinforce each other in predictable ways:
 - **9 + 11**: Volunteer-aware design and operator configuration both reduce the human cost of running the system — automation handles routine work, and configuration changes don't require developer involvement.
 - **3 + 8**: No compatibility shims and platform-native interaction both prevent technical debt accumulation — the system stays current rather than maintaining bridges to deprecated patterns.
 - **4 + 1**: Research before implementation supports operator clarity — when the problem is understood first, the resulting system is explainable because its design traces to real difficulties.
+- **13 + 1**: Derived state transparency reinforces operator clarity — when operational state is computed from visible inputs through inspectable rules, operators understand not just what the state is but why it is that way.
+- **13 + 6**: Derived state transparency reinforces trust and safety — deterministic derivation from evidence removes individual judgment as a vector for bias or manipulation in operational state assessment.
+- **14 + 9**: Graduated consequence reinforces volunteer-aware design — proportional responses reserve officer attention for the severity level that warrants it, rather than escalating every discrepancy to the same urgency.
+- **14 + 7**: Graduated consequence reinforces delegated authority with accountability — scoped officers can apply proportional responses within their authority, handling minor discrepancies autonomously while escalating severe ones.
 
 ---
 

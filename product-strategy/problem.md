@@ -24,6 +24,8 @@ Discord's built-in server member applications cover server-level join gating but
 
 The core difficulty is that intake is not a single decision point — it is a lifecycle. An application may be pending, claimed by a reviewer, in interview, waitlisted, approved, denied, or withdrawn. Each transition requires the right person to see the right context at the right time. When staff time is scarce, applications that require manual review compete for the same attention as every other operational task.
 
+When multiple officers have authority over the same intake queue, concurrent access introduces a mutual-exclusion problem. Two reviewers may independently begin evaluating the same application without knowing the other has started — duplicating scarce staff effort. If they reach different conclusions, the conflict itself requires officer attention to resolve. This collision risk connects directly to volunteer burnout (§9): every duplicated review or conflicting decision is attention spent on coordination overhead rather than adjudication.
+
 ---
 
 ## §3 Case Routing and State Management
@@ -43,6 +45,8 @@ The deeper problem is proving what happened after the fact. Staff teams need to 
 Discord's server audit log has a 45-day retention cap, which is too short for seasonal guild operations, officer misconduct reviews, or disputes that resurface months later. Third-party bots fill the gap with transcripts and logs, but then retention becomes a commercial or operational policy owned by someone else.
 
 The core difficulty is not logging — it is reconstructability. A complete audit trail means any past decision can be examined with its full context: who decided, what inputs they had, what alternatives existed, and what policy governed the decision. This requires durable storage under the community's control, not a vendor's retention policy.
+
+When reconstructability is enforced as a hard invariant rather than a best-effort goal, audit storage availability becomes a precondition for consequential operations. An officer approval, denial, or escalation that cannot be recorded cannot proceed — an audit outage becomes an operational outage for every decision that requires accountability. The system must either accept that audit failures block operations (sacrificing availability for integrity) or allow operations to proceed without audit (sacrificing the reconstructability the system was built to provide). This tension does not exist in the current state, where there is no audit trail to speak of, and only becomes visible when audit is elevated to a hard requirement.
 
 ---
 
@@ -131,3 +135,13 @@ Communities change their operational rules while operations are in progress. App
 The core difficulty is that a configuration change on a live system can silently corrupt the semantic integrity of in-flight operations. When an application form's fields change while submissions are pending review, the submitted responses may no longer correspond to the questions that were asked. When compliance rules change mid-season, evaluations that already ran correctly under the old parameters become inconsistent with evaluations that haven't run yet. The operation didn't fail — its meaning changed underneath it.
 
 This is not a versioning problem in the storage sense. It is an operational safety problem: ensuring that work begun under one set of rules completes under those same rules, while new work begins under the updated rules. The difficulty is compounded by the fact that configuration changes are not isolated — a single policy update may affect multiple subsystems simultaneously, and the set of in-flight operations affected is not obvious until the change is attempted.
+
+---
+
+## §14 Consolidated Failure Risk and Operational Availability
+
+When operational state is fragmented across many independent systems, a single system's failure affects only its domain — a ticket bot outage doesn't stop application review, and an application bot outage doesn't stop compliance tracking. Each failure is contained because the systems share nothing.
+
+Consolidation solves the fragmentation problem (§8, §12) but inverts the failure model. When all operational subsystems — intake, cases, compliance, permissions, audit, governance — share a platform, a platform-level failure (database outage, deployment failure, hosting disruption) can take down every operational workflow simultaneously. The blast radius of any single failure expands from one domain to all domains.
+
+The core difficulty is that consolidation and failure isolation pull in opposite directions. A unified system provides cross-workflow coherence (§12) and eliminates vendor fragmentation (§8), but achieving that coherence means subsystems share infrastructure, state dependencies, or both. The system must maintain meaningful operational independence between subsystems even though they share a platform — so that an outage in one domain does not cascade into a total operational shutdown.
