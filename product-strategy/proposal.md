@@ -65,6 +65,23 @@ The central entity linking a Discord user to the system's operational model.
 
 A Member record is created when a Discord user enters the system's scope (joins the server or is first referenced in an operation). The record persists even after departure — operational history is never orphaned.
 
+**Status lifecycle:**
+
+```
+active → suspended → active (reinstated)
+                   → departed
+active → departed
+departed → active (rejoin)
+```
+
+- `active → suspended`: Initiated by an officer with authority over the member's scope (chapter officer for chapter-level suspension, global staff for server-level). Requires a reason. Triggers: governance review outcome, trust violation, pending investigation, or compliance escalation. Suspension is always an explicit officer decision — the system does not auto-suspend members (auto-probation via compliance rules changes RosterEntry status to `under_review`, not Member status to `suspended`).
+- **Operational effects of suspension:** Suspended members cannot submit new applications, file tickets, or participate in chapter rosters. Existing RosterEntries transition to `on_leave`. Open tickets where the member is reporter remain visible to staff but the member cannot add messages. The member's Discord roles are synchronized to reflect the reduced access. Trust profile recomputation includes the suspension as an `incident_record` signal.
+- `suspended → active`: Reinstatement by an officer with appropriate authority. Requires a reason. RosterEntries are not automatically restored — each chapter decides whether to reinstate the member's roster position.
+- `suspended → departed` / `active → departed`: Member leaves the server or is removed. All chapter RosterEntries are closed. Authority grants are revoked. Operational history is preserved.
+- `departed → active`: Member rejoins the server. A new trust profile is computed. Prior operational history (applications, tickets, compliance, audit entries) is still linked — the system recognizes returning members. Chapter memberships are not automatically restored.
+
+Every status transition generates an AuditEntry with the actor, reason, and previous state.
+
 #### TrustProfile
 
 Per-member per-scope trust assessment, computed deterministically from signals.
@@ -79,7 +96,7 @@ Per-member per-scope trust assessment, computed deterministically from signals.
 
 Trust is a gradient, not binary. Trust profiles exist per-scope because trust in one chapter does not automatically transfer to another — chapters decide whether to recognize cross-scope trust during their intake process. Trust profiles are recomputed when underlying signals change, so they reflect current evidence rather than a stale snapshot.
 
-An operator can inspect any trust profile and see the exact signals contributing to the computed level. The computation is deterministic: same signals produce the same level.
+An operator can inspect any trust profile and see the exact signals contributing to the computed level, the weights applied to each signal (from the active TrustComputationConfig for the profile's scope), and the thresholds that determined the resulting level. The computation is deterministic: same signals under the same configuration produce the same level.
 
 #### TrustSignal
 
@@ -97,6 +114,28 @@ Individual evidence contributing to a trust profile.
 | `expires_at` | timestamp? | Signals may decay; null means indefinite |
 
 Trust signals are the durable evidence that trust computations draw from. Because signals are individually stored with provenance, a trust profile survives staff turnover — it is derived from evidence, not from any single officer's judgment. Expired signals are retained for audit but excluded from active computation.
+
+#### TrustComputationConfig
+
+Operator-configurable parameters governing how trust signals combine into a trust level.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | uuid | |
+| `scope` | enum + FK | `global` or FK → Chapter |
+| `signal_weights` | jsonb | Weight per signal type: `identity_verification`, `chapter_tenure`, `officer_endorsement`, `compliance_history`, `incident_record` |
+| `decay_rules` | jsonb | Per-signal-type decay curves: how signal influence diminishes over time |
+| `level_thresholds` | jsonb | Ordered thresholds mapping computed scores to discrete trust levels |
+| `version` | integer | Incremented on edit |
+| `created_by` | FK → Member | |
+| `effective_at` | timestamp | |
+| `supersedes_id` | FK → TrustComputationConfig? | Previous version |
+
+Trust computation parameters are operational configuration — analogous to ComplianceRule parameters or TicketCategory state machines. Different communities weight signal types differently based on their governance values: a community that values officer endorsement over tenure makes a fundamentally different governance choice than one that prioritizes compliance history. These choices must be expressible without code changes.
+
+When a TrustComputationConfig is updated, a new version is created. In-flight trust recomputations triggered before the change complete under the previous version. The new version governs subsequent recomputations. Operators can inspect the active configuration for any scope and see exactly how signals combine — the formula connecting individual signals to the resulting trust level is visible, not opaque.
+
+Chapter-scoped configurations override the global default for trust profiles within that chapter. A chapter that has not configured its own weights inherits the global configuration.
 
 ### Intake and Adjudication
 
@@ -196,7 +235,7 @@ A case with durable state, ownership, and cross-subsystem relationships.
 | `category_id` | FK → TicketCategory | |
 | `reporter_id` | FK → Member | |
 | `subject_id` | FK → Member? | The member the ticket is about, if applicable |
-| `state` | enum | Defined by category state machine; base states: `open`, `triaged`, `assigned`, `escalated`, `resolved`, `closed` |
+| `state` | enum | Defined by the category's state machine |
 | `priority` | enum | Set during triage |
 | `owner_id` | FK → Member? | Assigned officer |
 | `related_objects` | jsonb | FKs to Application, Chapter, Member, other Tickets |
@@ -204,13 +243,23 @@ A case with durable state, ownership, and cross-subsystem relationships.
 | `resolved_at` | timestamp? | |
 | `resolution` | jsonb? | Structured: outcome, reason, actions taken |
 
-**Base state machine** (categories may extend):
+**State machine:** Each TicketCategory defines its own complete state machine via the `state_machine` field. There is no mandatory base set of states — categories that need triage, escalation, and multi-stage resolution define those states; categories where routing and priority are deterministic (e.g., account linking requests that always go to the same queue) can define a minimal state machine that skips triage entirely. The only structural requirement is that every category's state machine includes at least one terminal state.
+
+A **default state machine** is provided for categories that do not need customization:
 
 ```
 open → triaged → assigned → resolved → closed
                           → escalated → assigned (at higher scope)
                                       → resolved → closed
 ```
+
+But a simple category like account linking might define:
+
+```
+open → assigned → resolved → closed
+```
+
+This flexibility ensures that every mandatory state transition — including human touchpoints like triage — justifies its attention cost for the specific category it governs.
 
 Tickets carry explicit relationships to other operational objects. A ticket about an application appeal links to the Application. A ticket about a chapter dispute links to the Chapter. These relationships are queryable: "all tickets related to this member" is a system query, not a manual search through channel history.
 
@@ -513,7 +562,7 @@ The default notification configuration is minimal. Operators add rules for the e
 
 1. Discord user joins the server.
 2. System creates a Member record (`status: active`).
-3. System creates a global TrustProfile with initial level computed from available signals (Discord account age, server join method, mutual servers — whatever the community has configured as initial trust signals).
+3. System creates a global TrustProfile with initial level computed from available signals (Discord account age, server join method, mutual servers — whatever the community has configured as initial trust signals) using the weights and thresholds from the active global TrustComputationConfig.
 4. If the community has configured intake requirements for server-level access, the member enters the application intake flow for the relevant FormDefinition.
 5. If no intake requirements are configured, the member receives base access as determined by the community's permission intents.
 
@@ -538,11 +587,13 @@ When reviewers claim applications, the system prevents two reviewers from claimi
 
 ### Ticket Lifecycle
 
-1. Reporter creates a ticket by selecting a TicketCategory. System creates a Ticket (`state: open`) and routes it to the category's queue per routing rules.
-2. An officer triages the ticket: sets priority, may reclassify category. Ticket transitions to `triaged`.
+The specific flow depends on the category's state machine. The following describes the default workflow for categories that use the full state machine (triage → assignment → resolution). Categories with simplified state machines (e.g., account linking: open → assigned → resolved → closed) skip steps that their state machine does not include.
+
+1. Reporter creates a ticket by selecting a TicketCategory. System creates a Ticket in the category's initial state and routes it to the category's queue per routing rules.
+2. For categories with a triage state: an officer triages the ticket — sets priority, may reclassify category. For categories without triage: the system applies deterministic routing (category defaults for priority and assignment queue) and the ticket proceeds directly to assignment.
 3. Officer assigns the ticket (to self or another officer with appropriate authority). Ticket transitions to `assigned`.
 4. Case work proceeds. TicketMessages are exchanged within visibility constraints (reporter-visible vs. staff-only). Related objects are linked as they become relevant.
-5. If the assigned officer cannot resolve the case, they escalate. Ticket transitions to `escalated`, which follows the category's escalation path (e.g., chapter officer → global staff). Reason required.
+5. If the category's state machine includes escalation and the assigned officer cannot resolve the case, they escalate. Ticket transitions to `escalated`, which follows the category's escalation path (e.g., chapter officer → global staff). Reason required.
 6. Officer resolves the case. Ticket transitions to `resolved`. Resolution is structured: outcome, reason, actions taken. Required fields.
 7. After a configurable resolution period (for follow-up or appeal), ticket transitions to `closed`.
 
@@ -754,6 +805,12 @@ Subsystems are peers with defined failure boundaries:
 Cross-subsystem effects (application approval → roster entry) handle downstream failure by queuing the effect and surfacing the pending state to operators. The upstream operation completes; the downstream effect retries until the target subsystem recovers. Operators see the pending state and can intervene if recovery takes too long.
 
 The audit subsystem is special: because reconstructable decisions are a design principle, operations that generate audit entries may block if audit storage is unavailable (to prevent decisions that cannot be reconstructed). This is a deliberate choice — audit integrity is more important than availability for consequential actions. Low-consequence automated transitions (e.g., scheduled compliance evaluation) may proceed with queued audit entries, but officer decisions (approvals, denials, escalations) wait for audit confirmation.
+
+**Operator experience during audit unavailability:**
+
+When audit storage is unavailable, officers attempting consequential actions (approve an application, escalate a ticket, change member status) receive an explicit error stating that the action cannot proceed because audit recording is unavailable, with the specific action and target identified. The system does not silently queue the officer's action or present it as successful — the officer knows the action did not execute and can retry when audit recovers. Pending automated transitions that proceeded with queued audit entries are surfaced in a degraded-state summary visible to operators with global authority, showing the count and type of operations awaiting audit confirmation.
+
+**Recovery:** When audit storage recovers, queued entries from automated transitions are flushed in order. Each queued entry records the timestamp of the original operation and the timestamp of audit persistence, so the audit trail reflects that the entry was deferred. No officer-initiated operations are replayed automatically — the officer must re-initiate any action that was blocked. This prevents stale decisions: if an officer attempted to approve an application during audit downtime and conditions changed before recovery, the system does not execute an approval based on outdated context.
 
 ### Data Portability
 

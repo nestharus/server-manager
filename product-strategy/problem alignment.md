@@ -142,3 +142,4 @@ For each sub-problem or interaction that the proposal reveals within an existing
 | 11 | Platform Constraints and Moving-Target Risk | §11 |
 | 12 | Cross-workflow State and Operational Continuity | §12 |
 | 13 | Live Configuration Safety and Temporal Integrity | §13 |
+| 14 | Consolidated Failure Risk and Operational Availability | §14 |

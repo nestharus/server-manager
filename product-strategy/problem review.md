@@ -6,7 +6,7 @@ Review of the proposal against the problem definition. Each axis is evaluated fo
 
 ## Unaddressed Axes
 
-None. All twelve axes have substantive treatment in the proposal.
+None. All thirteen axes have substantive treatment in the proposal.
 
 ---
 
@@ -24,7 +24,7 @@ None. The proposal's four constraint acknowledgments (external evidence reliabil
 
 ## Axes Aligned (Stage 2 Handoff)
 
-All twelve axes proceed to philosophy alignment review.
+All thirteen axes proceed to philosophy alignment review.
 
 | # | Axis | Assessment |
 |---|---|---|
@@ -40,6 +40,7 @@ All twelve axes proceed to philosophy alignment review.
 | 10 | Delegated Authority and Governance | Aligned |
 | 11 | Platform Constraints and Moving-Target Risk | Aligned |
 | 12 | Cross-workflow State and Operational Continuity | Aligned |
+| 13 | Live Configuration Safety and Temporal Integrity | Aligned |
 
 ---
 
@@ -71,7 +72,7 @@ The problem definition says compliance criteria are per-chapter, per-game, and p
 
 ### Axis 7: Permission Model and State Explosion
 
-The problem definition says Discord has no concept of intended permission state and no mechanism to detect when temporary overrides become permanent. The proposal's PermissionIntent is exactly the missing "intended state" concept, and PermissionDrift detects discrepancies between intent and reality. Temporary intents with explicit expiration directly prevent the temporary-becomes-permanent failure mode. The reconciliation workflow gives operators tools to reason about the aggregate effect of accumulated permission decisions.
+The problem definition identifies three layers of difficulty: the absence of an intended permission state, the split between permissions that diverged from intent and permissions with no intent at all, and the migration challenge of bringing existing unmanaged permissions into a declared-intent model. The proposal engages with all three. PermissionIntent is the missing intended-state concept. PermissionDrift with a nullable intent FK distinguishes the two drift categories — divergence from intent vs. permissions with no declared intent. The reconciliation workflow's resolution options (reconcile, accept, acknowledge) provide the classification mechanism that unmanaged permissions require. Temporary intents with expiration prevent the temporary-becomes-permanent failure mode.
 
 ### Axis 8: Vendor Lock-in, Migration, and Data Portability
 
@@ -92,3 +93,7 @@ The problem definition says any system built on Discord must treat platform cons
 ### Axis 12: Cross-workflow State and Operational Continuity
 
 The problem definition says the core difficulty is maintaining coherent state across subsystem boundaries, with cross-subsystem relationships as first-class rather than reconstructed from memory. The proposal's unified data model with explicit FK relationships across all operational domains directly addresses this. A member's full operational history — applications, tickets, roster entries, compliance evaluations, trust signals, authority grants, and audit entries — is a single query across subsystems, not a manual reconstruction from fragmented sources.
+
+### Axis 13: Live Configuration Safety and Temporal Integrity
+
+The problem definition says configuration changes on a live system can silently corrupt the semantic integrity of in-flight operations, and that this is an operational safety problem — not a versioning problem. The proposal engages with this directly through PolicyVersion objects that pin in-flight operations to the version active when they started. Form definitions, compliance rules, ticket routing, authority templates, and trust computation configurations are all versioned with this pinning behavior. The preview-confirm pattern for configuration changes surfaces the blast radius before the operator commits, addressing the problem definition's observation that the set of affected in-flight operations is not obvious until the change is attempted.
