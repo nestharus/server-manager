@@ -1,0 +1,64 @@
+gpt-high research agent — activity/audit data model
+started: 2026-04-14T10:42:00Z
+model: gpt-high
+working directory: /home/nes/discord
+output artifact: plans/research/activity-audit-model.md
+
+--- agent stdout ---
+
+Researching activity/audit data model design for Humility platform...
+
+[1/5] Problem framing — actions vs state changes
+  Analyzed semantic split between attempted operations (actions) and
+  accepted business facts (state changes). Concluded the split avoids
+  co-mingling failed writes with accepted writes in audit streams.
+
+[2/5] Entity-row versioning vs activity-derived versioning
+  Compared current ChapterRead/ChapterUpdate row-level version pattern
+  against activity-derived ETag model. Activity-derived versioning
+  decouples concurrency, history, and business state from entity rows.
+  Cost: higher write-path complexity, mandatory projections.
+
+[3/5] Activity-table schema options
+  Evaluated three schema shapes:
+  - Option A: single append-only table (simple, but conflates actions and state changes)
+  - Option B: split activity_actions + activity_state_changes (clean separation)
+  - Option C: Option B + projection/head helpers (practical end state)
+  Recommended Option C as the operational target with Option B as the conceptual model.
+
+[4/5] Optimistic locking via ETag / head hash
+  Evaluated sequence-only vs state-hash validators. Recommended per-aggregate
+  head hash carried by accepted state-change stream, exposed as opaque ETag.
+  API contract: If-Match for mutations, 412 Precondition Failed for stale writes.
+
+[5/5] Migration impact on chapters API
+  Documented contract break: version leaves ChapterRead/ChapterUpdate,
+  created_at becomes history metadata, stale updates move from 409 to 412,
+  repository pattern changes from replace(..., version+1) to append-action +
+  append-state-change + advance-head + refresh-projection.
+
+Research artifact written: plans/research/activity-audit-model.md (425 lines)
+
+Sections covered:
+  1. Problem framing: actions vs state changes
+  2. Entity-row versioning vs activity-derived versioning
+  3. Activity-table schema options (A/B/C)
+  4. Optimistic locking via activity hash / ETag
+  5. Audit trail, actor attribution, and reconstruction
+  6. Query, indexing, and operational tradeoffs
+  7. Migration impact on existing chapters API
+
+Sources referenced:
+  - services/api/app/contracts/base.py
+  - services/api/app/contracts/chapters.py
+  - services/api/app/services/chapters.py
+  - services/api/app/repositories/chapters.py
+  - services/api/tests/test_chapters.py
+  - proposals/01-v1-scope.rev1.md
+  - plans/research/database-stack.md
+  - RFC 9110 (HTTP Semantics)
+
+--- agent completed ---
+exit code: 0
+duration: 47s
+artifact: plans/research/activity-audit-model.md (425 lines)

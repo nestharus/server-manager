@@ -1,0 +1,64 @@
+gpt-high proposal agent — activity/audit data model
+started: 2026-04-14T11:15:00Z
+model: gpt-high
+working directory: /home/nes/discord
+input: plans/research/activity-audit-model.md
+output artifact: plans/proposals/activity-audit-model.md
+
+--- agent stdout ---
+
+Drafting activity/audit model proposal from research artifact...
+
+Reading research: plans/research/activity-audit-model.md (425 lines)
+Research covers 7 sections: problem framing, versioning comparison,
+schema options, optimistic locking, audit trail, query model, migration impact.
+
+[1/6] Executive summary
+  Synthesized two-stream model: activity_actions for attempted operations,
+  activity_state_changes for accepted business facts. Business tables become
+  projections. Optimistic locking moves to ETag/If-Match.
+
+[2/6] Scope definition
+  In scope: canonical split, append-only authority, ETag locking, clean
+  business tables, actor attribution, indexing model, migration impact.
+  Out of scope: implementation, migrations, UI surfaces, hybrid versioning.
+
+[3/6] Canonical model and authority boundaries
+  Defined action vs state change semantic split.
+  Source of truth: state-change stream for history, action stream for attempts.
+  Three storage layers: activity_actions, activity_state_changes, aggregate_heads.
+
+[4/6] Write model and optimistic locking
+  Concurrency contract via ETag/If-Match. Head-hash model with hash-chain.
+  Canonical write path: validate → read head → compare If-Match → append action
+  → append state changes → update heads → update projection → return ETag.
+  Multi-aggregate actions supported, concurrency remains aggregate-scoped.
+
+[5/6] Query model and indexing
+  Three query classes: current business reads, concurrency checks, audit/history.
+  Specified indexes on activity_actions, activity_state_changes, aggregate_heads.
+  Projection tables keep business indexes only.
+
+[6/6] Migration impact and downstream implications
+  Chapters API: version removed, ETag added, 409→412, created_at becomes
+  history metadata. Single cutover, no backwards-compatibility shim.
+  Downstream: every mutable aggregate needs projection + head strategy.
+
+Proposal artifact written: plans/proposals/activity-audit-model.md (403 lines)
+
+Sections:
+  1. Executive summary
+  2. Scope of Activity/Audit Model
+  3. Canonical model and authority boundaries
+  4. Write model and optimistic locking
+  5. Clean business tables, actor attribution, and diff capture
+  6. Query model and indexing strategy
+  7. Migration impact on existing chapters API
+  8. Tradeoffs, failure modes, and downstream implications
+  9. What is explicitly out of scope
+  10. Recommendation
+
+--- agent completed ---
+exit code: 0
+duration: 52s
+artifact: plans/proposals/activity-audit-model.md (403 lines)
