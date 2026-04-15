@@ -1,162 +1,135 @@
-# Risk: Activity/Audit Model — Safety & Data-Integrity Audit
+# Risk: Activity/Audit Model — Safety & Data-Integrity Audit (Re-assessment)
 
-**Rating: LOW** — with conditions listed below.
+**Rating: LOW** — all four prior MEDIUM findings resolved by addenda A1–A4.
 
-## Justification
+## Prior MEDIUM findings: disposition
 
-The proposal is architecturally sound across the six focus areas. No
-high- or medium-severity gaps were found. The risks that remain are
-implementation-time concerns that are solvable with standard PostgreSQL
-transactional guarantees, and the proposal explicitly identifies most of
-them as failure modes.
+### 1. Transactional atomicity / four-write invariant → LOW
 
-### 1. Transactional atomicity across business-row mutation + activity rows
+**Prior concern:** The proposal body (§4) used "should" language for the
+four-write transaction (action insert, state-change insert, head update,
+projection update). Without a harder contract, implementation could split
+the transaction boundary accidentally.
 
-The proposal requires steps 4–7 of the canonical write path (append
-action, append state change(s), update aggregate head, update projection)
-to execute in **one database transaction** (§4). This is the correct
-design. Because the stack is psycopg 3 against a single PostgreSQL
-instance with no cross-database or cross-service writes, standard
-`BEGIN / COMMIT` guarantees are sufficient. There is no eventual-
-consistency gap, no two-phase commit, and no saga requirement for the
-single-aggregate scope.
+**What A1 adds:** Mandates a single `mutate_entity()` service-layer
+primitive that owns all four writes in one PostgreSQL transaction. Direct
+write paths outside this primitive are forbidden and treated as CI/review
+violations.
 
-**Residual risk:** Implementation must not break the transaction
-boundary (e.g., committing the action row before the state-change row,
-or issuing projection updates outside the transaction). This is a
-code-review concern, not an architectural one.
+**Why resolved:** "Should execute in one transaction" is now "MUST go
+through a single primitive." The primitive is named, its scope is
+defined, and bypass is explicitly a violation. This converts an
+architectural recommendation into an enforceable contract. Combined with
+psycopg 3 against a single PostgreSQL instance (no cross-service writes),
+standard `BEGIN / COMMIT` guarantees are sufficient.
 
-### 2. Hash / ETag determinism
+**Residual risk:** Implementation must enforce the single-primitive rule
+through code review and, ideally, a linting or architectural test that
+detects direct writes to activity tables outside `mutate_entity()`.
+This is a code-quality concern, not an architectural gap.
 
-Phase 1 uses a **monotonic sequence number**, not a hash. The sequence
-is incremented inside the same transaction that appends the state change,
-so determinism is guaranteed by PostgreSQL's transactional isolation.
-The ETag is derived from this sequence and is opaque to clients.
+### 2. Hash / ETag determinism → LOW
 
-Hash-chain heads and canonical serialization are explicitly deferred to
-Phase 2 (second aggregate). The proposal correctly identifies the
-serialization specification (JCS/RFC 8785, key ordering, null handling,
-numeric precision, hash algorithm) as prerequisites that must be defined
-before hash-chain heads are adopted. Deferral is the right call; adopting
-hashes without that specification would be the actual risk.
+**Prior concern:** Hash-based ETags require canonical serialization
+(key ordering, null handling, numeric precision, hash algorithm). Without
+a serialization spec, hash determinism is fragile.
 
-**Residual risk:** None for Phase 1. Phase 2 will need its own risk
-assessment when the serialization spec is proposed.
+**What A2 adds:** Explicitly states that Phase 1 does not depend on
+hash-chain correctness. The concurrency head is a monotonic sequence
+number. Hash-chain heads and canonical serialization are deferred to the
+second-aggregate initiative. Phase 1 does not rely on timestamp precision
+or JSONB serialization determinism.
 
-### 3. Audit-row immutability
+**Why resolved:** The risk was never about sequence numbers — it was
+about premature adoption of hash-chain heads without a serialization
+spec. A2 codifies the deferral as a formal commitment, removing any
+ambiguity about Phase 1 dependencies. Sequence-number determinism is
+guaranteed by PostgreSQL's transactional isolation (the increment happens
+inside the same transaction as the state-change append).
 
-Both `activity_actions` and `activity_state_changes` are defined as
-**append-only** streams. The proposal never describes an UPDATE or DELETE
-path against these tables. The physical enforcement (e.g., triggers
-blocking UPDATE/DELETE, or RLS policies) is an implementation detail the
-proposal does not specify, but the intent is unambiguous.
+**Residual risk:** None for Phase 1. Phase 2 will require its own risk
+assessment when the serialization specification is proposed.
 
-**Residual risk:** Without explicit database-level enforcement (a
-trigger or policy denying mutations), application bugs or ad-hoc
-maintenance queries could violate immutability. This should be addressed
-at implementation time with a PostgreSQL trigger or rule. Low severity
-because the risk is accidental, not architectural.
+### 3. Backfill correctness → LOW
 
-### 4. Actor attribution
+**Prior concern:** Rebuild could silently produce a divergent projection
+if the replay logic differs from the live write path, or if a partial
+rebuild is accepted as valid.
 
-Attribution is well-structured. Each action captures `actor_kind`,
-`actor_id`, request surface, correlation ID, logical request payload
-(post-redaction), outcome status, and rejection/failure reason.
-State changes link back to the action via `action_id`, producing a
-durable chain: actor → action → accepted facts → projection.
+**What A3 adds:** Mandates that backfill replays `activity_state_changes`
+through the same projection-update function used by the live write path.
+Backfills must fail closed on divergence, verify the final
+`aggregate_heads.current_seq`, and must not leave a partially rebuilt
+projection silently accepted as valid state.
 
-The proposal explicitly requires **redaction** of tokens, secrets, and
-opaque external credentials from request capture (§5). This is the
-correct privacy boundary.
+**Why resolved:** A3 closes the two gaps that mattered. First, code
+sharing between live and rebuild paths is now a MUST, not a
+recommendation. Second, the fail-closed requirement prevents silent
+corruption — a partial or divergent rebuild is treated as a failure
+requiring investigation, not quietly promoted to current state. For the
+first aggregate (chapters, small table), manual verification is
+sufficient.
 
-**Residual risk:** Redaction is stated as a requirement but no
-mechanism is specified (allowlist vs blocklist, at which layer).
-Implementation must define where redaction occurs (service layer, before
-the action row is written) and must default to allowlisting safe fields
-rather than blocklisting dangerous ones. Low severity because the
-proposal raises the requirement; it just does not prescribe the
-implementation.
+**Residual risk:** Automated divergence alerting is deferred to the
+second aggregate. Acceptable at current scale.
 
-### 5. Backfill and rollback safety
+### 4. Rollback path → LOW
 
-The proposal defines a **replay-from-zero rebuild** strategy (§8):
-replay all `activity_state_changes` in order using the same
-projection-update function the live write path uses. Divergence detection
-compares the final replayed sequence against `aggregate_heads.current_seq`.
+**Prior concern:** A single cutover with no dual-write path means a
+failed migration could leave the system in a broken state with no
+defined recovery mechanism.
 
-For the first aggregate (chapters, small table), manual rebuild is
-accepted. Automated tooling is explicitly deferred.
+**What A4 adds:** Requires staging rehearsal before production cutover.
+Mandates a backup immediately before production cutover. If the cutover
+fails, the rollback is restore-from-backup — not reintroduction of the
+old row-version path. No compatibility shim, dual-write mode, or mixed
+authority rollback path is allowed.
 
-**Backfill safety:** Because the activity streams are append-only and
-the projection is derived, a corrupt projection can always be rebuilt
-from the authoritative stream. This is strictly safer than the current
-mutable-row model, where a bad UPDATE destroys the prior state.
+**Why resolved:** A4 provides a concrete, tested rollback mechanism
+(backup restore) instead of leaving rollback undefined. The staging
+rehearsal requirement means the cutover is validated before it runs
+against production. The explicit prohibition on mixed-authority fallback
+prevents the most dangerous failure mode (two competing concurrency
+authorities). For one small aggregate (chapters), backup/restore is a
+proportionate and reliable recovery strategy.
 
-**Rollback safety:** The proposal mandates a single cutover from
-row-versioned to activity-derived concurrency (§7). There is no
-dual-mode or backward-compatibility path. This is a one-way migration.
-If the cutover fails partway, the rollback strategy is to restore from
-backup and re-attempt — not to fall back to the old row-version model.
-
-**Residual risk:** The single-cutover strategy is clean but means the
-migration itself must be tested end-to-end in staging before production.
-A half-applied migration (e.g., activity tables created but projection
-not populated) would leave the system in a broken state. Low severity
-because the scope is one small aggregate (chapters) and the proposal
-explicitly calls this a proof-of-concept.
-
-### 6. Operational failure recovery
-
-The combination of append-only streams + derived projections + rebuild
-tooling gives a strong recovery model:
-
-- **Projection corruption:** Rebuild from the activity stream.
-- **Head drift:** Rebuild recomputes the head from the stream and
-  compares against `aggregate_heads`.
-- **Lost action rows:** Not recoverable from the activity stream alone,
-  but action rows are written in the same transaction as state changes,
-  so partial loss requires a PostgreSQL-level failure (disk corruption,
-  incomplete backup restore). Standard database backup/recovery applies.
-- **Transaction failure mid-write:** PostgreSQL atomicity guarantees
-  mean a crashed transaction leaves no partial state. The next retry
-  starts clean.
-
-**Residual risk:** The proposal does not specify monitoring or alerting
-for projection drift. For the first aggregate this is acceptable (manual
-verification), but for production maturity, automated drift detection
-should be added when a second aggregate is onboarded. Low severity.
+**Residual risk:** The backup must be taken immediately before cutover,
+not hours earlier. This is an operational discipline requirement, not an
+architectural gap.
 
 ## Privacy and security notes
 
-- **No PII leakage by design:** The activity model stores actor IDs and
-  action metadata, not raw user content beyond the business payload.
-  Redaction is mandated for secrets and tokens.
-- **No new attack surface:** The proposal does not add external
-  endpoints, webhooks, or cross-service calls. All writes are internal
-  PostgreSQL transactions.
-- **Audit immutability supports compliance:** Append-only streams are
-  the correct foundation for audit requirements. Physical enforcement
-  should be added at implementation time.
+- **No PII leakage by design.** Activity rows store actor IDs and
+  business payload metadata, not raw user content beyond the business
+  fields. Redaction of secrets and tokens is mandated (§5).
+- **No new attack surface.** The proposal adds no external endpoints,
+  webhooks, or cross-service calls. All writes are internal PostgreSQL
+  transactions.
+- **Audit immutability supports compliance.** Append-only streams are
+  the correct foundation. Physical enforcement (trigger/rule rejecting
+  UPDATE/DELETE) should be added at implementation time.
 
 ## What LOW requires
 
 For this rating to hold, the implementation must:
 
-1. **Keep steps 4–7 of the write path in a single database
-   transaction.** No partial commits, no async projection updates for
-   the synchronous API path.
+1. **Route all mutations through `mutate_entity()`** with the four
+   writes (action, state change(s), head update, projection) in a
+   single database transaction. No partial commits.
 2. **Enforce audit-row immutability at the database level.** Add a
-   PostgreSQL trigger or rule that rejects UPDATE and DELETE on
+   PostgreSQL trigger or rule rejecting UPDATE and DELETE on
    `activity_actions` and `activity_state_changes`.
-3. **Implement request-payload redaction as an allowlist**, not a
-   blocklist. Define the safe fields explicitly; reject everything else
-   from the persisted `request_json`.
-4. **Test the chapters migration as a single atomic cutover in staging**
-   before production. Verify that the old row-version path is fully
-   removed and the new activity path is fully operational.
-5. **Share projection-update code between the live write path and
-   rebuild**, as the proposal requires. Do not create a separate rebuild
-   implementation.
-6. **Validate ETag round-trip determinism in integration tests:**
-   read → mutate with If-Match → verify new ETag → stale mutate returns
-   412.
+3. **Implement request-payload redaction as an allowlist.** Define safe
+   fields explicitly; reject everything else from persisted
+   `request_json`.
+4. **Rehearse the chapters migration in staging** as a single atomic
+   cutover. Take a backup immediately before production cutover.
+   Verify old row-version path is fully removed and new activity path
+   is fully operational.
+5. **Share projection-update code** between the live write path and
+   rebuild. No separate rebuild implementation.
+6. **Fail closed on rebuild divergence.** If replayed sequence does not
+   match `aggregate_heads.current_seq`, treat the rebuild as failed.
+7. **Validate ETag round-trip determinism in integration tests:**
+   read → mutate with If-Match → verify new ETag → stale mutate
+   returns 412.
