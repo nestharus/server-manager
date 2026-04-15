@@ -491,3 +491,42 @@ same mutable rows.
 
 Chapters is the proof-of-concept. The second aggregate refines the
 pattern.
+
+---
+
+## Addendum: Audit risk mitigations (added post-risk-assessment)
+
+### A1. Transactional write primitive
+
+All entity mutations MUST go through a single `mutate_entity()`
+service-layer primitive. That primitive owns the full accepted-write
+sequence for one aggregate and performs the projection/business-row
+mutation, `activity_actions` insert, `activity_state_changes` insert,
+and `aggregate_heads` update in one PostgreSQL transaction. Direct
+write paths outside this primitive are forbidden and should be treated
+as CI / review violations.
+
+### A2. Phase-1 concurrency simplification
+
+The first aggregate does not depend on hash-chain correctness.
+For Phase 1, the concurrency head is a monotonic sequence number
+surfaced as an opaque `ETag`. Hash-chain heads and canonical
+serialization are deferred to the second-aggregate initiative, so the
+chapters proof-of-concept does not rely on timestamp precision or JSONB
+serialization determinism.
+
+### A3. Backfill and rebuild contract
+
+Backfill / rebuild work MUST replay `activity_state_changes` through the
+same projection-update function used by the live write path. Backfills
+must fail closed on divergence, verify the final
+`aggregate_heads.current_seq`, and avoid leaving a partially rebuilt
+projection silently accepted as valid state.
+
+### A4. Rollback path
+
+The chapters migration is a single staged cutover. Rehearse it in
+staging, take a backup immediately before production cutover, and if
+the cutover fails restore from backup rather than reintroducing the old
+row-version path. No compatibility shim, dual-write mode, or mixed
+authority rollback path is allowed.
