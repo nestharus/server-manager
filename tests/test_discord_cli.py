@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import inspect
 from datetime import datetime, timezone
+from typing import Any, Callable
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -1060,7 +1061,7 @@ def test_run_gateway_command_raises_cli_error_on_gateway_timeout(monkeypatch):
     close_spy.assert_awaited_once()
 
 
-def _require_serializer(name):
+def _require_serializer(name: str) -> Callable[..., Any]:
     serializer = getattr(discord_cli, name, None)
     if serializer is None:
         pytest.fail(f"discord_cli.{name} is missing from the serialization contract")

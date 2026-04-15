@@ -9,7 +9,7 @@ for attachments and embeds. The anti-scope is explicit and
 well-calibrated: it excludes Components v2 deep serialization, modals,
 `TextInput`, mutations, parser changes, and `discord.ui` conversion.
 Nothing in the proposed change touches command wiring, dispatch, or
-Discord write paths. The seven new helpers (`serialize_component`,
+Discord write paths. The eight new helpers (`serialize_component`,
 `serialize_action_row`, `serialize_button`, `serialize_select_menu`,
 `serialize_select_option`, `serialize_select_default_value`,
 `serialize_partial_emoji`, `serialize_component_fallback`) are
