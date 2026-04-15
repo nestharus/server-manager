@@ -1,0 +1,13 @@
+# tofu init -backend-config=backend.tfbackend
+bucket    = "humility-tfstate"
+key       = "infra/production/terraform.tfstate"
+region    = "ewr"
+# endpoint populated after bootstrap/state-backend is applied
+endpoints = { s3 = "REPLACE_AFTER_BOOTSTRAP" }
+
+skip_credentials_validation = true
+skip_requesting_account_id  = true
+skip_metadata_api_check     = true
+skip_region_validation      = true
+skip_s3_checksum            = true
+use_path_style              = true
