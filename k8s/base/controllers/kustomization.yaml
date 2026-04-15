@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: gitops-controller-contract
+    literals:
+      - gitops.foundation.layer=base
+      - gitops.foundation.reconciler=flux
+      - gitops.foundation.remoteReconciliation=disallowed
+      - gitops.foundation.controlClusterMutatesPeers=false

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../../overlays/production/control-cluster
+  - claims
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: production-control-cluster-root-contract
+    literals:
+      - gitops.foundation.layer=cluster-root
+      - gitops.foundation.scope=clusters/production/control-cluster
+      - gitops.foundation.desiredState=git
+      - gitops.foundation.reconciler=flux
+      - gitops.foundation.promotion=git-change-only
