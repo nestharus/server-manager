@@ -1,6 +1,6 @@
 # NOTES.md - agent-maintained log of discovered facts
 
-Last updated: 2026-04-13
+Last updated: 2026-04-15
 
 ## Guild
 
