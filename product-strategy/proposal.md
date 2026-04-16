@@ -229,7 +229,7 @@ Categories are operator-configurable. Each category defines its own state machin
 
 #### Ticket
 
-A case with durable state, ownership, and cross-subsystem relationships.
+A case with durable state, ownership, and lifecycle tracking.
 
 | Field | Type | Description |
 |---|---|---|
@@ -240,7 +240,7 @@ A case with durable state, ownership, and cross-subsystem relationships.
 | `state` | enum | Defined by the category's state machine |
 | `priority` | enum | Set during triage |
 | `owner_id` | FK → Member? | Assigned officer |
-| `related_objects` | jsonb | FKs to Application, Chapter, Member, other Tickets |
+| `related_ticket_ids` | FK[] → Ticket? | Other tickets within the case management subsystem related to this ticket |
 | `created_at` | timestamp | |
 | `resolved_at` | timestamp? | |
 | `resolution` | jsonb? | Structured: outcome, reason, actions taken |
@@ -263,7 +263,7 @@ open → assigned → resolved → closed
 
 This flexibility ensures that every mandatory state transition — including human touchpoints like triage — justifies its attention cost for the specific category it governs.
 
-Tickets carry explicit relationships to other operational objects. A ticket about an application appeal links to the Application. A ticket about a chapter dispute links to the Chapter. These relationships are queryable: "all tickets related to this member" is a system query, not a manual search through channel history.
+Within the case management subsystem, tickets carry explicit relationships to other tickets through `related_ticket_ids` — an appeal ticket can reference the original moderation ticket it appeals. Cross-subsystem relationships — a ticket about an application appeal, a ticket about a chapter dispute — are traced through correlated AuditEntries sharing a `correlation_id`, not through foreign key references to objects in other subsystems. The CQRS read model (see Cross-workflow State Coherence) materializes these event-based relationships into queryable views, so "all tickets related to this member" remains a practical operator query without coupling the case management schema to the intake or chapter subsystem schemas.
 
 #### TicketMessage
 
@@ -305,7 +305,7 @@ Provisioning blueprint for creating new chapters.
 | `id` | uuid | |
 | `name` | string | |
 | `channel_structure` | jsonb | Channels and categories to create |
-| `role_structure` | jsonb | Roles to create, mapped to authority levels |
+| `role_structure` | jsonb | Default ChapterRole definitions: names, ordinals, succession triggers, and authority templates |
 | `default_compliance_rules` | jsonb | Initial activity requirements |
 | `default_permission_intents` | jsonb | Initial permission state |
 
@@ -357,6 +357,26 @@ State change record for a chapter.
 | `reason` | text | |
 | `timestamp` | timestamp | |
 
+#### ChapterRole
+
+Operator-configurable position within a chapter's governance structure.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | uuid | |
+| `chapter_id` | FK → Chapter | |
+| `name` | string | Operator-defined name (e.g., `leader`, `officer`, `member`, `co-leader`, `senior_member`, `trainee`) |
+| `ordinal` | integer | Position in the chapter's governance hierarchy; higher ordinal = higher authority within the chapter |
+| `triggers_succession` | boolean | Whether vacancy in this role triggers the succession workflow |
+| `default_authority` | jsonb | Authority grant template automatically applied when a member is assigned this role |
+| `version` | integer | Incremented on edit |
+
+ChapterRoles are per-chapter, inheritable from ChapterTemplate. When a chapter is provisioned, the template's `role_structure` field seeds the chapter's initial role definitions. Chapter officers with appropriate authority can add, rename, or reconfigure roles — including adding positions the template did not include (e.g., `co-leader`, `trainee`) — without code changes or system redeployment. *(Philosophy: P11 Configuration by Operators, P7 Delegated Authority)*
+
+Roles carry operational significance through their attributes: `triggers_succession` determines which role departures activate the succession workflow, and `default_authority` determines what AuthorityGrant is created when a member is assigned to the role. This means organizational structure is an operator governance choice, not a system-imposed constraint. A community where chapters have flat structures (one `coordinator` role and one `member` role) and a community with deep hierarchies (`guild_master`, `officer`, `sergeant`, `member`, `recruit`) both configure their structure through the same mechanism.
+
+The `ordinal` field establishes an ordering within a chapter for governance purposes (e.g., succession candidates, authority escalation) but does not imply cross-chapter equivalence — a role with ordinal 3 in one chapter has no automatic relationship to ordinal 3 in another chapter.
+
 #### RosterEntry
 
 A member's position in a chapter.
@@ -366,13 +386,13 @@ A member's position in a chapter.
 | `id` | uuid | |
 | `chapter_id` | FK → Chapter | |
 | `member_id` | FK → Member | |
-| `role` | enum | `member`, `officer`, `leader` |
+| `role_id` | FK → ChapterRole | The member's current position in the chapter's governance structure |
 | `joined_at` | timestamp | |
 | `status` | enum | `active`, `on_leave`, `under_review`, `removed` |
 | `removed_at` | timestamp? | |
 | `removal_reason` | text? | |
 
-Roster entries are the authoritative record of chapter membership. A member's chapter affiliation is determined by their RosterEntry, not by which Discord roles they hold. Discord roles are synchronized from roster state, not the other way around.
+Roster entries are the authoritative record of chapter membership. A member's chapter affiliation is determined by their RosterEntry, not by which Discord roles they hold. Discord roles are synchronized from roster state, not the other way around. The `role_id` references the chapter's configurable governance structure (see ChapterRole), allowing each chapter to define its own positions and hierarchy.
 
 **Status lifecycle:**
 
@@ -402,8 +422,8 @@ State change record for a roster entry.
 | `roster_entry_id` | FK → RosterEntry | |
 | `from_state` | enum | Previous status |
 | `to_state` | enum | New status |
-| `from_role` | enum? | Previous role, if role changed |
-| `to_role` | enum? | New role, if role changed |
+| `from_role_id` | FK → ChapterRole? | Previous role, if role changed |
+| `to_role_id` | FK → ChapterRole? | New role, if role changed |
 | `actor_id` | FK → Member | Officer who initiated the change |
 | `reason` | text | Required for all transitions |
 | `timestamp` | timestamp | |
@@ -534,7 +554,7 @@ Authority is scoped, not ranked. An officer with a chapter-scoped grant can perf
 
 Every operation checks the actor's AuthorityGrant against the operation's scope. A scope mismatch or missing permission results in denial, not a warning.
 
-**Succession:** When a chapter leader departs, succession creates a new AuthorityGrant for the successor linked to the predecessor grant via `predecessor_grant_id`. The successor inherits the scope definition and operational context (pending decisions, open tickets, roster state). The system does not just transfer a Discord role — it transfers the operational authority and its history.
+**Succession:** When a member holding a ChapterRole with `triggers_succession: true` departs, succession creates a new AuthorityGrant for the successor linked to the predecessor grant via `predecessor_grant_id`. The successor inherits the scope definition and operational context (pending decisions, open tickets, roster state). The system does not just transfer a Discord role — it transfers the operational authority and its history.
 
 #### PolicyVersion
 
@@ -566,6 +586,8 @@ Immutable record of an operational decision.
 | `target_type` | enum | `Application`, `Ticket`, `Chapter`, `Member`, `ComplianceRule`, `PermissionIntent`, `AuthorityGrant`, `PolicyVersion`, `TrustProfile`, `RosterEntry` |
 | `target_id` | uuid | |
 | `scope` | enum + FK | `global` or FK → Chapter |
+| `correlation_id` | uuid | Root causal chain identifier; all events in a causal cascade share the same correlation_id |
+| `causation_id` | FK → AuditEntry? | The specific event that directly caused this event; null for root-cause events |
 | `policy_version_id` | FK → PolicyVersion? | What rules governed this decision |
 | `context` | jsonb | Snapshot of relevant state at decision time |
 | `previous_state` | jsonb? | State before the action |
@@ -573,6 +595,8 @@ Immutable record of an operational decision.
 | `reason` | text? | Required for consequential actions |
 
 AuditEntries are **append-only and immutable**. No entry is deleted or modified after creation. The `context` field captures enough state that a reviewer can understand the decision without access to the system's current state (which may have changed since the decision was made). This is the mechanism that makes decisions reconstructable months or years later — not just "who did what" but "what did they see and what rules applied."
+
+**Correlation mechanism:** AuditEntries serve as the cross-subsystem event fabric. The `correlation_id` links all events in a causal chain: when an application approval triggers a roster entry creation, which triggers compliance rule activation, all three AuditEntries share the same `correlation_id`. The `causation_id` links each event to its direct cause, enabling both full-chain queries (all events sharing a `correlation_id`) and step-by-step causal navigation (following `causation_id` links). The root event in a chain has `causation_id: null`. This is the mechanism that P15 (Traceability as Outcome) requires: cross-subsystem relationships are expressed through event correlation, not foreign key navigation at the data layer. Within a subsystem, schema objects use explicit foreign keys freely; across subsystem boundaries, correlated AuditEntries are the connective tissue.
 
 Retention is unlimited and under community control. The system does not impose a retention cap.
 
@@ -593,7 +617,7 @@ Operator-configurable triggers for officer notifications.
 
 The default notification configuration is minimal. Operators add rules for the events they need to know about. Notifications are either actionable (the officer needs to do something) or explicitly informational (the operator chose to be informed). The system does not generate notifications that neither require action nor were explicitly requested.
 
-**Causal grouping:** Operational actions frequently produce cascading events across subsystems — an application approval creates a RosterEntry, which activates compliance rules, which may generate an initial evaluation. Each event in the cascade carries a correlation identifier linking it to the root cause event. NotificationRules with `grouping: per_root_cause` batch notifications for causally related events into a single notification summarizing the root action and its downstream effects. Rules with `grouping: per_event` (the default) fire independently per event. This prevents notification patterns that train officers to ignore alerts: an officer who configures rules for application decisions, roster changes, and compliance activations receives a single grouped notification for what is, from their perspective, a single action's consequences — rather than independent notifications for each downstream effect.
+**Causal grouping:** Operational actions frequently produce cascading events across subsystems — an application approval creates a RosterEntry, which activates compliance rules, which may generate an initial evaluation. Each AuditEntry in the cascade carries a `correlation_id` linking it to the root cause event (see AuditEntry correlation mechanism). NotificationRules with `grouping: per_root_cause` batch notifications for all AuditEntries sharing the same `correlation_id` into a single notification summarizing the root action and its downstream effects. Rules with `grouping: per_event` (the default) fire independently per event. This prevents notification patterns that train officers to ignore alerts: an officer who configures rules for application decisions, roster changes, and compliance activations receives a single grouped notification for what is, from their perspective, a single action's consequences — rather than independent notifications for each downstream effect.
 
 ---
 
@@ -653,7 +677,7 @@ For sensitive categories (harassment reports), privacy levels control who sees w
 **Operations:**
 - Roster management through RosterEntries (intake via application, direct add by authorized officer).
 - Chapter-scoped compliance rules configured by chapter officers.
-- Chapter-scoped authority grants managed by chapter leaders (within their delegated scope).
+- Chapter-scoped authority grants managed by members holding roles with appropriate authority (within their delegated scope).
 
 **Governance events:**
 - If the chapter enters governance review (inactivity, leadership vacancy, policy violations), transition to `probation`. Central staff notified. Chapter operations may continue but new intake can be suspended per operator configuration.
@@ -666,8 +690,8 @@ For sensitive categories (harassment reports), privacy levels control who sees w
 4. Chapter transitions to `archived`. All operational state preserved — roster history, compliance records, audit entries, ticket transcripts — queryable for audit and reference.
 
 **Succession:**
-When a chapter leader departs (removal, departure, term expiration):
-1. System identifies pending decisions, open tickets, and in-progress operations owned by the departing leader.
+When a member holding a ChapterRole with `triggers_succession: true` departs (removal, departure, term expiration):
+1. System identifies pending decisions, open tickets, and in-progress operations owned by the departing member.
 2. A new AuthorityGrant is created for the successor, linked to the predecessor grant. The successor inherits the scope and its operational context.
 3. Pending items are transferred to the successor or flagged for review if no successor is designated.
 4. The transition is audited: who left, who succeeded, what was transferred, what was flagged.
@@ -742,22 +766,25 @@ This is not a suggestion system. An officer without chapter_A authority cannot a
 
 ### Audit Chain
 
-AuditEntries form chains across related objects through their `target_id` and `context` fields. An application approval that creates a roster entry that triggers a compliance rule activation is traceable as a connected sequence:
+AuditEntries form causal chains through `correlation_id` and `causation_id`. An application approval that creates a roster entry that triggers compliance rule activation is traceable as a connected sequence sharing a single `correlation_id`:
 
-1. Application approved (AuditEntry: target=Application, context includes applicant, reviewer, decision)
-2. Roster entry created (AuditEntry: target=RosterEntry, context includes originating application)
-3. Compliance rules activated for new member (AuditEntry: target=ComplianceEvaluation, context includes roster entry and applicable rules)
+1. Application approved (AuditEntry: target=Application, correlation_id=X, causation_id=null — root cause)
+2. Roster entry created (AuditEntry: target=RosterEntry, correlation_id=X, causation_id=→ entry 1)
+3. Compliance rules activated (AuditEntry: target=ComplianceEvaluation, correlation_id=X, causation_id=→ entry 2)
 
-Any point in this chain can be traced forward or backward. An auditor asking "why was this member flagged for compliance?" can trace back through the evaluation → roster entry → application approval → original submission.
+Tracing forward: query all AuditEntries with the same `correlation_id`, ordered by timestamp. Tracing backward: follow the `causation_id` chain from any event to its root cause. An auditor asking "why was this member flagged for compliance?" follows the `causation_id` from the compliance evaluation → roster entry creation → application approval → original submission, without navigating foreign keys across subsystem schemas.
+
+The CQRS read model materializes these chains into queryable views for common operator queries (see Cross-workflow State Coherence). The raw correlation chain in AuditEntries remains the authoritative record.
 
 ### Configuration Safety
 
 Configuration changes follow a preview-confirm pattern:
 
 1. Operator initiates a change (modify form, update rule, change routing).
-2. System generates a preview: what changes, what existing objects are affected, what the rollback path is.
+2. System generates a preview: what changes, what existing objects are affected, what the rollback path is. The preview captures the current policy version number.
 3. Operator confirms or cancels.
-4. On confirmation: change takes effect immediately (no restart required), AuditEntry generated, affected operators notified per rules.
+4. On confirmation: the system verifies that the policy version the operator previewed is still current. If another operator has confirmed a change to the same policy between preview and confirm, the confirmation is rejected with an updated preview reflecting the new current state. The operator reviews the updated preview and confirms again. This prevents decisions based on stale previews — the operator always confirms against the actual current state.
+5. On successful confirmation: change takes effect immediately (no restart required), AuditEntry generated, affected operators notified per rules.
 
 Operators never need to edit code, environment variables, or config files. All operational configuration is managed through Discord commands or the web interface and takes effect without redeployment.
 
@@ -796,20 +823,17 @@ Operators never need to edit code, environment variables, or config files. All o
 
 ### Cross-workflow State Coherence
 
-Every operational object maintains explicit foreign key relationships to related objects in other subsystems. The data model is designed so that "what is this member's full operational history?" is a single query joining across subsystems, not a reconstruction from fragmented sources.
+Cross-subsystem relationships are expressed through event correlation, not foreign key navigation. Within each subsystem, schema objects reference each other freely through explicit foreign keys. Across subsystem boundaries, correlated AuditEntries — sharing a `correlation_id` — are the connective tissue that links causally related operations.
 
-**Member operational history** spans:
-- Applications (as applicant)
-- Tickets (as reporter and as subject)
-- RosterEntries (chapter memberships)
-- ComplianceEvaluations (activity record)
-- TrustSignals (trust evidence)
-- AuthorityGrants (delegated authority)
-- AuditEntries (all actions taken by and about the member)
+When one subsystem generates an effect in another (application approval → roster entry → compliance activation), each step emits an AuditEntry. The downstream entries carry the same `correlation_id` as the root cause and a `causation_id` pointing to the specific entry that triggered them. The operational relationship is first-class — recorded in durable, queryable events — without coupling the data models of the subsystems involved.
 
-When one subsystem generates an event that affects another (application approval → roster entry → compliance activation), the relationship is recorded at creation time in the downstream object's context or related fields. These relationships are first-class, not reconstructed by officers from memory.
+**CQRS read model:** The event-based write path preserves subsystem independence (P15), but operators need ergonomic cross-subsystem queries — "what is this member's full operational history?" should not require manual event correlation (P1). A read-optimized aggregation layer materializes cross-subsystem views from AuditEntries into queryable read models:
 
-Subsystem independence is preserved: a compliance subsystem failure does not prevent querying a member's application history. But the relationships between subsystems are explicit and queryable, so operational continuity does not require any single officer to hold the full picture in their head.
+- **Member operational history:** Aggregated from AuditEntries where the member appears as `actor_id` or in `target_id` across all subsystems — applications, tickets, roster entries, compliance evaluations, trust signals, authority grants.
+- **Causal chain views:** Materialized from `correlation_id` groupings, providing operators with a single view of a root action and all its downstream effects across subsystems.
+- **Scope-filtered views:** Per-chapter or per-subsystem projections of operational history, supporting delegated authority (a chapter officer sees their chapter's operational history without global visibility).
+
+The read models are derived from events and updated asynchronously. They carry no authority — the AuditEntry event stream is the source of truth for cross-subsystem relationships. If the read model is stale or unavailable, operators can still query AuditEntries directly by `correlation_id`; they lose query convenience, not data integrity. This separation ensures that subsystem data models remain independent: schema evolution in one subsystem does not affect the schemas of other subsystems, only the read model's materialization logic. Replacing or restructuring a subsystem means updating the event-emitting code and the read model projection — not migrating foreign keys across subsystem boundaries.
 
 ### Platform Boundary
 
@@ -841,6 +865,7 @@ Subsystems are peers with defined failure boundaries:
 | Cases (tickets) | New tickets cannot be created; open tickets cannot be transitioned | Applications, chapters, compliance, permissions |
 | Compliance | Evaluations do not run on schedule | Applications, tickets, chapters, permissions |
 | Permission reconciliation | Drift detection paused; intents still accepted | Applications, tickets, chapters, compliance |
+| CQRS read model | Cross-subsystem queries fall back to direct AuditEntry correlation queries; slower but complete | All write-path operations, all within-subsystem queries |
 | Audit | Entries queued for retry; operations that require audit confirmation may block | Varies by operation criticality |
 
 Cross-subsystem effects (application approval → roster entry) handle downstream failure by queuing the effect and surfacing the pending state to operators. The upstream operation completes; the downstream effect retries until the target subsystem recovers. Operators see the pending state and can intervene if recovery takes too long.
