@@ -3,8 +3,6 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from app.contracts.base import VersionedMixin
-
 
 class ChapterStatus(str, Enum):
     active = "active"
@@ -17,7 +15,7 @@ class ChapterCreate(BaseModel):
     slug: str = Field(max_length=50, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
-class ChapterRead(VersionedMixin):
+class ChapterRead(BaseModel):
     id: int
     name: str
     slug: str
@@ -28,7 +26,7 @@ class ChapterRead(VersionedMixin):
     created_at: datetime
 
 
-class ChapterUpdate(VersionedMixin):
+class ChapterUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     slug: str | None = Field(
         default=None,
