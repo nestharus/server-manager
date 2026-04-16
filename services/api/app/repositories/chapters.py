@@ -13,14 +13,12 @@ class ChapterNotFoundError(Exception):
         super().__init__(f"Chapter {chapter_id} was not found")
 
 
-class ChapterVersionConflictError(Exception):
-    def __init__(self, chapter_id: int, expected_version: int, actual_version: int) -> None:
-        self.chapter_id = chapter_id
-        self.expected_version = expected_version
-        self.actual_version = actual_version
+class StalePreconditionError(Exception):
+    def __init__(self, aggregate_type: str, aggregate_id: int) -> None:
+        self.aggregate_type = aggregate_type
+        self.aggregate_id = aggregate_id
         super().__init__(
-            f"Chapter {chapter_id} version mismatch: "
-            f"expected {expected_version}, found {actual_version}"
+            f"{aggregate_type} {aggregate_id}: If-Match precondition failed"
         )
 
 
@@ -34,7 +32,6 @@ class ChapterRecord:
     discord_officer_role_id: int | None
     discord_member_role_id: int | None
     created_at: datetime
-    version: int
 
 
 class ChapterRepository(Protocol):
@@ -48,7 +45,6 @@ class ChapterRepository(Protocol):
         self,
         chapter_id: int,
         *,
-        expected_version: int,
         updates: dict[str, object],
     ) -> ChapterRecord: ...
 
@@ -70,7 +66,6 @@ class InMemoryChapterRepository:
             discord_officer_role_id=None,
             discord_member_role_id=None,
             created_at=datetime.now(timezone.utc),
-            version=0,
         )
         self._chapters[chapter.id] = chapter
         self._next_id += 1
@@ -86,23 +81,16 @@ class InMemoryChapterRepository:
         self,
         chapter_id: int,
         *,
-        expected_version: int,
         updates: dict[str, object],
     ) -> ChapterRecord:
         current = self._require_chapter(chapter_id)
-        self._assert_version(current, expected_version)
-
-        updated = replace(current, **updates, version=current.version + 1)
+        updated = replace(current, **updates)
         self._chapters[chapter_id] = updated
         return updated
 
     def archive(self, chapter_id: int) -> ChapterRecord:
         current = self._require_chapter(chapter_id)
-        updated = replace(
-            current,
-            status=ChapterStatus.archived,
-            version=current.version + 1,
-        )
+        updated = replace(current, status=ChapterStatus.archived)
         self._chapters[chapter_id] = updated
         return updated
 
@@ -111,11 +99,3 @@ class InMemoryChapterRepository:
         if chapter is None:
             raise ChapterNotFoundError(chapter_id)
         return chapter
-
-    def _assert_version(self, chapter: ChapterRecord, expected_version: int) -> None:
-        if chapter.version != expected_version:
-            raise ChapterVersionConflictError(
-                chapter.id,
-                expected_version=expected_version,
-                actual_version=chapter.version,
-            )
