@@ -106,9 +106,9 @@ Anti-goal: "check the pins in #staff-chat" as an operational lookup. If it matte
 
 ## Principle 11: Configuration by Operators, Not Developers
 
-Operational configuration — chapter thresholds, form definitions, ticket categories, activity rules — is managed by operators through Discord commands or a web interface, not by editing config files, environment variables, or code.
+Operational configuration — chapter thresholds, form definitions, ticket categories, activity rules, organizational roles — is managed by operators through Discord commands or a web interface, not by editing config files, environment variables, or code.
 
-Adding a chapter, changing an activity threshold, or modifying an application form does not require a code deployment. Configuration changes are logged, take effect without restart, and are reversible. The system's behavior is a function of its stored configuration, not its source code.
+Adding a chapter, changing an activity threshold, modifying an application form, or defining sub-community role structures does not require a code deployment. Configuration changes are logged, take effect without restart, and are reversible. The system's behavior is a function of its stored configuration, not its source code.
 
 Anti-goal: "edit the config file and restart" as a workflow for operational changes. Operators should never need to touch the codebase.
 
@@ -124,7 +124,7 @@ Anti-goal: monolithic coupling where a single failure mode brings down all commu
 
 ---
 
-## Principle 13: Derived State Transparency *(provisionally added — pending user confirmation)*
+## Principle 13: Derived State Transparency
 
 Operational state that influences decisions should be derived from observable evidence through transparent, deterministic computation rather than directly assessed or assigned by authority. The computation itself — inputs, rules, parameters — must be inspectable by operators.
 
@@ -134,13 +134,23 @@ Anti-goal: operational state that exists because someone said so. If a state can
 
 ---
 
-## Principle 14: Graduated Consequence *(provisionally added — pending user confirmation)*
+## Principle 14: Graduated Consequence
 
 System responses to operational discrepancies should offer proportional options between the extremes. Binary responses — compliant or removed, match or mismatch, active or archived — are insufficient for real operational governance.
 
 When the system detects a discrepancy (compliance violation, permission drift, declining activity, governance concern), it provides multiple response levels calibrated to severity and context. Operators choose the appropriate level. Low-severity discrepancies may warrant notification only; moderate cases may flag for review; severe cases may trigger automated protective action. Each domain defines its own graduation, but the principle is consistent: there is always an intermediate option between ignoring and maximum consequence.
 
 Anti-goal: all-or-nothing enforcement. A system that can only ignore or escalate forces officers into uncomfortable binary choices and trains them to ignore problems until they become crises.
+
+---
+
+## Principle 15: Traceability as Outcome
+
+Operators must be able to reconstruct the full causal chain of any operational event without leaving the system. The mechanism is event aggregation, correlation, and sequencing — the distributed-tracing pattern — not cross-subsystem data coupling.
+
+Each subsystem emits well-defined events with correlation identifiers. Tracing a member's operational history across subsystems means correlating events that share identifiers or causal links, not navigating foreign keys across subsystem boundaries. Within a subsystem, explicit relationships are unconstrained; across subsystem boundaries, events are the connective tissue.
+
+Anti-goal: cross-subsystem foreign keys as the traceability mechanism. Queryable traceability must not come at the cost of subsystem coupling at the data layer.
 
 ---
 
@@ -159,6 +169,10 @@ Principles reinforce each other in predictable ways:
 - **13 + 6**: Derived state transparency reinforces trust and safety — deterministic derivation from evidence removes individual judgment as a vector for bias or manipulation in operational state assessment.
 - **14 + 9**: Graduated consequence reinforces volunteer-aware design — proportional responses reserve officer attention for the severity level that warrants it, rather than escalating every discrepancy to the same urgency.
 - **14 + 7**: Graduated consequence reinforces delegated authority with accountability — scoped officers can apply proportional responses within their authority, handling minor discrepancies autonomously while escalating severe ones.
+- **15 + 1**: Traceability as outcome reinforces operator clarity — operators can reconstruct any causal chain, satisfying clarity's demand for explainable cause and effect.
+- **15 + 12**: Traceability as outcome reinforces graceful degradation — event-based correlation avoids cross-subsystem data coupling, preserving subsystem independence.
+- **15 + 10**: Traceability as outcome complements durable state — events are durably stored, and the traceability guarantee depends on durable event storage rather than cross-subsystem schema dependencies.
+- **15 + 5**: Traceability as outcome reinforces low lock-in — event-based correlation keeps subsystem data models independent, reducing the blast radius of replacing or restructuring a subsystem.
 
 ---
 
@@ -171,6 +185,7 @@ Some principles can pull in different directions in specific contexts:
 - **7 vs 9**: Delegated authority (require scoped approval) can conflict with volunteer-aware design (minimize approval gates). Resolution: delegation reduces total approval load by distributing it — officers approve within their scope without central bottleneck, reducing both individual and aggregate attention cost.
 - **6 vs 9**: Trust and safety (audit everything, require review) can conflict with volunteer-aware design (minimize friction). Resolution: the level of review scales with the severity of the action. Low-risk state transitions (e.g., routine activity flagging) are automated; high-risk decisions (e.g., membership denial, officer removal) require human judgment.
 - **6 vs 12**: Trust and safety (audit trails for consequential actions) can conflict with graceful degradation (subsystem failure doesn't cascade). Resolution: audit enforcement scales with action severity. Consequential decisions — approvals, denials, escalations — block when audit storage is unavailable rather than proceed unrecorded. Routine automated transitions proceed with deferred audit entries, tolerating temporary audit unavailability without cascading the outage.
+- **5 vs 8**: Low lock-in (minimize hard-to-exit dependencies) can conflict with platform-native interaction (fully leverage the platform's interaction model). Resolution: platform coupling is isolated to the interaction layer behind domain-defined service interfaces. Platform-specific code (e.g., a `DiscordService`) implements these interfaces; operational code depends on the interfaces, never on platform types directly. The data model is shaped by the domain, not named after or structured around the platform. Switching platforms means swapping service implementations, not rebuilding business logic. Any external platform, integration, or third-party dependency that touches operational flow is accessed through a service interface, not directly.
 
 ---
 

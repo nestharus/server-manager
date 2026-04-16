@@ -1,6 +1,6 @@
 # System Design Proposal
 
-This document describes the design of a guild-management platform that replaces fragmented third-party bot dependencies with a unified operational system for long-lived gaming communities. The design addresses the twelve problem axes defined in the problem definition, governed by the principles in the product philosophy.
+This document describes the design of a guild-management platform that replaces fragmented third-party bot dependencies with a unified operational system for long-lived gaming communities. The design addresses the fourteen problem axes defined in the problem definition, governed by the fifteen principles in the product philosophy.
 
 ---
 
@@ -97,6 +97,8 @@ Per-member per-scope trust assessment, computed deterministically from signals.
 Trust is a gradient, not binary. Trust profiles exist per-scope because trust in one chapter does not automatically transfer to another — chapters decide whether to recognize cross-scope trust during their intake process. Trust profiles are recomputed when underlying signals change, so they reflect current evidence rather than a stale snapshot.
 
 An operator can inspect any trust profile and see the exact signals contributing to the computed level, the weights applied to each signal (from the active TrustComputationConfig for the profile's scope), and the thresholds that determined the resulting level. The computation is deterministic: same signals under the same configuration produce the same level.
+
+When a recomputation changes the trust level, the system generates an AuditEntry (`action_type: trust_recomputed`, `target_type: TrustProfile`) capturing the previous level, the new level, the computation config version used, and the signal change that triggered recomputation (new signal recorded, signal expired, config weights updated). This makes trust level transitions observable and queryable: an operator can answer "when did this member's trust level change?" and "what was this member's trust level on a specific past date?" directly from the audit trail, without replaying the computation. An appeals officer reviewing a denied application can verify the trust level the original reviewer saw by querying trust recomputation events bracketing the review timestamp.
 
 #### TrustSignal
 
@@ -309,6 +311,8 @@ Provisioning blueprint for creating new chapters.
 
 Templates encode the community's standard chapter structure. When a new chapter is provisioned, the template determines what Discord resources are created, what authority levels exist, and what initial compliance rules apply. Templates are operator-configurable and versioned.
 
+**Configuration governance boundary:** The Chapter `configuration` field holds non-operational metadata — display names, descriptions, icons, and visual settings that do not affect operational behavior. All operational configuration — compliance thresholds, intake routing, notification rules, authority templates, trust computation parameters — is governed through chapter-scoped PolicyVersion records with version pinning, preview-confirm patterns, and audit. This boundary ensures that chapter officers can customize their chapter's presentation without risking the temporal integrity guarantees that PolicyVersion provides for operational settings.
+
 #### Chapter
 
 A sub-community with a defined lifecycle.
@@ -320,7 +324,7 @@ A sub-community with a defined lifecycle.
 | `template_id` | FK → ChapterTemplate | |
 | `state` | enum | `proposed`, `provisioning`, `active`, `probation`, `archiving`, `archived` |
 | `discord_resources` | jsonb | Category IDs, channel IDs, role IDs — actual Discord objects |
-| `configuration` | jsonb | Chapter-local settings, overrides of template defaults |
+| `configuration` | jsonb | Non-operational chapter metadata: display name, description, icon, visual settings. Does not hold operational settings |
 | `created_at` | timestamp | |
 | `archived_at` | timestamp? | |
 
@@ -369,6 +373,40 @@ A member's position in a chapter.
 | `removal_reason` | text? | |
 
 Roster entries are the authoritative record of chapter membership. A member's chapter affiliation is determined by their RosterEntry, not by which Discord roles they hold. Discord roles are synchronized from roster state, not the other way around.
+
+**Status lifecycle:**
+
+```
+active → on_leave → active (returned)
+                  → removed
+active → under_review → active (cleared)
+                      → removed
+active → removed
+```
+
+- `active → on_leave`: Initiated by an officer with chapter-scoped authority, or as a downstream effect of Member suspension. Requires a reason.
+- `on_leave → active`: Return from leave. Initiated by an officer or the member (per chapter configuration). Requires a reason.
+- `active → under_review`: Triggered by compliance auto-probation (`consequence: auto_probation`) or by direct officer action for governance concerns. The member remains on the roster but is flagged for evaluation.
+- `under_review → active`: Officer clears the review after evaluation. Requires a reason.
+- `under_review → removed` / `on_leave → removed` / `active → removed`: Member removed from chapter roster. Initiated by an officer with chapter-scoped authority, or as a downstream effect of Member departure. Requires a reason.
+
+Every status transition and role change generates a RosterTransition record and an AuditEntry (`action_type: roster_changed`, `target_type: RosterEntry`), capturing the actor, reason, previous state, and new state. Direct officer roster actions — the most operationally common case for chapter-level management — are attributed and auditable through the same mechanisms as application decisions and ticket escalations.
+
+#### RosterTransition
+
+State change record for a roster entry.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | uuid | |
+| `roster_entry_id` | FK → RosterEntry | |
+| `from_state` | enum | Previous status |
+| `to_state` | enum | New status |
+| `from_role` | enum? | Previous role, if role changed |
+| `to_role` | enum? | New role, if role changed |
+| `actor_id` | FK → Member | Officer who initiated the change |
+| `reason` | text | Required for all transitions |
+| `timestamp` | timestamp | |
 
 ### Activity and Compliance
 
@@ -524,8 +562,8 @@ Immutable record of an operational decision.
 | `id` | uuid | |
 | `timestamp` | timestamp | |
 | `actor_id` | FK → Member | |
-| `action_type` | enum | `application_decided`, `ticket_escalated`, `chapter_transitioned`, `role_changed`, `policy_updated`, `authority_granted`, `authority_revoked`, `compliance_evaluated`, `permission_reconciled`, `drift_resolved`, `member_status_changed`, `evidence_submitted`, `override_used` |
-| `target_type` | enum | `Application`, `Ticket`, `Chapter`, `Member`, `ComplianceRule`, `PermissionIntent`, `AuthorityGrant`, `PolicyVersion` |
+| `action_type` | enum | `application_decided`, `ticket_escalated`, `chapter_transitioned`, `role_changed`, `policy_updated`, `authority_granted`, `authority_revoked`, `compliance_evaluated`, `permission_reconciled`, `drift_resolved`, `member_status_changed`, `evidence_submitted`, `override_used`, `trust_recomputed`, `roster_changed` |
+| `target_type` | enum | `Application`, `Ticket`, `Chapter`, `Member`, `ComplianceRule`, `PermissionIntent`, `AuthorityGrant`, `PolicyVersion`, `TrustProfile`, `RosterEntry` |
 | `target_id` | uuid | |
 | `scope` | enum + FK | `global` or FK → Chapter |
 | `policy_version_id` | FK → PolicyVersion? | What rules governed this decision |
@@ -551,8 +589,11 @@ Operator-configurable triggers for officer notifications.
 | `channel` | enum | `dm`, `thread`, `designated_channel` |
 | `template` | jsonb | Notification content template |
 | `actionable` | boolean | Whether this notification expects a response |
+| `grouping` | enum | `per_event`, `per_root_cause` |
 
 The default notification configuration is minimal. Operators add rules for the events they need to know about. Notifications are either actionable (the officer needs to do something) or explicitly informational (the operator chose to be informed). The system does not generate notifications that neither require action nor were explicitly requested.
+
+**Causal grouping:** Operational actions frequently produce cascading events across subsystems — an application approval creates a RosterEntry, which activates compliance rules, which may generate an initial evaluation. Each event in the cascade carries a correlation identifier linking it to the root cause event. NotificationRules with `grouping: per_root_cause` batch notifications for causally related events into a single notification summarizing the root action and its downstream effects. Rules with `grouping: per_event` (the default) fire independently per event. This prevents notification patterns that train officers to ignore alerts: an officer who configures rules for application decisions, roster changes, and compliance activations receives a single grouped notification for what is, from their perspective, a single action's consequences — rather than independent notifications for each downstream effect.
 
 ---
 
