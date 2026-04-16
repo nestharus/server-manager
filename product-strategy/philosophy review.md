@@ -1,52 +1,80 @@
 # Philosophy Alignment Review
 
-Review of the proposal against the product philosophy. Each axis that passed Stage 1 is evaluated for whether the proposal's design decisions embody, violate, or lack grounding in the philosophy's principles.
+Review of the proposal against the product philosophy. Each of the fourteen axes that passed Stage 1 (problem alignment) is evaluated for whether the proposal's design decisions embody, violate, or lack grounding in the philosophy's fifteen principles.
 
 ---
 
 ## Violations
 
-### 1. Trust Profile Recomputation Not Audited
+### 1. Cross-subsystem traceability via foreign keys rather than event correlation
 
-- **Axis:** Trust Calibration and Identity Verification (Axis 1)
-- **Design decision:** TrustProfile stores the current computed trust level and a `computed_at` timestamp. When underlying signals change or a TrustComputationConfig is updated, the profile is recomputed and the `level` field is overwritten. No AuditEntry is generated for the recomputation, and the previous level is not preserved.
-- **Principle violated:** Principle 1 — Operator Clarity ("Every state transition is observable") and Principle 6 — Trust and Safety ("Sensitive actions require audit trails")
-- **How it's violated:** The AuditEntry `action_type` enum includes action types for application decisions, ticket escalations, chapter transitions, compliance evaluations, permission reconciliations, member status changes, and authority grants — but no `trust_level_changed` or `trust_recomputed` type. TrustProfile is not listed in the AuditEntry `target_type` enum. When a trust profile is recomputed, the previous level is overwritten. An operator cannot query "when did this member's trust level change?" or "what was this member's trust level on a specific past date?" without replaying the computation from historical signals and the TrustComputationConfig version that was active at that time.
-- **Why this matters:** Trust profiles are surfaced to reviewers during application intake as decision context. If a member's trust level changes between submission and review — because a signal expired, a new signal was recorded, or TrustComputationConfig weights were updated — the reviewer sees the current level without knowing it recently changed. An appeals officer reviewing a denied application cannot verify what trust level the original reviewer saw unless the application decision's AuditEntry context snapshot happened to include it. The inputs to trust computation are individually auditable (signal recordings, config version changes), but the derived transition — the moment a member's trust level changes from one value to another — is not. The proposal designs trust computation for transparency (deterministic formula, inspectable signals, configurable weights) but leaves the recomputation lifecycle itself opaque. This is a silent state mutation: operational state that influences decisions changes without generating a first-class audit record.
+**Axis:** 12 (Cross-workflow State and Operational Continuity)
 
-### 2. RosterEntry Lacks First-Class Audit and Lifecycle Governance
+**Design decision:** The Cross-workflow State Coherence section states: "Every operational object maintains explicit foreign key relationships to related objects in other subsystems. The data model is designed so that 'what is this member's full operational history?' is a single query joining across subsystems, not a reconstruction from fragmented sources." The Ticket schema includes `related_objects` (jsonb FKs to Application, Chapter, Member, and other Tickets across subsystem boundaries). Cross-subsystem relationships are recorded at creation time in downstream objects' fields. The audit chain traces events through `target_id` and `context` fields using FK-style navigation.
 
-- **Axis:** Sub-community Provisioning and Lifecycle (Axis 5) and Delegated Authority and Governance (Axis 10)
-- **Design decision:** RosterEntry tracks chapter membership with a status lifecycle (`active`, `on_leave`, `under_review`, `removed`). However: (a) `RosterEntry` is absent from the AuditEntry `target_type` enum (`Application`, `Ticket`, `Chapter`, `Member`, `ComplianceRule`, `PermissionIntent`, `AuthorityGrant`, `PolicyVersion`); (b) RosterEntry has no dedicated transition record analogous to ChapterTransition, TicketTransition, or ApplicationReview; (c) RosterEntry lacks a `changed_by` or `removed_by` field — the only actor-adjacent fields are `removed_at` and `removal_reason`, which record the fact and justification but not the responsible officer.
-- **Principle violated:** Principle 6 — Trust and Safety ("Sensitive actions require audit trails") and Principle 7 — Delegated Authority with Accountability ("An officer's actions within their scope are autonomous but recorded")
-- **How it's violated:** The proposal describes roster management as including "direct add by authorized officer" alongside application-based intake. When an officer directly adds or removes a member from a chapter roster, this action has no dedicated audit path. The officer's identity is not recorded on the RosterEntry, and no AuditEntry targets the roster change. RosterEntry changes from other sources are captured indirectly — compliance auto-probation is recorded in ComplianceEvaluation's `consequence_applied` field, member suspension effects are captured in the Member status AuditEntry — but direct officer roster actions, the most operationally common case for chapter-level roster management, pass through no audit mechanism. Additionally, the proposal's design principle "Lifecycle-first objects" promises that operational entities have defined state machines with explicit transitions, but RosterEntry's status lifecycle has no state machine diagram, no transition rules, and no transition record — an inconsistency with how Applications (9 states, full state machine), Tickets (per-category state machines), Chapters (6 states, full state machine), and Members (3 states, full lifecycle description) are treated.
-- **Why this matters:** Chapter roster management is a core operational action that directly affects members' standing. An auditor asking "who removed this member from the chapter?" cannot answer the question from the audit system. An officer who disputes a roster change has no attribution trail to examine. P7 requires that officer actions within their scope be recorded — roster modification within a chapter scope is the paradigmatic case of scoped officer action, yet it is the least-audited operational action in the proposal.
+**Principle violated:** Principle 15 — Traceability as Outcome
+
+**How it's violated:** P15 states: "Each subsystem emits well-defined events with correlation identifiers. Tracing a member's operational history across subsystems means correlating events that share identifiers or causal links, not navigating foreign keys across subsystem boundaries. Within a subsystem, explicit relationships are unconstrained; across subsystem boundaries, events are the connective tissue." The anti-goal is explicit: "cross-subsystem foreign keys as the traceability mechanism. Queryable traceability must not come at the cost of subsystem coupling at the data layer."
+
+The proposal uses exactly the approach P15 prohibits. Cross-subsystem operational history is traced through FK joins across subsystem tables rather than through event correlation. Ticket.related_objects stores direct FK references to Intake objects (Applications) and Chapter objects. The explicit design intent — "single query joining across subsystems" — is the anti-pattern P15 identifies.
+
+The proposal partially embodies P15 through AuditEntries, which function as events with `target_id` and `context` fields. But AuditEntries serve as the audit trail mechanism, not the primary traceability mechanism. The primary cross-subsystem query path is FK navigation through the operational data model.
+
+**Why this matters:** The philosophy identifies three reinforcing interactions that cross-subsystem FKs undermine:
+
+- **P15 + P12 (Graceful Degradation):** "Event-based correlation avoids cross-subsystem data coupling, preserving subsystem independence." FK-based coupling means subsystem data models are not independent — schema evolution in one subsystem can affect queries and constraints in referencing subsystems.
+- **P15 + P5 (Low Lock-in):** "Event-based correlation keeps subsystem data models independent, reducing the blast radius of replacing or restructuring a subsystem." With FK coupling, replacing or restructuring one subsystem requires updating all subsystems that reference its objects.
+- **P15 + P10 (Durable State):** "Events are durably stored, and the traceability guarantee depends on durable event storage rather than cross-subsystem schema dependencies." FK-based traceability depends on schema stability across subsystems.
+
+The proposal's own "subsystem independence" design principle — "Subsystems are peers. Failure in one produces errors for operations that depend on it but does not cascade to unrelated operations" — is also weakened by data-layer coupling that FK relationships create between subsystem schemas.
 
 ---
 
 ## Ungrounded Decisions
 
-None identified. All design decisions in the proposal are traceable to one or more philosophy principles through direct application or principled combination.
+### 1. Fixed RosterEntry role enum
+
+**Axis:** 5 (Sub-community Provisioning and Lifecycle)
+
+**Design decision:** RosterEntry defines `role` as a fixed enum with three values: `member`, `officer`, `leader`. The role carries operational significance — succession logic triggers on leader departure, and the proposal distinguishes leader-level from officer-level chapter authority in several workflows.
+
+**Observation:** No principle dictates that chapter governance should follow a uniform three-tier model. P7 (Delegated Authority) governs how authority is scoped and bounded but does not prescribe organizational structure. P11 (Configuration by Operators) suggests that operational configuration should be manageable without code changes, but adding a new position type (e.g., "co-leader," "senior member," "trainee") requires schema and logic changes to the succession and authority workflows that depend on the role enum. P1 (Operator Clarity) is served by legible structure, but any clear structure — including an operator-configurable one — would satisfy it.
+
+The proposal allows per-chapter customization for compliance rules, trust computation parameters, form definitions, and notification rules. Organizational structure is the one governance dimension where the proposal enforces a fixed, cross-chapter uniform model. The philosophical basis for treating organizational structure differently from other configurable governance dimensions is not articulated.
+
+**Implementation concern (existing-principle check per review procedure 4a):** The operational significance of the role enum — succession triggers on `leader`, specific authority patterns for `officer` vs `leader` — means the fixed roles are not just labels but load-bearing governance categories. Adding a new position type requires not only an enum extension but changes to every workflow that branches on role value. This implementation pattern bakes the three-tier assumption into the system's operational logic, making it harder to modify if the assumption proves wrong. This does not violate a specific principle but amplifies the cost of the ungrounded assumption.
+
+**Question:** Is the three-tier model a deliberate design constraint (all chapters share the same organizational structure for cross-chapter legibility and governance consistency), or an assumption about how gaming communities organize chapters? If the former, the constraint should be justified — what goes wrong with operator-configurable positions? If the latter, the proposer should consider whether this assumption holds for the communities the system serves.
+
+**Implicit principle (for expansion agent):** "Chapter governance should follow a fixed, uniform set of organizational positions across all sub-communities to maintain cross-chapter legibility and prevent governance fragmentation." This would be independent of P7 (which governs authority scope mechanics) and P1 (which governs system transparency). It addresses organizational design standardization — a concern the philosophy does not currently treat.
 
 ---
 
 ## Structural Concerns
 
-### 1. Notification Model Does Not Account for Causal Event Chains
+### 1. Notification causal grouping depends on undefined correlation mechanism
 
-The NotificationRule model triggers on individual state transition events. When a single operational action produces a cascade of events across subsystems — an application approval creates a RosterEntry, which activates compliance rules, which may generate an initial evaluation — each event independently matches against notification rules. There is no concept of causal grouping, root-cause attribution, or notification batching for related events.
+The NotificationRule `per_root_cause` grouping requires identifying which events share a causal chain. The proposal describes this: "Each event in the cascade carries a correlation identifier linking it to the root cause event." This is the right approach per P15 — correlation identifiers linking causally related events.
 
-An operator who configures notification rules for application decisions, roster changes, and compliance activations will receive independent notifications for what is, from their perspective, a single action's consequences. At scale — when an officer approves multiple applications in a session, each generating cascading downstream events — this produces notification patterns that can train officers to ignore alerts, undermining the attention-justified process design principle. The model cannot currently express "notify me about the outcome of this action" vs. "notify me about each downstream effect independently."
+However, no operational object or event in the data model includes an explicit correlation identifier field. The AuditEntry schema has `target_id` (which identifies the object acted upon, not the causal chain) and `context` (a jsonb field that could contain a correlation identifier but does not define one structurally). Without an explicit, schema-level correlation identifier, the `per_root_cause` grouping mechanism has no defined data contract.
 
-This is not a principle violation in the current design — notification rules are operator-configured, defaults are minimal, and operators can avoid configuring redundant rules. But it is a governance gap in the notification model: the model's triggering granularity does not match the operational reality that events are causally connected across subsystem boundaries.
+This gap means either:
+- The correlation identifier is implicit in the `context` jsonb field, which obscures the causal-chain mechanism in unstructured data (weakening P1's demand for inspectable cause and effect).
+- The correlation mechanism is left as an implementation detail, which means the proposal's notification grouping description promises behavior the schema cannot yet support.
 
-### 2. Chapter `configuration` Field Outside PolicyVersion Governance
+This is not a principle violation — it is a gap between a described mechanism and the data model that supports it. The proposer should specify where correlation identifiers live in the schema and how the `per_root_cause` grouping evaluates them.
 
-The Chapter object includes a `configuration: jsonb` field described as "chapter-local settings, overrides of template defaults." This field is mutable and not governed by PolicyVersion. The PolicyVersion model covers form definitions, compliance thresholds, ticket routing, authority templates, and notification rules — but Chapter.configuration is a separate, unversioned mechanism.
+### 2. Concurrent configuration edits under the preview-confirm pattern
 
-If chapter-local configuration overrides affect operational behavior — how compliance rules are parameterized, what intake routing applies, what notification thresholds are active — then changes to this field could alter the operational context of in-flight operations without the preview-confirm pattern, version pinning, or audit mechanisms that PolicyVersion provides. The proposal does not specify what settings `configuration` contains, so the boundary between "settings governed by PolicyVersion" and "settings in Chapter.configuration" is unclear.
+The preview-confirm pattern generates a preview showing "what changes, what existing objects are affected, what the rollback path is." The operator confirms based on this preview. But the preview captures a point-in-time snapshot of current state. If two officers with overlapping authority preview changes to the same policy concurrently:
 
-This is a design-level ambiguity rather than a current violation. But as the system grows and chapter officers customize their chapters, this field is the most likely accumulation point for unversioned operational configuration that should be versioned. If the field is intended only for non-operational settings (display preferences, descriptions), the proposal should clarify that boundary. If it can hold operational settings, it needs PolicyVersion governance.
+1. Both officers see version N in their previews.
+2. Officer A confirms, creating version N+1.
+3. Officer B confirms — but B's preview was based on version N, not N+1. B may not know A's change exists.
+
+The PolicyVersion system handles this correctly at the data level (each change creates a new version with `supersedes_id`). But the operator experience conflicts with P1 (Operator Clarity): Officer B made a decision based on a stale preview. The system did not surface that the underlying state changed between preview and confirm.
+
+This does not require a complex concurrency control mechanism. A version check at confirm time — "the state you previewed has changed since your preview; here is the current state" — would close the gap. The concern is that the proposal describes the preview-confirm pattern without addressing this edge case.
 
 ---
 
@@ -54,16 +82,17 @@ This is a design-level ambiguity rather than a current violation. But as the sys
 
 | # | Axis | Assessment | Notes |
 |---|---|---|---|
-| 1 | Trust Calibration and Identity Verification | **Violation** | Trust profile recomputation not audited (P1, P6) |
+| 1 | Trust Calibration and Identity Verification | Embodied | Deterministic computation (P13), recomputation audited (P1, P6), operator-configurable weights (P11), per-scope profiles (P7) |
 | 2 | Structured Intake and Adjudication | Embodied | Form versioning (P2), claim ownership (P9), context surfacing (P1), scoped routing (P7) |
 | 3 | Case Routing and State Management | Embodied | Per-category state machines (P11/P9), privacy levels (P6), durable transcripts (P10) |
-| 4 | Audit Trail and Long-term Accountability | Embodied | Context snapshots (P1), immutable entries (P6), unlimited retention (P5/P10), chain traceability (P1) |
-| 5 | Sub-community Provisioning and Lifecycle | **Violation** | RosterEntry lacks audit infrastructure (P6, P7). Template provisioning (P11), archival process (P10), succession chains (P7) otherwise well-aligned |
-| 6 | Activity Tracking and Compliance Enforcement | Embodied | Configurable rules (P11), graduated consequences (P6/P9), OCR as extraction not decision (anti-goal), rule version pinning (P2) |
-| 7 | Permission Model and State Explosion | Embodied | Declarative intent (P1), drift detection (P1), temporary expiration (P1), three-option reconciliation (P9/P1) |
+| 4 | Audit Trail and Long-term Accountability | Embodied | Context snapshots (P1), immutable entries (P6), unlimited retention (P5/P10), audit-availability tradeoff (P12 + P6 tension) |
+| 5 | Sub-community Provisioning and Lifecycle | **Ungrounded** | Fixed role enum (see ungrounded #1). Template provisioning (P11), archival process (P10), succession chains (P7) otherwise well-aligned |
+| 6 | Activity Tracking and Compliance Enforcement | Embodied | Configurable rules (P11), graduated consequences (P14), OCR as extraction not decision (anti-goal), rule version pinning (P2) |
+| 7 | Permission Model and State Explosion | Embodied | Declarative intent (P1), drift detection (P13), temporary expiration (P1), three-option reconciliation (P14) |
 | 8 | Vendor Lock-in, Migration, and Data Portability | Embodied | Database as truth (P10/P5), export paths (P5), platform boundary (P8/P3) |
-| 9 | Volunteer Coordination and Staff Burnout | Embodied | Automation-first defaults (P9), minimal notifications (P9), collision prevention (P9). See structural concern #1 |
-| 10 | Delegated Authority and Governance | **Violation** | RosterEntry roster management not attributed (P7). Scoped authority (P7), enhanced override audit (P6), succession (P7) otherwise well-aligned |
+| 9 | Volunteer Coordination and Staff Burnout | Embodied | Automation-first defaults (P9), causal notification grouping (P9/P15), collision prevention (P9) |
+| 10 | Delegated Authority and Governance | Embodied | Scoped authority (P7), enhanced override audit (P6), roster transitions attributed (P7), succession chains (P7) |
 | 11 | Platform Constraints and Moving-Target Risk | Embodied | Platform boundary (P8/P3), assumption verification (P12/P1), agnostic operational model (P5) |
-| 12 | Cross-workflow State and Operational Continuity | Embodied | FK relationships (P1/P10), subsystem independence (P12), queued cross-subsystem effects (P12) |
+| 12 | Cross-workflow State and Operational Continuity | **Violation** | Cross-subsystem FK joins violate P15. See violation #1. See structural concern #1 |
 | 13 | Live Configuration Safety and Temporal Integrity | Embodied | PolicyVersion pinning (P2), preview-confirm pattern (P1), blast radius surfacing (P1/P2), no-restart application (P11). See structural concern #2 |
+| 14 | Consolidated Failure Risk and Operational Availability | Embodied | Subsystem independence (P12), failure boundaries defined (P12), audit-availability design choice (P12 + P6 tension explicit) |

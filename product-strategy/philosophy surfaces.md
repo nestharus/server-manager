@@ -1,45 +1,43 @@
 # Philosophy Surfaces
 
-New philosophical concerns discovered during the Stage 2 philosophy alignment review. These are inputs for the philosophy expansion agent, not modifications to the philosophy.
+New philosophical concerns discovered during the Stage 2 philosophy alignment review. These are inputs for the philosophy expansion agent — they describe concerns the current philosophy does not fully address.
 
 ---
 
 ## Implicit Principles
 
-### 1. Derived State Transparency
+### Organizational uniformity across sub-communities
 
-- **Axis:** Trust Calibration and Identity Verification (Axis 1), Activity Tracking and Compliance Enforcement (Axis 6), Permission Model and State Explosion (Axis 7)
-- **Design decisions:** TrustProfile is computed deterministically from TrustSignals via operator-configured TrustComputationConfig. ComplianceEvaluation is computed from EvidenceSubmissions against ComplianceRules. PermissionDrift is computed from PermissionIntents against actual Discord state. In each case, the proposal derives operational state from observable inputs through transparent, deterministic computation rather than relying on direct officer assessment or assignment.
-- **Implicit principle:** Operational state that influences decisions should be derived from observable evidence through transparent, deterministic computation rather than directly assessed or assigned by authority. The computation itself — inputs, formula, parameters — must be inspectable by operators. When the derivation changes (new inputs, changed parameters), the system recomputes rather than preserving stale results.
-- **Relationship to existing principles:** Extends Principle 1 (Operator Clarity — derived state is inspectable because the computation is visible) and Principle 6 (Trust and Safety — removing individual judgment from state assessment reduces the risk of bias or bad-faith manipulation). Neither principle explicitly states a preference for derived state over assessed state. The implicit principle is stronger: it prescribes a specific mechanism (deterministic derivation from evidence) that Principles 1 and 6 only imply. A system could satisfy P1 and P6 with officer-assessed trust levels that are logged and auditable — the proposal's choice to derive trust computationally goes beyond what the principles require.
-- **Strength of evidence:** High. Three major subsystems (trust, compliance, permissions) independently follow this pattern. The proposal's design principle "Declarative intent with reconciliation" partially captures the pattern for permissions, but the broader principle — "derive operational state from observable inputs via transparent computation" — spans all three domains and is not articulated in the philosophy or the proposal's design principles.
+**Axis:** 5 (Sub-community Provisioning and Lifecycle)
 
-### 2. Graduated Consequence
+**Design decision:** RosterEntry defines a fixed three-value role enum (`member`, `officer`, `leader`) that applies to all chapters. Organizational structure is the only governance dimension where the proposal enforces a uniform, non-configurable model — compliance rules, trust computation, form definitions, and notification rules are all per-chapter configurable.
 
-- **Axis:** Activity Tracking and Compliance Enforcement (Axis 6), Permission Model and State Explosion (Axis 7), Sub-community Provisioning and Lifecycle (Axis 5)
-- **Design decisions:** ComplianceRule has three consequence levels (`notification_only`, `flag_for_review`, `auto_probation`). PermissionDrift has three resolution options (`reconcile`, `accept`, `acknowledge`). Chapter lifecycle includes `probation` as an intermediate state between `active` and `archiving`. Member status includes `suspended` as an intermediate state between `active` and `departed`. In each case, the proposal provides graduated options between "no action" and "maximum consequence."
-- **Implicit principle:** System responses to operational discrepancies should be graduated, offering proportional options between the extremes. Binary responses (compliant/removed, match/mismatch, active/archived) are insufficient for real operational governance. The operator chooses the appropriate consequence level based on how much risk each specific situation represents.
-- **Relationship to existing principles:** Extends Principle 9 (Volunteer-Aware Design — graduated responses reserve officer attention for the severity level that warrants it) and Principle 7 (Delegated Authority with Accountability — graduated responses allow scope-appropriate proportionality). Neither principle explicitly states that responses should be graduated. The implicit principle is a specific design pattern that serves both.
-- **Strength of evidence:** High. Four operational domains (compliance enforcement, permission management, chapter governance, member governance) independently implement graduated response patterns with multiple intermediate states.
+**Implicit principle:** Chapter governance should follow a fixed, uniform set of organizational positions across all sub-communities to maintain cross-chapter legibility and prevent governance fragmentation.
+
+**Relationship to existing principles:** Independent of existing principles. P7 (Delegated Authority) governs authority scope mechanics but does not address whether organizational positions should be uniform or configurable. P11 (Configuration by Operators) would pull toward configurability. P1 (Operator Clarity) is served by legibility but does not require uniformity. This implicit principle would be a new concern about organizational design standardization.
+
+**Strength of evidence:** Weak. Only the RosterEntry role enum follows this implicit principle. ChapterTemplate provides structural uniformity for initial provisioning, but templates are operator-configurable and not fixed. No other design decision in the proposal enforces cross-chapter organizational uniformity.
 
 ---
 
 ## Principle Tensions
 
-### P5 (Low Lock-in) vs. P8 (Platform-Native Interaction)
+### P15 (Traceability as Outcome) vs P1 (Operator Clarity) for cross-subsystem queries
 
-- **Axis:** Vendor Lock-in, Migration, and Data Portability (Axis 8) and Platform Constraints and Moving-Target Risk (Axis 11)
-- **Principles in tension:** Principle 5 says minimize dependencies that are hard to exit; every external dependency must justify itself against the switching cost it introduces. Principle 8 says work with Discord's interaction model, not against it; the system extends Discord rather than replacing it. Going platform-native necessarily deepens the dependency that P5 warns against — a system that fully uses Discord's modals, threads, forums, buttons, and component model is more coupled to Discord than one that uses minimal Discord features.
-- **How the proposal resolves it:** Platform boundary isolation. The operational model is platform-agnostic (Members, Applications, Tickets, Chapters); the Discord layer translates between this model and Discord's current capabilities. The proposal accepts interaction-level coupling (the Discord layer must be rebuilt to switch platforms) but prevents data-level and logic-level coupling (operational data and business rules do not depend on Discord constructs). This is a principled resolution: minimize the cost of switching by isolating the platform-specific layer, while going fully native within that layer.
-- **What the philosophy doesn't say:** The Principle Interactions section identifies P3 + P8 as reinforcing ("both prevent technical debt accumulation") but does not address P5 + P8. The philosophy presents Low Lock-in and Platform-Native Interaction as compatible without noting their tension. The proposal's resolution — accept interaction coupling, prevent data coupling — is a design judgment that has no philosophical basis. An alternative proposal could take P5 further by building a platform-abstraction layer with swappable interaction backends (reducing Discord coupling but violating P8's "extend Discord, don't replace it"). Another could take P8 further by storing Discord-native constructs directly (deeper platform integration but increasing switching cost). The philosophy should articulate where the boundary falls between acceptable platform coupling (interaction layer) and unacceptable platform coupling (data and logic layers).
+**Axis:** 12 (Cross-workflow State and Operational Continuity)
 
----
+**Principles in tension:** Principle 15 (Traceability as Outcome) and Principle 1 (Operator Clarity)
 
-## New Philosophical Axes
+P1 requires operators to be able to understand and query the system's operational state — including cross-subsystem views like "what is this member's full operational history?" P15 requires that cross-subsystem connections use event correlation with shared identifiers rather than foreign key navigation at the data layer.
 
-### Cross-subsystem Relational Integrity
+**How the proposal resolves it:** The proposal chose FK-based cross-subsystem joins, prioritizing P1's query ergonomics over P15's subsystem independence. The Cross-workflow State Coherence section explicitly states: "The data model is designed so that 'what is this member's full operational history?' is a single query joining across subsystems." This serves P1 well — operators get simple, fast, complete queries — but violates P15.
 
-- **Concern:** How should operational objects relate to each other across subsystem boundaries? Specifically: should the relationships between objects in different subsystems be explicit, first-class, and directly queryable — or implicit and reconstructable from separate queries across independent data stores?
-- **Evidence from proposal:** The unified data model with explicit FK relationships across all operational domains. The Cross-workflow State Coherence section, which describes member operational history as "a single query joining across subsystems, not a reconstruction from fragmented sources." The audit chain traceability design, where causally connected events across subsystems (approval → roster entry → compliance activation) are linked through target_id and context fields. The Ticket `related_objects` field explicitly linking tickets to applications, chapters, members, and other tickets.
-- **Why it's not covered:** Principle 10 (Durable State) addresses *where* state lives — the database, not Discord — but not *how* state relates across boundaries. Principle 12 (Graceful Degradation) addresses *how subsystems handle each other's failures* — independent recovery, no cascading — but not how they share relational context during normal operation. Principle 1 (Operator Clarity) addresses *whether state transitions are observable* — an operator can see what happened — but not whether the connections between state transitions in different subsystems are queryable as first-class relationships. A system could satisfy all three principles while having fragmented relationships: everything is stored durably (P10), subsystems fail independently (P12), and each subsystem's transitions are individually observable (P1) — but an operator who wants to trace a member's full operational history must manually correlate records across subsystems rather than following explicit relational links.
-- **Questions for the user:** The proposal treats cross-subsystem relational integrity as fundamental — should the philosophy? If so, what form should the principle take? Two orientations are possible: prescriptive ("operational objects must maintain explicit relationships across subsystem boundaries") or outcome-oriented ("an operator should be able to trace any operational event's full causal chain without leaving the system"). The prescriptive form constrains the data model; the outcome-oriented form constrains the operator experience. Which is the right level of commitment?
+**What the philosophy doesn't say:** The philosophy lists P15+P1 as reinforcing: "operators can reconstruct any causal chain, satisfying clarity's demand for explainable cause and effect." This assumes event-based traceability is equally ergonomic for operators as FK navigation. In practice, event correlation may require more complex query tooling, multiple query steps, or a dedicated aggregation layer to achieve the same operator-facing simplicity that FK joins provide.
+
+The philosophy needs guidance for this tension: when the subsystem independence that P15 protects imposes query complexity costs on operators, how should the system resolve the tradeoff? Options include:
+
+- A read-optimized event aggregation layer that provides FK-join-equivalent query performance over correlated events (preserving both principles at the cost of system complexity).
+- Accepting that operators use event-correlation queries that are more complex but preserve subsystem independence.
+- Defining which cross-subsystem queries are common enough to warrant materialized views or query abstractions, and which are rare enough to tolerate event-correlation complexity.
+
+Without this guidance, proposers will predictably choose FK joins (as this proposal did) because P1's demand for operator-facing simplicity is more immediately felt than P15's demand for architectural independence.
