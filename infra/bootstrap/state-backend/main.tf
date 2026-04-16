@@ -49,14 +49,8 @@ resource "vultr_object_storage" "state" {
   label      = var.object_storage_label
 }
 
-resource "vultr_object_storage_bucket" "tfstate" {
-  object_storage_id = vultr_object_storage.state.id
-  name              = var.bucket_name
-  enable_versioning = true
-}
-
 output "bucket_name" {
-  value = vultr_object_storage_bucket.tfstate.name
+  value = var.bucket_name
 }
 
 output "s3_hostname" {

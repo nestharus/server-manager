@@ -195,11 +195,8 @@ BS="bootstrap/state-backend/main.tf"
 assert_grep 'resource\s+"vultr_object_storage"' "$BS" \
   "declares vultr_object_storage resource"
 
-assert_grep 'resource\s+"vultr_object_storage_bucket"' "$BS" \
-  "declares vultr_object_storage_bucket resource"
-
-assert_grep 'enable_versioning\s*=\s*true' "$BS" \
-  "enable_versioning = true"
+assert_no_grep 'resource\s+"vultr_object_storage_bucket"' "$BS" \
+  "no vultr_object_storage_bucket resource (not in provider)"
 
 assert_grep 'version\s*=\s*"~>\s*2\.30"' "$BS" \
   "provider version constraint ~> 2.30"
