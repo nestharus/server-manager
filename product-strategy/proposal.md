@@ -108,7 +108,7 @@ Individual evidence contributing to a trust profile.
 |---|---|---|
 | `id` | uuid | |
 | `member_id` | FK → Member | |
-| `signal_type` | enum | `identity_verification`, `chapter_tenure`, `officer_endorsement`, `compliance_history`, `incident_record` |
+| `signal_type` | enum | `platform_metadata`, `identity_verification`, `chapter_tenure`, `officer_endorsement`, `compliance_history`, `incident_record` |
 | `scope` | enum + FK | `global` or FK → Chapter |
 | `value` | jsonb | Signal-specific structured data |
 | `source` | enum + FK | `system` or FK → Member (the officer who recorded it) |
@@ -116,6 +116,8 @@ Individual evidence contributing to a trust profile.
 | `expires_at` | timestamp? | Signals may decay; null means indefinite |
 
 Trust signals are the durable evidence that trust computations draw from. Because signals are individually stored with provenance, a trust profile survives staff turnover — it is derived from evidence, not from any single officer's judgment. Expired signals are retained for audit but excluded from active computation.
+
+The `platform_metadata` signal type covers system-recorded signals from platform-origin data at member creation time: Discord account age, server join method, mutual servers, and any other platform-observable attributes the community has configured as initial trust inputs. These signals are recorded automatically by the system — not by officers — and provide the inputs for initial trust computation during member onboarding (see Member Onboarding workflow). Including platform-origin metadata in the same signal type system as officer-recorded and operational signals ensures that an operator inspecting a new member's trust profile sees the full input inventory: every signal contributing to the computed level is stored, typed, and inspectable through the same mechanism.
 
 #### TrustComputationConfig
 
@@ -125,17 +127,16 @@ Operator-configurable parameters governing how trust signals combine into a trus
 |---|---|---|
 | `id` | uuid | |
 | `scope` | enum + FK | `global` or FK → Chapter |
-| `signal_weights` | jsonb | Weight per signal type: `identity_verification`, `chapter_tenure`, `officer_endorsement`, `compliance_history`, `incident_record` |
+| `signal_weights` | jsonb | Weight per signal type: `platform_metadata`, `identity_verification`, `chapter_tenure`, `officer_endorsement`, `compliance_history`, `incident_record` |
 | `decay_rules` | jsonb | Per-signal-type decay curves: how signal influence diminishes over time |
 | `level_thresholds` | jsonb | Ordered thresholds mapping computed scores to discrete trust levels |
-| `version` | integer | Incremented on edit |
-| `created_by` | FK → Member | |
-| `effective_at` | timestamp | |
-| `supersedes_id` | FK → TrustComputationConfig? | Previous version |
+| `version` | integer | Incremented on edit; used by TrustProfile to pin the config version that produced a computation |
 
 Trust computation parameters are operational configuration — analogous to ComplianceRule parameters or TicketCategory state machines. Different communities weight signal types differently based on their governance values: a community that values officer endorsement over tenure makes a fundamentally different governance choice than one that prioritizes compliance history. These choices must be expressible without code changes.
 
-When a TrustComputationConfig is updated, a new version is created. In-flight trust recomputations triggered before the change complete under the previous version. The new version governs subsequent recomputations. Operators can inspect the active configuration for any scope and see exactly how signals combine — the formula connecting individual signals to the resulting trust level is visible, not opaque.
+Changes to TrustComputationConfig are governed through PolicyVersion (`policy_type: trust_computation`), following the same preview-confirm workflow, optimistic concurrency, and audit trail as all other operational configuration. The `version` integer serves the same role as `form_version` on Application or `rule_version` on ComplianceEvaluation: pinning. In-flight trust recomputations triggered before a config change complete under the previous version; the new version governs subsequent recomputations. Authorship, temporal effectiveness, and version chain metadata live on the PolicyVersion record — TrustComputationConfig carries only the configuration content and a version counter for pinning.
+
+Operators can inspect the active configuration for any scope and see exactly how signals combine — the formula connecting individual signals to the resulting trust level is visible, not opaque.
 
 Chapter-scoped configurations override the global default for trust profiles within that chapter. A chapter that has not configured its own weights inherits the global configuration.
 
@@ -222,10 +223,30 @@ Configuration for a class of cases, defining routing and workflow.
 | `name` | string | `appeal`, `harassment_report`, `recruitment`, `dispute`, `account_linking`, `officer_request`, etc. |
 | `routing_scope` | jsonb | Which authority scopes handle this category |
 | `state_machine` | jsonb | Allowed states and transitions for this category |
-| `sla_rules` | jsonb? | Time-based escalation thresholds |
+| `sla_rules` | jsonb? | Ordered list of time-based consequence thresholds (see SLA Enforcement below) |
 | `privacy_level` | enum | `reporter_and_assigned`, `category_officers`, `all_staff` |
 
 Categories are operator-configurable. Each category defines its own state machine — a harassment report may have different states than an account linking request. Privacy levels control visibility: harassment reports protect reporter identity from all but assigned staff; recruitment tickets may be visible to all chapter officers.
+
+**SLA Enforcement:** Each SLA rule is a list of graduated thresholds, each specifying an elapsed-time trigger and a consequence. Thresholds are ordered by elapsed time and evaluated in sequence — multiple thresholds per rule provide proportional escalation rather than a single jump from "within SLA" to "violated." *(Philosophy: P14 Graduated Consequence, P13 Derived State Transparency)*
+
+Each threshold defines:
+- **`elapsed`**: Duration since the ticket entered a specified state (or set of states) in the category's state machine. The trigger states are part of the SLA rule definition — an SLA measuring "time to first response" triggers on the state the ticket is in before assignment; an SLA measuring "time to resolution" triggers on assignment.
+- **`consequence`**: One of `notify_owner` (notify the assigned officer), `notify_scope` (notify officers with authority over the category's routing scope), `flag_for_review` (mark the ticket as SLA-breached, visible in operator dashboards), or `auto_escalate` (transition the ticket to the category's escalation state per its state machine, if one exists; otherwise `flag_for_review`).
+
+Example for a harassment report category:
+- 24h in `assigned` → `notify_owner` (reminder to the assigned officer)
+- 48h in `assigned` → `notify_scope` (scope officers are made aware)
+- 72h in `assigned` → `auto_escalate` (ticket transitions to `escalated` per the category's state machine)
+
+Example for an account linking category:
+- 48h in `open` → `notify_scope` (officers with routing authority notified)
+
+SLA-triggered state transitions (specifically `auto_escalate`) interact with the category's state machine — the system transitions the ticket through the same state machine path that an officer escalation would follow. If the category's state machine has no escalation path, `auto_escalate` falls back to `flag_for_review`. This ensures that SLA enforcement never produces a state the category's workflow does not define. *(Philosophy: P1 Operator Clarity — the system's SLA behavior is predictable from the category's configured state machine and SLA rules)*
+
+Every SLA-triggered action generates an AuditEntry (`action_type: sla_triggered`, `target_type: Ticket`) capturing the SLA rule, the threshold reached, the elapsed time, and the consequence applied. SLA notifications participate in the notification system through NotificationRules like any other system event. *(Philosophy: P9 Volunteer-Aware Design — each threshold's consequence is operator-configured per category, so the attention cost of SLA enforcement is calibrated to the risk profile of the case type)*
+
+SLA rules are optional per category. Categories without SLA rules have no time-based enforcement. Operators add SLA rules where elapsed-time monitoring justifies its attention cost — a harassment report category may warrant aggressive SLA thresholds, while a low-priority feedback category may warrant none. *(Philosophy: P11 Configuration by Operators)*
 
 #### Ticket
 
@@ -563,7 +584,7 @@ Versioned governance configuration.
 | Field | Type | Description |
 |---|---|---|
 | `id` | uuid | |
-| `policy_type` | enum | `intake_rules`, `compliance_thresholds`, `ticket_routing`, `authority_templates`, `notification_rules` |
+| `policy_type` | enum | `intake_rules`, `compliance_thresholds`, `ticket_routing`, `authority_templates`, `notification_rules`, `trust_computation` |
 | `scope` | enum + FK | `global` or FK → Chapter |
 | `version_number` | integer | |
 | `content` | jsonb | The policy configuration |
@@ -582,7 +603,7 @@ Immutable record of an operational decision.
 | `id` | uuid | |
 | `timestamp` | timestamp | |
 | `actor_id` | FK → Member | |
-| `action_type` | enum | `application_decided`, `ticket_escalated`, `chapter_transitioned`, `role_changed`, `policy_updated`, `authority_granted`, `authority_revoked`, `compliance_evaluated`, `permission_reconciled`, `drift_resolved`, `member_status_changed`, `evidence_submitted`, `override_used`, `trust_recomputed`, `roster_changed` |
+| `action_type` | enum | `application_decided`, `ticket_escalated`, `chapter_transitioned`, `role_changed`, `policy_updated`, `authority_granted`, `authority_revoked`, `compliance_evaluated`, `permission_reconciled`, `drift_resolved`, `member_status_changed`, `evidence_submitted`, `override_used`, `trust_recomputed`, `roster_changed`, `sla_triggered` |
 | `target_type` | enum | `Application`, `Ticket`, `Chapter`, `Member`, `ComplianceRule`, `PermissionIntent`, `AuthorityGrant`, `PolicyVersion`, `TrustProfile`, `RosterEntry` |
 | `target_id` | uuid | |
 | `scope` | enum + FK | `global` or FK → Chapter |
@@ -868,15 +889,26 @@ Subsystems are peers with defined failure boundaries:
 | CQRS read model | Cross-subsystem queries fall back to direct AuditEntry correlation queries; slower but complete | All write-path operations, all within-subsystem queries |
 | Audit | Entries queued for retry; operations that require audit confirmation may block | Varies by operation criticality |
 
-Cross-subsystem effects (application approval → roster entry) handle downstream failure by queuing the effect and surfacing the pending state to operators. The upstream operation completes; the downstream effect retries until the target subsystem recovers. Operators see the pending state and can intervene if recovery takes too long.
+Cross-subsystem effects use consequence-graduated deferral when a downstream subsystem is unavailable. The design distinguishes two categories of deferred work: *(Philosophy: P2 Live-Server Safety vs P12 Graceful Degradation + P9 Volunteer-Aware Design — see tension resolution)*
 
-The audit subsystem is special: because reconstructable decisions are a design principle, operations that generate audit entries may block if audit storage is unavailable (to prevent decisions that cannot be reconstructed). This is a deliberate choice — audit integrity is more important than availability for consequential actions. Low-consequence automated transitions (e.g., scheduled compliance evaluation) may proceed with queued audit entries, but officer decisions (approvals, denials, escalations) wait for audit confirmation.
+**Deferred recording** — the operation already happened; only the record is delayed. Deferred audit entries for automated transitions fall in this category: the compliance evaluation executed, the state transition occurred, and the audit entry is a record of what already happened. Deferred recording is safe by construction — the operation's preconditions were valid at execution time, and delaying the record does not change the operation's validity. These auto-retry freely on subsystem recovery.
+
+**Deferred execution** — the operation hasn't happened; preconditions may have changed since the effect was queued. When an application approval triggers a roster entry creation and the chapter subsystem is temporarily unavailable, the roster creation is deferred — it hasn't executed. If the application is subsequently withdrawn, the member departs, or the chapter enters archival while the effect is queued, retry would execute against invalid preconditions.
+
+Deferred execution effects are classified by consequence level at design time:
+
+- **Low-consequence effects** (notification generation, read model updates, non-authoritative cache refreshes): auto-retry freely on subsystem recovery. These do not gate real operational consequences — a stale notification or temporarily outdated read model is recoverable without officer intervention. *(Philosophy: P12 + P9 — resilience without officer burden)*
+- **Consequential effects** (roster entry creation, authority grant provisioning, membership state changes, compliance rule activation): block or require operator confirmation on retry. Before executing a queued consequential effect, the system validates that the preconditions that warranted the effect still hold. If preconditions have changed (application withdrawn, member departed, chapter archived), the effect is not executed — it is surfaced to operators as a stale queued effect with the reason it was invalidated. If preconditions still hold, the effect either executes automatically (with an AuditEntry noting the deferral) or requires operator confirmation, depending on the specific effect type's classification. *(Philosophy: P2 — operations execute under valid preconditions)*
+
+Operators see all pending deferred effects — both low-consequence and consequential — in a degraded-state summary. Each pending effect shows the originating action, the target subsystem, the elapsed time since queuing, and (for consequential effects) the precondition validation status.
+
+The audit subsystem follows the same principle with a specific policy: because reconstructable decisions are a design principle, officer-initiated consequential actions (approvals, denials, escalations) block when audit storage is unavailable rather than proceed unrecorded — the officer's decision is deferred execution, not deferred recording, and the consequences of executing without an audit trail outweigh the availability cost. Low-consequence automated transitions (e.g., scheduled compliance evaluation) proceed with deferred audit recording, because the operation already executed validly and only the record is delayed.
 
 **Operator experience during audit unavailability:**
 
 When audit storage is unavailable, officers attempting consequential actions (approve an application, escalate a ticket, change member status) receive an explicit error stating that the action cannot proceed because audit recording is unavailable, with the specific action and target identified. The system does not silently queue the officer's action or present it as successful — the officer knows the action did not execute and can retry when audit recovers. Pending automated transitions that proceeded with queued audit entries are surfaced in a degraded-state summary visible to operators with global authority, showing the count and type of operations awaiting audit confirmation.
 
-**Recovery:** When audit storage recovers, queued entries from automated transitions are flushed in order. Each queued entry records the timestamp of the original operation and the timestamp of audit persistence, so the audit trail reflects that the entry was deferred. No officer-initiated operations are replayed automatically — the officer must re-initiate any action that was blocked. This prevents stale decisions: if an officer attempted to approve an application during audit downtime and conditions changed before recovery, the system does not execute an approval based on outdated context.
+**Recovery:** When a subsystem recovers, queued effects are processed according to their classification. Low-consequence deferred effects (both execution and recording) are flushed in order. Consequential deferred execution effects undergo precondition validation before executing — stale effects are surfaced to operators rather than blindly executed. Deferred audit recording entries are flushed in order, each recording the timestamp of the original operation and the timestamp of audit persistence so the audit trail reflects the deferral. No officer-initiated operations that were blocked are replayed automatically — the officer must re-initiate any action that was blocked. This prevents stale decisions: if an officer attempted to approve an application during audit downtime and conditions changed before recovery, the system does not execute an approval based on outdated context.
 
 ### Data Portability
 
