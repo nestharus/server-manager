@@ -24,6 +24,8 @@ Discord's built-in server member applications cover server-level join gating but
 
 The core difficulty is that intake is not a single decision point — it is a lifecycle. An application may be pending, claimed by a reviewer, in interview, waitlisted, approved, denied, or withdrawn. Each transition requires the right person to see the right context at the right time. When staff time is scarce, applications that require manual review compete for the same attention as every other operational task.
 
+When multiple officers have authority over the same intake queue, concurrent access introduces a mutual-exclusion problem. Two reviewers may independently begin evaluating the same application without knowing the other has started — duplicating scarce staff effort. If they reach different conclusions, the conflict itself requires officer attention to resolve. This collision risk connects directly to volunteer burnout (§9): every duplicated review or conflicting decision is attention spent on coordination overhead rather than adjudication.
+
 ---
 
 ## §3 Case Routing and State Management
@@ -34,6 +36,10 @@ Discord has no native end-to-end ticket system. The platform's own safety guidan
 
 The core difficulty is state management across a case's lifetime. A ticket is not a message thread — it has an owner, a status, a category, a history of who touched it, and potentially a relationship to other operational objects (an application, a chapter, a member record). When ticket state lives in a third-party dashboard, the community's operational continuity depends on that vendor's availability and data model.
 
+Case routing has a spatial dimension — ensuring the right person sees the right case — and a temporal dimension that the state-management framing alone does not capture. Cases can age in an assigned or open state with no systemic visibility into how long they have been there. The operational consequences of delayed response vary dramatically by case type: a harassment report stalling for a week has fundamentally different consequences than an account-linking request at the same age. A stalled harassment report erodes community trust; a stalled appeal leaves a member in limbo; a stalled recruitment issue delays chapter operations.
+
+The difficulty is that responsiveness requirements are per-category, not system-wide, and the consequences of missed responsiveness are operational, not merely procedural. A system that correctly routes cases, maintains durable state, and prevents collisions can still deliver one where cases silently age without accountability. Time-based monitoring introduces its own attention cost (connecting to §9): tracking which cases are overdue, in which categories, against which thresholds, and determining what graduated consequences apply at each stage — all of this is coordination overhead that competes for the same officer attention the system is trying to protect.
+
 ---
 
 ## §4 Audit Trail and Long-term Accountability
@@ -43,6 +49,8 @@ The deeper problem is proving what happened after the fact. Staff teams need to 
 Discord's server audit log has a 45-day retention cap, which is too short for seasonal guild operations, officer misconduct reviews, or disputes that resurface months later. Third-party bots fill the gap with transcripts and logs, but then retention becomes a commercial or operational policy owned by someone else.
 
 The core difficulty is not logging — it is reconstructability. A complete audit trail means any past decision can be examined with its full context: who decided, what inputs they had, what alternatives existed, and what policy governed the decision. This requires durable storage under the community's control, not a vendor's retention policy.
+
+When reconstructability is enforced as a hard invariant rather than a best-effort goal, audit storage availability becomes a precondition for consequential operations. An officer approval, denial, or escalation that cannot be recorded cannot proceed — an audit outage becomes an operational outage for every decision that requires accountability. The system must either accept that audit failures block operations (sacrificing availability for integrity) or allow operations to proceed without audit (sacrificing the reconstructability the system was built to provide). This tension does not exist in the current state, where there is no audit trail to speak of, and only becomes visible when audit is elevated to a hard requirement.
 
 ---
 
@@ -74,6 +82,10 @@ A multi-chapter server with officer tiers, special squads, archive spaces, bot r
 
 The core difficulty is that Discord provides tools to set permissions but no tools to reason about the aggregate effect of accumulated permission decisions over time. There is no native concept of "intended permission state" against which actual state can be audited, and no mechanism to detect when a temporary override has become permanent.
 
+This single-phenomenon description understates the difficulty. When an "intended permission state" is introduced, permission discrepancies split into two distinct categories that require fundamentally different operational responses. Permissions that have diverged from a declared intent have a clear resolution path: compare actual state to intended state and correct the discrepancy. But permissions that were set directly in Discord without any corresponding intent have no resolution path at all — the operator must first determine whether the permission should exist, then either create an intent to formalize it or remove it.
+
+The migration challenge is itself significant. Any community that adopts a declared-intent model inherits the full history of unmanaged permission decisions. These existing permissions must be individually classified and brought into the managed set before the system can provide complete coverage. Until that migration completes, the community operates in a hybrid state where some permissions are managed and others are not — and the boundary between the two must be visible to operators or it becomes a new source of confusion.
+
 ---
 
 ## §8 Vendor Lock-in, Migration, and Data Portability
@@ -91,6 +103,8 @@ The core difficulty is that the switching cost is invisible until it becomes urg
 Most operational workflows in gaming communities are run by volunteers. Ticket queues, application review, roster cleanup, and appeal handling all compete for the same officer attention. Burnout shows up when the system requires constant human arbitration to stay coherent.
 
 The core difficulty is that adding process (more review steps, more approval gates, more notifications) makes governance more rigorous but also accelerates burnout. The system must reduce the total attention cost of maintaining operational coherence, not just redistribute it. Every mandatory human touchpoint is a cost that must justify itself against the risk of not having it.
+
+Notification volume is a distinct burnout mechanism from process rigor. A system can have well-justified mandatory touchpoints — every human decision earns its attention cost — and still overwhelm officers through informational notifications about downstream effects of decisions already made. When a single officer action triggers a cascade of operational consequences — roster updates, compliance re-evaluations, permission changes — each consequence may independently notify affected officers. From the officer's perspective, these are all one event; from the system's perspective, they are independent state changes. The officer who approved an application does not need three separate notifications that the approval triggered a roster addition, a compliance activation, and a permission grant. Reducing mandatory decision touchpoints does not solve this problem — notification volume from automated cascades is an attention cost that exists independently of how many decisions require human involvement.
 
 ---
 
@@ -117,3 +131,33 @@ The core difficulty is designing against a substrate that moves. Any system buil
 Across all operational domains, the recurring issue is that decisions span multiple subsystems but state is fragmented. An application leads to a membership decision that affects chapter rosters, which affects activity tracking, which may trigger a ticket. These relationships exist in the community's operational logic but not in any single bot or built-in feature.
 
 The core difficulty is not building individual subsystems — it is maintaining coherent state across their boundaries. When application data lives in one bot, ticket data in another, and roster data in a spreadsheet, no single system can answer "what is this member's full operational history?" Operational continuity requires that cross-subsystem relationships are first-class, not reconstructed by officers from memory.
+
+---
+
+## §13 Live Configuration Safety and Temporal Integrity
+
+Communities change their operational rules while operations are in progress. Application forms are updated mid-review cycle, compliance thresholds are adjusted while evaluations are running, ticket routing is modified while cases are open, and authority templates shift as staff availability changes. These changes are routine and necessary — communities learn and adapt continuously.
+
+The core difficulty is that a configuration change on a live system can silently corrupt the semantic integrity of in-flight operations. When an application form's fields change while submissions are pending review, the submitted responses may no longer correspond to the questions that were asked. When compliance rules change mid-season, evaluations that already ran correctly under the old parameters become inconsistent with evaluations that haven't run yet. The operation didn't fail — its meaning changed underneath it.
+
+This is not a versioning problem in the storage sense. It is an operational safety problem: ensuring that work begun under one set of rules completes under those same rules, while new work begins under the updated rules. The difficulty is compounded by the fact that configuration changes are not isolated — a single policy update may affect multiple subsystems simultaneously, and the set of in-flight operations affected is not obvious until the change is attempted.
+
+Configuration changes can also corrupt other configuration changes, not only in-flight operations. When multiple operators have authority over the same policy domain, concurrent modifications introduce a decision-integrity problem distinct from the in-flight operation problem. An operator who previews the effect of a proposed change, deliberates, and then confirms the change is making a governance decision — but the state they deliberated against may no longer be current if another operator confirmed a different change in the interval. The second operator's decision was informed by a state that no longer exists, and the confirmed change may have consequences the operator did not evaluate. Unlike the in-flight operation problem — where the affected entity is work proceeding under configuration — the affected entity here is the configuration itself, and the failure mode is a governance decision made against a phantom state. This is especially dangerous because the change succeeds silently: there is no error, no corruption of running operations, just an operator who believed they were modifying one policy state when they were actually modifying a different one.
+
+---
+
+## §14 Consolidated Failure Risk and Operational Availability
+
+When operational state is fragmented across many independent systems, a single system's failure affects only its domain — a ticket bot outage doesn't stop application review, and an application bot outage doesn't stop compliance tracking. Each failure is contained because the systems share nothing.
+
+Consolidation solves the fragmentation problem (§8, §12) but inverts the failure model. When all operational subsystems — intake, cases, compliance, permissions, audit, governance — share a platform, a platform-level failure (database outage, deployment failure, hosting disruption) can take down every operational workflow simultaneously. The blast radius of any single failure expands from one domain to all domains.
+
+The core difficulty is that consolidation and failure isolation pull in opposite directions. A unified system provides cross-workflow coherence (§12) and eliminates vendor fragmentation (§8), but achieving that coherence means subsystems share infrastructure, state dependencies, or both. The system must maintain meaningful operational independence between subsystems even though they share a platform — so that an outage in one domain does not cascade into a total operational shutdown.
+
+The consolidation-isolation tension has a second dimension beyond shared infrastructure: data coupling. Cross-workflow coherence (§12) requires that relationships between subsystems are first-class — an application approval that triggers a roster entry must maintain that causal link. But making these relationships first-class through shared data contracts means that subsystem schemas become interdependent. Schema evolution in one subsystem may invalidate queries or references in others, and replacing a subsystem requires migrating every cross-boundary relationship that other subsystems depend on. This is not a failure-propagation risk — both subsystems may be running perfectly — it is a change-propagation risk. The more tightly subsystem data is linked to achieve the coherence that §12 requires, the more difficult it becomes to evolve, replace, or independently maintain any single subsystem. The independence that this section requires is not only about surviving outages in isolation but about changing in isolation — and coherence-through-coupling makes both harder.
+
+The consolidation-isolation tension has a third dimension beyond shared infrastructure and data coupling: temporal validity during recovery. When subsystems can fail independently — as operational independence requires — an upstream operation may generate a cross-subsystem effect while the downstream subsystem is temporarily unavailable. The effect is queued until the downstream subsystem recovers. But the operational state that warranted the effect may change during the outage: an applicant may withdraw, a member may depart, or a chapter may enter archival while the effect sits in a queue.
+
+Queued effects carry an implicit assumption that their preconditions still hold. A roster entry creation that was valid at the moment of application approval may be invalid by the time the roster subsystem recovers — the applicant may have withdrawn in the interval. If queued effects execute unconditionally on recovery, the system produces state that contradicts its own operational logic: roster entries for withdrawn applicants, compliance activations for archived chapters, permission grants for departed members.
+
+This is distinct from both failure propagation (dimension one) and schema coupling (dimension two). Both subsystems may be architecturally independent and fully functional — the problem arises specifically in the temporal gap between when an effect was warranted and when it executes. The system must distinguish between effects where the operation already happened and only the record is delayed (safe to retry) and effects where the operation has not happened and preconditions may have changed (requiring re-validation before execution). The consequence severity of the pending effect determines how dangerous blind execution is — a low-consequence notification retry carries different risk than a consequential roster mutation.

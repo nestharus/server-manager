@@ -106,9 +106,9 @@ Anti-goal: "check the pins in #staff-chat" as an operational lookup. If it matte
 
 ## Principle 11: Configuration by Operators, Not Developers
 
-Operational configuration — chapter thresholds, form definitions, ticket categories, activity rules — is managed by operators through Discord commands or a web interface, not by editing config files, environment variables, or code.
+Operational configuration — chapter thresholds, form definitions, ticket categories, activity rules, organizational roles — is managed by operators through Discord commands or a web interface, not by editing config files, environment variables, or code.
 
-Adding a chapter, changing an activity threshold, or modifying an application form does not require a code deployment. Configuration changes are logged, take effect without restart, and are reversible. The system's behavior is a function of its stored configuration, not its source code.
+Adding a chapter, changing an activity threshold, modifying an application form, or defining sub-community role structures does not require a code deployment. Configuration changes are logged, take effect without restart, and are reversible. The system's behavior is a function of its stored configuration, not its source code.
 
 Anti-goal: "edit the config file and restart" as a workflow for operational changes. Operators should never need to touch the codebase.
 
@@ -124,17 +124,58 @@ Anti-goal: monolithic coupling where a single failure mode brings down all commu
 
 ---
 
+## Principle 13: Derived State Transparency
+
+Operational state that influences decisions should be derived from observable evidence through transparent, deterministic computation rather than directly assessed or assigned by authority. The computation itself — inputs, rules, parameters — must be inspectable by operators.
+
+When the system computes a trust level, evaluates compliance, detects permission drift, or monitors elapsed time against operational deadlines, the inputs, the computation rules, and the output are all visible. Operators configure the computation; the system executes it deterministically. When inputs or parameters change, the system recomputes rather than preserving stale results. No operational state depends on an officer's subjective assessment when an objective derivation from evidence is possible.
+
+Anti-goal: operational state that exists because someone said so. If a state can be derived from evidence, it should be — and the derivation should be visible.
+
+---
+
+## Principle 14: Graduated Consequence
+
+System responses to operational discrepancies should offer proportional options between the extremes. Binary responses — compliant or removed, match or mismatch, active or archived — are insufficient for real operational governance.
+
+When the system detects a discrepancy (compliance violation, permission drift, declining activity, governance concern), it provides multiple response levels calibrated to severity and context. Operators choose the appropriate level. Low-severity discrepancies may warrant notification only; moderate cases may flag for review; severe cases may trigger automated protective action. Each domain defines its own graduation, but the principle is consistent: there is always an intermediate option between ignoring and maximum consequence.
+
+Anti-goal: all-or-nothing enforcement. A system that can only ignore or escalate forces officers into uncomfortable binary choices and trains them to ignore problems until they become crises.
+
+---
+
+## Principle 15: Traceability as Outcome
+
+Operators must be able to reconstruct the full causal chain of any operational event without leaving the system. The mechanism is event aggregation, correlation, and sequencing — the distributed-tracing pattern — not cross-subsystem data coupling.
+
+Each subsystem emits well-defined events with correlation identifiers. Tracing a member's operational history across subsystems means correlating events that share identifiers or causal links, not navigating foreign keys across subsystem boundaries. Within a subsystem, explicit relationships are unconstrained; across subsystem boundaries, events are the connective tissue.
+
+Anti-goal: cross-subsystem foreign keys as the traceability mechanism. Queryable traceability must not come at the cost of subsystem coupling at the data layer.
+
+---
+
 ## Principle Interactions
 
 Principles reinforce each other in predictable ways:
 
 - **1 + 6**: Operator clarity supports trust and safety — when operators understand what the system does, they can verify it is doing the right thing for member safety.
 - **2 + 12**: Live-server safety and graceful degradation both serve operational continuity — changes must be safe, and failures must be contained.
+- **2 + 12 (deferred recording vs execution)**: The general P2+P12 reinforcement has an important refinement. Deferred *recording* (the operation already happened; only the record is delayed) is safe by construction — P2 and P12 fully reinforce because operational safety is unaffected. Deferred *execution* (the operation hasn't happened; preconditions may have changed) requires consequence-graduation to balance safety with resilience, per the P2 vs P12+P9 tension resolution.
+- **12 + 9 (deferred execution)**: Graceful degradation reinforces volunteer-aware design for low-consequence deferred effects — auto-retry preserves subsystem resilience without officer burden. For high-consequence deferred effects, the consequence-graduated pattern accepts confirmation cost because the decision gates real consequences, consistent with P9's standard that every gate must justify its attention cost.
 - **5 + 10**: Low lock-in and durable state both ensure the community owns its operational history — data is portable because it is stored in a controlled, durable format.
 - **7 + 6**: Delegated authority with accountability directly serves trust and safety — scoped authority with audit trails prevents both over-centralization and unchecked power.
 - **9 + 11**: Volunteer-aware design and operator configuration both reduce the human cost of running the system — automation handles routine work, and configuration changes don't require developer involvement.
 - **3 + 8**: No compatibility shims and platform-native interaction both prevent technical debt accumulation — the system stays current rather than maintaining bridges to deprecated patterns.
 - **4 + 1**: Research before implementation supports operator clarity — when the problem is understood first, the resulting system is explainable because its design traces to real difficulties.
+- **13 + 1**: Derived state transparency reinforces operator clarity — when operational state is computed from visible inputs through inspectable rules, operators understand not just what the state is but why it is that way.
+- **13 + 6**: Derived state transparency reinforces trust and safety — deterministic derivation from evidence removes individual judgment as a vector for bias or manipulation in operational state assessment.
+- **14 + 9**: Graduated consequence reinforces volunteer-aware design — proportional responses reserve officer attention for the severity level that warrants it, rather than escalating every discrepancy to the same urgency.
+- **14 + 7**: Graduated consequence reinforces delegated authority with accountability — scoped officers can apply proportional responses within their authority, handling minor discrepancies autonomously while escalating severe ones.
+- **15 + 1**: Traceability as outcome and operator clarity are in tension (resolved) for cross-subsystem queries — event-based correlation preserves subsystem independence but can impose query complexity costs on operators. Resolution: CQRS-style read/write split. Write-paths remain event-based (P15 unconditional); a read-optimized aggregation layer provides operator-ergonomic query performance (P1 satisfied). The principles reinforce at the write layer (traceability enables causal chain reconstruction) and are reconciled at the read layer (aggregation restores query ergonomics).
+- **15 + 12**: Traceability as outcome reinforces graceful degradation — event-based correlation avoids cross-subsystem data coupling, preserving subsystem independence.
+- **15 + 10**: Traceability as outcome complements durable state — events are durably stored, and the traceability guarantee depends on durable event storage rather than cross-subsystem schema dependencies.
+- **15 + 5**: Traceability as outcome reinforces low lock-in — event-based correlation keeps subsystem data models independent, reducing the blast radius of replacing or restructuring a subsystem.
+- **13 + 14**: Derived state transparency enables graduated consequence — transparent derivation of operational state from evidence provides the granularity needed for proportional responses. When derived state reflects degree rather than binary pass/fail, graduated consequences can be calibrated to the severity of the discrepancy.
 
 ---
 
@@ -146,6 +187,10 @@ Some principles can pull in different directions in specific contexts:
 - **2 vs 3**: Live-server safety (don't break running systems) can conflict with no compatibility shims (don't maintain old patterns). Resolution: migration tooling makes the transition safe, but the system does not maintain the old path indefinitely. Safe doesn't mean permanent.
 - **7 vs 9**: Delegated authority (require scoped approval) can conflict with volunteer-aware design (minimize approval gates). Resolution: delegation reduces total approval load by distributing it — officers approve within their scope without central bottleneck, reducing both individual and aggregate attention cost.
 - **6 vs 9**: Trust and safety (audit everything, require review) can conflict with volunteer-aware design (minimize friction). Resolution: the level of review scales with the severity of the action. Low-risk state transitions (e.g., routine activity flagging) are automated; high-risk decisions (e.g., membership denial, officer removal) require human judgment.
+- **6 vs 12**: Trust and safety (audit trails for consequential actions) can conflict with graceful degradation (subsystem failure doesn't cascade). Resolution: audit enforcement scales with action severity. Consequential decisions — approvals, denials, escalations — block when audit storage is unavailable rather than proceed unrecorded. Routine automated transitions proceed with deferred audit entries, tolerating temporary audit unavailability without cascading the outage.
+- **2 vs 12 + 9 (deferred execution)**: Live-server safety (ensure operations execute under valid preconditions) can conflict with graceful degradation (queue and retry when a subsystem is unavailable) and volunteer-aware design (minimize officer intervention in routine recovery). When a cross-subsystem effect is queued for retry, preconditions may change before execution — an application withdrawn, a member departed, a chapter archived. This is distinct from deferred *recording* (the operation already happened; only the record is delayed), which is safe by construction. Resolution: consequence-graduated deferral, extending the severity-scaling pattern from audit (P6 vs P12) and review gates (P6 vs P9). Consequential deferred effects (roster creation, authority grants, membership state changes) block or require operator confirmation on retry. Low-consequence deferred effects (notification generation, read model updates) auto-retry freely. Each cross-subsystem effect type is classified by consequence level at design time.
+- **5 vs 8**: Low lock-in (minimize hard-to-exit dependencies) can conflict with platform-native interaction (fully leverage the platform's interaction model). Resolution: platform coupling is isolated to the interaction layer behind domain-defined service interfaces. Platform-specific code (e.g., a `DiscordService`) implements these interfaces; operational code depends on the interfaces, never on platform types directly. The data model is shaped by the domain, not named after or structured around the platform. Switching platforms means swapping service implementations, not rebuilding business logic. Any external platform, integration, or third-party dependency that touches operational flow is accessed through a service interface, not directly.
+- **15 vs 1**: Traceability as outcome (event-based cross-subsystem correlation, no FK coupling) can conflict with operator clarity (operators need ergonomic access to cross-subsystem operational history). Event correlation may impose query complexity costs on operators that violate P1's demand for readily accessible answers. Resolution (CQRS-style read/write split): write-paths remain fully event-based and FK-free across subsystem boundaries — P15 holds unconditionally at the write layer. A separate read-optimized aggregation layer (materialized views, denormalized read models, or a dedicated query service) provides operators with ergonomic, FK-join-equivalent query performance by correlating events into queryable read models. One rule, consistently enforced — no per-query-path judgment calls.
 
 ---
 
