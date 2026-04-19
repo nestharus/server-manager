@@ -61,11 +61,11 @@ async def test_client_fixture_reaches_health_endpoint(
         ("post", "/api/v1/chapters", {"name": "Humility Seattle", "slug": "humility-seattle"}),
         ("get", "/api/v1/chapters", None),
         ("get", "/api/v1/chapters/1", None),
-        ("patch", "/api/v1/chapters/1", {"version": 0}),
+        ("patch", "/api/v1/chapters/1", {}),
         ("post", "/api/v1/chapters/1/archive", None),
     ],
 )
-async def test_chapter_endpoint_stubs_are_reachable_via_client(
+async def test_chapter_endpoints_are_reachable_via_client(
     async_client: httpx.AsyncClient,
     method: str,
     path: str,
@@ -74,4 +74,9 @@ async def test_chapter_endpoint_stubs_are_reachable_via_client(
     kwargs = {"json": json_body} if json_body is not None else {}
     response = await getattr(async_client, method)(path, **kwargs)
 
-    assert response.status_code == HTTPStatus.NOT_IMPLEMENTED
+    assert response.status_code in {
+        HTTPStatus.CREATED,
+        HTTPStatus.OK,
+        HTTPStatus.NOT_FOUND,
+        HTTPStatus.PRECONDITION_REQUIRED,
+    }
