@@ -267,6 +267,66 @@ For infrastructure changes:
 
 ---
 
+## Prototyping Workflow
+
+Runs between strategic roadmap approval and production implementation when
+a slice has wide magnitude uncertainty or unknown external dependencies.
+See `prototyping/orchestrator.md` for the full process.
+
+**Prototyping is NOT implementation.** It cares about discovery, not
+correctness. Prototype code is disposable. Production code is written
+fresh using prototype findings as input.
+
+Five stages:
+
+1. Scope the prototype (human gate — user approves the questions and budget)
+2. Pre-prototype research (`gpt-high`, `prototyping/research agent.md`)
+3. Build the prototype (`gpt-high`, `prototyping/prototype agent.md`)
+4. Synthesize findings (`claude-opus`, `prototyping/findings agent.md`)
+5. Propose roadmap updates (`gpt-high`, `prototyping/roadmap-update agent.md`)
+6. Human gate — user applies updates, commissions follow-ups, or moves to implementation
+
+No 3x risk gate. Prototype artifacts live in `prototyping/<slug>/prototype/`
+and are not shipped.
+
+---
+
+## Writing Pipeline
+
+Multi-agent writing quality system for public-facing documents. See
+`product-strategy/writing pipeline orchestrator.md` for the full process
+and `product-strategy/WRITING_SKILL_MASTER.md` for the craft reference.
+
+Applies to: executive roadmap, pitch deck, and any future public documents.
+
+**Phase A: Content Revision**
+1. Content revision (`claude-opus`, `writing content agent.md`)
+   — adds missing sections from communication research
+2. Human gate — user approves content additions
+
+**Phase B: Writing Quality (sequential, per rubric)**
+3. Skeleton extraction (`gpt-high`) — structural analysis
+4. Non-negotiable scan (`gpt-high`) — hard ban violations
+5. Rubric 1: Story beats (`claude-opus`, `writing rubric agent.md`)
+6. Rubric 2: AI tell filter (`claude-opus`, `writing rubric agent.md`)
+7. Rubric 3: Flow and cohesion (`claude-opus`, `writing rubric agent.md`)
+8. Rubric 4: Adversarial robustness (`claude-opus`, `writing rubric agent.md`)
+9. Tempo and editorial (`claude-opus`, `writing editorial agent.md`)
+10. Restart check — if major edits, re-run from step 4. Max 3 cycles.
+
+**Phase C: Quality Gate**
+11. Quality gate (`claude-opus`, `writing quality gate agent.md`)
+    — PASS/FAIL with specific findings. Separate reviewer.
+12. PDF rendering — `python scripts/render-pitch-deck.py`
+
+**Gate: Human** — user reviews the PDF before distribution.
+
+Communication research per document type:
+- Executive roadmap: `research/exec-roadmap-communication.md`
+- Pitch deck: `research/pitch-deck-communication.md`
+
+---
+
 ## Product Strategy Workflow
 
 For strategic product decisions, use the alignment loop in
@@ -277,11 +337,42 @@ full process.
 acts as the orchestrator, NOT a single mega-agent. Do not collapse the
 multi-stage workflow into a single agent.
 
-Pipeline after alignment converges:
-1. Roadmap agent (`product-strategy/roadmap/prompt.md`)
-2. Executive roadmap agent (`product-strategy/executive-roadmap/prompt.md`)
-3. Roadmap refinement agent (`product-strategy/roadmap-refinement/prompt.md`)
-4. Tasks agent (`product-strategy/tasks/prompt.md`)
+Pipeline after alignment converges — see
+`product-strategy/roadmap orchestrator.md` for the full process:
+
+**Layer 0: Market Research**
+1. Research planning (orchestrator — identifies research questions)
+2. Web research execution (`gpt-high` × N parallel, via Firecrawl MCP)
+3. Market research synthesis (`gpt-high`, `market research agent.md`)
+4. Surface check → product strategy re-entry if surfaces found
+
+**Layer 1: Executive Roadmap**
+5. Executive roadmap proposal (`gpt-high`, `executive roadmap proposer.md`)
+6. 3x executive risk assessment (`claude-opus`, parallel):
+   market misread, dependency trap, completeness
+7. Human gate — user approves strategic ordering
+
+**Layer 2: Engineering Roadmap**
+8. Engineering codebase research (`gpt-high`, `engineering research agent.md`)
+9. Engineering roadmap proposal (`gpt-high`, `engineering roadmap proposer.md`)
+10. 3x engineering risk assessment (`claude-opus`, parallel):
+    feasibility, integration, drift
+11. Human gate — user resolves ordering disagreements
+
+**Layer 3: AI-Optimized Roadmap**
+12. AI roadmap proposal (`gpt-high`, `ai roadmap proposer.md`)
+13. 3x AI risk assessment (`claude-opus`, parallel):
+    decomposition, coverage, dependency
+14. Model gate — orchestrator validates completeness
+
+**Layer 4: Ticket Generation**
+15. Ticket generation (`gpt-high`, `ticket generation agent.md`)
+16. Human gate — user reviews tickets
+
+Risk types per layer are defined in `product-strategy/roadmap risk types.md`.
+All risk assessments must return LOW. If any returns MEDIUM/HIGH, the
+proposer revises and the full risk gate re-runs. See the roadmap
+orchestrator for resolution paths per risk type.
 
 ---
 

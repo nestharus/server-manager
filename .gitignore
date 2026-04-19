@@ -25,4 +25,5 @@ node_modules/
 # Workspace / generated
 .tmp/
 worktrees/
+.refs/
 .DS_Store
