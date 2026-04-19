@@ -1,10 +1,3 @@
-from pydantic import BaseModel, Field
+"""Base contract helpers."""
 
-
-class VersionedMixin(BaseModel):
-    """Internal version carrier for optimistic-locking aware models."""
-
-    version: int = Field(ge=0)
-
-
-__all__ = ["VersionedMixin"]
+__all__: list[str] = []

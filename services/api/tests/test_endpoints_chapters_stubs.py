@@ -34,20 +34,9 @@ def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(key, value)
 
 
-def _load_chapters_endpoint_module():
-    try:
-        return importlib.import_module("app.api.v1.endpoints.chapters")
-    except ModuleNotFoundError as exc:
-        pytest.fail(f"Expected endpoint module app.api.v1.endpoints.chapters to exist: {exc}")
-
-
 def _load_chapters_router() -> APIRouter:
-    module = _load_chapters_endpoint_module()
+    module = importlib.import_module("app.api.v1.endpoints.chapters")
     router = getattr(module, "router", None)
-
-    if router is None:
-        pytest.fail("Expected app.api.v1.endpoints.chapters to define `router`.")
-
     assert isinstance(router, APIRouter)
     return router
 
@@ -55,26 +44,25 @@ def _load_chapters_router() -> APIRouter:
 def _build_test_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     _set_required_env(monkeypatch)
     settings = Settings()
-    app = create_app(settings=settings)
-    app.include_router(_load_chapters_router(), tags=["chapters"])
-    return app
+    return create_app(settings=settings)
 
 
 @pytest.mark.parametrize(
-    ("method", "path", "json_body"),
+    ("method", "path", "json_body", "expected_status"),
     [
-        ("post", "/api/v1/chapters", {"name": "Humility Seattle", "slug": "humility-seattle"}),
-        ("get", "/api/v1/chapters", None),
-        ("get", "/api/v1/chapters/1", None),
-        ("patch", "/api/v1/chapters/1", {"version": 0}),
-        ("post", "/api/v1/chapters/1/archive", None),
+        ("post", "/api/v1/chapters", {"name": "Humility Seattle", "slug": "humility-seattle"}, HTTPStatus.CREATED),
+        ("get", "/api/v1/chapters", None, HTTPStatus.OK),
+        ("get", "/api/v1/chapters/1", None, HTTPStatus.NOT_FOUND),
+        ("patch", "/api/v1/chapters/1", {}, HTTPStatus.PRECONDITION_REQUIRED),
+        ("post", "/api/v1/chapters/1/archive", None, HTTPStatus.PRECONDITION_REQUIRED),
     ],
 )
-def test_chapter_stub_routes_exist_and_return_not_implemented(
+def test_chapter_routes_exist_and_exercise_live_http_contract(
     monkeypatch: pytest.MonkeyPatch,
     method: str,
     path: str,
     json_body: dict | None,
+    expected_status: HTTPStatus,
 ) -> None:
     app = _build_test_app(monkeypatch)
 
@@ -82,13 +70,7 @@ def test_chapter_stub_routes_exist_and_return_not_implemented(
         kwargs = {"json": json_body} if json_body is not None else {}
         response = getattr(client, method)(path, **kwargs)
 
-    assert response.status_code == HTTPStatus.NOT_IMPLEMENTED
-
-
-def test_chapters_router_is_importable_from_endpoints_module() -> None:
-    router = _load_chapters_router()
-
-    assert router is not None
+    assert response.status_code == expected_status
 
 
 def test_chapters_router_exposes_expected_route_paths(monkeypatch: pytest.MonkeyPatch) -> None:
