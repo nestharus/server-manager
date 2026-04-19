@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -19,8 +20,19 @@ from app.services.mutations import mutate_entity
 
 
 TEST_AGGREGATE_TYPE = "test_aggregate"
-TEST_AGGREGATE_ID = 101
+TEST_AGGREGATE_ID = "test_aggregate:101"
 TEST_PROJECTION_TABLE = "test_mutation_projection"
+
+
+def _make_request(*, expected_version: int) -> MutationRequest:
+    return MutationRequest(
+        expected_version=expected_version,
+        actor_kind="user",
+        actor_id="u1",
+        reason_text=None,
+        request_surface="service:test",
+        correlation_id=uuid4(),
+    )
 
 
 def _normalize_json(value: Any) -> Any:
@@ -36,7 +48,7 @@ def _reset_activity_state(database_url: str) -> None:
         conn.execute("DELETE FROM activity_actions")
 
 
-def _seed_head(database_url: str, *, aggregate_id: int, version: int) -> None:
+def _seed_head(database_url: str, *, aggregate_id: str, version: int) -> None:
     with psycopg.connect(database_url, autocommit=True) as conn:
         conn.execute(
             """
@@ -70,7 +82,7 @@ def _fetch_state_changes(database_url: str) -> list[dict[str, Any]]:
         ).fetchall()
 
 
-def _fetch_head(database_url: str, *, aggregate_id: int) -> dict[str, Any]:
+def _fetch_head(database_url: str, *, aggregate_id: str) -> dict[str, Any]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         row = conn.execute(
             """
@@ -109,7 +121,7 @@ def prepared_mutation_db(migrated_postgres_db: str) -> str:
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {TEST_PROJECTION_TABLE} (
-                aggregate_id BIGINT PRIMARY KEY,
+                aggregate_id TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )
             """
@@ -125,20 +137,36 @@ def prepared_mutation_db(migrated_postgres_db: str) -> str:
 
 
 def test_mutation_request_validation() -> None:
-    request = MutationRequest(expected_version=0, actor_kind="user", actor_id="u1")
+    request = _make_request(expected_version=0)
 
     assert request.expected_version == 0
     assert request.actor_kind == "user"
     assert request.actor_id == "u1"
+    assert request.request_surface == "service:test"
 
     with pytest.raises(ValidationError):
-        MutationRequest(expected_version=-1, actor_kind="user", actor_id="u1")
+        MutationRequest(
+            expected_version=-1,
+            actor_kind="user",
+            actor_id="u1",
+            request_surface="service:test",
+        )
 
     with pytest.raises(ValidationError):
-        MutationRequest(expected_version=0, actor_kind="", actor_id="u1")
+        MutationRequest(
+            expected_version=0,
+            actor_kind="",
+            actor_id="u1",
+            request_surface="service:test",
+        )
 
     with pytest.raises(ValidationError):
-        MutationRequest(expected_version=0, actor_kind="user", actor_id="")
+        MutationRequest(
+            expected_version=0,
+            actor_kind="user",
+            actor_id="",
+            request_surface="service:test",
+        )
 
 
 def test_mutation_result_etag_format() -> None:
@@ -210,7 +238,7 @@ def test_mutate_entity_accepted_path(
         db=mutation_runtime_db,
         aggregate_type=TEST_AGGREGATE_TYPE,
         aggregate_id=TEST_AGGREGATE_ID,
-        request=MutationRequest(expected_version=0, actor_kind="user", actor_id="u1"),
+        request=_make_request(expected_version=0),
         action_type="test.accept",
         action_payload={"safe": 1, "secret": "x"},
         payload_allowlist={"safe"},
@@ -254,7 +282,7 @@ def test_mutate_entity_stale_version_raises_412_and_audits_rejected(
         db=mutation_runtime_db,
         aggregate_type=TEST_AGGREGATE_TYPE,
         aggregate_id=TEST_AGGREGATE_ID,
-        request=MutationRequest(expected_version=0, actor_kind="user", actor_id="u1"),
+        request=_make_request(expected_version=0),
         action_type="test.accept",
         action_payload={"safe": 1},
         payload_allowlist={"safe"},
@@ -268,7 +296,7 @@ def test_mutate_entity_stale_version_raises_412_and_audits_rejected(
             db=mutation_runtime_db,
             aggregate_type=TEST_AGGREGATE_TYPE,
             aggregate_id=TEST_AGGREGATE_ID,
-            request=MutationRequest(expected_version=0, actor_kind="user", actor_id="u1"),
+            request=_make_request(expected_version=0),
             action_type="test.accept",
             action_payload={"safe": 2},
             payload_allowlist={"safe"},
@@ -310,7 +338,7 @@ def test_mutate_entity_rollback_on_projection_exception(
             db=mutation_runtime_db,
             aggregate_type=TEST_AGGREGATE_TYPE,
             aggregate_id=TEST_AGGREGATE_ID,
-            request=MutationRequest(expected_version=0, actor_kind="user", actor_id="u1"),
+            request=_make_request(expected_version=0),
             action_type="test.accept",
             action_payload={"safe": 1},
             payload_allowlist={"safe"},
@@ -351,7 +379,7 @@ def test_mutate_entity_payload_redaction(
         db=mutation_runtime_db,
         aggregate_type=TEST_AGGREGATE_TYPE,
         aggregate_id=TEST_AGGREGATE_ID,
-        request=MutationRequest(expected_version=0, actor_kind="user", actor_id="u1"),
+        request=_make_request(expected_version=0),
         action_type="test.redact",
         action_payload={"safe": 1, "secret": "x"},
         payload_allowlist={"safe"},
@@ -362,7 +390,7 @@ def test_mutate_entity_payload_redaction(
         db=mutation_runtime_db,
         aggregate_type=TEST_AGGREGATE_TYPE,
         aggregate_id=TEST_AGGREGATE_ID,
-        request=MutationRequest(expected_version=1, actor_kind="user", actor_id="u1"),
+        request=_make_request(expected_version=1),
         action_type="test.redact",
         action_payload={"safe": 1, "secret": "x"},
         payload_allowlist=None,

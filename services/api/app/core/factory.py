@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.v1.router import router as v1_router
+from app.core.context import CorrelationMiddleware
 from app.core.settings import Settings
 from app.repositories.activity import InMemoryActionStore, InMemoryStateChangeStore
 from app.repositories.chapters import ChapterRepository, InMemoryChapterRepository
@@ -58,6 +59,7 @@ def create_app(
         debug=resolved_settings.debug,
         lifespan=lifespan,
     )
+    app.add_middleware(CorrelationMiddleware)
     app.state.settings = resolved_settings
     app.state.db = resolved_db
     app.state.activity_action_store = resolved_action_store

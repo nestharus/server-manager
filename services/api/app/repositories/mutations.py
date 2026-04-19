@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from psycopg import Connection
 from psycopg.types.json import Jsonb
@@ -10,7 +11,7 @@ from psycopg.types.json import Jsonb
 @dataclass(slots=True)
 class AggregateHeadRow:
     aggregate_type: str
-    aggregate_id: int
+    aggregate_id: str
     current_seq: int
     latest_change_id: int | None
 
@@ -19,7 +20,7 @@ def get_head_for_update(
     connection: Connection[Any],
     *,
     aggregate_type: str,
-    aggregate_id: int,
+    aggregate_id: str,
 ) -> AggregateHeadRow | None:
     row = connection.execute(
         """
@@ -36,7 +37,7 @@ def get_head_for_update(
 
     return AggregateHeadRow(
         aggregate_type=str(row[0]),
-        aggregate_id=int(row[1]),
+        aggregate_id=str(row[1]),
         current_seq=int(row[2]),
         latest_change_id=None if row[3] is None else int(row[3]),
     )
@@ -47,9 +48,13 @@ def insert_action(
     *,
     action_type: str,
     aggregate_type: str,
-    aggregate_id: int,
+    aggregate_id: str,
     actor_kind: str,
     actor_id: str,
+    correlation_id: UUID,
+    causation_id: UUID | None,
+    scope_kind: str | None,
+    scope_id: str | None,
     request_surface: str,
     request_json: dict[str, object],
     status: str,
@@ -64,13 +69,17 @@ def insert_action(
             aggregate_id,
             actor_kind,
             actor_id,
+            correlation_id,
+            causation_id,
+            scope_kind,
+            scope_id,
             request_surface,
             request_json,
             status,
             reason_text,
             error_metadata
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -79,6 +88,10 @@ def insert_action(
             aggregate_id,
             actor_kind,
             actor_id,
+            correlation_id,
+            causation_id,
+            scope_kind,
+            scope_id,
             request_surface,
             Jsonb(request_json),
             status,
@@ -98,7 +111,7 @@ def insert_state_change(
     *,
     action_id: int,
     aggregate_type: str,
-    aggregate_id: int,
+    aggregate_id: str,
     aggregate_seq: int,
     change_type: str,
     payload_json: dict[str, Any],
@@ -139,7 +152,7 @@ def advance_head(
     connection: Connection[Any],
     *,
     aggregate_type: str,
-    aggregate_id: int,
+    aggregate_id: str,
     new_version: int,
     latest_change_id: int,
 ) -> None:

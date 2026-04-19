@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 
 import httpx
+import psycopg
 import pytest
 import pytest_asyncio
 from _pytest.monkeypatch import MonkeyPatch
@@ -15,6 +16,42 @@ from testcontainers.postgres import PostgresContainer
 from app.api.v1.router import router as v1_router
 from app.core.factory import create_app
 from app.core.settings import Settings
+
+
+GOVERNANCE_TABLES = (
+    "notification_events",
+    "activity_state_changes",
+    "activity_actions",
+    "aggregate_heads",
+    "authority_grants",
+    "policy_versions",
+)
+
+
+def reset_governance_state(database_url: str) -> None:
+    """Truncate every governance-adjacent table that exists for per-test isolation.
+
+    Only truncates tables present in the database schema, so the fixture is
+    safe across branches that have different subsets of the governance
+    migrations applied.
+    """
+
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        existing = [
+            row[0]
+            for row in conn.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name = ANY(%s)",
+                (list(GOVERNANCE_TABLES),),
+            ).fetchall()
+        ]
+        if not existing:
+            return
+        conn.execute(
+            "TRUNCATE TABLE "
+            + ", ".join(existing)
+            + " RESTART IDENTITY CASCADE"
+        )
 
 
 @pytest.fixture(scope="session")
@@ -150,3 +187,18 @@ async def migrated_async_client(
     async_client: httpx.AsyncClient,
 ) -> AsyncIterator[httpx.AsyncClient]:
     yield async_client
+
+
+@pytest.fixture()
+def governance_dsn(migrated_postgres_db: str) -> Iterator[str]:
+    """DSN fixture for governance-foundation tests.
+
+    Truncates every governance-related table before each test so no state
+    leaks across cases. SLICE-002 tests reuse the session-scoped migrated
+    Postgres because migrations are expensive; per-test isolation is done
+    through truncation.
+    """
+
+    reset_governance_state(migrated_postgres_db)
+    yield migrated_postgres_db
+    reset_governance_state(migrated_postgres_db)
