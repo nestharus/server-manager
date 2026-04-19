@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import hashlib
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from psycopg import Connection
+
+from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
+from app.contracts.policies import (
+    POLICY_AGGREGATE_SCOPE_MISSING,
+    PolicyConfirmRequest,
+    PolicyPreviewRead,
+    PolicyPreviewRequest,
+    PolicyPreviewTokenMismatchError,
+    _canonicalize_content,
+)
+from app.repositories.db import PostgresDatabase
+from app.repositories.policies import fetch_latest_version, insert_policy_version
+from app.services.mutations import mutate_entity
+
+
+def _policy_aggregate_id(
+    policy_type: str,
+    scope_kind: str,
+    scope_id: str | None,
+) -> str:
+    return f"{policy_type}|{scope_kind}|{scope_id if scope_id is not None else POLICY_AGGREGATE_SCOPE_MISSING}"
+
+
+def _policy_preview_digest(
+    policy_type: str,
+    scope_kind: str,
+    scope_id: str | None,
+    expected_current_version: int,
+    content: dict[str, Any],
+) -> str:
+    digest_input = "|".join(
+        [
+            policy_type,
+            scope_kind,
+            scope_id if scope_id is not None else POLICY_AGGREGATE_SCOPE_MISSING,
+            str(expected_current_version),
+            _canonicalize_content(content),
+        ]
+    )
+    return hashlib.blake2b(
+        digest_input.encode("ascii"),
+        digest_size=16,
+    ).hexdigest()
+
+
+def _diff_top_level(
+    current_content: dict[str, Any],
+    next_content: dict[str, Any],
+) -> list[dict[str, Any]]:
+    diffs: list[dict[str, Any]] = []
+    for key in sorted(set(current_content) | set(next_content)):
+        if current_content.get(key) != next_content.get(key):
+            diffs.append({"key": key})
+    return diffs
+
+
+def preview(db: PostgresDatabase, request: PolicyPreviewRequest) -> PolicyPreviewRead:
+    with db.connection() as connection:
+        latest = fetch_latest_version(
+            connection,
+            request.policy_type,
+            request.scope_kind,
+            request.scope_id,
+        )
+
+    current_version = 0 if latest is None else int(latest["version_number"])
+    current_content = {} if latest is None else dict(latest["content"])
+    return PolicyPreviewRead(
+        preview_token=_policy_preview_digest(
+            request.policy_type,
+            request.scope_kind,
+            request.scope_id,
+            request.expected_current_version,
+            request.content,
+        ),
+        current_version=current_version,
+        affected_objects=_diff_top_level(current_content, request.content),
+        rollback_summary=current_content,
+    )
+
+
+def confirm(db: PostgresDatabase, request: PolicyConfirmRequest) -> MutationResult:
+    expected_token = _policy_preview_digest(
+        request.policy_type,
+        request.scope_kind,
+        request.scope_id,
+        request.expected_current_version,
+        request.content,
+    )
+    if expected_token != request.preview_token:
+        raise PolicyPreviewTokenMismatchError()
+
+    aggregate_id = _policy_aggregate_id(
+        request.policy_type,
+        request.scope_kind,
+        request.scope_id,
+    )
+
+    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+        version_number = request.expected_current_version + 1
+        insert_policy_version(
+            connection,
+            row={
+                "id": uuid4(),
+                "policy_type": request.policy_type,
+                "scope_kind": request.scope_kind,
+                "scope_id": request.scope_id,
+                "version_number": version_number,
+                "content": request.content,
+                "effective_at": datetime.now(UTC),
+            },
+        )
+        return StateChangeDraft(
+            change_type="policy_version.confirmed",
+            payload_json={
+                "policy_type": request.policy_type,
+                "scope_kind": request.scope_kind,
+                "scope_id": request.scope_id,
+                "version_number": version_number,
+            },
+        )
+
+    return mutate_entity(
+        db=db,
+        aggregate_type="policy_version",
+        aggregate_id=aggregate_id,
+        request=MutationRequest(
+            expected_version=request.expected_current_version,
+            actor_kind="system",
+            actor_id="policy-service",
+            reason_text=None,
+            request_surface="service:policies.confirm",
+        ),
+        action_type="policy.confirm",
+        action_payload={},
+        payload_allowlist=None,
+        mutate_projection=mutate_projection,
+        scope_kind=request.scope_kind,
+        scope_id=request.scope_id,
+    )
