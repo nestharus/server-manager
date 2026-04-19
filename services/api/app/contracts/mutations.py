@@ -18,8 +18,11 @@ accepted fact.
 """
 
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from app.core.context import MissingCorrelationContextError
 
 
 class MutationRequest(BaseModel):
@@ -33,6 +36,9 @@ class MutationRequest(BaseModel):
     actor_kind: str = Field(min_length=1)
     actor_id: str = Field(min_length=1)
     reason_text: str | None = None
+    request_surface: str = Field(min_length=1)
+    correlation_id: UUID | None = None
+    causation_id: UUID | None = None
 
 
 class MutationResult(BaseModel):
@@ -72,7 +78,7 @@ class StaleMutationError(Exception):
         self,
         *,
         aggregate_type: str,
-        aggregate_id: int,
+        aggregate_id: str,
         expected_version: int,
         current_version: int,
     ) -> None:
@@ -86,7 +92,18 @@ class StaleMutationError(Exception):
         )
 
 
+class MissingAggregateError(Exception):
+    """Raised when a versioned mutation targets no existing aggregate."""
+
+    def __init__(self, *, aggregate_type: str, aggregate_id: str) -> None:
+        self.aggregate_type = aggregate_type
+        self.aggregate_id = aggregate_id
+        super().__init__(f"missing aggregate {aggregate_type}#{aggregate_id}")
+
+
 __all__ = [
+    "MissingAggregateError",
+    "MissingCorrelationContextError",
     "MutationRequest",
     "MutationResult",
     "StaleMutationError",
