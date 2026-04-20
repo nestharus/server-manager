@@ -30,6 +30,8 @@ GOVERNANCE_TABLES = (
     "chapter_templates",
     "permission_drift",
     "permission_intents",
+    "scheduled_jobs",
+    "deferred_effects",
 )
 
 
