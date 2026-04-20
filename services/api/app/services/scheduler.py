@@ -139,6 +139,11 @@ class SchedulerLoop:
         self._poll_interval_seconds = poll_interval_seconds
         self._claim_batch_size = claim_batch_size
         self._stop_event = asyncio.Event()
+        self._is_running = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._is_running and not self._stop_event.is_set()
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -147,18 +152,24 @@ class SchedulerLoop:
         extend_lease(self._db, job_key, extra_seconds=extra_seconds)
 
     async def run(self) -> None:
-        while not self._stop_event.is_set():
-            try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(),
-                    timeout=self._poll_interval_seconds,
-                )
-                break
-            except TimeoutError:
+        self._is_running = True
+        try:
+            while not self._stop_event.is_set():
                 try:
-                    await self._tick()
-                except Exception:
-                    logger.exception("scheduler tick failed for worker %s", self._worker_id)
+                    await asyncio.wait_for(
+                        self._stop_event.wait(),
+                        timeout=self._poll_interval_seconds,
+                    )
+                    break
+                except TimeoutError:
+                    try:
+                        await self._tick()
+                    except Exception:
+                        logger.exception(
+                            "scheduler tick failed for worker %s", self._worker_id
+                        )
+        finally:
+            self._is_running = False
 
     async def _tick(self) -> None:
         now = datetime.now(tz=UTC)

@@ -48,8 +48,7 @@ async def test_client_fixture_reaches_health_endpoint(
 
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {
-        "status": "ok",
-        "service": test_settings.app_name,
+        "status": "alive",
         "version": test_settings.app_version,
     }
 

@@ -13,9 +13,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from testcontainers.postgres import PostgresContainer
 
-from app.api.v1.router import router as v1_router
 from app.contracts.testing import API_TEST_HARNESS, ApiTestHarnessRead
-from app.core.factory import create_app
+from app.core.factory import create_api_app
 from app.core.settings import Settings
 
 
@@ -176,9 +175,7 @@ def fresh_migrated_postgres_db(
 
 @pytest.fixture()
 def app(test_settings: Settings) -> FastAPI:
-    application = create_app(settings=test_settings)
-    application.include_router(v1_router)
-    return application
+    return create_api_app(settings=test_settings)
 
 
 @pytest.fixture()

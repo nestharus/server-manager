@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.factory import create_app
+from app.core.factory import create_api_app
 from app.core.settings import Settings
 
 
@@ -44,7 +44,7 @@ def _load_chapters_router() -> APIRouter:
 def _build_test_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     _set_required_env(monkeypatch)
     settings = Settings()
-    return create_app(settings=settings)
+    return create_api_app(settings=settings)
 
 
 @pytest.mark.parametrize(
