@@ -15,7 +15,7 @@ from fastapi import FastAPI
 
 from app.api.v1.router import router as v1_router
 from app.core.context import CorrelationMiddleware
-from app.core.settings import Settings
+from app.core.settings import Settings, load_settings
 from app.repositories.activity import InMemoryActionStore, InMemoryStateChangeStore
 from app.repositories.chapters import ChapterRepository, InMemoryChapterRepository
 from app.repositories.db import PostgresDatabase
@@ -31,7 +31,7 @@ def create_app(
     state_change_store: InMemoryStateChangeStore | None = None,
     db: PostgresDatabase | None = None,
 ) -> FastAPI:
-    resolved_settings = settings if settings is not None else Settings()
+    resolved_settings = settings if settings is not None else load_settings()
     resolved_chapter_repository = (
         chapter_repository
         if chapter_repository is not None
