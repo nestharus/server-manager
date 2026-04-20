@@ -9,6 +9,9 @@ from pydantic import BaseModel
 from app.contracts.scope import ScopeKind
 
 
+AUDIT_CHAIN_MAX_ROWS = 1000
+
+
 class CorrelationHeadersRead(BaseModel):
     x_correlation_id: UUID
     x_causation_id: UUID | None = None
@@ -36,8 +39,15 @@ class AuditEntryRead(BaseModel):
     reason_text: str | None = None
 
 
+class AuditEntryListRead(BaseModel):
+    items: list[AuditEntryRead]
+    total: int
+
+
 __all__ = [
+    "AUDIT_CHAIN_MAX_ROWS",
     "AuditContextRead",
     "AuditEntryRead",
+    "AuditEntryListRead",
     "CorrelationHeadersRead",
 ]
