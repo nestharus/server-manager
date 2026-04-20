@@ -10,6 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.contracts.actor import ActorIdentity, ActorIdentityMissingError
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 
 
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 CURRENT_AUDIT_CONTEXT: ContextVar[AuditContextRead | None] = ContextVar(
     "CURRENT_AUDIT_CONTEXT",
+    default=None,
+)
+CURRENT_ACTOR: ContextVar[ActorIdentity | None] = ContextVar(
+    "CURRENT_ACTOR",
     default=None,
 )
 
@@ -28,6 +33,13 @@ class MissingCorrelationContextError(Exception):
 
 def get_current_audit_context() -> AuditContextRead | None:
     return CURRENT_AUDIT_CONTEXT.get()
+
+
+def get_current_actor() -> ActorIdentity:
+    actor = CURRENT_ACTOR.get()
+    if actor is None:
+        raise ActorIdentityMissingError("actor identity missing from request context")
+    return actor
 
 
 def resolve_register_correlation(
@@ -76,6 +88,15 @@ def use_audit_context(ctx: AuditContextRead) -> Iterator[None]:
         CURRENT_AUDIT_CONTEXT.reset(token)
 
 
+@contextmanager
+def use_actor(actor: ActorIdentity) -> Iterator[None]:
+    token = CURRENT_ACTOR.set(actor)
+    try:
+        yield
+    finally:
+        CURRENT_ACTOR.reset(token)
+
+
 def _parse_header_uuid(value: str | None) -> UUID | None:
     if value is None:
         return None
@@ -116,10 +137,13 @@ class CorrelationMiddleware(BaseHTTPMiddleware):
 
 
 __all__ = [
+    "CURRENT_ACTOR",
     "CURRENT_AUDIT_CONTEXT",
     "CorrelationMiddleware",
     "MissingCorrelationContextError",
+    "get_current_actor",
     "get_current_audit_context",
     "resolve_register_correlation",
+    "use_actor",
     "use_audit_context",
 ]
