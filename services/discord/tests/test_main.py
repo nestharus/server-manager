@@ -68,11 +68,13 @@ async def test_main_closes_bot_in_finally_when_start_raises_gateway_not_found() 
     settings = _make_settings()
     bot = _make_bot(start_side_effect=discord.GatewayNotFound())
 
-    with patch.object(module, "Settings", return_value=settings, create=True), patch.object(
-        module,
-        "HumilityBot",
-        return_value=bot,
-        create=True,
+    async def _noop_reachability(*, base_url: str, client) -> None:
+        return None
+
+    with (
+        patch.object(module, "Settings", return_value=settings, create=True),
+        patch.object(module, "HumilityBot", return_value=bot, create=True),
+        patch.object(module, "check_api_reachability", side_effect=_noop_reachability),
     ):
         assert await module.main() == 1
 
@@ -85,11 +87,13 @@ async def test_main_starts_bot_with_token_from_settings() -> None:
     settings = _make_settings(token="discord-token-from-settings")
     bot = _make_bot()
 
-    with patch.object(module, "Settings", return_value=settings, create=True), patch.object(
-        module,
-        "HumilityBot",
-        return_value=bot,
-        create=True,
+    async def _noop_reachability(*, base_url: str, client) -> None:
+        return None
+
+    with (
+        patch.object(module, "Settings", return_value=settings, create=True),
+        patch.object(module, "HumilityBot", return_value=bot, create=True),
+        patch.object(module, "check_api_reachability", side_effect=_noop_reachability),
     ):
         assert await module.main() == 0
 
@@ -103,11 +107,13 @@ async def test_main_returns_zero_on_keyboard_interrupt_during_start() -> None:
     settings = _make_settings()
     bot = _make_bot(start_side_effect=KeyboardInterrupt())
 
-    with patch.object(module, "Settings", return_value=settings, create=True), patch.object(
-        module,
-        "HumilityBot",
-        return_value=bot,
-        create=True,
+    async def _noop_reachability(*, base_url: str, client) -> None:
+        return None
+
+    with (
+        patch.object(module, "Settings", return_value=settings, create=True),
+        patch.object(module, "HumilityBot", return_value=bot, create=True),
+        patch.object(module, "check_api_reachability", side_effect=_noop_reachability),
     ):
         assert await module.main() == 0
 
@@ -120,11 +126,13 @@ async def test_main_returns_one_on_login_failure() -> None:
     settings = _make_settings()
     bot = _make_bot(start_side_effect=discord.LoginFailure("invalid token"))
 
-    with patch.object(module, "Settings", return_value=settings, create=True), patch.object(
-        module,
-        "HumilityBot",
-        return_value=bot,
-        create=True,
+    async def _noop_reachability(*, base_url: str, client) -> None:
+        return None
+
+    with (
+        patch.object(module, "Settings", return_value=settings, create=True),
+        patch.object(module, "HumilityBot", return_value=bot, create=True),
+        patch.object(module, "check_api_reachability", side_effect=_noop_reachability),
     ):
         assert await module.main() == 1
 
