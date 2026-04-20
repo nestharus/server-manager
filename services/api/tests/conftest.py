@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from testcontainers.postgres import PostgresContainer
 
 from app.api.v1.router import router as v1_router
+from app.contracts.testing import API_TEST_HARNESS, ApiTestHarnessRead
 from app.core.factory import create_app
 from app.core.settings import Settings
 
@@ -111,6 +112,11 @@ def required_env(monkeypatch_session: MonkeyPatch, postgres_dsn: str) -> None:
 @pytest.fixture(scope="session")
 def test_settings(required_env: None) -> Settings:
     return Settings()
+
+
+@pytest.fixture()
+def test_harness() -> ApiTestHarnessRead:
+    return API_TEST_HARNESS
 
 
 @pytest.fixture(scope="session")
