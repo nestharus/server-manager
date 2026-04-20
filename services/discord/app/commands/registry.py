@@ -7,7 +7,8 @@ from app.contracts.interactions import (
     InteractionHandler,
     InteractionResult,
 )
-from app.core.context import build_audit_context, use_audit_context
+from app.core.context import use_audit_context
+from app.core.request_context import build_request_context_from_envelope
 
 
 class InteractionRegistry:
@@ -28,12 +29,7 @@ class InteractionRegistry:
         handler = self._handlers.get(envelope.command_name)
         if handler is None:
             raise HandlerNotFoundError(envelope.command_name)
-        with use_audit_context(
-            build_audit_context(
-                correlation_id=envelope.correlation_id,
-                causation_id=envelope.causation_id,
-            )
-        ):
+        with use_audit_context(build_request_context_from_envelope(envelope)):
             return await handler(envelope)
 
     def has_handlers(self) -> bool:
