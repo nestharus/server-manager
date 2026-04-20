@@ -1,16 +1,13 @@
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from app.contracts.audit import AuditContextRead, AuditEntryRead, CorrelationHeadersRead
 from app.repositories.audit import fetch_audit_entry
 from app.repositories.db import PostgresDatabase
 
 
-def get_audit_entry(db: PostgresDatabase, id: int) -> AuditEntryRead:
-    with db.connection() as connection:
-        row = fetch_audit_entry(connection, id)
-    if row is None:
-        raise LookupError(f"audit entry {id} was not found")
-
+def _build_audit_entry_read(row: Mapping[str, Any]) -> AuditEntryRead:
     return AuditEntryRead(
         id=int(row["id"]),
         recorded_at=row["recorded_at"],
@@ -33,3 +30,12 @@ def get_audit_entry(db: PostgresDatabase, id: int) -> AuditEntryRead:
         request_surface=str(row["request_surface"]),
         reason_text=row["reason_text"],
     )
+
+
+def get_audit_entry(db: PostgresDatabase, id: int) -> AuditEntryRead:
+    with db.connection() as connection:
+        row = fetch_audit_entry(connection, id)
+    if row is None:
+        raise LookupError(f"audit entry {id} was not found")
+
+    return _build_audit_entry_read(row)
