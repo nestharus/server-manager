@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from app.contracts.scope import ScopeKind
+
+
+DenialReason = Literal[
+    "no_matching_grant",
+    "scope_mismatch",
+    "permission_missing",
+    "grant_expired",
+    "grant_revoked",
+]
 
 
 class AuthorityGrantRead(BaseModel):
@@ -25,8 +35,20 @@ class AuthorityRequirement(BaseModel):
     permission: str = Field(min_length=1)
 
 
-class AuthorityDecision(BaseModel):
+class AuthorityDecisionRead(BaseModel):
     allowed: bool
+    grant_id: UUID | None = None
+    denial_reason: DenialReason | None = None
+    override_used: bool = False
+
+
+class AuthorityErrorBody(BaseModel):
+    code: Literal[
+        "authority_decision_denied",
+        "actor_identity_missing",
+    ]
+    message: str
+    decision: AuthorityDecisionRead | None = None
 
 
 class GrantAlreadyRevokedError(Exception):
@@ -36,8 +58,10 @@ class GrantAlreadyRevokedError(Exception):
 
 
 __all__ = [
-    "AuthorityDecision",
+    "AuthorityDecisionRead",
+    "AuthorityErrorBody",
     "AuthorityGrantRead",
     "AuthorityRequirement",
+    "DenialReason",
     "GrantAlreadyRevokedError",
 ]

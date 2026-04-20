@@ -12,8 +12,11 @@ from contextlib import asynccontextmanager
 from contextlib import suppress
 
 from fastapi import FastAPI
+from fastapi.exceptions import HTTPException
+from fastapi.responses import JSONResponse
 
 from app.api.v1.router import router as v1_router
+from app.core.actor import ActorMiddleware
 from app.core.context import CorrelationMiddleware
 from app.core.settings import Settings, load_settings
 from app.repositories.activity import InMemoryActionStore, InMemoryStateChangeStore
@@ -71,7 +74,19 @@ def create_api_app(
         debug=resolved_settings.debug,
         lifespan=lifespan,
     )
+    app.add_middleware(ActorMiddleware)
     app.add_middleware(CorrelationMiddleware)
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(_request, exc: HTTPException) -> JSONResponse:
+        detail = exc.detail
+        content = detail if isinstance(detail, dict) else {"detail": detail}
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=content,
+            headers=exc.headers,
+        )
+
     app.state.settings = resolved_settings
     app.state.db = resolved_db
     app.state.scheduler_loop = scheduler_loop

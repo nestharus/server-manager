@@ -23,7 +23,7 @@ from psycopg.rows import dict_row
 
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.authority import (
-    AuthorityDecision,
+    AuthorityDecisionRead,
     AuthorityGrantRead,
     AuthorityRequirement,
     GrantAlreadyRevokedError,
@@ -135,7 +135,7 @@ def test_grant_authority_creates_persisted_row_with_scope_and_permissions(
 
 def test_evaluate_allows_matching_scope_and_permission() -> None:
     """One active grant whose scope_kind, scope_id, and permission all match
-    the requirement must produce ``AuthorityDecision(allowed=True)``."""
+    the requirement must produce ``AuthorityDecisionRead(allowed=True)``."""
 
     grant = _make_grant(
         scope_kind="chapter",
@@ -150,7 +150,7 @@ def test_evaluate_allows_matching_scope_and_permission() -> None:
 
     decision = evaluate(requirement=requirement, grants=[grant], at=current_time())
 
-    assert isinstance(decision, AuthorityDecision)
+    assert isinstance(decision, AuthorityDecisionRead)
     assert decision.allowed is True
 
 

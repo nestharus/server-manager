@@ -8,7 +8,7 @@ from psycopg import Connection
 from psycopg.rows import dict_row
 
 from app.contracts.authority import (
-    AuthorityDecision,
+    AuthorityDecisionRead,
     AuthorityGrantRead,
     AuthorityRequirement,
     GrantAlreadyRevokedError,
@@ -160,20 +160,54 @@ def evaluate(
     grants: list[AuthorityGrantRead],
     *,
     at: datetime,
-) -> AuthorityDecision:
+) -> AuthorityDecisionRead:
+    """Evaluate an authority requirement against a set of grants.
+
+    Returns AuthorityDecisionRead with grant_id populated on allow and
+    denial_reason populated on deny. Denial-reason priority order:
+      1. no_matching_grant — no grants for this grantee at all
+      2. scope_mismatch    — grants exist but no scope match
+      3. permission_missing — scope-matching grant lacks permission
+      4. grant_expired     — would match but expires_at <= at
+      5. grant_revoked     — would match but revoked_at is not null
+    """
+    if not grants:
+        return AuthorityDecisionRead(
+            allowed=False, denial_reason="no_matching_grant"
+        )
+
+    saw_scope_match = False
+    saw_permission_match_but_expired = False
+    saw_permission_match_but_revoked = False
+
     for grant in grants:
+        scope_matches = grant.scope_kind == requirement.scope_kind and (
+            grant.scope_id is None or grant.scope_id == requirement.scope_id
+        )
+        if not scope_matches:
+            continue
+        saw_scope_match = True
+
+        permission_matches = requirement.permission in grant.permissions
+        if not permission_matches:
+            continue
+
         if grant.revoked_at is not None and grant.revoked_at <= at:
+            saw_permission_match_but_revoked = True
             continue
         if grant.expires_at is not None and grant.expires_at <= at:
+            saw_permission_match_but_expired = True
             continue
-        if grant.scope_kind != requirement.scope_kind:
-            continue
-        if grant.scope_id is not None and grant.scope_id != requirement.scope_id:
-            continue
-        if requirement.permission not in grant.permissions:
-            continue
-        return AuthorityDecision(allowed=True)
-    return AuthorityDecision(allowed=False)
+
+        return AuthorityDecisionRead(allowed=True, grant_id=grant.id)
+
+    if saw_permission_match_but_expired:
+        return AuthorityDecisionRead(allowed=False, denial_reason="grant_expired")
+    if saw_permission_match_but_revoked:
+        return AuthorityDecisionRead(allowed=False, denial_reason="grant_revoked")
+    if saw_scope_match:
+        return AuthorityDecisionRead(allowed=False, denial_reason="permission_missing")
+    return AuthorityDecisionRead(allowed=False, denial_reason="scope_mismatch")
 
 
 def list_active_grants(
