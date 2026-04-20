@@ -30,6 +30,43 @@ def get_current_audit_context() -> AuditContextRead | None:
     return CURRENT_AUDIT_CONTEXT.get()
 
 
+def resolve_register_correlation(
+    explicit: UUID | None,
+    *,
+    allow_new_root: bool,
+) -> AuditContextRead:
+    if explicit is not None:
+        return AuditContextRead(
+            correlation_id=explicit,
+            causation_id=None,
+            headers=CorrelationHeadersRead(
+                x_correlation_id=explicit,
+                x_causation_id=None,
+            ),
+        )
+
+    current = get_current_audit_context()
+    if current is not None:
+        return current
+
+    if not allow_new_root:
+        raise MissingCorrelationContextError()
+
+    correlation_id = uuid4()
+    logger.warning(
+        "missing registration correlation context; generated root correlation %s",
+        correlation_id,
+    )
+    return AuditContextRead(
+        correlation_id=correlation_id,
+        causation_id=None,
+        headers=CorrelationHeadersRead(
+            x_correlation_id=correlation_id,
+            x_causation_id=None,
+        ),
+    )
+
+
 @contextmanager
 def use_audit_context(ctx: AuditContextRead) -> Iterator[None]:
     token = CURRENT_AUDIT_CONTEXT.set(ctx)
@@ -83,5 +120,6 @@ __all__ = [
     "CorrelationMiddleware",
     "MissingCorrelationContextError",
     "get_current_audit_context",
+    "resolve_register_correlation",
     "use_audit_context",
 ]
