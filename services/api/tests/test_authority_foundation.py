@@ -102,7 +102,7 @@ def test_grant_authority_creates_persisted_row_with_scope_and_permissions(
     and predecessor link match the call arguments exactly."""
 
     with use_audit_context(_make_audit_context()):
-        result = grant_authority(
+        grant = grant_authority(
             db=governance_db,
             grantee_id="u1",
             scope_kind="chapter",
@@ -113,12 +113,22 @@ def test_grant_authority_creates_persisted_row_with_scope_and_permissions(
             actor=ACTOR,
         )
 
-    assert result.version == 1
-    assert result.etag == '"1"'
+    # SLICE-008 D2: grant_authority() now returns AuthorityGrantRead. The
+    # version/ETag live on the HTTP response headers, not on the business
+    # return value.
+    assert isinstance(grant, AuthorityGrantRead)
+    assert grant.grantee_id == "u1"
+    assert grant.scope_kind == "chapter"
+    assert grant.scope_id == "ch-1"
+    assert grant.permissions == frozenset({"chapter.manage"})
+    assert grant.expires_at is None
+    assert grant.revoked_at is None
+    assert grant.predecessor_grant_id is None
 
     rows = _fetch_grants(governance_dsn)
     assert len(rows) == 1
     row = rows[0]
+    assert row["id"] == grant.id
     assert row["grantee_id"] == "u1"
     assert row["scope_kind"] == "chapter"
     assert row["scope_id"] == "ch-1"
@@ -135,7 +145,7 @@ def test_grant_authority_creates_persisted_row_with_scope_and_permissions(
 
 def test_evaluate_allows_matching_scope_and_permission() -> None:
     """One active grant whose scope_kind, scope_id, and permission all match
-    the requirement must produce ``AuthorityDecisionRead(allowed=True)``."""
+    the requirement must produce ``AuthorityDecision(allowed=True)``."""
 
     grant = _make_grant(
         scope_kind="chapter",
@@ -152,6 +162,9 @@ def test_evaluate_allows_matching_scope_and_permission() -> None:
 
     assert isinstance(decision, AuthorityDecisionRead)
     assert decision.allowed is True
+    assert decision.grant_id == grant.id
+    assert decision.denial_reason is None
+    assert decision.override_used is False
 
 
 def test_evaluate_denies_revoked_grants() -> None:
@@ -266,10 +279,22 @@ def test_revoke_authority_second_call_raises_grant_already_revoked_error(
     grant_id: UUID = rows[0]["id"]
 
     with use_audit_context(_make_audit_context()):
-        revoke_authority(db=governance_db, grant_id=grant_id, actor=ACTOR)
+        revoke_authority(
+            db=governance_db,
+            grant_id=grant_id,
+            actor=ACTOR,
+            revoked_by="admin",
+            reason="cleanup",
+        )
 
         with pytest.raises(GrantAlreadyRevokedError):
-            revoke_authority(db=governance_db, grant_id=grant_id, actor=ACTOR)
+            revoke_authority(
+                db=governance_db,
+                grant_id=grant_id,
+                actor=ACTOR,
+                revoked_by="admin",
+                reason="second attempt",
+            )
 
 
 # ---------------------------------------------------------------------------
