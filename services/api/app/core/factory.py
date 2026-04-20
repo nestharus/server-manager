@@ -6,8 +6,10 @@ startup. Follows the ai-workflow factory pattern.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextlib import suppress
 
 from fastapi import FastAPI
 
@@ -18,6 +20,7 @@ from app.repositories.activity import InMemoryActionStore, InMemoryStateChangeSt
 from app.repositories.chapters import ChapterRepository, InMemoryChapterRepository
 from app.repositories.db import PostgresDatabase
 from app.services.chapters import ChapterService
+from app.services.scheduler import build_scheduler_loop
 
 
 def create_app(
@@ -48,10 +51,18 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        scheduler_loop = build_scheduler_loop(resolved_db, worker_id="api:primary")
+        scheduler_task = asyncio.create_task(scheduler_loop.run())
         try:
             yield
         finally:
-            resolved_db.close()
+            try:
+                await scheduler_loop.stop()
+            finally:
+                scheduler_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await scheduler_task
+                resolved_db.close()
 
     app = FastAPI(
         title=resolved_settings.app_name,
