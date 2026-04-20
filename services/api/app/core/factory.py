@@ -23,7 +23,7 @@ from app.services.chapters import ChapterService
 from app.services.scheduler import build_scheduler_loop
 
 
-def create_app(
+def create_api_app(
     settings: Settings | None = None,
     *,
     chapter_repository: ChapterRepository | None = None,
@@ -48,11 +48,12 @@ def create_app(
     resolved_db = (
         db if db is not None else PostgresDatabase(resolved_settings.supabase_db_url)
     )
+    scheduler_loop = build_scheduler_loop(resolved_db, worker_id="api:primary")
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        scheduler_loop = build_scheduler_loop(resolved_db, worker_id="api:primary")
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler_task = asyncio.create_task(scheduler_loop.run())
+        app.state.scheduler_task = scheduler_task
         try:
             yield
         finally:
@@ -73,6 +74,7 @@ def create_app(
     app.add_middleware(CorrelationMiddleware)
     app.state.settings = resolved_settings
     app.state.db = resolved_db
+    app.state.scheduler_loop = scheduler_loop
     app.state.activity_action_store = resolved_action_store
     app.state.activity_state_change_store = resolved_state_change_store
     app.state.chapter_service = ChapterService(

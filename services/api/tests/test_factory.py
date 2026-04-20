@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.core.factory as factory_module
 from app.contracts.runtime_settings import SettingsConstructionError
-from app.core.factory import create_app
+from app.core.factory import create_api_app
 from app.core.settings import Settings
 
 
@@ -30,20 +30,22 @@ def _clear_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_create_app_is_importable_from_factory_module() -> None:
-    assert callable(create_app)
-    assert create_app.__module__ == "app.core.factory"
+def test_create_api_app_is_importable_from_factory_module() -> None:
+    assert callable(create_api_app)
+    assert create_api_app.__module__ == "app.core.factory"
 
 
-def test_create_app_without_args_returns_fastapi_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_api_app_without_args_returns_fastapi_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _set_required_env(monkeypatch)
 
-    app = create_app()
+    app = create_api_app()
 
     assert isinstance(app, FastAPI)
 
 
-def test_create_app_with_provided_settings_uses_same_object_and_skips_settings_init(
+def test_create_api_app_with_provided_settings_uses_same_object_and_skips_settings_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_env(monkeypatch)
@@ -54,51 +56,53 @@ def test_create_app_with_provided_settings_uses_same_object_and_skips_settings_i
 
     monkeypatch.setattr(factory_module, "Settings", fail_if_called)
 
-    app = create_app(settings=settings)
+    app = create_api_app(settings=settings)
 
     assert app.state.settings is settings
 
 
-def test_create_app_sets_title_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_api_app_sets_title_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
     settings = Settings()
 
-    app = create_app(settings=settings)
+    app = create_api_app(settings=settings)
 
     assert app.title == settings.app_name
 
 
-def test_create_app_sets_version_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_api_app_sets_version_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
     settings = Settings()
 
-    app = create_app(settings=settings)
+    app = create_api_app(settings=settings)
 
     assert app.version == settings.app_version
 
 
-def test_create_app_sets_debug_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_api_app_sets_debug_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
     settings = Settings()
 
-    app = create_app(settings=settings)
+    app = create_api_app(settings=settings)
 
     assert app.debug == settings.debug
 
 
-def test_create_app_stores_used_settings_on_app_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_api_app_stores_used_settings_on_app_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _set_required_env(monkeypatch)
     settings = Settings()
 
-    app = create_app(settings=settings)
+    app = create_api_app(settings=settings)
 
     assert app.state.settings is settings
 
 
-def test_create_app_without_env_vars_raises_settings_construction_error(
+def test_create_api_app_without_env_vars_raises_settings_construction_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_required_env(monkeypatch)
 
     with pytest.raises(SettingsConstructionError):
-        create_app()
+        create_api_app()
