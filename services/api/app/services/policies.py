@@ -7,18 +7,25 @@ from uuid import uuid4
 
 from psycopg import Connection
 
-from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
+from app.contracts.actor import ActorIdentity
+from app.contracts.mutations import MutationRequest, StateChangeDraft
 from app.contracts.policies import (
     POLICY_AGGREGATE_SCOPE_MISSING,
     PolicyConfirmRequest,
+    PolicyVersionNotFoundError,
     PolicyPreviewRead,
     PolicyPreviewRequest,
     PolicyPreviewTokenMismatchError,
+    PolicyVersionRead,
     _canonicalize_content,
 )
 from app.repositories.db import PostgresDatabase
-from app.repositories.policies import fetch_latest_version, insert_policy_version
-from app.services.mutations import mutate_entity
+from app.repositories.policies import (
+    fetch_current_policy_version,
+    fetch_latest_version,
+    insert_policy_version,
+)
+from app.services.mutations import _format_etag, mutate_entity
 
 
 def _policy_aggregate_id(
@@ -62,6 +69,17 @@ def _diff_top_level(
     return diffs
 
 
+def _row_to_policy_version_read(row: dict[str, Any]) -> PolicyVersionRead:
+    return PolicyVersionRead(
+        id=row["id"],
+        policy_type=row["policy_type"],
+        scope_kind=row["scope_kind"],
+        scope_id=row["scope_id"],
+        version_number=int(row["version_number"]),
+        effective_at=row["effective_at"],
+    )
+
+
 def preview(db: PostgresDatabase, request: PolicyPreviewRequest) -> PolicyPreviewRead:
     with db.connection() as connection:
         latest = fetch_latest_version(
@@ -87,7 +105,12 @@ def preview(db: PostgresDatabase, request: PolicyPreviewRequest) -> PolicyPrevie
     )
 
 
-def confirm(db: PostgresDatabase, request: PolicyConfirmRequest) -> MutationResult:
+def confirm(
+    db: PostgresDatabase,
+    request: PolicyConfirmRequest,
+    *,
+    actor: ActorIdentity,
+) -> tuple[PolicyVersionRead, str]:
     expected_token = _policy_preview_digest(
         request.policy_type,
         request.scope_kind,
@@ -103,19 +126,21 @@ def confirm(db: PostgresDatabase, request: PolicyConfirmRequest) -> MutationResu
         request.scope_kind,
         request.scope_id,
     )
+    created_effective_at = datetime.now(UTC)
+    created_id = uuid4()
+    created_version_number = request.expected_current_version + 1
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        version_number = request.expected_current_version + 1
         insert_policy_version(
             connection,
             row={
-                "id": uuid4(),
+                "id": created_id,
                 "policy_type": request.policy_type,
                 "scope_kind": request.scope_kind,
                 "scope_id": request.scope_id,
-                "version_number": version_number,
+                "version_number": created_version_number,
                 "content": request.content,
-                "effective_at": datetime.now(UTC),
+                "effective_at": created_effective_at,
             },
         )
         return StateChangeDraft(
@@ -124,18 +149,18 @@ def confirm(db: PostgresDatabase, request: PolicyConfirmRequest) -> MutationResu
                 "policy_type": request.policy_type,
                 "scope_kind": request.scope_kind,
                 "scope_id": request.scope_id,
-                "version_number": version_number,
+                "version_number": created_version_number,
             },
         )
 
-    return mutate_entity(
+    result = mutate_entity(
         db=db,
         aggregate_type="policy_version",
         aggregate_id=aggregate_id,
         request=MutationRequest(
             expected_version=request.expected_current_version,
-            actor_kind="system",
-            actor_id="policy-service",
+            actor_kind=actor.actor_kind,
+            actor_id=actor.actor_id,
             reason_text=None,
             request_surface="service:policies.confirm",
         ),
@@ -146,3 +171,38 @@ def confirm(db: PostgresDatabase, request: PolicyConfirmRequest) -> MutationResu
         scope_kind=request.scope_kind,
         scope_id=request.scope_id,
     )
+    return (
+        PolicyVersionRead(
+            id=created_id,
+            policy_type=request.policy_type,
+            scope_kind=request.scope_kind,
+            scope_id=request.scope_id,
+            version_number=created_version_number,
+            effective_at=created_effective_at,
+        ),
+        result.etag,
+    )
+
+
+def get_current_policy_version(
+    db: PostgresDatabase,
+    *,
+    policy_type: str,
+    scope_kind: str,
+    scope_id: str | None,
+) -> tuple[PolicyVersionRead, str]:
+    with db.connection() as connection:
+        row = fetch_current_policy_version(
+            connection,
+            policy_type=policy_type,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
+    if row is None:
+        raise PolicyVersionNotFoundError(
+            policy_type=policy_type,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
+    read = _row_to_policy_version_read(row)
+    return read, _format_etag(read.version_number)

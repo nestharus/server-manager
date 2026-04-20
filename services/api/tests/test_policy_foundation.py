@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from psycopg.rows import dict_row
 
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
+from app.contracts.actor import ActorIdentity
 from app.contracts.mutations import StaleMutationError
 from app.contracts.policies import (
     PolicyConfirmRequest,
@@ -120,7 +121,8 @@ def _fetch_activity_actions(database_url: str) -> list[dict[str, Any]]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         return conn.execute(
             """
-            SELECT id, aggregate_type, aggregate_id, action_type, status
+            SELECT id, aggregate_type, aggregate_id, action_type, status,
+                   actor_kind, actor_id
             FROM activity_actions
             ORDER BY id
             """
@@ -249,7 +251,11 @@ def test_confirm_recomputes_digest_and_raises_policy_preview_token_mismatch_erro
 
     with use_audit_context(_make_audit_context()):
         with pytest.raises(PolicyPreviewTokenMismatchError):
-            policy_confirm(governance_db, confirm_request)
+            policy_confirm(
+                governance_db,
+                confirm_request,
+                actor=ActorIdentity(actor_kind="user", actor_id="admin"),
+            )
 
 
 def test_confirm_with_matching_digest_persists_next_version(
@@ -258,7 +264,7 @@ def test_confirm_with_matching_digest_persists_next_version(
 ) -> None:
     """AC3 implied: when preview and confirm agree, the confirm must append
     a new ``policy_versions`` row at ``version_number = expected + 1`` and
-    return ``MutationResult`` with that version."""
+    return ``(PolicyVersionRead, etag)`` with that version."""
 
     _seed_policy_version(
         governance_dsn,
@@ -289,10 +295,14 @@ def test_confirm_with_matching_digest_persists_next_version(
     )
 
     with use_audit_context(_make_audit_context()):
-        result = policy_confirm(governance_db, confirm_request)
+        created, etag = policy_confirm(
+            governance_db,
+            confirm_request,
+            actor=ActorIdentity(actor_kind="user", actor_id="admin"),
+        )
 
-    assert result.version == 3
-    assert result.etag == '"3"'
+    assert created.version_number == 3
+    assert etag == '"3"'
 
     versions = _fetch_policy_versions(governance_dsn)
     # The seeded row plus the new confirmed row.
@@ -346,13 +356,21 @@ def test_confirm_with_stale_expected_version_raises_stale_mutation_error(
 
     # First caller wins.
     with use_audit_context(_make_audit_context()):
-        policy_confirm(governance_db, confirm_request)
+        policy_confirm(
+            governance_db,
+            confirm_request,
+            actor=ActorIdentity(actor_kind="user", actor_id="admin"),
+        )
 
     # Second caller replays the same confirm: digest still matches the
     # preview input, but aggregate_heads has advanced past v1.
     with use_audit_context(_make_audit_context()):
         with pytest.raises(StaleMutationError):
-            policy_confirm(governance_db, confirm_request)
+            policy_confirm(
+                governance_db,
+                confirm_request,
+                actor=ActorIdentity(actor_kind="user", actor_id="admin"),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +417,11 @@ def test_policy_aggregate_id_is_stable_across_preview_and_confirm(
         content={"a": 2},
     )
     with use_audit_context(_make_audit_context()):
-        policy_confirm(governance_db, confirm_request)
+        policy_confirm(
+            governance_db,
+            confirm_request,
+            actor=ActorIdentity(actor_kind="user", actor_id="admin"),
+        )
 
     actions = _fetch_activity_actions(governance_dsn)
     policy_actions = [

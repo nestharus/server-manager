@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -69,17 +69,47 @@ class PolicyVersionRead(BaseModel):
     effective_at: datetime
 
 
+class PolicyErrorBody(BaseModel):
+    code: Literal[
+        "policy_preview_token_mismatch",
+        "stale_policy_version",
+        "policy_version_not_found",
+    ]
+    message: str
+    expected_current_version: int | None = None
+    actual_current_version: int | None = None
+
+
 class PolicyPreviewTokenMismatchError(Exception):
     def __init__(self) -> None:
         super().__init__("policy preview token does not match confirm payload")
 
 
+class PolicyVersionNotFoundError(Exception):
+    def __init__(
+        self,
+        *,
+        policy_type: str,
+        scope_kind: ScopeKind,
+        scope_id: str | None,
+    ) -> None:
+        self.policy_type = policy_type
+        self.scope_kind = scope_kind
+        self.scope_id = scope_id
+        super().__init__(
+            "policy version not found for "
+            f"policy_type={policy_type!r}, scope_kind={scope_kind!r}, scope_id={scope_id!r}"
+        )
+
+
 __all__ = [
     "POLICY_AGGREGATE_SCOPE_MISSING",
     "PolicyConfirmRequest",
+    "PolicyErrorBody",
     "PolicyPreviewRead",
     "PolicyPreviewRequest",
     "PolicyPreviewTokenMismatchError",
+    "PolicyVersionNotFoundError",
     "PolicyVersionRead",
     "_canonicalize_content",
 ]

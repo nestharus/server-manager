@@ -29,6 +29,29 @@ def fetch_latest_version(
         ).fetchone()
 
 
+def fetch_current_policy_version(
+    connection: Connection[Any],
+    *,
+    policy_type: str,
+    scope_kind: str,
+    scope_id: str | None,
+) -> dict[str, Any] | None:
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            """
+            SELECT id, policy_type, scope_kind, scope_id,
+                   version_number, effective_at
+            FROM policy_versions
+            WHERE policy_type = %s
+              AND scope_kind = %s
+              AND scope_id IS NOT DISTINCT FROM %s
+            ORDER BY version_number DESC, effective_at DESC, id DESC
+            LIMIT 1
+            """,
+            (policy_type, scope_kind, scope_id),
+        ).fetchone()
+
+
 def insert_policy_version(
     connection: Connection[Any],
     *,
