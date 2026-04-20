@@ -3,11 +3,11 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
-from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.core.factory as factory_module
+from app.contracts.runtime_settings import SettingsConstructionError
 from app.core.factory import create_app
 from app.core.settings import Settings
 
@@ -59,15 +59,6 @@ def test_create_app_with_provided_settings_uses_same_object_and_skips_settings_i
     assert app.state.settings is settings
 
 
-def test_create_app_without_args_raises_validation_error_when_required_env_vars_are_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _clear_required_env(monkeypatch)
-
-    with pytest.raises(ValidationError):
-        create_app()
-
-
 def test_create_app_sets_title_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
     settings = Settings()
@@ -102,3 +93,12 @@ def test_create_app_stores_used_settings_on_app_state(monkeypatch: pytest.Monkey
     app = create_app(settings=settings)
 
     assert app.state.settings is settings
+
+
+def test_create_app_without_env_vars_raises_settings_construction_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_required_env(monkeypatch)
+
+    with pytest.raises(SettingsConstructionError):
+        create_app()

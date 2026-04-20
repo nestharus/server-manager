@@ -1,7 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from app.core.settings import Settings
+from app.contracts.runtime_settings import (
+    API_SETTINGS_SOURCE,
+    ApiSettingsRead,
+    SettingsConstructionError,
+)
+from app.core.settings import Settings, load_settings
 
 
 ALL_SETTINGS_ENV_VARS = (
@@ -198,3 +203,70 @@ def test_settings_reads_values_from_environment(monkeypatch: pytest.MonkeyPatch)
     assert settings.gemini_api_key == "gemini-key"
     assert settings.z_ai_api_key == "z-ai-key"
     assert settings.minimax_api_key == "minimax-key"
+
+
+def test_settings_to_read_returns_api_settings_read_narrow_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_env(monkeypatch)
+
+    read = Settings().to_read()
+
+    assert isinstance(read, ApiSettingsRead)
+    assert set(read.model_fields.keys()) == {
+        "database_url",
+        "supabase_service_key",
+        "app_version",
+    }
+    assert read.database_url == "postgresql://user:pass@localhost:5432/db"
+    assert read.supabase_service_key == "test-service-key"
+    assert read.app_version == "0.1.0"
+
+
+def test_api_settings_read_rejects_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        ApiSettingsRead(
+            database_url="postgresql://x",
+            supabase_service_key="k",
+            app_version="0.0.1",
+            foo="bar",
+        )
+
+
+def test_load_settings_raises_settings_construction_error_on_missing_env_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_settings_env(monkeypatch)
+
+    with pytest.raises(SettingsConstructionError):
+        load_settings()
+
+
+def test_settings_construction_error_names_missing_env_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_settings_env(monkeypatch)
+
+    with pytest.raises(SettingsConstructionError) as exc_info:
+        load_settings()
+
+    missing = set(exc_info.value.missing_env_vars)
+    assert missing == {
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_GUILD_ID",
+        "SUPABASE_DB_URL",
+        "SUPABASE_SERVICE_KEY",
+    }
+
+
+def test_api_settings_source_matches_service_code_env_vars() -> None:
+    required = {
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_GUILD_ID",
+        "SUPABASE_DB_URL",
+        "SUPABASE_SERVICE_KEY",
+    }
+    optional = set(ALL_SETTINGS_ENV_VARS) - required
+
+    assert API_SETTINGS_SOURCE.required_env_vars == frozenset(required)
+    assert API_SETTINGS_SOURCE.optional_env_vars == frozenset(optional)
