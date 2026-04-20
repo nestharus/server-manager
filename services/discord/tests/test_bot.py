@@ -17,7 +17,7 @@ def settings() -> Settings:
     return Settings(
         discord_bot_token="test-token",
         discord_guild_id=1,
-        supabase_db_url="postgresql://test",
+        api_base_url="http://stub",
     )
 
 

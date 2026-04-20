@@ -17,7 +17,11 @@ def _import_main_module():
 
 
 def _make_settings(token: str = "test-token") -> SimpleNamespace:
-    return SimpleNamespace(discord_bot_token=token)
+    return SimpleNamespace(
+        discord_bot_token=token,
+        discord_guild_id=1,
+        api_base_url="http://stub",
+    )
 
 
 def _make_bot(*, start_side_effect: BaseException | None = None) -> SimpleNamespace:
@@ -53,7 +57,7 @@ async def test_main_returns_one_when_settings_construction_fails(
 
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     monkeypatch.delenv("DISCORD_GUILD_ID", raising=False)
-    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
+    monkeypatch.delenv("API_BASE_URL", raising=False)
 
     assert await module.main() == 1
 
