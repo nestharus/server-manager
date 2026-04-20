@@ -25,6 +25,11 @@ GOVERNANCE_TABLES = (
     "aggregate_heads",
     "authority_grants",
     "policy_versions",
+    "roster_entries",
+    "chapter_roles",
+    "chapter_templates",
+    "permission_drift",
+    "permission_intents",
 )
 
 
