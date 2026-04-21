@@ -25,7 +25,12 @@ from app.repositories.deferred_effects import (
     query_degraded_state_summary,
     update_precondition_state,
 )
-from app.services.scheduler import CLAIM_BATCH_SIZE, DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS, _lookup_handler
+from app.services.scheduler import (
+    CLAIM_BATCH_SIZE,
+    DEFAULT_MAX_ATTEMPTS,
+    LEASE_SECONDS,
+    _lookup_handler,
+)
 
 
 def _deferred_effect_from_row(row: dict[str, Any]) -> DeferredEffectRead:
@@ -51,6 +56,12 @@ def _summary_from_row(row: dict[str, Any]) -> DegradedStateSummaryRead:
         subsystem=row["subsystem"],
         pending_effect_count=int(row["pending_effect_count"]),
         scheduled_job_count=int(row["scheduled_job_count"]),
+        stuck_in_flight_envelopes=(
+            int(row["stuck_in_flight_envelopes"])
+            if row["subsystem"] == "notifications"
+            and row.get("stuck_in_flight_envelopes") is not None
+            else None
+        ),
         oldest_pending_at=row["oldest_pending_at"],
     )
 
@@ -120,7 +131,9 @@ def mark_precondition_valid(
     effect_id: UUID,
 ) -> DeferredEffectRead:
     with db.connection() as connection:
-        row = update_precondition_state(connection, effect_id=effect_id, new_state="valid")
+        row = update_precondition_state(
+            connection, effect_id=effect_id, new_state="valid"
+        )
     return _deferred_effect_from_row(row)
 
 
@@ -129,7 +142,9 @@ def mark_precondition_invalid(
     effect_id: UUID,
 ) -> DeferredEffectRead:
     with db.connection() as connection:
-        row = update_precondition_state(connection, effect_id=effect_id, new_state="invalid")
+        row = update_precondition_state(
+            connection, effect_id=effect_id, new_state="invalid"
+        )
     return _deferred_effect_from_row(row)
 
 

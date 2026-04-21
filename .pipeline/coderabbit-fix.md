@@ -67,3 +67,40 @@
 
 - `cd services/api && uv run pytest tests/ -q`: 376 passed, 1 warning.
 - `cd services/discord && uv run pytest tests/ -q`: 65 passed, 20 warnings.
+
+# SLICE-015 CodeRabbit + Justification Fix Pass
+
+## Fixes Applied
+
+- Made the `notification-dispatcher` authority seed and downgrade predicates require exact permission equality with both `@>` and `<@`, so supersets no longer mask or remove grants.
+- Added `HAVING COUNT(*) > 0` to the notification envelope degraded-summary CTE so healthy notifications no longer creates a synthetic subsystem row.
+- Changed notification event inserts to use the DB-owned `created_at` and return it from `INSERT ... RETURNING`; changed the migration default to `clock_timestamp()` so same-transaction event order remains stable.
+- Changed notification rule patch state-change payloads to use post-update `updated_at` and the new version, and aligned the action type to `notification_rule.patch`.
+- Cached the constructed notifications delivery port in `get_delivery_port()`.
+- Made malformed DM recipient IDs and designated-channel IDs definitive Discord delivery failures.
+- Added `NotificationRuleCreate` scope consistency validation for global/chapter/member rules.
+- Reused `_claim.claim_due_rows(..., claim_status=None)` for envelope claiming.
+- Replaced the envelope materialization `max_attempts` literal with `DEFAULT_MAX_ATTEMPTS`.
+- Made `stuck_in_flight_envelopes` optional on degraded summaries and only populated it for the notifications subsystem.
+- Updated D9 synthesis wording to the shipped `notifications_materialize` / `notifications_deliver` effect names and payloads.
+- Replaced absolute verification commands in `.pipeline/implementation.md` with repo-relative commands.
+
+## Tests Added
+
+- Patch audit assertions for `notification_rule.patch`, state-change version `2`, and post-update `updated_at`.
+- Scope mismatch create rejection cases for `global + scope_id`, `chapter + NULL scope_id`, and `member + NULL scope_id`.
+- Discord adapter malformed recipient and destination ID definitive-failure cases.
+
+## Skipped Low Item
+
+- Left the `emit(..., actor=...)` parameter in place because the Rev-2 contract and existing call sites require that signature; wiring it through would require a contract/proposal change rather than a local cleanup.
+
+## Verification
+
+- `cd services/api && uv run pytest tests/ -q`: 404 passed, 1 warning.
+- `cd services/discord && uv run pytest tests/ -q`: 68 passed, 20 warnings.
+
+Warnings were pre-existing test-environment warnings:
+
+- API: one Pydantic deprecation warning in `tests/test_settings.py`.
+- Discord: discord.py deprecation warnings in existing bot/command tests.
