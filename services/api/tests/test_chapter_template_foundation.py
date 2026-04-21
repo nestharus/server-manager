@@ -109,6 +109,8 @@ def test_chapter_template_round_trips_to_json() -> None:
 
     original = ChapterTemplateRead(
         id=uuid4(),
+        template_family_id=uuid4(),
+        version=1,
         name="Chapter Template A",
         schema_version=CURRENT_TEMPLATE_SCHEMA_VERSION,
         channel_structure=[ChannelSpec.model_validate(c) for c in _channel_specs()],
@@ -224,7 +226,7 @@ def test_create_chapter_template_persists_row(
     with psycopg.connect(governance_dsn, row_factory=dict_row) as conn:
         rows = conn.execute(
             """
-            SELECT id, name, schema_version,
+            SELECT id, template_family_id, version, name, schema_version,
                    channel_structure, role_structure, default_permission_intents
             FROM chapter_templates
             """
@@ -232,6 +234,8 @@ def test_create_chapter_template_persists_row(
 
     assert len(rows) == 1
     row = rows[0]
+    assert row["template_family_id"] == row["id"]
+    assert row["version"] == 1
     assert row["name"] == "Chapter Template A"
     assert row["schema_version"] == CURRENT_TEMPLATE_SCHEMA_VERSION
     assert isinstance(row["channel_structure"], list)
@@ -286,13 +290,15 @@ def test_read_template_with_stale_schema_raises(
         conn.execute(
             """
             INSERT INTO chapter_templates (
-                id, name, schema_version,
+                id, template_family_id, version, name, schema_version,
                 channel_structure, role_structure, default_permission_intents
             )
-            VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)
             """,
             (
                 stale_id,
+                stale_id,
+                1,
                 "Stale Template",
                 99,
                 json.dumps(_channel_specs()),

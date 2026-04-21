@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     audit,
     authority,
+    chapter_templates,
     chapters,
     health,
     policies,
@@ -21,6 +22,7 @@ from app.api.v1.endpoints import (
 router = APIRouter()
 router.include_router(audit.router, tags=["audit"])
 router.include_router(authority.router, tags=["authority"])
+router.include_router(chapter_templates.router, tags=["chapter-templates"])
 router.include_router(chapters.router, tags=["chapters"])
 router.include_router(health.router, tags=["health"])
 router.include_router(policies.router, tags=["policies"])
