@@ -69,6 +69,8 @@ class DefaultIntentSpec(_TemplateModel):
 
 class ChapterTemplateRead(_TemplateModel):
     id: UUID
+    template_family_id: UUID
+    version: int = Field(ge=1)
     name: str = Field(min_length=1)
     schema_version: int = Field(ge=1)
     channel_structure: list[ChannelSpec]
@@ -93,6 +95,61 @@ class ChapterTemplateCreate(_TemplateModel):
         return self
 
 
+class ChapterTemplatePatch(_TemplateModel):
+    expected_current_version: int = Field(ge=1)
+    name: str | None = Field(default=None, min_length=1)
+    schema_version: int | None = None
+    channel_structure: list[ChannelSpec] | None = None
+    role_structure: list[RoleSpec] | None = None
+    default_permission_intents: list[DefaultIntentSpec] | None = None
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> "ChapterTemplatePatch":
+        if self.schema_version is not None:
+            if self.schema_version != CURRENT_TEMPLATE_SCHEMA_VERSION:
+                raise ValueError(
+                    "chapter templates must use the current schema version"
+                )
+        if all(
+            value is None
+            for value in (
+                self.name,
+                self.channel_structure,
+                self.role_structure,
+                self.default_permission_intents,
+            )
+        ):
+            raise ValueError("chapter template patch must include a patchable field")
+        return self
+
+
+class ChapterTemplateNotFoundError(Exception):
+    def __init__(self, template_id: UUID) -> None:
+        self.template_id = template_id
+        super().__init__(f"chapter template {template_id} was not found")
+
+
+class StaleTemplateVersionError(Exception):
+    def __init__(
+        self,
+        *,
+        template_family_id: UUID,
+        expected_version: int,
+        current_version: int,
+    ) -> None:
+        self.template_family_id = template_family_id
+        self.expected_version = expected_version
+        self.current_version = current_version
+        super().__init__(
+            f"stale template family {template_family_id}: "
+            f"expected {expected_version}, current {current_version}"
+        )
+
+
+class ChapterTemplatePatchEmptyError(Exception):
+    pass
+
+
 class TemplateSchemaVersionMismatchError(Exception):
     def __init__(self, schema_version: int) -> None:
         self.schema_version = schema_version
@@ -106,8 +163,12 @@ __all__ = [
     "CURRENT_TEMPLATE_SCHEMA_VERSION",
     "ChannelSpec",
     "ChapterTemplateCreate",
+    "ChapterTemplateNotFoundError",
+    "ChapterTemplatePatch",
+    "ChapterTemplatePatchEmptyError",
     "ChapterTemplateRead",
     "DefaultIntentSpec",
     "RoleSpec",
+    "StaleTemplateVersionError",
     "TemplateSchemaVersionMismatchError",
 ]
