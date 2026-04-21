@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     ready,
     roster,
     system,
+    trust,
 )
 
 router = APIRouter()
@@ -32,3 +33,4 @@ router.include_router(policies.router, tags=["policies"])
 router.include_router(ready.router, tags=["ready"])
 router.include_router(roster.router, tags=["roster"])
 router.include_router(system.router, tags=["system"])
+router.include_router(trust.router, tags=["trust"])
