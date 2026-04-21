@@ -61,7 +61,15 @@ def test_build_bot_with_registry_registers_interaction_commands() -> None:
         result = module.build_bot_with_registry(settings=settings, api_client=object())
 
     assert result is bot
-    assert registered == ["provision_chapter", "ticket_open", "ticket_transition"]
+    assert registered == [
+        "application_claim",
+        "application_approve",
+        "application_deny",
+        "application_submit",
+        "provision_chapter",
+        "ticket_open",
+        "ticket_transition",
+    ]
 
 
 @pytest.mark.asyncio
