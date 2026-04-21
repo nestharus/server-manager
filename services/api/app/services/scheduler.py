@@ -29,6 +29,7 @@ POLL_INTERVAL_SECONDS = 5
 DEFAULT_MAX_ATTEMPTS = 3
 CLAIM_BATCH_SIZE = 10
 TICKET_SLA_INTERVAL_SECONDS = 60
+CHAPTER_ARCHIVE_INTERVAL_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,7 @@ class SchedulerLoop:
         self._stop_event = asyncio.Event()
         self._is_running = False
         self._last_ticket_sla_tick_at: datetime | None = None
+        self._last_archive_tick_at: datetime | None = None
 
     @property
     def is_running(self) -> bool:
@@ -179,14 +181,33 @@ class SchedulerLoop:
         for job in claimed_jobs:
             await asyncio.to_thread(self._dispatch_claimed_job, job)
 
+        await self._run_chapter_archive_if_due(now)
         from app.services.deferred_effects import deferred_effect_worker_tick
-
         await asyncio.to_thread(
             deferred_effect_worker_tick,
             self._db,
             worker_id=self._worker_id,
         )
         await self._run_ticket_sla_if_due(now)
+
+    async def _run_chapter_archive_if_due(self, now: datetime) -> None:
+        if (
+            self._last_archive_tick_at is not None
+            and (now - self._last_archive_tick_at).total_seconds()
+            < CHAPTER_ARCHIVE_INTERVAL_SECONDS
+        ):
+            return
+
+        from app.tasks.archive import archive_worker_tick
+
+        self._last_archive_tick_at = now
+        try:
+            await asyncio.to_thread(archive_worker_tick)
+        except Exception:
+            logger.exception(
+                "chapter archive worker tick failed for worker %s",
+                self._worker_id,
+            )
 
     async def _run_ticket_sla_if_due(self, now: datetime) -> None:
         if (
@@ -271,6 +292,7 @@ def build_scheduler_loop(
 
 __all__ = [
     "CLAIM_BATCH_SIZE",
+    "CHAPTER_ARCHIVE_INTERVAL_SECONDS",
     "DEFAULT_MAX_ATTEMPTS",
     "HandlerRegistry",
     "LEASE_SECONDS",

@@ -31,6 +31,7 @@ GOVERNANCE_TABLES = (
     "trust_profiles",
     "members",
     "policy_versions",
+    "chapter_archive_runs",
     "chapter_transitions",
     "chapters",
     "roster_transitions",
