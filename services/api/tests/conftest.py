@@ -20,6 +20,8 @@ from app.core.settings import Settings
 
 GOVERNANCE_TABLES = (
     "notification_events",
+    "notification_envelopes",
+    "notification_rules",
     "activity_state_changes",
     "activity_actions",
     "aggregate_heads",

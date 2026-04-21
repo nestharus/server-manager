@@ -32,7 +32,7 @@ def upgrade() -> None:
             "created_at",
             sa.DateTime(timezone=True),
             nullable=False,
-            server_default=sa.text("CURRENT_TIMESTAMP"),
+            server_default=sa.text("clock_timestamp()"),
         ),
         sa.CheckConstraint(
             "scope_kind IS NULL OR scope_kind IN ('global', 'chapter', 'member')",

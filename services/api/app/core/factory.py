@@ -21,6 +21,7 @@ from app.core.context import CorrelationMiddleware
 from app.core.settings import Settings, load_settings
 from app.repositories.db import PostgresDatabase
 from app.services.scheduler import build_scheduler_loop
+from app.tasks import configure_task_runtime
 
 
 def create_api_app(
@@ -32,6 +33,7 @@ def create_api_app(
     resolved_db = (
         db if db is not None else PostgresDatabase(resolved_settings.supabase_db_url)
     )
+    configure_task_runtime(db=resolved_db)
     scheduler_loop = build_scheduler_loop(resolved_db, worker_id="api:primary")
 
     @asynccontextmanager
