@@ -57,11 +57,10 @@ async def test_client_fixture_reaches_health_endpoint(
 @pytest.mark.parametrize(
     ("method", "path", "json_body"),
     [
-        ("post", "/api/v1/chapters", {"name": "Humility Seattle", "slug": "humility-seattle"}),
-        ("get", "/api/v1/chapters", None),
-        ("get", "/api/v1/chapters/1", None),
-        ("patch", "/api/v1/chapters/1", {}),
-        ("post", "/api/v1/chapters/1/archive", None),
+        ("post", "/api/v1/chapters", {"name": "Humility Seattle"}),
+        ("get", "/api/v1/chapters/example", None),
+        ("post", "/api/v1/chapters/example/transitions", {}),
+        ("patch", "/api/v1/chapters/example/discord-resources", {}),
     ],
 )
 async def test_chapter_endpoints_are_reachable_via_client(
@@ -78,4 +77,5 @@ async def test_chapter_endpoints_are_reachable_via_client(
         HTTPStatus.OK,
         HTTPStatus.NOT_FOUND,
         HTTPStatus.PRECONDITION_REQUIRED,
+        HTTPStatus.UNAUTHORIZED,
     }

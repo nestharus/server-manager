@@ -35,8 +35,8 @@ from app.services.authority import grant_authority
 
 
 OVERRIDE_ACTION_TYPE = "authority.override"
-TEST_ROUTE_CHAPTER = "/_test/override/chapters/{chapter_id}/archive"
-TEST_ROUTE_CHAPTER_CALL = "/_test/override/chapters/{chapter_id}/archive"
+TEST_ROUTE_CHAPTER = "/_test/override/chapters/{chapter_id}/manage"
+TEST_ROUTE_CHAPTER_CALL = "/_test/override/chapters/{chapter_id}/manage"
 
 
 def _actor_headers(
@@ -64,7 +64,7 @@ def _build_router() -> APIRouter:
         chapter_id: str,  # noqa: ARG001 — RequireAuthority resolves from path
         decision: AuthorityDecisionRead = Depends(
             RequireAuthority(
-                permission="chapter.archive",
+                permission="chapter.write",
                 scope_kind="chapter",
                 scope_id_param="chapter_id",
             )
@@ -99,7 +99,7 @@ def _seed_grant(
     grantee_id: str = "grantee-1",
     scope_kind: str = "chapter",
     scope_id: str | None = "ch-1",
-    permissions: frozenset[str] = frozenset({"chapter.archive"}),
+    permissions: frozenset[str] = frozenset({"chapter.write"}),
 ) -> Any:
     with use_audit_context(_make_audit_context()):
         return grant_authority(
@@ -147,7 +147,7 @@ async def test_override_requires_non_empty_reason(
         db,
         scope_kind="global",
         scope_id=None,
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
 
     response = await client.post(
@@ -171,7 +171,7 @@ async def test_override_too_long_rejected(
         db,
         scope_kind="global",
         scope_id=None,
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
     too_long = "x" * 513
 
@@ -202,7 +202,7 @@ async def test_override_used_records_distinct_audit_event(
         db,
         scope_kind="global",
         scope_id=None,
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
 
     response = await client.post(
@@ -233,7 +233,7 @@ async def test_override_records_correlation_id(
         db,
         scope_kind="global",
         scope_id=None,
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
 
     correlation_id = uuid4()
@@ -265,7 +265,7 @@ async def test_override_records_reason_text(
         db,
         scope_kind="global",
         scope_id=None,
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
 
     reason = "emergency cleanup; see ticket OPS-1234"
@@ -305,7 +305,7 @@ async def test_override_without_global_grant_denied(
         db,
         scope_kind="chapter",
         scope_id="ch-X",
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
 
     response = await client.post(
@@ -336,7 +336,7 @@ async def test_override_aggregate_id_includes_timestamp(
         db,
         scope_kind="global",
         scope_id=None,
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
 
     correlation_id = uuid4()
@@ -382,7 +382,7 @@ async def test_override_blocked_when_no_denial_to_override(
         db,
         scope_kind="chapter",
         scope_id="ch-1",
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
 
     response = await client.post(

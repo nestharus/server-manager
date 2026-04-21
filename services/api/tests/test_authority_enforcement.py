@@ -37,8 +37,8 @@ from app.services.authority import (
 )
 
 
-TEST_ROUTE_CHAPTER = "/_test/authority/chapters/{chapter_id}/archive"
-TEST_ROUTE_CHAPTER_CALL = "/_test/authority/chapters/{chapter_id}/archive"
+TEST_ROUTE_CHAPTER = "/_test/authority/chapters/{chapter_id}/manage"
+TEST_ROUTE_CHAPTER_CALL = "/_test/authority/chapters/{chapter_id}/manage"
 TEST_ROUTE_GLOBAL = "/_test/authority/global/ping"
 
 
@@ -63,11 +63,11 @@ def _build_test_router() -> APIRouter:
     router = APIRouter()
 
     @router.post(TEST_ROUTE_CHAPTER)
-    async def guarded_chapter_archive(
+    async def guarded_chapter_manage(
         chapter_id: str,  # noqa: ARG001 — path param used by RequireAuthority
         decision: AuthorityDecisionRead = Depends(
             RequireAuthority(
-                permission="chapter.archive",
+                permission="chapter.write",
                 scope_kind="chapter",
                 scope_id_param="chapter_id",
             )
@@ -114,7 +114,7 @@ def _seed_grant(
     grantee_id: str = "grantee-1",
     scope_kind: str = "chapter",
     scope_id: str | None = "ch-1",
-    permissions: frozenset[str] = frozenset({"chapter.archive"}),
+    permissions: frozenset[str] = frozenset({"chapter.write"}),
     expires_at: datetime | None = None,
 ) -> Any:
     with use_audit_context(_make_audit_context()):
@@ -168,7 +168,7 @@ async def test_guarded_surface_allows_when_grant_covers_requirement(
         grantee_id="grantee-1",
         scope_kind="chapter",
         scope_id="ch-1",
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
     )
 
     response = await client.post(
@@ -195,7 +195,7 @@ async def test_guarded_surface_denial_reason_scope_mismatch(
     """A grant for chapter X does not authorize actions on chapter Y."""
 
     client, db = guarded_client
-    _seed_grant(db, scope_id="ch-X", permissions=frozenset({"chapter.archive"}))
+    _seed_grant(db, scope_id="ch-X", permissions=frozenset({"chapter.write"}))
 
     response = await client.post(
         TEST_ROUTE_CHAPTER_CALL.format(chapter_id="ch-Y"),
@@ -237,7 +237,7 @@ async def test_guarded_surface_denial_reason_grant_expired(
     _seed_grant(
         db,
         scope_id="ch-1",
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
         expires_at=past,
     )
 
@@ -259,7 +259,7 @@ async def test_guarded_surface_denial_reason_grant_revoked(
 
     client, db = guarded_client
     result = _seed_grant(
-        db, scope_id="ch-1", permissions=frozenset({"chapter.archive"})
+        db, scope_id="ch-1", permissions=frozenset({"chapter.write"})
     )
     with use_audit_context(_make_audit_context()):
         revoke_authority(
@@ -315,12 +315,12 @@ async def test_guarded_surface_denial_reason_priority_order(
     _seed_grant(
         db,
         scope_id="ch-1",
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
         expires_at=past,
     )
     # Grant B: otherwise-matches, revoked -> would emit grant_revoked
     revokable = _seed_grant(
-        db, scope_id="ch-1", permissions=frozenset({"chapter.archive"})
+        db, scope_id="ch-1", permissions=frozenset({"chapter.write"})
     )
     with use_audit_context(_make_audit_context()):
         revoke_authority(
@@ -353,7 +353,7 @@ async def test_guarded_surface_resolves_scope_id_from_path_param(
 
     client, db = guarded_client
     result = _seed_grant(
-        db, scope_id="ch-abc", permissions=frozenset({"chapter.archive"})
+        db, scope_id="ch-abc", permissions=frozenset({"chapter.write"})
     )
 
     response = await client.post(
@@ -434,13 +434,13 @@ def test_evaluate_returns_authority_decision_read_with_grant_id_on_allow() -> No
         grantee_id="u1",
         scope_kind="chapter",
         scope_id="ch-1",
-        permissions=frozenset({"chapter.archive"}),
+        permissions=frozenset({"chapter.write"}),
         expires_at=None,
         revoked_at=None,
         predecessor_grant_id=None,
     )
     requirement = AuthorityRequirement(
-        scope_kind="chapter", scope_id="ch-1", permission="chapter.archive"
+        scope_kind="chapter", scope_id="ch-1", permission="chapter.write"
     )
 
     decision = evaluate(requirement=requirement, grants=[grant], at=current_time())
