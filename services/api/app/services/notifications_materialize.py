@@ -246,6 +246,7 @@ def materialize_event(
                         payload_json={"envelope_id": str(envelope.id)},
                         consequence_level="safe",
                         correlation_id=event.correlation_id,
+                        causation_id=event.causation_id,
                     ),
                     correlation_id=event.correlation_id,
                     max_attempts=DEFAULT_MAX_ATTEMPTS,

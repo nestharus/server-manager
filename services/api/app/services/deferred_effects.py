@@ -46,6 +46,7 @@ def _deferred_effect_from_row(row: dict[str, Any]) -> DeferredEffectRead:
         attempts=int(row["attempts"]),
         max_attempts=int(row["max_attempts"]),
         correlation_id=row["correlation_id"],
+        causation_id=row["causation_id"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -66,13 +67,16 @@ def _summary_from_row(row: dict[str, Any]) -> DegradedStateSummaryRead:
     )
 
 
-def _reconstruct_audit_context(correlation_id: Any) -> AuditContextRead:
+def _reconstruct_audit_context(
+    correlation_id: Any,
+    causation_id: Any | None,
+) -> AuditContextRead:
     return AuditContextRead(
         correlation_id=correlation_id,
-        causation_id=None,
+        causation_id=causation_id,
         headers=CorrelationHeadersRead(
             x_correlation_id=correlation_id,
-            x_causation_id=None,
+            x_causation_id=causation_id,
         ),
     )
 
@@ -82,10 +86,16 @@ def enqueue_effect(
     request: DeferredEffectCreate,
 ) -> DeferredEffectRead:
     ctx = resolve_register_correlation(request.correlation_id, allow_new_root=True)
+    persisted = request.model_copy(
+        update={
+            "correlation_id": ctx.correlation_id,
+            "causation_id": request.causation_id or ctx.causation_id,
+        }
+    )
     with db.connection() as connection:
         row = insert_effect(
             connection,
-            effect=request,
+            effect=persisted,
             correlation_id=ctx.correlation_id,
             max_attempts=DEFAULT_MAX_ATTEMPTS,
         )
@@ -189,7 +199,9 @@ def deferred_effect_worker_tick(
             continue
 
         try:
-            with use_audit_context(_reconstruct_audit_context(effect.correlation_id)):
+            with use_audit_context(
+                _reconstruct_audit_context(effect.correlation_id, effect.causation_id)
+            ):
                 result = handler(effect)
                 if inspect.isawaitable(result):
                     asyncio.run(result)

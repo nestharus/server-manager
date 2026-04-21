@@ -65,7 +65,7 @@ TRANSITION_PAYLOAD_ALLOWLIST = {
     "review": {"action", "reviewer_id", "notes"},
     "approve": {"action", "reviewer_id", "decision_reason"},
     "deny": {"action", "reviewer_id", "decision_reason"},
-    "withdraw": {"action", "reviewer_id"},
+    "withdraw": {"action", "reviewer_id", "notes"},
 }
 
 APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST = {

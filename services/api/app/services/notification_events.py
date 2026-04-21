@@ -60,6 +60,7 @@ def emit(
                 payload_json={"event_id": str(event_id)},
                 consequence_level="safe",
                 correlation_id=ctx.correlation_id,
+                causation_id=ctx.causation_id,
             ),
             correlation_id=ctx.correlation_id,
             max_attempts=DEFAULT_MAX_ATTEMPTS,

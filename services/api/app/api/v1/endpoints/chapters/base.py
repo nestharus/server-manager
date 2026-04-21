@@ -1,4 +1,4 @@
-"""Chapter lifecycle endpoints."""
+"""Base chapter lifecycle endpoints."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from app.contracts.actor import ActorIdentity
 from app.contracts.chapter_templates import ChapterTemplateNotFoundError
 from app.contracts.chapters import (
+    ChapterArchiveInProgressError,
+    ChapterArchivePrerequisitesError,
     ChapterCreate,
     ChapterDuplicateNameError,
     ChapterNotFoundError,
@@ -17,6 +19,7 @@ from app.contracts.chapters import (
     ChapterResourcesPatchRequest,
     ChapterTransitionRequest,
     IncompleteProvisioningError,
+    InvalidChapterGovernanceTransitionError,
     InvalidChapterTransitionError,
 )
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
@@ -36,7 +39,7 @@ def get_db(request: Request) -> PostgresDatabase:
     return request.app.state.db
 
 
-def _parse_if_match(request: Request) -> int:
+def parse_if_match(request: Request) -> int:
     if_match = request.headers.get("if-match")
     if if_match is None:
         raise HTTPException(
@@ -51,11 +54,11 @@ def _parse_if_match(request: Request) -> int:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="invalid If-Match") from error
 
 
-def _set_etag(response: Response, etag: str) -> None:
+def set_etag(response: Response, etag: str) -> None:
     response.headers["etag"] = etag
 
 
-def _raise_for_chapter_error(error: Exception) -> None:
+def raise_for_chapter_error(error: Exception) -> None:
     if isinstance(error, (ChapterNotFoundError, ChapterTemplateNotFoundError, MissingAggregateError)):
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="not found") from error
     if isinstance(error, StaleMutationError):
@@ -75,6 +78,34 @@ def _raise_for_chapter_error(error: Exception) -> None:
                 "code": "invalid_transition",
                 "from_state": error.from_state,
                 "to_state": error.to_state,
+            },
+        ) from error
+    if isinstance(error, InvalidChapterGovernanceTransitionError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={
+                "code": "invalid_chapter_governance_transition",
+                "action": error.action,
+                "from_state": error.from_state,
+                "to_state": error.to_state,
+            },
+        ) from error
+    if isinstance(error, ChapterArchiveInProgressError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={
+                "code": "chapter_archive_in_progress",
+                "archive_run_id": str(error.archive_run_id),
+                "correlation_id": str(error.correlation_id),
+            },
+        ) from error
+    if isinstance(error, ChapterArchivePrerequisitesError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={
+                "code": "chapter_archive_prerequisites_blocked",
+                "chapter_id": error.chapter_id,
+                "state": error.state,
             },
         ) from error
     if isinstance(error, IncompleteProvisioningError):
@@ -100,8 +131,8 @@ def create_chapter(
     try:
         read, result = create_chapter_service(db, chapter, actor)
     except Exception as error:
-        _raise_for_chapter_error(error)
-    _set_etag(response, result.etag)
+        raise_for_chapter_error(error)
+    set_etag(response, result.etag)
     return read
 
 
@@ -118,8 +149,8 @@ def get_chapter(
     try:
         read, etag = read_chapter_service(db, str(chapter_id))
     except Exception as error:
-        _raise_for_chapter_error(error)
-    _set_etag(response, etag)
+        raise_for_chapter_error(error)
+    set_etag(response, etag)
     return read
 
 
@@ -136,7 +167,7 @@ def transition_chapter_endpoint(
     db: PostgresDatabase = Depends(get_db),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterRead:
-    expected_version = _parse_if_match(request)
+    expected_version = parse_if_match(request)
     try:
         read, result = transition_chapter(
             db,
@@ -146,8 +177,8 @@ def transition_chapter_endpoint(
             expected_version,
         )
     except Exception as error:
-        _raise_for_chapter_error(error)
-    _set_etag(response, result.etag)
+        raise_for_chapter_error(error)
+    set_etag(response, result.etag)
     return read
 
 
@@ -164,7 +195,7 @@ def patch_chapter_discord_resources_endpoint(
     db: PostgresDatabase = Depends(get_db),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterRead:
-    expected_version = _parse_if_match(request)
+    expected_version = parse_if_match(request)
     try:
         read, result = patch_chapter_discord_resources(
             db,
@@ -174,6 +205,15 @@ def patch_chapter_discord_resources_endpoint(
             expected_version,
         )
     except Exception as error:
-        _raise_for_chapter_error(error)
-    _set_etag(response, result.etag)
+        raise_for_chapter_error(error)
+    set_etag(response, result.etag)
     return read
+
+
+__all__ = [
+    "get_db",
+    "parse_if_match",
+    "raise_for_chapter_error",
+    "router",
+    "set_etag",
+]

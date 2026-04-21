@@ -56,18 +56,19 @@ def enqueue_effect(
                 max_attempts,
                 last_error_json,
                 correlation_id,
+                causation_id,
                 created_at,
                 updated_at
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, 'unchecked', 'queued',
-                NULL, NULL, NULL, 0, %s, NULL, %s, %s, %s
+                NULL, NULL, NULL, 0, %s, NULL, %s, %s, %s, %s
             )
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING id, subsystem, effect_type, idempotency_key, payload_json,
                       consequence_level, precondition_state, status,
                       claimed_by, claimed_at, lease_until, attempts, max_attempts,
-                      last_error_json, correlation_id, created_at, updated_at
+                      last_error_json, correlation_id, causation_id, created_at, updated_at
             """,
             (
                 effect_id,
@@ -78,6 +79,7 @@ def enqueue_effect(
                 effect.consequence_level,
                 max_attempts,
                 correlation_id,
+                effect.causation_id,
                 now,
                 now,
             ),
@@ -89,7 +91,7 @@ def enqueue_effect(
             SELECT id, subsystem, effect_type, idempotency_key, payload_json,
                    consequence_level, precondition_state, status,
                    claimed_by, claimed_at, lease_until, attempts, max_attempts,
-                   last_error_json, correlation_id, created_at, updated_at
+                   last_error_json, correlation_id, causation_id, created_at, updated_at
             FROM deferred_effects
             WHERE idempotency_key = %s
             """,
@@ -112,7 +114,7 @@ def fetch_deferred_effect(
             SELECT id, subsystem, effect_type, idempotency_key, payload_json,
                    consequence_level, precondition_state, status,
                    claimed_by, claimed_at, lease_until, attempts, max_attempts,
-                   last_error_json, correlation_id, created_at, updated_at
+                   last_error_json, correlation_id, causation_id, created_at, updated_at
             FROM deferred_effects
             WHERE id = %s
             """,
@@ -130,7 +132,7 @@ def list_deferred_effects_by_subsystem(
         SELECT id, subsystem, effect_type, idempotency_key, payload_json,
                consequence_level, precondition_state, status,
                claimed_by, claimed_at, lease_until, attempts, max_attempts,
-               last_error_json, correlation_id, created_at, updated_at
+               last_error_json, correlation_id, causation_id, created_at, updated_at
         FROM deferred_effects
         WHERE subsystem = %s
     """
@@ -219,7 +221,7 @@ def mark_deferred_effect_failed(
             RETURNING id, subsystem, effect_type, idempotency_key, payload_json,
                       consequence_level, precondition_state, status,
                       claimed_by, claimed_at, lease_until, attempts, max_attempts,
-                      last_error_json, correlation_id, created_at, updated_at
+                      last_error_json, correlation_id, causation_id, created_at, updated_at
             """,
             (_error_payload(error), now, effect_id, worker_id),
         ).fetchone()
@@ -267,7 +269,7 @@ def update_precondition_state(
             RETURNING id, subsystem, effect_type, idempotency_key, payload_json,
                       consequence_level, precondition_state, status,
                       claimed_by, claimed_at, lease_until, attempts, max_attempts,
-                      last_error_json, correlation_id, created_at, updated_at
+                      last_error_json, correlation_id, causation_id, created_at, updated_at
             """,
             (new_state, now, effect_id),
         ).fetchone()
@@ -284,6 +286,60 @@ def update_precondition_state(
     if current is None:
         raise LookupError(f"deferred effect {effect_id} was not found")
     raise InvalidPreconditionStateTransitionError(effect_id, str(current["precondition_state"]))
+
+
+def mark_unclaimed_deferred_effect_skipped(
+    connection: Connection[Any],
+    *,
+    effect_id: UUID,
+    reason: str,
+) -> dict[str, Any] | None:
+    now = datetime.now(UTC)
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            """
+            UPDATE deferred_effects
+            SET status = 'skipped',
+                claimed_by = NULL,
+                claimed_at = NULL,
+                lease_until = NULL,
+                last_error_json = COALESCE(last_error_json, '{}'::jsonb) || %s,
+                updated_at = %s
+            WHERE id = %s
+              AND (
+                    status IN ('queued', 'failed')
+                    OR (status = 'claimed' AND lease_until < %s)
+                  )
+            RETURNING id, subsystem, effect_type, idempotency_key, payload_json,
+                      consequence_level, precondition_state, status,
+                      claimed_by, claimed_at, lease_until, attempts, max_attempts,
+                      last_error_json, correlation_id, causation_id, created_at, updated_at
+            """,
+            (_error_payload(reason), now, effect_id, now),
+        ).fetchone()
+
+
+def list_archive_effects(
+    connection: Connection[Any],
+    *,
+    archive_run_id: UUID,
+    statuses: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT id, subsystem, effect_type, idempotency_key, payload_json,
+               consequence_level, precondition_state, status,
+               claimed_by, claimed_at, lease_until, attempts, max_attempts,
+               last_error_json, correlation_id, causation_id, created_at, updated_at
+        FROM deferred_effects
+        WHERE payload_json->>'archive_run_id' = %s
+    """
+    params: list[Any] = [str(archive_run_id)]
+    if statuses is not None:
+        query += " AND status = ANY(%s)"
+        params.append(list(statuses))
+    query += " ORDER BY created_at ASC, id ASC"
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(query, params).fetchall()
 
 
 def query_degraded_state_summary(
