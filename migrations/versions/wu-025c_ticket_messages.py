@@ -92,23 +92,18 @@ def upgrade() -> None:
               AND permissions @> '{_SERVICE_PERMISSIONS}'::jsonb
               AND permissions <@ '{_SERVICE_PERMISSIONS}'::jsonb
               AND revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         )
         """
     )
 
 
 def downgrade() -> None:
-    op.execute(
-        f"""
-        DELETE FROM authority_grants
-        WHERE grantee_id = 'discord-ticket-bot'
-          AND scope_kind = 'global'
-          AND scope_id IS NULL
-          AND permissions @> '{_SERVICE_PERMISSIONS}'::jsonb
-          AND permissions <@ '{_SERVICE_PERMISSIONS}'::jsonb
-          AND revoked_at IS NULL
-        """
-    )
+    # Seeding is non-reversible by design: if an identical grant already existed
+    # prior to this migration, we cannot safely distinguish it from the seeded
+    # row. Per AGENTS.md live-server principle, leave the grant in place on
+    # downgrade; an operator can revoke it manually if needed.
+    pass
     op.drop_index(
         "uq_ticket_messages__ticket_client_message_id",
         table_name="ticket_messages",

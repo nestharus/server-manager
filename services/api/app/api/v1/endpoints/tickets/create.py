@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/v1/tickets")
     "",
     response_model=TicketCreateRead,
     status_code=HTTPStatus.CREATED,
-    dependencies=[Depends(service_actor_only), Depends(RequireAuthority("ticket.create", "global"))],
+    dependencies=[Depends(RequireAuthority("ticket.create", "global"))],
 )
 def create_ticket_endpoint(
     body: TicketCreate,

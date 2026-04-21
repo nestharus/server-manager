@@ -353,18 +353,19 @@ def create_ticket(
         except errors.UniqueViolation as error:
             if request.client_ticket_id is None:
                 raise
-            existing = get_ticket_by_category_client_ticket_id(
-                connection,
-                category_id=request.category_id,
-                client_ticket_id=request.client_ticket_id,
-            )
-            if existing is None:
-                raise
-            existing_read = _ticket_from_row(existing)
-            initial_message = _load_duplicate_initial_message(
-                connection,
-                ticket_id=existing_read.id,
-            )
+            with db.connection() as recovery_connection:
+                existing = get_ticket_by_category_client_ticket_id(
+                    recovery_connection,
+                    category_id=request.category_id,
+                    client_ticket_id=request.client_ticket_id,
+                )
+                if existing is None:
+                    raise
+                existing_read = _ticket_from_row(existing)
+                initial_message = _load_duplicate_initial_message(
+                    recovery_connection,
+                    ticket_id=existing_read.id,
+                )
             raise DuplicateTicketCreateError(existing_read, initial_message) from error
 
         initial_message, _created = append_ticket_message(
@@ -473,4 +474,3 @@ def transition_ticket(
     with db.connection() as connection:
         read = _ticket_from_row(_fetch_ticket_row(connection, ticket_id))
     return read, result
-
