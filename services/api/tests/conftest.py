@@ -24,6 +24,8 @@ GOVERNANCE_TABLES = (
     "activity_actions",
     "aggregate_heads",
     "authority_grants",
+    "trust_profiles",
+    "members",
     "policy_versions",
     "chapter_transitions",
     "chapters",

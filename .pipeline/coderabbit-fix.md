@@ -43,3 +43,27 @@
 
 - `cd services/api && uv run pytest tests/ -q`: 335 passed, 1 warning.
 - `cd services/discord && uv run pytest tests/ -q`: 56 passed, 20 warnings.
+
+# SLICE-007 CodeRabbit + Justification Fix Pass
+
+## Fixes Applied
+
+- Added a migration comment documenting that `wu_014_authority_api` adds `revoked_by` and `revocation_reason` before `wu_012_trust` through the `wu_033_roster -> wu_011_members` chain.
+- Guarded Discord onboarding member API responses before reading `member["id"]`; malformed lookup/create responses now raise `MemberOnboardingError` with the correct step.
+- Guarded Discord onboarding trust API responses so a missing `tier` raises `MemberOnboardingError` instead of silently deriving `intake_required=False`.
+- Treated missing trust policy `weights` as `InvalidTrustPolicyError("weights missing")`.
+- Suppressed the exception chain when re-raising the original concurrent trust compute error after recovery re-read fails.
+- Removed unsupported trust policy mapping branches for tier thresholds and account-age weighting.
+- Deleted the unused `_trust_create_payload` test helper and updated call sites.
+- Corrected `.pipeline/synthesis.md` D7 so `POST /members` no longer claims to carry `initial_signals`.
+
+## Tests Added
+
+- `test_handle_member_join_raises_on_malformed_api_response`
+- `test_handle_member_join_raises_on_malformed_trust_api_response`
+- `test_compute_trust_returns_409_when_policy_weights_missing`
+
+## Verification
+
+- `cd services/api && uv run pytest tests/ -q`: 376 passed, 1 warning.
+- `cd services/discord && uv run pytest tests/ -q`: 65 passed, 20 warnings.
