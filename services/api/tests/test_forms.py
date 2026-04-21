@@ -157,3 +157,20 @@ async def test_publish_form_rejects_invalid_contract_shapes(
     )
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.asyncio
+async def test_publish_form_normalizes_scope_id(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    _grant(governance_db)
+    response = await migrated_async_client.post(
+        FORMS_URL,
+        json=_payload(scope_id="  chapter-1  "),
+        headers=_headers(**{"If-Match": '"0"'}),
+    )
+
+    assert response.status_code == HTTPStatus.CREATED, response.text
+    assert response.json()["scope"]["scope_id"] == "chapter-1"
+    assert response.json()["routing_rules"]["review_scope"]["scope_id"] == "chapter-1"

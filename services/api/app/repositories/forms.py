@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID
 
 from psycopg import Connection
 from psycopg.rows import dict_row
@@ -104,55 +103,4 @@ def get_current_form_for_scope(
               AND f.status = 'current'
             """,
             (scope_kind, scope_id),
-        ).fetchone()
-
-
-def get_current_form_for_scope_for_update(
-    connection: Connection[Any],
-    *,
-    scope_kind: str,
-    scope_id: str | None,
-) -> dict[str, Any] | None:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            _FORM_SELECT
-            + """
-            WHERE f.scope_kind = %s
-              AND f.scope_id IS NOT DISTINCT FROM %s
-              AND f.status = 'current'
-            FOR UPDATE OF f
-            """,
-            (scope_kind, scope_id),
-        ).fetchone()
-
-
-def list_form_versions(
-    connection: Connection[Any],
-    *,
-    scope_kind: str,
-    scope_id: str | None,
-) -> list[dict[str, Any]]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return list(
-            cursor.execute(
-                _FORM_SELECT
-                + """
-                WHERE f.scope_kind = %s
-                  AND f.scope_id IS NOT DISTINCT FROM %s
-                ORDER BY f.version ASC
-                """,
-                (scope_kind, scope_id),
-            ).fetchall()
-        )
-
-
-def get_form_by_id(
-    connection: Connection[Any],
-    *,
-    form_definition_id: UUID,
-) -> dict[str, Any] | None:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            _FORM_SELECT + " WHERE f.id = %s",
-            (form_definition_id,),
         ).fetchone()

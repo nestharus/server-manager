@@ -12,6 +12,7 @@ from app.contracts.applications import (
     ApplicationDecisionReasonRequiredError,
     ApplicationFormField,
     ApplicationNotFoundError,
+    ApplicationNotOwnerError,
     ApplicationRead,
     ApplicationReviewNotesRequiredError,
     ApplicationSubmission,
@@ -208,6 +209,9 @@ def require_application_read_authority(
     actor: ActorIdentity,
     application: ApplicationRead,
 ) -> None:
+    # D8 interprets application read as: applicant identity OR any of the
+    # transition permissions (claim/review/approve/deny/withdraw) at
+    # form_snapshot.target_scope. No dedicated application.read permission.
     if actor.actor_kind == "user" and actor.actor_id == str(application.applicant_id):
         return
     target_scope = application.form_snapshot["target_scope"]
@@ -282,6 +286,8 @@ def validate_application_responses(
         if field.type in {"short", "long"}:
             if not isinstance(value, str):
                 raise InvalidApplicationResponseError(f"{field_id} must be a string")
+            if field.required and not value.strip():
+                raise InvalidApplicationResponseError(f"{field_id} is required")
             if field.max_length is not None and len(value) > field.max_length:
                 raise InvalidApplicationResponseError(f"{field_id} exceeds max_length")
         elif field.type == "number":
@@ -293,10 +299,17 @@ def validate_application_responses(
         elif field.type == "multi_select":
             if not isinstance(value, list):
                 raise InvalidApplicationResponseError(f"{field_id} must be a list")
+            if field.required and not value:
+                raise InvalidApplicationResponseError(f"{field_id} is required")
+            for item in value:
+                if not isinstance(item, str):
+                    raise InvalidApplicationResponseError(
+                        f"{field_id} entries must be strings"
+                    )
             if len(value) != len(set(value)):
                 raise InvalidApplicationResponseError(f"{field_id} must not contain duplicates")
             options = set(field.options or [])
-            if any(not isinstance(item, str) or item not in options for item in value):
+            if any(item not in options for item in value):
                 raise InvalidApplicationResponseError(f"{field_id} must contain configured options")
         elif field.type == "boolean" and not isinstance(value, bool):
             raise InvalidApplicationResponseError(f"{field_id} must be a boolean")
@@ -481,11 +494,12 @@ def submit_application(
         except errors.UniqueViolation as error:
             if validated.client_application_id is None:
                 raise
-            existing = get_application_by_client_application_id(
-                connection,
-                applicant_id=validated.applicant_id,
-                client_application_id=validated.client_application_id,
-            )
+            with db.connection() as recovery_connection:
+                existing = get_application_by_client_application_id(
+                    recovery_connection,
+                    applicant_id=validated.applicant_id,
+                    client_application_id=validated.client_application_id,
+                )
             if existing is None:
                 raise
             raise DuplicateApplicationCreateError(_row_to_read(existing)) from error
@@ -546,6 +560,11 @@ def _transition_application_locked(
         )
         now = datetime.now(UTC)
         reviewer_id = _reviewer_id(actor, action)
+        if action in {"review", "approve", "deny"} and current["owner_id"] != reviewer_id:
+            raise ApplicationNotOwnerError(
+                current_owner_id=current["owner_id"],
+                actor_id=reviewer_id,
+            )
         notes = None if request.notes is None else request.notes.strip()
         decision_reason = (
             None if request.decision_reason is None else request.decision_reason.strip()

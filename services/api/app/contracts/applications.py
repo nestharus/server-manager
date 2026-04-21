@@ -57,10 +57,10 @@ class ApplicationScope(_ApplicationModel):
     def validate_scope_id(self) -> "ApplicationScope":
         if self.scope_kind == "global" and self.scope_id is not None:
             raise ValueError("global scope must not set scope_id")
-        if self.scope_kind in {"chapter", "member"} and (
-            self.scope_id is None or not self.scope_id.strip()
-        ):
-            raise ValueError(f"{self.scope_kind} scope requires scope_id")
+        if self.scope_kind in {"chapter", "member"}:
+            if self.scope_id is None or not self.scope_id.strip():
+                raise ValueError(f"{self.scope_kind} scope requires scope_id")
+            object.__setattr__(self, "scope_id", self.scope_id.strip())
         return self
 
     def as_persisted(self) -> dict[str, str | None]:
@@ -295,6 +295,13 @@ class ApplicationAlreadyClaimedError(Exception):
         super().__init__("application is already claimed")
 
 
+class ApplicationNotOwnerError(Exception):
+    def __init__(self, *, current_owner_id: UUID | None, actor_id: UUID) -> None:
+        self.current_owner_id = current_owner_id
+        self.actor_id = actor_id
+        super().__init__("application is owned by a different reviewer")
+
+
 class DuplicateApplicationCreateError(Exception):
     def __init__(self, application: ApplicationRead) -> None:
         self.application = application
@@ -311,6 +318,7 @@ __all__ = [
     "ApplicationDecisionReasonRequiredError",
     "ApplicationFormField",
     "ApplicationNotFoundError",
+    "ApplicationNotOwnerError",
     "ApplicationRead",
     "ApplicationReviewNotesRequiredError",
     "ApplicationReviewRead",

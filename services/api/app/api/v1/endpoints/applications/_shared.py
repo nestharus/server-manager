@@ -9,6 +9,7 @@ from app.contracts.applications import (
     ApplicationAlreadyClaimedError,
     ApplicationDecisionReasonRequiredError,
     ApplicationNotFoundError,
+    ApplicationNotOwnerError,
     ApplicationReviewNotesRequiredError,
     DuplicateApplicationCreateError,
     FormDefinitionNotFoundError,
@@ -84,6 +85,20 @@ def raise_known_application_error(error: Exception) -> NoReturn:
                     if error.application.owner_id is None
                     else str(error.application.owner_id)
                 ),
+            },
+        ) from error
+    if isinstance(error, ApplicationNotOwnerError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={
+                "code": "application_not_owner",
+                "message": str(error),
+                "current_owner_id": (
+                    None
+                    if error.current_owner_id is None
+                    else str(error.current_owner_id)
+                ),
+                "actor_id": str(error.actor_id),
             },
         ) from error
     if isinstance(error, DuplicateApplicationCreateError):

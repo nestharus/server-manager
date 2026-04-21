@@ -105,6 +105,7 @@ def _form_payload() -> dict[str, Any]:
                 "id": "roles",
                 "type": "multi_select",
                 "label": "Roles",
+                "required": True,
                 "options": ["tank", "healer"],
             },
             {"id": "ready", "type": "boolean", "label": "Ready"},
@@ -214,6 +215,27 @@ async def test_duplicate_client_application_id_returns_409_without_second_review
 
 
 @pytest.mark.asyncio
+async def test_submit_rejects_empty_required_short_and_multi_select(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    await _publish_form(migrated_async_client, governance_db)
+    applicant_id = _create_member(governance_db, "applicant-1")
+    body = _application_payload(applicant_id, client_id=f"interaction-{uuid4().hex}")
+    body["responses"]["nickname"] = "   "
+    body["responses"]["roles"] = []
+
+    response = await migrated_async_client.post(
+        APPLICATIONS_URL,
+        json=body,
+        headers=_headers(applicant_id),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.json()["code"] == "invalid_application_response"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "responses",
     [
@@ -223,6 +245,7 @@ async def test_duplicate_client_application_id_returns_409_without_second_review
         {"nickname": "A" * 17, "score": 42, "class": "mage"},
         {"nickname": "Ada", "score": 42, "class": "rogue"},
         {"nickname": "Ada", "score": 42, "class": "mage", "roles": ["tank", "tank"]},
+        {"nickname": "Ada", "score": 42, "class": "mage", "roles": [{}]},
     ],
 )
 async def test_submit_validates_responses_against_snapshot(
@@ -274,6 +297,71 @@ async def test_claim_conflict_maps_stale_claim_to_409(
     )
     assert second.status_code == HTTPStatus.CONFLICT
     assert second.json()["code"] == "application_already_claimed"
+
+
+@pytest.mark.asyncio
+async def test_only_owner_can_review_approve_deny(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    await _publish_form(migrated_async_client, governance_db)
+    applicant_id = _create_member(governance_db, "applicant-1")
+    owner = _create_member(governance_db, "reviewer-1")
+    other = _create_member(governance_db, "reviewer-2")
+    _grant(
+        governance_db,
+        actor_id=owner,
+        permissions=frozenset(
+            {"application.claim", "application.review", "application.approve", "application.deny"}
+        ),
+    )
+    _grant(
+        governance_db,
+        actor_id=other,
+        permissions=frozenset(
+            {"application.review", "application.approve", "application.deny"}
+        ),
+    )
+    created = await _submit(migrated_async_client, applicant_id)
+    application_id = created.json()["id"]
+
+    claimed = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": "claim"},
+        headers=_headers(owner, **{"If-Match": created.headers["etag"]}),
+    )
+    assert claimed.status_code == HTTPStatus.OK, claimed.text
+
+    review = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": "review", "notes": "not your claim"},
+        headers=_headers(other, **{"If-Match": claimed.headers["etag"]}),
+    )
+    assert review.status_code == HTTPStatus.CONFLICT
+    assert review.json()["code"] == "application_not_owner"
+
+    reviewed = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": "review", "notes": "owner review"},
+        headers=_headers(owner, **{"If-Match": claimed.headers["etag"]}),
+    )
+    assert reviewed.status_code == HTTPStatus.OK, reviewed.text
+
+    approve = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": "approve", "decision_reason": "not your claim"},
+        headers=_headers(other, **{"If-Match": reviewed.headers["etag"]}),
+    )
+    assert approve.status_code == HTTPStatus.CONFLICT
+    assert approve.json()["code"] == "application_not_owner"
+
+    deny = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": "deny", "decision_reason": "not your claim"},
+        headers=_headers(other, **{"If-Match": reviewed.headers["etag"]}),
+    )
+    assert deny.status_code == HTTPStatus.CONFLICT
+    assert deny.json()["code"] == "application_not_owner"
 
 
 @pytest.mark.asyncio

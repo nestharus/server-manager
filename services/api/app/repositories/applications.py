@@ -198,32 +198,3 @@ def insert_review_row(connection: Connection[Any], *, row: dict[str, Any]) -> di
             ),
         ).fetchone()
 
-
-def list_review_rows(
-    connection: Connection[Any],
-    *,
-    application_id: UUID,
-) -> list[dict[str, Any]]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return list(
-            cursor.execute(
-                """
-                SELECT id,
-                       application_id,
-                       aggregate_seq,
-                       reviewer_id,
-                       actor_kind,
-                       actor_id,
-                       action,
-                       from_state,
-                       to_state,
-                       notes,
-                       decision_reason,
-                       recorded_at
-                FROM application_reviews
-                WHERE application_id = %s
-                ORDER BY aggregate_seq ASC
-                """,
-                (application_id,),
-            ).fetchall()
-        )
