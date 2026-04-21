@@ -35,6 +35,7 @@ GOVERNANCE_TABLES = (
     "roster_entries",
     "chapter_roles",
     "chapter_templates",
+    "ticket_categories",
     "permission_drift",
     "permission_intents",
     "scheduled_jobs",
