@@ -1,83 +1,73 @@
-# SLICE-018 Phase 5+6 Implementation
-
-## Summary
-
-Implemented both work units from final proposal revision 1:
-
-- WU-033: roster lifecycle API with chapter-scoped user authority, service-only sync-failure reporting, OCC via `If-Match`, roster transition projection rows, partial current-entry uniqueness, and atomic deferred-effect enqueue.
-- WU-034: Discord roster role sync handler with name/ID role resolution, idempotent add/remove behavior, deferred acknowledgement support, and API-backed sync-failure reporting as `roster-syncer`.
+# SLICE-007 Phase 5+6 Implementation
 
 ## Files Touched
 
-### CREATE
+### API
 
-- `migrations/versions/wu-033_roster.py`
-- `services/api/app/api/v1/endpoints/roster.py`
-- `services/api/tests/test_roster.py`
-- `services/discord/app/contracts/roster.py`
-- `services/discord/app/handlers/roster.py`
-- `services/discord/tests/test_roster_sync.py`
-
-### MODIFY
-
-- `.pipeline/implementation.md`
+- `migrations/versions/wu-011_members.py`
+- `migrations/versions/wu-012_trust.py`
+- `services/api/app/contracts/members.py`
+- `services/api/app/contracts/trust.py`
+- `services/api/app/repositories/members.py`
+- `services/api/app/repositories/trust.py`
+- `services/api/app/services/members.py`
+- `services/api/app/services/trust.py`
+- `services/api/app/api/v1/endpoints/members.py`
+- `services/api/app/api/v1/endpoints/trust.py`
 - `services/api/app/api/v1/router.py`
-- `services/api/app/contracts/roster.py`
-- `services/api/app/repositories/roster.py`
-- `services/api/app/services/roster.py`
 - `services/api/tests/conftest.py`
+- `services/api/tests/test_members.py`
+- `services/api/tests/test_trust.py`
 
-### DELETE
+### Discord
 
-- `services/api/tests/test_roster_foundation.py`
+- `services/discord/app/contracts/onboarding.py`
+- `services/discord/app/handlers/onboarding.py`
+- `services/discord/app/core/bot.py`
+- `services/discord/tests/test_onboarding.py`
 
-## Test Results
+## Test Counts
 
-- `cd /home/nes/projects/server-manager/worktrees/slice-018/services/api && uv run pytest tests/ -q`
-  - `354 passed, 1 warning`
-- `cd /home/nes/projects/server-manager/worktrees/slice-018/services/discord && uv run pytest tests/ -q`
-  - `59 passed, 20 warnings`
-
-## Grep Invariants
-
-Verified zero matches in implementation files:
-
-```bash
-rg -n "def insert_roster_entry\(|def fetch_roster_entry\(|def update_roster_status\(|def read_roster_entry\(|def transition_roster_status\(|roster-service|system/roster-service" services/api/app services/discord/app migrations -g '!**/.venv/**'
-```
-
-Result: no matches.
+- `cd services/api && uv run pytest tests/ -q`
+  - `375 passed, 1 warning in 106.97s`
+  - Warning: existing Pydantic deprecation warning in `tests/test_settings.py`.
+- `cd services/discord && uv run pytest tests/ -q`
+  - `63 passed, 20 warnings in 0.22s`
+  - Warnings: existing discord.py deprecation warnings from command registration tests.
 
 ## Deviations
 
-- Added optional `ack_deferred` to `RosterSyncEvent` so `sync_roster` can satisfy the explicit phase constraint that deferred acknowledgement happens before API/Discord work. This is additive to the proposal contract and does not change API persistence behavior.
-- No intentional deviations from the revision 1 authority split, OCC requirements, state machine, transition projection, partial unique index, service actor identity, or deferred-effect enqueue semantics.
+- No product-scope deviations from proposal revision 1.
+- The trust evaluator accepts both tier mapping rules and the list form used by the contract tests:
+  `{"name": "...", "max_score": ...}`. Both are deterministic policy-rule inputs.
+- No Discord-visible Tier 3 actions were executed.
 
-## Notes
+## Grep Invariants
 
-- `.pipeline/proposal.md`, `.pipeline/synthesis.md`, `.pipeline/research.md`, and `plans/risk/slice-018-*.md` were treated as inputs. Existing unstaged input-file changes were left intact.
+### Service actor grant
 
-## CodeRabbit Fix Pass
+```text
+migrations/versions/wu-012_trust.py:77:            'member-onboarder',
+migrations/versions/wu-012_trust.py:80:            '["member.read", "member.write", "trust.read", "trust.write"]'::jsonb,
+migrations/versions/wu-012_trust.py:89:            WHERE grantee_id = 'member-onboarder'
+migrations/versions/wu-012_trust.py:92:              AND permissions @> '["member.read", "member.write", "trust.read", "trust.write"]'::jsonb
+services/discord/app/handlers/onboarding.py:11:    "X-Actor-Id": "member-onboarder",
+```
 
-Applied critical and major review fixes:
+### No hardcoded system actor in member service
 
-- Allowed same-status roster transitions when `to_role_id` changes, while keeping no-op same-status transitions rejected with `409`.
-- Added API regression coverage for active-to-active role reassignment success and same-role no-op rejection.
-- Updated Discord roster sync to call `member.add_roles(role, ...)` and `member.remove_roles(role, ...)` with discord.py varargs instead of list arguments.
-- Updated Discord test fakes and assertions to match `add_roles(*roles, reason=None, atomic=True)` / `remove_roles(*roles, reason=None, atomic=True)`.
-- Typed Discord `RosterSyncEvent.transition_id` as `UUID` and serialized it back to a string in API payloads/results.
-- Replaced the bare sync-failure API exception swallow with explicit `ApiTransportError` / `ApiUnreachableError` handling.
+```text
+$ rg -n "['\"]system['\"]" services/api/app/services/members.py
+<no matches>
+```
 
-Quick low-risk nits included:
+### Aggregate and uniqueness wiring
 
-- Changed the roster syncer grant downgrade to use JSONB containment.
-- Removed the duplicate `_service_actor_only` dependency from the sync-failure endpoint signature.
-- Dropped the unused `chapter_id` parameter from the chapter-role repository helper.
-- Converted `services/api/tests/test_roster.py` to `@pytest.fixture`.
-
-Verification:
-
-- `cd /home/nes/projects/server-manager/worktrees/slice-018/services/api && uv run pytest tests/ -q`
-  - `356 passed, 1 warning`
-- `cd /home/nes/projects/server-manager/worktrees/slice-018/services/discord && uv run pytest tests/ -q`
-  - `59 passed, 20 warnings`
+```text
+migrations/versions/wu-011_members.py:37:            name="uq_members__discord_user_id",
+services/api/app/repositories/members.py:20:      ON h.aggregate_type = 'member'
+services/api/app/repositories/trust.py:20:      ON h.aggregate_type = 'trust_profile'
+services/api/app/services/members.py:119:            aggregate_type="member",
+services/api/app/services/members.py:207:        aggregate_type="member",
+services/api/app/services/trust.py:226:            aggregate_type="trust_profile",
+```

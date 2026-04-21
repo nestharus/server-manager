@@ -14,6 +14,7 @@ from app.api.v1.endpoints import (
     chapter_templates,
     chapters,
     health,
+    members,
     policies,
     ready,
     roster,
@@ -26,6 +27,7 @@ router.include_router(authority.router, tags=["authority"])
 router.include_router(chapter_templates.router, tags=["chapter-templates"])
 router.include_router(chapters.router, tags=["chapters"])
 router.include_router(health.router, tags=["health"])
+router.include_router(members.router, tags=["members"])
 router.include_router(policies.router, tags=["policies"])
 router.include_router(ready.router, tags=["ready"])
 router.include_router(roster.router, tags=["roster"])
