@@ -14,7 +14,6 @@ from app.contracts.scope import ScopeKind
 from app.core.context import get_current_actor as _get_current_actor
 from app.services.audit_overrides import record_authority_override
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
-from app.services.chapters import ChapterService
 
 
 def _authority_error(
@@ -41,10 +40,6 @@ def _normalize_override_reason(raw_value: str | None) -> str | None:
             message="X-Override-Reason must be 512 characters or fewer",
         )
     return trimmed
-
-
-def get_chapter_service(request: Request) -> ChapterService:
-    return request.app.state.chapter_service
 
 
 def get_current_actor() -> ActorIdentity:
