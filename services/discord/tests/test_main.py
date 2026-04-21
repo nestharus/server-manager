@@ -49,7 +49,7 @@ def test_main_module_has_expected_docstring() -> None:
     assert module.__doc__ == EXPECTED_MODULE_DOCSTRING
 
 
-def test_build_bot_with_registry_registers_chapter_command() -> None:
+def test_build_bot_with_registry_registers_interaction_commands() -> None:
     module = _import_main_module()
     settings = _make_settings()
     registered: list[str] = []
@@ -61,7 +61,7 @@ def test_build_bot_with_registry_registers_chapter_command() -> None:
         result = module.build_bot_with_registry(settings=settings, api_client=object())
 
     assert result is bot
-    assert registered == ["provision_chapter"]
+    assert registered == ["provision_chapter", "ticket_open", "ticket_transition"]
 
 
 @pytest.mark.asyncio
