@@ -27,6 +27,7 @@ GOVERNANCE_TABLES = (
     "policy_versions",
     "chapter_transitions",
     "chapters",
+    "roster_transitions",
     "roster_entries",
     "chapter_roles",
     "chapter_templates",

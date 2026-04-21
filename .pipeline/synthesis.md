@@ -1,174 +1,135 @@
-# SLICE-013 Phase 2: Synthesis
+# SLICE-018 Phase 2 Synthesis: Binding Decisions
 
-Orchestrator synthesis. D1-D12 binding.
+These decisions are binding for the SLICE-018 proposal and implementation.
+The proposal may choose implementation mechanics inside these boundaries, but
+it must not add scope, replace these directions, or introduce compatibility
+paths around them.
 
-## Problem
+## Binding Decisions
 
-SLICE-013 ships chapter provisioning from templates — template-mgmt CRUD, chapter lifecycle (proposed → provisioning → active), Discord guild resource creation workflow. Prototype identified one genuine contradiction (SLICE-003 immutable templates vs AC1's PATCH) resolved via template versioning.
+- **D1 — BINDING: RosterEntry aggregate and version handling.**
+  `roster_entries` is the durable `RosterEntry` aggregate table and uses
+  `aggregate_type = "roster_entry"` for optimistic locking. `roster_entries`
+  must not gain an independent `version` column. Read models must obtain
+  `version` by joining `aggregate_heads` on
+  `aggregate_type = "roster_entry"` and `aggregate_id = roster_entries.id`.
+  `RosterEntryRead` must include `version`.
 
-## Scope Decisions
+- **D2 — BINDING: Roster state machine.**
+  The only valid roster statuses are `active`, `on_leave`, `under_review`,
+  and `removed`. Allowed transitions are `active -> on_leave`,
+  `active -> under_review`, `active -> removed`, `on_leave -> active`,
+  `on_leave -> removed`, `under_review -> active`, and
+  `under_review -> removed`. No transition is allowed out of `removed`.
+  Re-admission after removal creates a new `RosterEntry` row and must not
+  resurrect or mutate the removed row back to a non-removed state.
 
-### D1: Template immutability resolved via versioning (new column `version`)
+- **D3 — BINDING: RosterTransition projection.**
+  `RosterTransition` must mirror the existing `chapter_transitions` projection
+  pattern. The service writes the roster entry mutation and transition
+  projection inside the same `mutate_entity(connection=...)` transaction, using
+  `mutate_projection`. `aggregate_seq` is always `expected_version + 1`.
+  `roster_transitions` must have a unique index on
+  `(roster_entry_id, aggregate_seq)`.
 
-SLICE-003 D9 made templates immutable (no update path). AC1 requires PATCH. Resolution:
-- `chapter_templates` gains `version: BIGINT NOT NULL` + `template_family_id: UUID NOT NULL` via migration `wu-018_chapter_templates.py`.
-- Each template row is still immutable in-place (per SLICE-003).
-- `PATCH /chapter-templates/{id}` creates a NEW row sharing the same `template_family_id`, with `version = max(version) + 1`.
-- GET by `template_id` returns a specific version; operators pass `expected_current_version` for 412 stale-write detection.
-- ChapterTemplateRead gains `version`, `template_family_id` fields.
+- **D4 — BINDING: ChapterRole identity.**
+  Stable `chapter_roles.id` remains the roster identity anchor stored in
+  `roster_entries.role_id` and transition role fields. Discord role IDs must
+  not be duplicated into `chapter_roles`. Discord role IDs are resolved from
+  `chapters.discord_resources.role_ids[chapter_role.name]`.
 
-### D2: Chapter state machine — 4 states + typed transitions
+- **D5 — BINDING: Member identity.**
+  `roster_entries.member_id` remains `TEXT` without a foreign key in SLICE-018
+  because the SLICE-007 member aggregate is not merged. Treat `member_id` as an
+  external durable identifier. Discord sync events must carry
+  `member_discord_user_id` separately and must not infer it from a local member
+  table.
 
-```python
-ChapterState = Literal["proposed", "provisioning", "active", "provisioning_failed"]
+- **D6 — BINDING: Current roster uniqueness.**
+  Add the partial unique index
+  `uq_roster__chapter_member_active` on
+  `roster_entries (chapter_id, member_id) WHERE status != 'removed'`. This
+  prevents more than one non-removed entry for the same chapter-member pair
+  while preserving removed historical rows.
 
-ChapterTransition = {
-    ("proposed", "provisioning"),
-    ("provisioning", "active"),
-    ("provisioning", "provisioning_failed"),
-    ("provisioning_failed", "provisioning"),   # retry
-}
-```
+- **D7 — BINDING: Operator roster authority scopes.**
+  Operator-facing roster endpoints are chapter-scoped and user-actor-only.
+  The only new roster permissions are `roster.read`, `roster.write`, and
+  `roster.remove`; removal requires the dedicated `roster.remove` permission
+  because it is destructive. `POST /api/v1/roster-entries` derives
+  `scope_id` from `body.chapter_id`. `GET /api/v1/roster-entries/{id}` and
+  transition endpoints first fetch the roster entry, derive the chapter
+  `scope_id` from that row, then authorize `roster.read`, `roster.write`, or
+  `roster.remove` as required by the operation and `to_status`. The
+  `/sync-failure` endpoint is excluded from this chapter-scoped operator
+  policy and follows D10.
 
-Service enforces the matrix; invalid transition raises `InvalidChapterTransitionError`. No direct state updates — always via `transition_chapter(chapter_id, to_state, reason, actor)` service call that composes with mutate_entity. Archive state and archive transitions are SLICE-023-only.
+- **D8 — BINDING: Discord sync idempotency.**
+  The Discord `sync_roster` handler is idempotent. It adds missing target role
+  IDs, skips roles already present, removes target-absent roles when the target
+  state requires removal, and skips roles already absent. It must call
+  `Member.add_roles([role], reason=...)` and
+  `Member.remove_roles([role], reason=...)` with explicit reason strings. On
+  Discord `Forbidden`, `NotFound`, or `HTTPException`, the handler must record
+  a consequential deferred effect through the API rather than swallowing the
+  failure or writing directly to the database.
 
-### D3: Template instantiation = copy-on-instantiate
+- **D9 — BINDING: Deferred effect on sync failure.**
+  The API exposes a service method
+  `record_roster_sync_failure(roster_entry_id, reason, expected_version)`.
+  It runs inside `mutate_entity` for the `roster_entry` aggregate and enqueues
+  the retry in the same transaction. The idempotency key is
+  `f"roster_sync_retry:{roster_entry_id}:{transition_id}"`,
+  `consequence_level = "consequential"`, and
+  `precondition_state = "unchecked"`. A stale `expected_version` must reject
+  the failure recording and must not enqueue a retry for obsolete desired
+  state.
 
-Chapter row stores:
-- `template_id: UUID` — provenance, the exact template version used
-- `template_snapshot: JSONB` — deep-copied channel_structure + role_structure + default_permission_intents at provision time
-- `configuration: JSONB` — operator-set overrides (empty in Phase 2)
+- **D10 — BINDING: Discord handler service actor.**
+  The Discord roster sync handler uses a new service actor,
+  `roster-syncer`, separate from `discord-provisioner`. The migration for
+  SLICE-018 seeds authority grants for `roster-syncer` with `roster.read` and
+  `roster.write` at global scope. Per-chapter service grants are deferred and
+  must not be introduced in this slice. `POST
+  /api/v1/roster-entries/{id}/sync-failure` is service-only: it requires a
+  service actor, rejects non-service actors before mutation, and authorizes
+  `roster.write` at `scope_kind = "global"` to match the seeded
+  `roster-syncer` grant.
 
-Template edits (new version in same family) do NOT alter existing chapters. Chapters only change via explicit operator actions.
+- **D11 — BINDING: Originating user propagation.**
+  Discord-to-API roster calls carry `originating_actor_kind` and
+  `originating_actor_id` in the request body. The API records these values in
+  audit payloads and transition rows using the same originating actor pattern
+  established by SLICE-013.
 
-### D4: Discord provisioning workflow = sequential with partial-failure rollback plan
+- **D12 — BINDING: Anti-scope.**
+  SLICE-018 must not implement advanced roster analytics, bulk CSV import,
+  leadership succession workflow, roster archival, cross-chapter transfer, or
+  automatic synchronization of per-role permission grants into
+  `authority_grants`.
 
-Order: create_category → create_roles (sequential) → create_channels with permission overwrites → record Discord resource IDs back via API → transition to active.
+## Anti-Scope
 
-On any step failure:
-1. Record partial resources (category_id, role_ids, channel_ids) in `discord_resources` on the Chapter row.
-2. Transition chapter to `provisioning_failed`.
-3. Enqueue deferred_effects row with consequence_level="consequential", precondition_state="unchecked", effect_type="chapter_provisioning_retry", payload includes chapter_id + partial resources + failure reason.
+- Advanced roster analytics.
+- Bulk roster import from CSV or other files.
+- Leadership succession workflow; this belongs to SLICE-024.
+- Roster archival.
+- Cross-chapter transfer.
+- Automatic per-role permission grant synchronization into `authority_grants`.
 
-Retry (from provisioning_failed → provisioning): operator triggers retry via transition endpoint OR deferred effect handler picks up after precondition validated.
+## Traceability
 
-### D5: Idempotent provisioning via name-check
-
-Before creating any Discord resource, check if a resource with the chapter's prefix/name already exists in the guild. If present, treat as already-created (record its id in discord_resources). Each role/channel name is derived deterministically from template + chapter name, so re-running provisioning on a partial state doesn't duplicate.
-
-### D6: Deferred effect payload for failed provisioning
-
-```python
-payload = {
-    "chapter_id": str(chapter.id),
-    "template_id": str(chapter.template_id),
-    "partial_resources": {
-        "category_id": Optional[str],
-        "role_ids": dict[str, str],  # {template_role_name: discord_role_id}
-        "channel_ids": dict[str, str],
-    },
-    "failure_reason": str,
-    "failed_at_step": Literal["category","role","channel","permission_overwrite","api_confirm"],
-}
-```
-
-Effect handler (future slice or next PR): read payload, resume from failed step, call Discord API to finish, update chapter state via API.
-
-### D7: Discord resources stored on Chapter row
-
-`chapters.discord_resources: JSONB` — structure:
-```python
-{
-    "category_id": "123456789",
-    "role_ids": {"officer": "111", "member": "222", ...},
-    "channel_ids": {"announcements": "333", "general": "444", ...},
-}
-```
-
-Always kept in sync with Discord reality. On provisioning, populated incrementally. Archive retention semantics are SLICE-023-only.
-
-### D8: Required permissions for API endpoints
-
-- `chapter_template.write` for POST/PATCH template endpoints (global scope)
-- `chapter_template.read` for GET (global)
-- `chapter.write` for POST /chapters + POST /transitions (global scope)
-- `chapter.read` for GET /chapters/{id} (global scope for Phase 2; chapter-scoped later)
-
-All via RequireAuthority.
-
-### D9: Discord bot permissions required
-
-- MANAGE_CHANNELS (create_category + create_text_channel)
-- MANAGE_ROLES (create_role + permission overwrites)
-- VIEW_CHANNEL (observe)
-
-Document in DiscordSettingsRead — no new env var, but add a comment documenting required bot permissions. Fail-fast at Discord runtime boot if `bot.guild.me.guild_permissions` lacks any required bit (enhance runtime_check).
-
-### D10: Chapter aggregate identity and table schema
-
-New migration `wu-019_chapter_lifecycle.py`:
-```sql
-CREATE TABLE chapters (
-    id TEXT PRIMARY KEY,  -- stable chapter-id, e.g., "chapter:<slug>"
-    name TEXT NOT NULL,
-    template_id UUID NOT NULL REFERENCES chapter_templates(id),
-    template_snapshot JSONB NOT NULL,
-    configuration JSONB NOT NULL DEFAULT '{}',
-    state TEXT NOT NULL CHECK (state IN ('proposed','provisioning','active','provisioning_failed')),
-    discord_resources JSONB NOT NULL DEFAULT '{}',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX uq_chapters__name ON chapters (LOWER(name));
-
-CREATE TABLE chapter_transitions (
-    id UUID PRIMARY KEY,
-    chapter_id TEXT NOT NULL REFERENCES chapters(id),
-    from_state TEXT NOT NULL,
-    to_state TEXT NOT NULL,
-    actor_kind TEXT NOT NULL,
-    actor_id TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX ix_chapter_transitions__chapter_id ON chapter_transitions (chapter_id);
-```
-
-`aggregate_id = str(chapter.id)` for mutate_entity. Each transition writes one activity_action + one chapter_transitions row (via mutate_projection).
-
-### D11: Discord provisioning workflow in handlers/chapters.py + commands/chapters.py
-
-- `commands/chapters.py`: register `provision_chapter(chapter_id, actor)` as an InteractionHandler via InteractionRegistry. (Or register as a non-command background task via SchedulerLoop? Since it's triggered by an operator Discord command, InteractionHandler is correct.)
-- `handlers/chapters.py`: async `provision_chapter_handler(envelope) -> InteractionResult`:
-  1. Fetch chapter from API (GET /chapters/{id}) — expect state=proposed.
-  2. POST /chapters/{id}/transitions with to_state="provisioning".
-  3. Create Discord resources sequentially (D4).
-  4. On each step success, PATCH `/chapters/{id}/discord-resources` to update discord_resources incrementally.
-  5. On all success, POST transition to_state="active".
-  6. On any failure, enqueue deferred effect via API (new POST /deferred-effects endpoint OR direct via the scheduler service if shared).
-
-### D12: Anti-scope
-
-- NO chapter editing post-provision (name changes, template swaps) — later slice.
-- NO chapter archive state, archive transitions, archive workflow, archived_at column, or Discord resource teardown. Archive is SLICE-023-only.
-- NO roster management (SLICE-018).
-- NO template-family permission (templates and their versions all share same permission).
-- NO deferred-effect handler implementation for chapter_provisioning_retry — this slice ENQUEUES the effect; the handler/worker that drains it is deferred to a follow-up slice or SLICE-023.
-- NO multi-guild / multi-tenant.
-
-## Acceptance Criteria → WU Mapping
-
-- **AC1** (template create/update + 412): WU-018 — POST creates v1; PATCH creates new version of same family; 412 on expected_current_version mismatch.
-- **AC2** (create returns proposed state + template reference): WU-019 — POST /chapters creates row at state=proposed with template_id populated.
-- **AC3** (proposed→provisioning→active only after verified Discord IDs): WU-019 transitions endpoint + AC3-required `PATCH /chapters/{id}/discord-resources` endpoint + WU-020 workflow patching discord_resources before requesting final active transition.
-- **AC4** (failed provisioning → deferred effect, not partial active): WU-020 catch + enqueue deferred_effect + transition to provisioning_failed (not active).
-
-## Hand-off to Proposal
-
-Proposer honors D1-D12 and covers:
-- 2 migrations (wu-018 templates versioning, wu-019 chapters + transitions)
-- Contract shapes (ChapterTemplateRead gains version/family, ChapterRead, ChapterTransitionRead, ChapterProvisionResult)
-- Services (chapter_templates widened, chapters new, Discord handlers new)
-- 7 API route operations + 1 Discord command handler
-- Deferred effect enqueue (reuses SLICE-004 substrate)
-- Authority guards
-- Per-WU test plans
+| Decision | Supports / resolves |
+|---|---|
+| D1 | Supports AC3: optimistic locking with versioned reads and stale transition rejection. Resolves research finding 1 that roster version must come from `aggregate_heads`, matching chapter lifecycle. |
+| D2 | Supports AC2: status transitions are explicit and auditable. Resolves research finding 4 that `removed` is terminal and re-admission creates a new entry. |
+| D3 | Supports AC2 and AC3: every transition records actor/reason metadata in the same transaction as the versioned aggregate update. Resolves research finding 2 that roster transitions should mirror `chapter_transitions`. |
+| D4 | Supports AC1 and Discord sync correctness: roster entries tie to durable chapter role identity while Discord IDs remain provisioning resources. Resolves research finding 3 that `chapter_roles.id` is the stable identity and Discord role IDs live in `chapters.discord_resources`. |
+| D5 | Supports AC1 and WU-034 sync contract: roster state can ship before SLICE-007 member storage. Resolves research finding 7 that no merged member table exists and `member_id TEXT` must remain external. |
+| D6 | Supports AC1 and D2: direct roster add cannot create competing current entries for the same chapter member while preserving removed history for re-admission. Resolves research finding 4's current-entry invariant. |
+| D7 | Supports AC1, AC2, and destructive removal safety: operator roster reads/writes are authorized for the owning chapter, and removal has its own permission. Resolves research finding 8 about chapter-scoped roster authority and two-step authorization for entry-id routes while excluding the service-only sync-failure route. |
+| D8 | Supports AC4: Discord role sync is recoverable and does not silently drift. Resolves research finding 5 that no existing role sync path exists and the handler must be idempotent around add/remove operations. |
+| D9 | Supports AC4 and AC3: failed Discord role updates enqueue consequential deferred work only when the roster version is still current. Resolves research finding 6 and the proposed API concurrency spike. |
+| D10 | Supports AC4 and least-confusion service attribution: roster sync has a distinct service actor from chapter provisioning, and sync-failure reporting uses global service authority instead of chapter scope. Resolves research finding 8's service grant question by binding global service grants for this slice. |
+| D11 | Supports AC2 and audit accountability: Discord-originated roster changes preserve the human originator separately from the service actor. Resolves the SLICE-013 pattern reuse noted in the task input. |
+| D12 | Resolves proposal scope risk by excluding roadmap-adjacent work that belongs to later slices or separate initiatives. Aligns with SLICE-018 ticket boundaries and the research warning against expanding into analytics, imports, succession, archival, transfer, or authority auto-sync. |
