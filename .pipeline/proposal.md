@@ -1,484 +1,439 @@
-# SLICE-018 Phase 3: Proposal
+# SLICE-007 Phase 3 Proposal: Member Onboarding With Initial Trust Assessment
 
-## 1. Source
+## Source
 
-This proposal implements WU-033 and WU-034 from
-`product-strategy/tickets/SLICE-018.md`: operators can add members directly to
-a chapter roster, transition roster status or role with attribution, enforce
-optimistic concurrency, and queue a consequential deferred effect when Discord
-role synchronization fails.
+This proposal implements WU-011, WU-012, and WU-013 from
+`product-strategy/tickets/SLICE-007.md`, using the Phase 1 research in
+`.pipeline/research.md` and the Phase 2 binding synthesis in
+`.pipeline/synthesis.md`.
 
-Primary source inputs:
+Primary source citations:
 
-- `.pipeline/research.md` establishes the implementation substrate: keep
-  `roster_entries` as aggregate type `roster_entry`, read version from
-  `aggregate_heads`, mirror `chapter_transitions`, resolve Discord role IDs via
-  `chapters.discord_resources.role_ids[chapter_role.name]`, keep
-  `member_id TEXT`, use chapter-scoped authority for operator endpoints, and
-  record Discord sync failure through the API rather than writing directly from
-  Discord.
-- `.pipeline/synthesis.md` is binding. D1-D12 define the roster aggregate,
-  transition matrix, projection pattern, chapter role identity, member identity,
-  current roster uniqueness, authority model, Discord idempotency, deferred
-  effect semantics, service actor, originating-user propagation, and anti-scope.
-- Existing merged code provides the patterns to extend:
-  `services/api/app/services/mutations.py` for OCC and aggregate heads,
-  `services/api/app/services/chapters.py` and
-  `services/api/app/repositories/chapter_transitions.py` for transition
-  projections and failed-provisioning deferred effects,
-  `services/api/app/repositories/chapters.py` for version joins,
-  `services/discord/app/handlers/chapters.py` for the SLICE-013
-  Discord-to-API service actor flow, and the WU-007B/WU-007C roster and
-  chapter-role foundation migrations/contracts/services.
+- `.pipeline/research.md` section 1: no prototype is required because the slice stays
+  on existing `mutate_entity()`/`aggregate_heads`, policy-version, and
+  Discord-to-API transport surfaces.
+- `.pipeline/research.md` sections 2.1, 2.9, and 2.10: member creation should be a new
+  projection-plus-head aggregate, `discord_user_id` must be unique, and member
+  lifecycle history should use `activity_actions` rather than a dedicated
+  transition projection.
+- `.pipeline/research.md` sections 2.4 and 2.6: trust compute is initial-only,
+  idempotent by member, uses the latest global `policy_versions` trust row,
+  and returns a typed `409` when no trust policy exists.
+- `.pipeline/research.md` sections 2.8 and 2.11: the Discord join handler must be
+  API-first and use global member/trust authority.
+- `.pipeline/synthesis.md` D1-D12: these decisions are binding. Where research
+  and synthesis differ, D1-D12 control this proposal.
 
-## 2. In Scope / Out of Scope
+Existing code references:
 
-In scope:
+- `services/api/app/services/mutations.py:58` defines `mutate_entity()`;
+  `services/api/app/services/mutations.py:97` bootstraps `aggregate_heads` for
+  `expected_version=0`; `services/api/app/services/mutations.py:123` rejects
+  stale versions; `services/api/app/services/mutations.py:150` writes accepted
+  audit actions; `services/api/app/services/mutations.py:167` advances the
+  version.
+- `services/api/app/repositories/roster.py:11` shows the current projection
+  read pattern that joins `aggregate_heads` for `version`.
+- `services/api/app/repositories/policies.py:10` provides latest policy-version
+  lookup.
+- `services/api/app/core/dependencies.py:56` and
+  `services/api/app/core/dependencies.py:129` provide global authority
+  enforcement through `RequireAuthority`.
+- `services/discord/app/infrastructure/api_client.py:25` adds correlation
+  headers to API calls while preserving caller-supplied headers.
+- `services/discord/app/core/bot.py:21` already enables the Discord members
+  intent needed for join events.
+- `services/discord/app/handlers/chapters.py:12` and
+  `services/discord/app/handlers/chapters.py:88` are the precedent for service
+  actor headers plus originating-user payload fields.
 
-- Extend, not replace, the existing roster foundation from
-  `migrations/versions/wu-007c_roster_foundation.py`,
-  `services/api/app/contracts/roster.py`,
-  `services/api/app/repositories/roster.py`, and
-  `services/api/app/services/roster.py`.
-- Add `migrations/versions/wu-033_roster.py` with roster lifecycle schema:
-  adjusted `roster_entries` columns/constraints where needed,
-  `roster_transitions`, current-entry partial uniqueness, and seeded
-  `roster-syncer` service actor grants.
-- Add the roster lifecycle API:
-  `POST /api/v1/roster-entries`,
-  `GET /api/v1/roster-entries/{id}`,
-  `POST /api/v1/roster-entries/{id}/transitions`, and
-  `POST /api/v1/roster-entries/{id}/sync-failure`.
-- Add two-tier roster authority:
-  - operator-facing create, read, and transition endpoints require
-    chapter-scoped `roster.read`, `roster.write`, or `roster.remove` as
-    appropriate, and are user-actor-only;
-  - service-only sync-failure reporting requires global-scoped
-    `roster.write` and a service actor.
-- Add `RosterEntryTransitionRequest` and `RosterSyncFailureRequest`, and extend
-  `RosterEntryRead` with `version`.
-- Add Discord-side `RosterSyncEvent`, `RosterSyncResult`, and
-  `sync_roster(event)` that uses Discord member role add/remove APIs
-  idempotently.
-- On Discord sync failure, call the API as service actor `roster-syncer` and
-  let the API enqueue the consequential deferred effect inside the roster
-  aggregate mutation.
+## In Scope
 
-Out of scope:
+- Add a durable `member` aggregate backed by `members` plus
+  `aggregate_heads`.
+- Add member create/get/status APIs with global `member.read` and
+  `member.write` authority.
+- Add a durable one-profile-per-member `trust_profile` aggregate backed by
+  `trust_profiles` plus `aggregate_heads`.
+- Add initial trust compute and read APIs with global `trust.read` and
+  `trust.write` authority.
+- Compute trust deterministically from the fixed onboarding signal JSON and the
+  currently selected trust policy version.
+- Return `409 {"code": "no_trust_policy_configured"}` when no global trust
+  policy exists.
+- Seed the `member-onboarder` service actor with global `member.read`,
+  `member.write`, `trust.read`, and `trust.write` grants.
+- Add a Discord member-join handler that creates or finds the member, requests
+  trust compute through the API, and returns an onboarding outcome.
+- Carry the originating Discord user ID in request bodies so API audit payloads
+  preserve the user behind the service actor.
 
-- No advanced roster analytics.
-- No bulk CSV or file import.
-- No leadership succession workflow; SLICE-024 owns it.
-- No roster archival workflow.
-- No cross-chapter transfer.
-- No automatic synchronization of per-role permission grants into
-  `authority_grants`.
-- No SLICE-007 member table dependency or FK from `roster_entries.member_id` to
-  members.
-- No deferred-effect worker for executing roster sync retries. This slice
-  enqueues the effect only.
-- No Discord-visible mutation is run by this proposal. Implementation tests use
-  mocks/fakes; any live Discord role change remains Tier 3 and requires
-  explicit per-action approval under `AGENTS.md`.
+## Out of Scope
 
-D12 anti-scope is binding exactly as stated in synthesis: SLICE-018 must not
-implement advanced roster analytics, bulk CSV import, leadership succession,
-roster archival, cross-chapter transfer, or automatic synchronization of
-per-role permission grants into `authority_grants`.
+D12 anti-scope is explicit and remains binding. SLICE-007 does not implement:
 
-## 3. Work Units
+- Trust recomputation.
+- Trust signal extensibility beyond the initial onboarding JSONB shape.
+- Member merge or split workflows.
+- Member data export.
+- Compliance-driven member status changes.
+- Per-chapter member visibility.
+- Age verification.
+- Phone verification.
 
-### WU-033 Roster Lifecycle API
+The slice also does not add a foreign key from `roster_entries.member_id` to
+`members.id`; D10 defers that backfill and constraint to a later cleanup slice.
 
-**Migration: `migrations/versions/wu-033_roster.py`**
+## Work Units
 
-- Set `down_revision` to the current migration head that includes
-  `wu_019_chapter_lifecycle`.
-- Extend `roster_entries` without adding a version column:
-  - Keep `id`, `chapter_id`, `member_id`, `role_id`, `status`, `created_at`.
-  - Add `updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`.
-  - Add `removal_metadata JSONB NOT NULL DEFAULT '{}'::jsonb`.
-  - Add FK `chapter_id -> chapters(id)` and update roster tests to seed a
-    chapter before creating chapter roles or roster entries.
-  - Add `UNIQUE (chapter_id, id)` on `chapter_roles` as
-    `uq_chapter_roles__chapter_id_id` to support the composite FK.
-  - Add composite FK `(chapter_id, role_id) -> chapter_roles(chapter_id, id)`
-    so a roster entry cannot point at a role from another chapter.
-  - Add partial unique index
-    `uq_roster__chapter_member_active` on `(chapter_id, member_id) WHERE status
-    != 'removed'` per D6.
-- Create `roster_transitions`:
+### WU-011 Member Aggregate + Status API
+
+**Migration: `migrations/versions/wu-011_members.py`**
+
+- Create `members`:
   - `id UUID PRIMARY KEY`
-  - `roster_entry_id UUID NOT NULL REFERENCES roster_entries(id) ON DELETE RESTRICT`
-  - `chapter_id TEXT NOT NULL`
-  - `aggregate_seq BIGINT NOT NULL`
-  - `from_status TEXT NOT NULL`
-  - `to_status TEXT NOT NULL`
-  - `from_role_id UUID NULL REFERENCES chapter_roles(id) ON DELETE RESTRICT`
-  - `to_role_id UUID NULL REFERENCES chapter_roles(id) ON DELETE RESTRICT`
-  - `actor_kind TEXT NOT NULL`
-  - `actor_id TEXT NOT NULL`
-  - `originating_actor_kind TEXT NULL`
-  - `originating_actor_id TEXT NULL`
-  - `reason TEXT NOT NULL`
-  - `removal_metadata JSONB NOT NULL DEFAULT '{}'::jsonb`
-  - `recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
-  - FK `chapter_id -> chapters(id) ON DELETE RESTRICT`
-  - checks for valid roster statuses
-  - `UNIQUE (roster_entry_id, aggregate_seq)` per D3
-  - index on `(chapter_id, recorded_at)`
-- Seed a global, active `authority_grants` row for `grantee_id='roster-syncer'`
-  with permissions `["roster.read", "roster.write"]`, `scope_kind='global'`,
-  and `scope_id IS NULL` per D10. Do not introduce per-chapter service grants.
+  - `discord_user_id TEXT NOT NULL UNIQUE`
+  - `joined_at TIMESTAMPTZ NOT NULL`
+  - `status TEXT NOT NULL CHECK (status IN ('active','suspended','departed'))`
+  - `created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
+  - `updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
+- Do not add a `version` column.
+- The service bootstraps the matching `aggregate_heads` row through
+  `mutate_entity(... expected_version=0, aggregate_type="member")`, matching
+  the established aggregate-head bootstrap pattern.
 
-**Contracts: `services/api/app/contracts/roster.py`**
+**Contracts: `services/api/app/contracts/members.py`**
 
-- Keep `RosterStatus = Literal["active", "on_leave", "under_review",
-  "removed"]`.
-- Extend `RosterEntryRead` with:
-  - `updated_at: datetime`
-  - `removal_metadata: dict[str, Any] = Field(default_factory=dict)`
-  - `version: int = Field(ge=1)`
-- Update `RosterEntryCreate` to only accept `chapter_id`, `member_id`, and
-  `role_id`. Creation always writes `status="active"` server-side. Delete the
-  public create-status input and update foundation tests rather than preserving
-  a compatibility path.
-- Add `RosterEntryTransitionRequest`:
-  - `to_status: RosterStatus`
-  - `to_role_id: UUID | None = None`
-  - `reason: str = Field(min_length=1)`
-  - `removal_metadata: dict[str, Any] = Field(default_factory=dict)`
-  - `originating_actor_kind: Literal["user", "service"] = "user"`
-  - `originating_actor_id: str = Field(min_length=1)`
-- Add `RosterSyncFailureRequest`:
-  - `transition_id: UUID`
-  - `reason: str = Field(min_length=1)`
-  - `member_discord_user_id: str | None = None`
-  - `operation: Literal["add_roles", "remove_roles", "resolve_member", "resolve_role"]`
-  - `failed_at_step: str = Field(min_length=1)`
-  - `desired_discord_role_ids: list[str] = Field(default_factory=list)`
-  - `error_type: str | None = None`
-  - `originating_actor_kind: Literal["user", "service"] = "service"`
-  - `originating_actor_id: str = Field(min_length=1)`
-- Add typed errors:
-  - `RosterEntryNotFoundError`
-  - `RosterRoleNotFoundError` remains
-  - `InvalidRosterStatusTransitionError` remains
-  - `RosterRoleChapterMismatchError`
-  - `RosterDuplicateCurrentEntryError`
-
-**Repository: `services/api/app/repositories/roster.py`**
-
-Use underscore-prefixed helpers as the module's internal persistence API:
-
-- `_ROSTER_ENTRY_SELECT` joins `roster_entries` to `aggregate_heads` with
-  `aggregate_type='roster_entry'` and `aggregate_id = roster_entries.id::text`
-  to return `version`.
-- `_fetch_roster_entry(connection, entry_id)` returns the read row with version.
-- `_fetch_roster_entry_for_update(connection, entry_id)` locks the roster row
-  for transition and sync-failure recording.
-- `_insert_roster_entry(connection, row)` inserts the active entry.
-- `_insert_roster_transition(connection, row)` inserts the projection row.
-- `_update_roster_entry(connection, entry_id, status, role_id,
-  removal_metadata)` updates status/role/removal metadata and `updated_at`.
-- `_fetch_chapter_role_for_update_or_validate(connection, chapter_id, role_id)`
-  verifies the role belongs to the same chapter before insert or transition.
-
-This replaces the current public-only foundation helpers
-`insert_roster_entry`, `fetch_roster_entry`, and `update_roster_status` without
-leaving compatibility aliases.
-
-**Service: `services/api/app/services/roster.py`**
-
-- `create_roster_entry(db, request, actor) -> tuple[RosterEntryRead,
-  MutationResult]`
-  - Validates `request.role_id` belongs to `request.chapter_id`.
-  - Inserts an `active` row through `_insert_roster_entry`.
-  - Uses `mutate_entity(aggregate_type="roster_entry", expected_version=0)`.
-  - Returns `RosterEntryRead` with version `1` and ETag `"1"`.
-  - Translates partial unique index violation to
-    `RosterDuplicateCurrentEntryError`.
-- `get_roster_entry(db, entry_id) -> tuple[RosterEntryRead, str]`
-  - Fetches by `_fetch_roster_entry`.
-  - Returns body plus ETag from `version`.
-- `transition_roster_entry(db, entry_id, request, actor, expected_version) ->
-  tuple[RosterEntryRead, MutationResult]`
-  - Fetches current row `FOR UPDATE` inside `mutate_entity`.
-  - Applies D2 state matrix exactly:
-    `active -> on_leave | under_review | removed`,
-    `on_leave -> active | removed`,
-    `under_review -> active | removed`,
-    no transition out of `removed`.
-  - If `request.to_role_id` is present, validates it belongs to the same
-    chapter and writes the role change in the same mutation.
-  - Computes `aggregate_seq = expected_version + 1`.
-  - Inserts one `roster_transitions` row with actor, originating actor, reason,
-    from/to status, from/to role, removal metadata, and aggregate sequence.
-  - Updates `roster_entries` in the same transaction.
-  - Emits action/state-change payloads that include `originating_actor_kind` and
-    `originating_actor_id` per D11.
-- `record_roster_sync_failure(db, roster_entry_id, request, actor,
-  expected_version) -> tuple[RosterEntryRead, MutationResult]`
-  - Enforces actor `service/roster-syncer` at the endpoint layer and still uses
-    the passed actor for audit.
-  - Runs `mutate_entity` for aggregate type `roster_entry` with the supplied
-    `expected_version`; stale versions become 412 and enqueue nothing.
-  - Does not change `roster_entries.status` or `role_id`.
-  - Enqueues `DeferredEffectCreate` in the same transaction via
-    `enqueue_effect`, with:
-    `subsystem="roster_role_sync"`,
-    `effect_type="roster_sync_retry"`,
-    `idempotency_key=f"roster_sync_retry:{roster_entry_id}:{request.transition_id}"`,
-    `consequence_level="consequential"`, and repository default
-    `precondition_state="unchecked"`.
-  - Payload includes roster entry id, chapter id, member id,
-    member Discord user id, transition id, desired Discord role ids,
-    operation, failed step, failure reason, and originating actor.
-
-Remove or rename `read_roster_entry` and `transition_roster_status`; the
-implementation must update all call sites and tests to the new lifecycle
-service names with no compatibility shim.
-
-**Endpoints: `services/api/app/api/v1/endpoints/roster.py`**
-
-- Mount the router from `services/api/app/api/v1/router.py`.
-- Add a local service-actor dependency for sync-failure reporting:
-  `_service_actor_only(actor: ActorIdentity = Depends(get_current_actor))`.
-  It rejects any actor whose `actor_kind != "service"` with
-  `403 {"code": "service_actor_required"}` before mutation. The endpoint also
-  rejects service actors other than `actor_id="roster-syncer"` with 403, using
-  the same actor-id guard already required by the service contract.
-- Reuse the chapter endpoint ETag parse/set pattern:
-  - missing `If-Match` -> `428 Precondition Required`
-  - malformed `If-Match` -> `400 Bad Request`
-  - stale aggregate -> `412 Precondition Failed`
-- `POST /api/v1/roster-entries -> RosterEntryRead`
-  - Requires actor headers.
-  - Requires `actor_kind="user"`; service actors must not use operator
-    endpoints.
-  - Uses body-aware chapter-scoped authority:
-    `roster.write` on `scope_kind="chapter"`, `scope_id=body.chapter_id`.
-  - Returns `201 Created`, body status `active`, and ETag `"1"`.
-- `GET /api/v1/roster-entries/{id} -> RosterEntryRead`
-  - Requires `actor_kind="user"`; service actors must not use operator
-    endpoints.
-  - Fetches the entry first, derives `chapter_id`, then evaluates
-    `roster.read` for that chapter. Do not rely on path-only
-    `RequireAuthority`, because chapter id is not in the path.
-  - Returns ETag from read `version`.
-- `POST /api/v1/roster-entries/{id}/transitions -> RosterEntryRead`
-  - Requires `actor_kind="user"`; service actors must not use operator
-    endpoints.
-  - Requires `If-Match`.
-  - Fetches the entry first, derives chapter scope, then requires
-    `roster.remove` when `to_status == "removed"` and otherwise
-    `roster.write`.
-  - Calls `transition_roster_entry`.
-- `POST /api/v1/roster-entries/{id}/sync-failure -> RosterEntryRead`
-  - Requires `If-Match`.
-  - Requires current actor to be `actor_kind="service"` and
-    `actor_id="roster-syncer"`.
-  - Requires `roster.write` at `scope_kind="global"` with no chapter
-    `scope_id`. Do not derive authority from the roster entry chapter for this
-    service-only endpoint, because `services/api/app/services/authority.py`
-    rejects grants whose `scope_kind` differs from the requirement and D10
-    seeds `roster-syncer` with global grants only.
-  - Calls `record_roster_sync_failure`.
-
-**WU-033 tests**
-
-- API endpoint tests live in `services/api/tests/test_roster.py`.
-- Migration/invariant tests may remain in or extend
-  `services/api/tests/test_roster_foundation.py` where that keeps foundation
-  coverage readable.
-- Required sync-failure authority tests:
-  - `test_sync_failure_rejects_non_service_actors_with_403`: a user actor with
-    a valid chapter-scoped roster grant is rejected before mutation.
-  - `test_sync_failure_accepts_roster_syncer_service_actor_with_global_grant`:
-    the Discord handler uses `roster-syncer` service headers, the seeded global
-    `roster.write` grant authorizes the API call, and a deferred effect row is
-    enqueued.
-- Required tests are listed in the AC trace below.
-
-### WU-034 Discord Roster Role Sync
-
-**Contracts: `services/discord/app/contracts/roster.py`**
-
-- `RosterSyncEvent`
-  - `roster_entry_id: str`
-  - `roster_entry_version: int`
-  - `transition_id: str`
-  - `chapter_id: str`
-  - `member_id: str`
-  - `member_discord_user_id: str`
-  - `chapter_role_name: str`
-  - `chapter_discord_role_id: str | None = None`
-  - `chapter_discord_resources: dict[str, Any]`
-  - `status: Literal["active", "on_leave", "under_review", "removed"]`
+- `MemberStatus = Literal["active", "suspended", "departed"]`
+- `MemberCreate`
+  - `discord_user_id: str`
+  - `joined_at: datetime`
   - `originating_actor_kind: Literal["user", "service"] = "user"`
   - `originating_actor_id: str`
+- `MemberRead`
+  - `id: UUID`
+  - `discord_user_id: str`
+  - `joined_at: datetime`
+  - `status: MemberStatus`
+  - `created_at: datetime`
+  - `updated_at: datetime`
+  - `version: int`
+- `MemberStatusPatch`
+  - `status: MemberStatus`
   - `reason: str`
-  - `correlation_id: str | None = None`
-- `RosterSyncResult`
-  - `roster_entry_id: str`
-  - `transition_id: str`
-  - `applied_role_ids: list[str]`
-  - `skipped_role_ids: list[str]`
-  - `failure_recorded: bool = False`
-  - `deferred_effect_id: str | None = None`
+  - `originating_actor_kind: Literal["user", "service"] = "user"`
+  - `originating_actor_id: str`
+- Errors: `MemberNotFoundError`, `InvalidMemberStatusTransitionError`.
 
-**Handler: `services/discord/app/handlers/roster.py`**
+**Repository: `services/api/app/repositories/members.py`**
 
-- Add `SERVICE_ACTOR_HEADERS = {"X-Actor-Kind": "service",
-  "X-Actor-Id": "roster-syncer"}` locally rather than reusing the
-  `discord-provisioner` headers from chapter provisioning.
-- `async def sync_roster(event: RosterSyncEvent, *, api_client: Any | None =
-  None, guild: Any | None = None) -> RosterSyncResult`.
-- Resolve the guild member by `event.member_discord_user_id`. Use a local
-  helper that first checks cached guild members when available and then uses a
-  fetch method if the fake/discord object exposes it.
-- Resolve the Discord role ID:
-  - Prefer `event.chapter_discord_role_id` when present.
-  - Otherwise read `event.chapter_discord_resources["role_ids"][event.chapter_role_name]`.
-  - Then resolve the role object from `guild.roles`.
-  - If the stored ID is stale, rediscover by deterministic role name using the
-    same chapter resource naming substrate as SLICE-013 where available. This
-    satisfies `test_discord_handler_rediscovers_role_id_by_name_for_chapter`
-    without adding a new persistence path for the rediscovered ID in this slice.
-- For `active`, `on_leave`, and `under_review`, call
-  `Member.add_roles(role, reason=...)` only when the member does not already
-  have the role.
-- For `removed`, call `Member.remove_roles(role, reason=...)` only when the
-  member currently has the role.
-- Reason strings include roster entry id, transition id, and originating actor.
-- Catch Discord `Forbidden`, `NotFound`, and `HTTPException`, plus stale role
-  or departed member resolution failures, and call:
-  `POST /api/v1/roster-entries/{roster_entry_id}/sync-failure`
-  with `If-Match: "{roster_entry_version}"`, `SERVICE_ACTOR_HEADERS`, and a
-  `RosterSyncFailureRequest` body.
-- If the sync-failure API returns 412, return a result with
-  `failure_recorded=False`; the API has correctly rejected an obsolete retry.
-- Do not write to the database directly from Discord.
-- Do not create, rename, or persist Discord roles in WU-034. Role creation and
-  resource persistence remain the chapter provisioning substrate's job.
+- `_MEMBER_SELECT` joins `members` to `aggregate_heads` with
+  `aggregate_type = 'member'` and `aggregate_id = members.id::text`.
+- Public reads:
+  - `fetch_member_by_id(connection, member_id)`
+  - `fetch_member_by_discord_id(connection, discord_user_id)`
+- Internal writes:
+  - `_insert_member(connection, row)`
+  - `_update_member_status(connection, member_id, status)`
+- Keep write helpers underscore-prefixed so services own mutation semantics and
+  audit, matching the roster repository boundary.
 
-**WU-034 tests**
+**Service: `services/api/app/services/members.py`**
 
-- Tests live in `services/discord/tests/test_roster_sync.py`.
-- Use fake guild, member, role, and API client objects following
-  `services/discord/tests/test_chapter_provisioning.py`.
-- Required scenarios: idempotency, `Forbidden`, `NotFound`, stale role id,
-  departed member, and sync-failure API call shape.
+- `create_or_get_member(db, request, actor) -> tuple[MemberRead, MutationResult | None, bool]`
+  - Checks by `discord_user_id` first.
+  - If found, returns the current member and no mutation result; endpoint emits
+    `200 OK`.
+  - If absent, generates a UUID and calls `mutate_entity()` with
+    `aggregate_type="member"`, `expected_version=0`, action type
+    `member.create`, and global scope.
+  - Catches `UniqueViolation` on `discord_user_id` and re-reads the existing
+    row to make duplicate Discord join delivery race-safe.
+  - New members always start `status="active"`.
+- `get_member_by_id(db, member_id) -> tuple[MemberRead, str]`
+- `get_member_by_discord_id(db, discord_user_id) -> tuple[MemberRead, str]`
+- `patch_member_status(db, member_id, request, actor, expected_version) -> tuple[MemberRead, MutationResult]`
+  - Allows D2 transitions:
+    `active -> suspended`, `suspended -> active`, `active -> departed`,
+    `suspended -> departed`, `departed -> active`.
+  - Rejects same-status and unsupported transitions with `409`.
+  - Uses `mutate_entity()` against aggregate type `member`; stale `If-Match`
+    becomes `412 Precondition Failed`.
+  - Stores originating actor fields in `action_payload` and
+    `StateChangeDraft.payload_json`.
 
-## 4. Tradeoffs
+**Endpoints: `services/api/app/api/v1/endpoints/members.py`**
 
-- **Substrate parity with SLICE-013.** The roster API deliberately copies the
-  chapter lifecycle patterns instead of creating a separate mutation style:
-  `mutate_entity` for OCC, transition projection rows in the same transaction,
-  ETags from aggregate version, service actor headers, originating actor in the
-  request body, and API-owned deferred-effect enqueue. This keeps WU-033 close
-  to `services/api/app/services/chapters.py` and WU-034 close to
-  `services/discord/app/handlers/chapters.py`.
-- **Global service grant for `roster-syncer`.** Per-chapter service grants
-  would be tighter, but D10 explicitly defers them. The sync-failure endpoint
-  therefore requires global-scoped `roster.write`, enforces the service actor
-  and `roster-syncer` actor id, and audits as `roster-syncer`.
-- **Deferred effect dedup by idempotency key.** The API uses
-  `roster_sync_retry:{roster_entry_id}:{transition_id}`. This deduplicates
-  repeat failure reports for the same desired transition while allowing a later
-  transition on the same roster entry to enqueue its own retry.
-- **No duplicated Discord role IDs in `chapter_roles`.** D4 keeps stable roster
-  identity in `chapter_roles.id` and resolves Discord IDs through chapter
-  resources. This means a stale role ID recovery can be attempted by name in
-  the Discord handler, but persisting the corrected role ID is deferred to a
-  later resource-reconciliation slice.
-- **No member table dependency.** Keeping `member_id TEXT` avoids blocking on
-  SLICE-007. The cost is that Discord sync events must carry
-  `member_discord_user_id` explicitly.
+- `POST /api/v1/members`
+  - Requires `RequireAuthority("member.write", "global")`.
+  - Returns `201 Created` for new members and `200 OK` for existing
+    `discord_user_id`.
+  - Sets `ETag` when a new mutation creates the row; for existing rows, derives
+    `ETag` from `MemberRead.version`.
+- `GET /api/v1/members/{id}`
+  - Requires `RequireAuthority("member.read", "global")`.
+- `GET /api/v1/members/by-discord/{discord_user_id}`
+  - Requires `RequireAuthority("member.read", "global")`.
+  - Returns `404 {"code": "member_not_found"}` when absent.
+- `PATCH /api/v1/members/{id}/status`
+  - Requires `RequireAuthority("member.write", "global")`.
+  - Requires `If-Match`.
+  - Maps stale mutation to `412`, invalid transition to `409`, missing member to
+    `404`.
+- Register the router in `services/api/app/api/v1/router.py`.
 
-## 5. Preserved
+### WU-012 Trust Profile + Initial Computation API
 
-- Preserve the WU-007C `roster_entries` foundation as the durable roster
-  aggregate table. It is extended with lifecycle columns and constraints, not
-  replaced.
-- Preserve `aggregate_type="roster_entry"` already used by
-  `services/api/app/services/roster.py`.
-- Preserve the existing WU-007B `chapter_roles` table and contracts. It remains
-  the stable roster role identity anchor.
-- Preserve the current roster state names and transition validator semantics
-  already present in `_validate_roster_transition`; SLICE-018 exposes them
-  through API contracts, transition rows, and OCC.
-- Preserve the activity/audit substrate from `mutate_entity`; accepted,
-  rejected, and failed roster operations continue to produce activity actions
-  and aggregate state changes.
-- Preserve the SLICE-013 chapter Discord resource storage model:
-  Discord role IDs stay in `chapters.discord_resources.role_ids`, keyed by
-  logical chapter role name.
+**Migration: `migrations/versions/wu-012_trust.py`**
 
-## 6. Resolved Decisions
+- Create `trust_profiles`:
+  - `member_id UUID PRIMARY KEY REFERENCES members(id) ON DELETE RESTRICT`
+  - `score INT NOT NULL CHECK (score >= 0 AND score <= 100)`
+  - `tier TEXT NOT NULL`
+  - `signals JSONB NOT NULL`
+  - `policy_version_id UUID NOT NULL REFERENCES policy_versions(id) ON DELETE RESTRICT`
+  - `created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
+  - `updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
+- Do not add a `version` column; read version through `aggregate_heads` with
+  `aggregate_type = 'trust_profile'` and `aggregate_id = member_id::text`.
+- Idempotently seed one active global `authority_grants` row for
+  `grantee_id='member-onboarder'`, `scope_kind='global'`, `scope_id IS NULL`,
+  and permissions containing
+  `["member.read", "member.write", "trust.read", "trust.write"]`.
+- Downgrade removes only that global `member-onboarder` grant.
+- The migration may also create indexes for policy replay reads, such as
+  `ix_trust_profiles__policy_version_id`.
 
-| Decision | Resolution and code references |
+**Contracts: `services/api/app/contracts/trust.py`**
+
+- `TrustSignalsInput`
+  - `discord_account_age_days: int = Field(ge=0)`
+  - `has_avatar: bool`
+  - `has_verified_badge: bool`
+  - `account_flags: list[str] = Field(default_factory=list)`
+  - `originating_actor_kind: Literal["user", "service"] = "user"`
+  - `originating_actor_id: str`
+- `TrustProfileRead`
+  - `member_id: UUID`
+  - `score: int`
+  - `tier: str`
+  - `signals: dict[str, Any]`
+  - `policy_version_id: UUID`
+  - `version: int`
+- Errors: `TrustProfileNotFoundError`, `NoTrustPolicyConfiguredError`,
+  `InvalidTrustPolicyError`, `MemberNotFoundError` reuse or import boundary.
+
+**Repository: `services/api/app/repositories/trust.py`**
+
+- `_TRUST_PROFILE_SELECT` joins `trust_profiles` to `aggregate_heads` with
+  `aggregate_type = 'trust_profile'`.
+- `fetch_trust_profile_by_member_id(connection, member_id)`.
+- `_insert_trust_profile(connection, row)`.
+- Reuse `services/api/app/repositories/policies.py:10` for latest global trust
+  policy lookup rather than creating a parallel policy query.
+
+**Service: `services/api/app/services/trust.py`**
+
+- `compute_trust(db, member_id, signals, actor) -> tuple[TrustProfileRead, MutationResult | None, bool]`
+  - Verifies the member exists through the member repository/service.
+  - If a trust profile already exists for `member_id`, returns it without
+    recomputing. This is idempotency, not recomputation.
+  - Fetches the latest policy where `policy_type="trust"`,
+    `scope_kind="global"`, `scope_id=None`.
+  - If absent, raises `NoTrustPolicyConfiguredError` and the endpoint maps it
+    to `409 {"code": "no_trust_policy_configured"}`.
+  - Computes `score` and `tier` deterministically from `signals` and the
+    selected policy row's `rules` JSON.
+  - Does not read ambient time, random values, Discord, or other mutable
+    external state during scoring.
+  - Calls `mutate_entity()` with `aggregate_type="trust_profile"`,
+    `aggregate_id=str(member_id)`, `expected_version=0`, action type
+    `trust_profile.compute`, and global scope.
+  - Catches `StaleMutationError` from concurrent first-compute redelivery,
+    re-reads the profile by `member_id`, and returns the committed profile
+    without recomputing. If the re-read is unexpectedly absent, re-raises the
+    original stale error.
+  - Also catches `UniqueViolation` from the profile insert path and uses the
+    same re-read-and-return recovery. This is belt-and-suspenders protection
+    for a create-after-head-check window.
+  - The pinned idempotency exception list is:
+    `StaleMutationError | UniqueViolation -> re-read existing profile and
+    return`.
+  - Stores the exact input signals and selected `policy_version_id` on
+    `trust_profiles`.
+- `get_trust_profile(db, member_id) -> tuple[TrustProfileRead, str]`
+
+Policy content contract for SLICE-007:
+
+- The current policy row content must contain a deterministic `rules` object.
+- The evaluator should accept a minimal shape such as:
+  - `rules.score_floor`
+  - `rules.score_ceiling`
+  - `rules.default_score`
+  - `rules.weights.discord_account_age_days`
+  - `rules.weights.has_avatar`
+  - `rules.weights.has_verified_badge`
+  - `rules.flags`
+  - `rules.tiers`
+- Invalid policy shape raises `InvalidTrustPolicyError`; the endpoint maps it
+  to typed `409 {"code": "invalid_trust_policy"}` rather than silently
+  defaulting.
+
+**Endpoints: `services/api/app/api/v1/endpoints/trust.py`**
+
+- `POST /api/v1/trust/compute/{member_id}`
+  - Requires `RequireAuthority("trust.write", "global")`.
+  - Returns `201 Created` on first compute and `200 OK` when the profile already
+    exists, including concurrent redelivery recovered through
+    `StaleMutationError` or `UniqueViolation`.
+  - Sets `ETag` from mutation result or current read version.
+  - Maps `InvalidTrustPolicyError` to
+    `409 {"code": "invalid_trust_policy"}`.
+- `GET /api/v1/trust/{member_id}`
+  - Requires `RequireAuthority("trust.read", "global")`.
+  - Returns `404 {"code": "trust_profile_not_found"}` when absent.
+- Register the router in `services/api/app/api/v1/router.py`.
+
+### WU-013 Discord Member-Join Onboarding Flow
+
+**Contracts: `services/discord/app/contracts/onboarding.py`**
+
+- `MemberJoinEvent`
+  - `discord_user_id: str`
+  - `joined_at: datetime`
+  - `signals: TrustSignalsInput`-compatible payload with the fixed D5 fields
+  - `originating_actor_kind: Literal["user"] = "user"`
+  - `originating_actor_id: str`
+- `MemberJoinOutcomeRead`
+  - `member: dict[str, Any]`
+  - `trust: dict[str, Any]`
+  - `intake_required: bool`
+
+**Handler: `services/discord/app/handlers/onboarding.py`**
+
+- `handle_member_join(event: MemberJoinEvent) -> MemberJoinOutcomeRead`
+- The handler uses API calls only; it must not compute trust locally.
+- Service actor headers:
+  - `X-Actor-Kind: service`
+  - `X-Actor-Id: member-onboarder`
+- Flow:
+  1. `GET /api/v1/members/by-discord/{discord_user_id}`.
+  2. If status is `404`, call `POST /api/v1/members` with
+     `discord_user_id`, `joined_at`, and originating actor fields derived from
+     the event.
+  3. Call `POST /api/v1/trust/compute/{member_id}` with the D5 signal JSON and
+     originating actor fields.
+  4. Derive `intake_required` from `trust.tier`.
+  5. Return `MemberJoinOutcomeRead(member=member, trust=trust,
+     intake_required=intake_required)`.
+- The tier mapping is local policy interpretation for the returned outcome:
+  `low` requires intake; all other tiers do not. This is deliberately derived
+  from the persisted profile's tier rather than recomputing score.
+- API errors propagate as onboarding failures; duplicate delivery is handled by
+  member create idempotency and trust compute idempotency.
+- Bot wiring should add an `on_member_join` listener on `HumilityBot` or a
+  registered listener that converts `discord.Member` into `MemberJoinEvent`
+  and calls `handle_member_join`.
+
+**Audit payload**
+
+- API calls are attributed to `service/member-onboarder` through headers.
+- The originating Discord user is carried in the request body through
+  `originating_actor_kind="user"` and `originating_actor_id=<discord_user_id>`.
+- Member create, status patch, and trust compute services include those fields
+  in their mutation action payload allowlist and state-change payload.
+- Those mutation calls use
+  `payload_allowlist=set(request.model_dump(mode="json").keys())`, matching
+  the existing member/chapter/roster mutation allowlist pattern.
+
+## Tradeoffs
+
+- **Member status audit uses `activity_actions` only.** D2 forbids a dedicated
+  `member_transitions` table. This is acceptable because the member lifecycle
+  is simple in this slice and no downstream Discord effect needs a transition
+  ID for retry idempotency.
+- **Roster FK is deferred.** D10 keeps `roster_entries.member_id` as
+  unconstrained `TEXT`. Adding an FK now would mix durable member onboarding
+  with a cross-slice roster migration and backfill.
+- **Trust recompute is not supported.** D3 makes compute idempotent and
+  initial-only. A second compute returns the existing profile even if the trust
+  policy has changed; SLICE-016 owns recomputation and additional signals.
+- **No default trust policy is seeded here.** Missing trust policy returns
+  `409 no_trust_policy_configured`. Policy creation already belongs to the
+  policy-versioning surface and should stay explicit.
+
+## Preserved
+
+- **SLICE-002 audit.** Mutations go through `mutate_entity()`, preserving
+  accepted/rejected/failed audit actions, correlation headers, causation, and
+  `activity_state_changes`.
+- **SLICE-008 authority.** Member and trust APIs use explicit global
+  `RequireAuthority` checks. The Discord handler uses a narrowly seeded service
+  actor rather than bypassing authority.
+- **SLICE-010 policy versioning substrate.** Trust computation uses
+  `policy_versions` and stores `policy_version_id` for replay. No parallel
+  configuration table is introduced.
+
+## Resolved Decisions
+
+| Decision | Proposal resolution |
 |---|---|
-| D1 | `roster_entries` remains the `RosterEntry` aggregate table using `aggregate_type="roster_entry"` in `services/api/app/services/roster.py`. No version column is added. `RosterEntryRead.version` is read by joining `aggregate_heads`, matching `services/api/app/repositories/chapters.py` and OCC in `services/api/app/services/mutations.py`. |
-| D2 | The state machine is the existing roster matrix in `_validate_roster_transition` in `services/api/app/services/roster.py`, now enforced by `transition_roster_entry` and API tests. `removed` remains terminal; re-admission uses a new row and is protected by the D6 partial unique index. |
-| D3 | `roster_transitions` mirrors `chapter_transitions` from `migrations/versions/wu-019_chapter_lifecycle.py` and `services/api/app/repositories/chapter_transitions.py`. `transition_roster_entry` inserts the transition projection and updates `roster_entries` inside the same `mutate_entity` transaction, with `aggregate_seq = expected_version + 1`. |
-| D4 | `roster_entries.role_id`, `roster_transitions.from_role_id`, and `roster_transitions.to_role_id` store `chapter_roles.id`. Discord IDs are resolved from `chapters.discord_resources.role_ids[chapter_role.name]`, following `services/api/app/contracts/chapters.py` and `services/discord/app/handlers/chapters.py`. |
-| D5 | `roster_entries.member_id` stays `TEXT`, as defined by `migrations/versions/wu-007c_roster_foundation.py`. No member FK is introduced. `RosterSyncEvent.member_discord_user_id` carries the Discord user ID explicitly. |
-| D6 | `migrations/versions/wu-033_roster.py` adds `uq_roster__chapter_member_active` on `(chapter_id, member_id) WHERE status != 'removed'`. Removed historical rows remain allowed. |
-| D7 | Operator-facing roster endpoints evaluate `roster.read`, `roster.write`, and `roster.remove` against `scope_kind="chapter"` and require user actors. Create derives scope from `body.chapter_id`; read and transition routes fetch the row first and derive scope from `roster_entries.chapter_id`, because existing `RequireAuthority` only reads path params in `services/api/app/core/dependencies.py`. The service-only sync-failure endpoint follows D10 instead of chapter scope. |
-| D8 | `services/discord/app/handlers/roster.py::sync_roster` is idempotent: skip already-present adds and already-absent removes, call `Member.add_roles(..., reason=...)` and `Member.remove_roles(..., reason=...)`, and report `Forbidden`, `NotFound`, `HTTPException`, stale role, or departed member failures to the API. |
-| D9 | `record_roster_sync_failure` runs through `mutate_entity` for the roster entry aggregate and enqueues a `DeferredEffectCreate` via `services/api/app/repositories/deferred_effects.py::enqueue_effect` in the same transaction. Stale `If-Match` returns 412 and enqueues nothing. |
-| D10 | `migrations/versions/wu-033_roster.py` seeds global `authority_grants` for `grantee_id='roster-syncer'` with `roster.read` and `roster.write`, parallel to the `discord-provisioner` seed in `migrations/versions/wu-019_chapter_lifecycle.py`. `POST /api/v1/roster-entries/{id}/sync-failure` requires `actor_kind="service"`, `actor_id="roster-syncer"`, and `roster.write` at `scope_kind="global"` so the endpoint matches the seeded service grant. |
-| D11 | `RosterEntryTransitionRequest` and `RosterSyncFailureRequest` carry `originating_actor_kind` and `originating_actor_id`. Services record them in action payloads and `roster_transitions`, following the originating actor fields in `services/api/app/contracts/chapters.py` and `services/api/app/services/chapters.py`. |
-| D12 | Anti-scope is enforced by omission: no analytics modules, import endpoints, succession code, archival state, transfer endpoint, or authority auto-sync job are added. The only authority write is the `roster-syncer` seed required by D10. |
+| D1 | `members` is introduced in `migrations/versions/wu-011_members.py` with the exact UUID/Discord/joined/status shape. It has no `version` column. `MemberRead.version` comes from a repository join on `aggregate_heads`, following `services/api/app/repositories/roster.py:11`. Creation uses `mutate_entity()` bootstrap from `services/api/app/services/mutations.py:97`. |
+| D2 | `patch_member_status()` enforces the allowed status matrix and records changes only through `activity_actions`/`activity_state_changes` via `mutate_entity()`. No `member_transitions` table is created. |
+| D3 | `trust_profiles.member_id` is the primary key and aggregate id. `compute_trust()` returns an existing profile without recomputing and only creates a profile when none exists. Version reads use `aggregate_heads` with `aggregate_type='trust_profile'`. |
+| D4 | `compute_trust()` calls the existing policy repository pattern from `services/api/app/repositories/policies.py:10` for `policy_type='trust'`, global scope. Missing policy maps to `409 no_trust_policy_configured`. The selected `policy_version_id` is persisted. |
+| D5 | `TrustSignalsInput` is the fixed JSON shape: `discord_account_age_days`, `has_avatar`, `has_verified_badge`, and `account_flags`. Signals are stored in `trust_profiles.signals` JSONB. No standalone signal table is added. |
+| D6 | Trust scoring is a pure evaluator over `TrustSignalsInput` plus the selected policy row's `rules` JSON. It reads no clock, random source, Discord state, or mutable external dependency during scoring. |
+| D7 | `handle_member_join(event: MemberJoinEvent)` implements GET by Discord ID, POST member on 404, then POST trust compute, and returns `MemberJoinOutcomeRead`. The handler uses `ApiTransportRequest` through the existing API client, matching `services/discord/app/infrastructure/api_client.py:25`. |
+| D8 | The handler sends `X-Actor-Kind: service` and `X-Actor-Id: member-onboarder`, following the service-header precedent in `services/discord/app/handlers/chapters.py:12`. Request bodies carry `originating_actor_id=<discord_user_id>`, following the originating-body precedent in `services/discord/app/handlers/chapters.py:88`. |
+| D9 | Member endpoints require global `member.read`/`member.write`; trust endpoints require global `trust.read`/`trust.write` through `RequireAuthority` from `services/api/app/core/dependencies.py:129`. `wu-012_trust.py` idempotently seeds global `member.read`, `member.write`, `trust.read`, and `trust.write` for `member-onboarder`. |
+| D10 | `wu-011_members.py` does not alter `roster_entries`. Existing roster code keeps `member_id` as string-shaped data, as seen in `services/api/app/contracts/roster.py`. FK cleanup is deferred. |
+| D11 | `POST /members` is get-or-create by `discord_user_id`: existing row returns `200`, new row returns `201`. Member create catches `UniqueViolation` on `discord_user_id` and re-reads. `POST /trust/compute/{member_id}` returns an existing profile on sequential retry and concurrent first-compute redelivery; trust compute catches `StaleMutationError | UniqueViolation`, re-reads by `member_id`, and returns the committed profile. |
+| D12 | The out-of-scope list is restated above and no proposed contract, migration, endpoint, or handler adds recompute, extensible signals, merge/split, export, compliance statuses, per-chapter visibility, age verification, or phone verification. |
 
-## 7. AC Trace
+## AC Trace
 
-AC1: direct roster add creates active entry tied to a chapter role.
+### AC1: Creating a member returns an active record with server-assigned id
 
-- `test_create_roster_entry_in_active_state`
-- `test_create_roster_entry_requires_roster_write_permission_chapter_scope`
+- `test_create_member_returns_active_with_uuid_id`
+- `test_create_member_idempotent_on_duplicate_discord_user_id`
+- `test_create_member_requires_member_write_permission`
+- `test_get_member_by_id_returns_current_state`
+- `test_get_member_by_discord_id_404_when_absent`
 
-AC2: status and role transitions create a `RosterTransition` row with
-attribution and reason.
+### AC2: Initial trust compute persists deterministic profile using current policy version
 
-- `test_transition_creates_roster_transition_row_with_actor`
-- `test_transition_records_reason`
-- `test_transition_state_machine_allowed_and_rejected_transitions`
-- `test_removed_is_terminal_no_further_transitions`
+- `test_compute_trust_creates_profile_with_current_policy_version`
+- `test_compute_trust_is_deterministic_given_same_signals_and_policy`
+- `test_compute_trust_returns_existing_profile_on_retry`
+- `test_compute_trust_concurrent_same_member_returns_same_profile_to_both`
+- `test_compute_trust_returns_409_when_no_trust_policy`
+- `test_compute_trust_returns_409_when_policy_shape_invalid`
+- `test_trust_profile_stores_policy_version_id_for_replay`
 
-AC3: OCC with `If-Match`; current version succeeds, stale version returns 412.
+### AC3: Discord join flow uses API, not local logic
 
-- `test_transition_with_current_version_succeeds`
-- `test_transition_with_stale_version_returns_412`
-- `test_get_roster_entry_returns_version_and_etag`
+- `test_handle_member_join_creates_member_when_absent`
+- `test_handle_member_join_reuses_member_when_present`
+- `test_handle_member_join_computes_trust_and_derives_intake_required`
+- `test_handle_member_join_records_originating_user_in_audit`
 
-AC4: failed Discord sync queues a consequential deferred effect instead of
-silently drifting.
+### AC4: Stale status patch is rejected through optimistic locking
 
-- `test_sync_failure_enqueues_deferred_effect_atomically`
-- `test_sync_failure_idempotency_key_per_transition`
-- `test_sync_failure_preserves_roster_entry_state`
-- `test_sync_failure_rejects_non_service_actors_with_403`
-- `test_sync_failure_accepts_roster_syncer_service_actor_with_global_grant`
-- `test_discord_handler_calls_sync_failure_on_forbidden`
-- `test_discord_handler_rediscovers_role_id_by_name_for_chapter`
+- `test_patch_member_status_with_current_version_succeeds_and_advances_version`
+- `test_patch_member_status_returns_412_on_stale_version`
 
-Invariants:
+### Invariants
 
-- `test_partial_unique_index_allows_one_active_per_chapter_member`
-- `test_roster_syncer_service_actor_grants_seeded`
-- `test_no_legacy_roster_in_memory_remains`
-- `test_discord_handler_idempotently_skips_existing_role`
-- `test_discord_handler_idempotently_skips_absent_removed_role`
-- `test_discord_handler_calls_sync_failure_on_not_found`
-- `test_discord_handler_calls_sync_failure_on_stale_role_id`
-- `test_discord_handler_calls_sync_failure_on_departed_member`
+- `test_member_onboarder_service_actor_has_read_and_write_grants_after_migration`
+- `test_no_hardcoded_system_actor_in_members_service`
+- `test_unique_discord_user_id_enforced`
 
-## Revision history
+## Revision History
 
-- Revision 1: Split roster authority into chapter-scoped user-actor operator
-  endpoints and a global-scoped service-only `/sync-failure` endpoint. This
-  resolves Audit F1 by matching the endpoint's required scope to the seeded
-  `roster-syncer` global grant and adding explicit tests for non-service
-  rejection and successful global service authorization.
+- **Revision 0** — Initial proposal for WU-011, WU-012, and WU-013.
+- **Revision 1** — Closes round-1 risk findings: pins
+  `StaleMutationError | UniqueViolation` recovery for concurrent trust compute
+  redelivery, adds AC4 stale-version PATCH tests, seeds `member-onboarder` with
+  read/write member and trust grants, and requires typed
+  `InvalidTrustPolicyError -> 409` coverage for malformed policy rules.
