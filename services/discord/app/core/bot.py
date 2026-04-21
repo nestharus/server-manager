@@ -12,8 +12,10 @@ from app.contracts.interactions import (
     InteractionHandler,
     InteractionResult,
 )
+from app.contracts.onboarding import MemberJoinEvent, MemberJoinSignals
 from app.core.context import get_current_audit_context
 from app.core.settings import Settings
+from app.handlers.onboarding import handle_member_join
 
 
 class HumilityBot(commands.Bot):
@@ -71,6 +73,26 @@ class HumilityBot(commands.Bot):
                 ephemeral=result.ephemeral,
             )
         return result
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        if self.api_client is None:
+            return
+        joined_at = member.joined_at or discord.utils.utcnow()
+        created_at = member.created_at
+        account_age_days = max((joined_at - created_at).days, 0)
+        event = MemberJoinEvent(
+            discord_user_id=str(member.id),
+            joined_at=joined_at,
+            signals=MemberJoinSignals(
+                discord_account_age_days=account_age_days,
+                has_avatar=member.avatar is not None,
+                has_verified_badge=False,
+                account_flags=[],
+            ),
+            originating_actor_kind="user",
+            originating_actor_id=str(member.id),
+        )
+        await handle_member_join(event, api_client=self.api_client)
 
 
 def _interaction_command_name(raw_interaction: Any) -> str:
