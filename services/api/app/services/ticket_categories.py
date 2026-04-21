@@ -191,6 +191,29 @@ def validate_state_machine(state_machine: dict[str, Any]) -> dict[str, Any]:
     return state_machine
 
 
+def find_state_path(
+    state_machine: dict[str, Any],
+    start_state: str,
+    target_state: str,
+) -> list[dict[str, Any]] | None:
+    adjacency: dict[str, list[dict[str, Any]]] = {}
+    for edge in state_machine.get("edges", []):
+        adjacency.setdefault(str(edge["from"]), []).append(edge)
+
+    queue: deque[tuple[str, list[dict[str, Any]]]] = deque([(start_state, [])])
+    seen: set[str] = set()
+    while queue:
+        current, path = queue.popleft()
+        if current == target_state:
+            return path
+        if current in seen:
+            continue
+        seen.add(current)
+        for edge in adjacency.get(current, []):
+            queue.append((str(edge["to"]), [*path, edge]))
+    return None
+
+
 def validate_sla_rules(
     sla_rules: dict[str, Any],
     state_machine: dict[str, Any],
@@ -203,10 +226,6 @@ def validate_sla_rules(
         raise InvalidTicketSlaRulesError("sla_rules.rules must be a list")
 
     state_keys = {state["key"] for state in state_machine["states"]}
-    adjacency: dict[str, set[str]] = {state_key: set() for state_key in state_keys}
-    for edge in state_machine.get("edges", []):
-        adjacency[str(edge["from"])].add(str(edge["to"]))
-
     seen_rule_keys: set[str] = set()
     valid_consequences = {
         "notify_owner",
@@ -214,20 +233,6 @@ def validate_sla_rules(
         "flag_for_review",
         "auto_escalate",
     }
-
-    def _is_reachable(start: str, target: str) -> bool:
-        queue = deque([start])
-        seen: set[str] = set()
-        while queue:
-            current = queue.popleft()
-            if current == target:
-                return True
-            if current in seen:
-                continue
-            seen.add(current)
-            for neighbor in adjacency.get(current, set()):
-                queue.append(neighbor)
-        return False
 
     for rule in rules:
         key = rule.get("key")
@@ -274,7 +279,7 @@ def validate_sla_rules(
                         f"sla rule {key} auto_escalate requires a known target_state"
                     )
                 for state in trigger_states:
-                    if not _is_reachable(str(state), str(target_state)):
+                    if find_state_path(state_machine, str(state), str(target_state)) is None:
                         raise InvalidTicketSlaRulesError(
                             f"sla rule {key} target_state {target_state} is unreachable from {state}"
                         )

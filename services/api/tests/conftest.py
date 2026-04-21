@@ -35,6 +35,7 @@ GOVERNANCE_TABLES = (
     "roster_entries",
     "chapter_roles",
     "chapter_templates",
+    "ticket_sla_triggers",
     "ticket_messages",
     "ticket_transitions",
     "tickets",
