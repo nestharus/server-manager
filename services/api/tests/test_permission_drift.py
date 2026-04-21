@@ -289,6 +289,42 @@ async def test_resolve_drift_detected_to_acknowledged_with_if_match(
 
 
 @pytest.mark.asyncio
+async def test_resolve_drift_returns_post_mutation_state(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """CodeRabbit CRITICAL 1: response body must reflect post-update status
+    (status=reconciled, resolution metadata populated), not the pre-update
+    snapshot (status=detected with nulls)."""
+    _grant(
+        governance_db,
+        actor_id="operator",
+        permissions=frozenset(
+            {"permission_drift.read", "permission_drift.write"}
+        ),
+    )
+    drift_id = _seed_drift(governance_db)
+
+    response = await migrated_async_client.post(
+        f"{DRIFT_URL}/{drift_id}/resolve",
+        json={"action": "reconcile", "reason": "fixed"},
+        headers=_headers("operator", **{"If-Match": '"1"'}),
+    )
+    assert response.status_code == HTTPStatus.OK, response.text
+    body = response.json()
+    # Pre-update status was 'detected' with all resolution fields null; the
+    # response MUST reflect the post-update terminal state with populated
+    # resolution metadata, and the ETag must match the new version.
+    assert body["status"] == "reconciled"
+    assert body["status"] != "detected"
+    assert body["resolved_by_kind"] == "user"
+    assert body["resolved_by_id"] == "operator"
+    assert body["resolved_at"] is not None
+    assert body["resolution_reason"] == "fixed"
+    assert response.headers["etag"] == '"2"'
+
+
+@pytest.mark.asyncio
 async def test_resolve_drift_acknowledged_to_reconciled_populates_resolved_fields(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,

@@ -88,10 +88,18 @@ def _channel_role_entries(
     scope_id: str | None,
 ) -> list[DiscordPermissionSnapshotEntry]:
     entries: list[DiscordPermissionSnapshotEntry] = []
+    default_role = getattr(guild, "default_role", None)
+    default_role_id = (
+        str(getattr(default_role, "id", ""))
+        if default_role is not None
+        else None
+    )
     for channel in _channels_for_scope(guild, scope_kind, scope_id):
         overwrites = getattr(channel, "overwrites", None) or {}
         for target, overwrite in overwrites.items():
             if not _is_role(target):
+                continue
+            if default_role_id and str(target.id) == default_role_id:
                 continue
             pair = overwrite.pair() if hasattr(overwrite, "pair") else (None, None)
             allow, deny = pair
@@ -164,7 +172,6 @@ async def handle_reconcile_permissions(
             "Reconciliation conflicted with a concurrent run; retry."
         )
     except PermissionApiConflictError as error:
-        result = run
         body = error.body or {}
         run_status: str | None = None
         if isinstance(body, dict):
@@ -174,9 +181,18 @@ async def handle_reconcile_permissions(
                 nested = body["detail"].get("status")
                 if isinstance(nested, str):
                     run_status = nested
-        if run_status == "failed":
+        if run_status == "reconciled":
+            # Terminal idempotent replay: submit_snapshot on an already-
+            # reconciled run is safe to report as success.
+            result = run
+        elif run_status == "failed":
             return _ephemeral_error(
                 "Previous reconciliation run failed; retry with a new run."
+            )
+        else:
+            return _ephemeral_error(
+                f"Reconciliation conflict: run is in state "
+                f"{run_status or 'unknown'}. Retry with a new run."
             )
     except PermissionApiHttpError as error:
         return _ephemeral_error(

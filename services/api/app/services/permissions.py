@@ -485,7 +485,17 @@ def resolve_permission_drift(
         scope_kind=current.scope_kind,
         scope_id=current.scope_id,
     )
-    return read_permission_drift(db, drift_id), result
+    post_update = PermissionDriftRead.model_validate(
+        {
+            **current.model_dump(mode="python"),
+            "status": next_status,
+            "resolved_by_kind": resolved_kind,
+            "resolved_by_id": resolved_id,
+            "resolved_at": resolved_at,
+            "resolution_reason": resolution_reason,
+        }
+    )
+    return post_update, result
 
 
 def create_permission_drift(

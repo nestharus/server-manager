@@ -285,6 +285,48 @@ async def test_snapshot_skips_default_role() -> None:
 
 
 @pytest.mark.asyncio
+async def test_channel_overwrites_skip_default_role() -> None:
+    """CodeRabbit MAJOR 3: @everyone overwrites must be filtered from the
+    channel snapshot the same way guild-role entries skip guild.default_role,
+    otherwise every channel with an @everyone overwrite creates persistent
+    drift noise."""
+    default = Role(id="everyone", permission_bits=0)
+    role = Role(id="role-a", permission_bits=0)
+    channel = FakeChannel(
+        id="chan-1",
+        category=SimpleNamespace(id="cat-1"),
+        overwrites={
+            default: _Overwrite(allow=1024, deny=0),
+            role: _Overwrite(allow=64, deny=0),
+        },
+    )
+    guild = FakeGuild(
+        default_role=default,
+        roles=[default, role],
+        channels=[channel],
+    )
+
+    run = _run_read()
+    client = FakePermissionClient(
+        create_run=run,
+        submit_result=_run_read(run_id=run.id, status="reconciled"),
+    )
+    envelope = _envelope(arguments={"chapter": "cat-1"})
+    await handle_reconcile_permissions(
+        envelope, permission_client=client, guild=guild,
+    )
+
+    channel_entries = [
+        e
+        for e in client.submit_calls[0]["entries"]
+        if isinstance(e, DiscordChannelRoleSnapshotEntry)
+    ]
+    role_ids = {e.role_id for e in channel_entries}
+    assert role_ids == {"role-a"}
+    assert "everyone" not in role_ids
+
+
+@pytest.mark.asyncio
 async def test_snapshot_formats_bits_as_decimal_strings() -> None:
     """AC4: permission bits are emitted as decimal strings matching DecimalBitString."""
     role = Role(id="role-x", permission_bits=2147483648)  # > 32-bit signed
@@ -377,3 +419,57 @@ async def test_handler_returns_ephemeral_error_when_previous_run_failed_on_confl
     assert result.success is False
     assert "failed" in (result.response_text or "").lower()
     assert "retry" in (result.response_text or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_handler_reports_non_terminal_409_as_error() -> None:
+    """CodeRabbit CRITICAL 2: a 409 with non-terminal status (e.g.
+    'snapshot_submitted' from a concurrent submit) must NOT be silently
+    treated as success — it must surface as an ephemeral error."""
+    run = _run_read()
+    conflict_error = PermissionApiConflictError(
+        status=409,
+        reason="run in snapshot_submitted state",
+        body={
+            "code": "reconciliation_run_conflict",
+            "status": "snapshot_submitted",
+            "message": "run in status snapshot_submitted",
+        },
+    )
+    client = FakePermissionClient(
+        create_run=run,
+        submit_result=conflict_error,
+    )
+    guild = FakeGuild(roles=[Role(id="role-a")])
+    result = await handle_reconcile_permissions(
+        _envelope(), permission_client=client, guild=guild,
+    )
+    assert result.success is False
+    text = (result.response_text or "").lower()
+    assert "conflict" in text
+    assert "snapshot_submitted" in text
+
+
+@pytest.mark.asyncio
+async def test_handler_treats_reconciled_409_as_idempotent_success() -> None:
+    """CodeRabbit CRITICAL 2: a 409 with status='reconciled' is an idempotent
+    terminal replay and should be reported as success."""
+    run = _run_read()
+    conflict_error = PermissionApiConflictError(
+        status=409,
+        reason="run already reconciled",
+        body={
+            "code": "reconciliation_run_conflict",
+            "status": "reconciled",
+            "message": "run in status reconciled",
+        },
+    )
+    client = FakePermissionClient(
+        create_run=run,
+        submit_result=conflict_error,
+    )
+    guild = FakeGuild(roles=[Role(id="role-a")])
+    result = await handle_reconcile_permissions(
+        _envelope(), permission_client=client, guild=guild,
+    )
+    assert result.success is True
