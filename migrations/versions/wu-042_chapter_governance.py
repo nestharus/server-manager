@@ -227,18 +227,10 @@ def downgrade() -> None:
         END $$;
         """
     )
-    op.execute(
-        f"""
-        DELETE FROM authority_grants
-        WHERE grantee_id = 'chapter-archiver'
-          AND scope_kind = 'chapter'
-          AND scope_id IS NULL
-          AND revoked_at IS NULL
-          AND predecessor_grant_id IS NULL
-          AND permissions @> '{_ARCHIVER_PERMISSIONS}'::jsonb
-          AND '{_ARCHIVER_PERMISSIONS}'::jsonb @> permissions
-        """
-    )
+    # Seeding is non-reversible by design: if an identical grant existed prior,
+    # we cannot safely distinguish it from the seeded row. Per AGENTS.md
+    # live-server principle, leave the grant in place on downgrade; an operator
+    # can revoke it manually if needed.
     op.drop_index("ix_deferred_effects__unresolved_chapter", table_name="deferred_effects")
     op.drop_index("ix_tickets__open_chapter_routing", table_name="tickets")
     op.drop_index("ix_deferred_effects__correlation", table_name="deferred_effects")
@@ -256,11 +248,10 @@ def downgrade() -> None:
         table_name="chapter_archive_runs",
     )
     op.drop_table("chapter_archive_runs")
-    op.drop_constraint(
-        "chapter_transitions_reason_nonblank",
-        "chapter_transitions",
-        type_="check",
-    )
+    # The chapter_transitions_reason_nonblank CHECK may have been added by this
+    # migration or by an earlier one; we cannot safely distinguish. Per
+    # AGENTS.md live-server principle, leave the constraint in place on
+    # downgrade.
     op.drop_constraint(
         "chapter_transitions_to_state_valid",
         "chapter_transitions",
