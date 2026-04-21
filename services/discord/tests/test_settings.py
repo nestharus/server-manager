@@ -122,6 +122,11 @@ def test_discord_settings_to_read_returns_discord_settings_read() -> None:
     assert read.discord_bot_token == "test-token"
     assert read.discord_guild_id == 1
     assert read.api_base_url == "http://api.test"
+    assert read.required_bot_permissions == (
+        "MANAGE_ROLES",
+        "MANAGE_CHANNELS",
+        "VIEW_CHANNEL",
+    )
 
 
 def test_discord_settings_construction_error_names_missing_env_vars(

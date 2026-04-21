@@ -22,6 +22,11 @@ class Settings(BaseSettings):
             discord_bot_token=self.discord_bot_token,
             discord_guild_id=self.discord_guild_id,
             api_base_url=self.api_base_url,
+            required_bot_permissions=(
+                "MANAGE_ROLES",
+                "MANAGE_CHANNELS",
+                "VIEW_CHANNEL",
+            ),
         )
 
 

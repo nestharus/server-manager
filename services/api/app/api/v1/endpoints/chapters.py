@@ -1,4 +1,4 @@
-"""Chapter endpoints with ETag/If-Match concurrency."""
+"""Chapter lifecycle endpoints."""
 
 from __future__ import annotations
 
@@ -6,97 +6,170 @@ from http import HTTPStatus
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from app.contracts.chapters import ChapterCreate, ChapterRead, ChapterUpdate
-from app.core.dependencies import get_chapter_service
-from app.repositories.chapters import ChapterNotFoundError, StalePreconditionError
-from app.services.chapters import ChapterService
+from app.contracts.chapter_templates import ChapterTemplateNotFoundError
+from app.contracts.chapters import (
+    ChapterCreate,
+    ChapterDuplicateNameError,
+    ChapterNotFoundError,
+    ChapterRead,
+    ChapterResourcesPatchRequest,
+    ChapterTransitionRequest,
+    IncompleteProvisioningError,
+    InvalidChapterTransitionError,
+)
+from app.contracts.mutations import MissingAggregateError, StaleMutationError
+from app.core.dependencies import RequireAuthority, get_current_actor
+from app.repositories.db import PostgresDatabase
+from app.services.chapters import (
+    create_chapter as create_chapter_service,
+    patch_chapter_discord_resources,
+    read_chapter as read_chapter_service,
+    transition_chapter,
+)
 
 router = APIRouter(prefix="/api/v1/chapters")
 
 
-def _raise_for_chapter_error(error: Exception) -> None:
-    if isinstance(error, ChapterNotFoundError):
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from error
-    if isinstance(error, StalePreconditionError):
+def _db(request: Request) -> PostgresDatabase:
+    return request.app.state.db
+
+
+def _parse_if_match(request: Request) -> int:
+    if_match = request.headers.get("if-match")
+    if if_match is None:
         raise HTTPException(
-            status_code=412, detail="Precondition Failed",
+            status_code=HTTPStatus.PRECONDITION_REQUIRED,
+            detail="If-Match header required",
+        )
+    if not (if_match.startswith('"') and if_match.endswith('"')):
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="invalid If-Match")
+    try:
+        return int(if_match.strip('"'))
+    except ValueError as error:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="invalid If-Match") from error
+
+
+def _set_etag(response: Response, etag: str) -> None:
+    response.headers["etag"] = etag
+
+
+def _raise_for_chapter_error(error: Exception) -> None:
+    if isinstance(error, (ChapterNotFoundError, ChapterTemplateNotFoundError, MissingAggregateError)):
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="not found") from error
+    if isinstance(error, StaleMutationError):
+        raise HTTPException(
+            status_code=HTTPStatus.PRECONDITION_FAILED,
+            detail="Precondition Failed",
+        ) from error
+    if isinstance(error, ChapterDuplicateNameError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={"code": "duplicate_chapter_name", "name": error.name},
+        ) from error
+    if isinstance(error, InvalidChapterTransitionError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={
+                "code": "invalid_transition",
+                "from_state": error.from_state,
+                "to_state": error.to_state,
+            },
+        ) from error
+    if isinstance(error, IncompleteProvisioningError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={"code": "incomplete_provisioning", "missing": error.missing},
         ) from error
     raise error
 
 
-def _require_if_match(request: Request) -> str:
-    if_match = request.headers.get("if-match")
-    if if_match is None:
-        raise HTTPException(
-            status_code=428, detail="If-Match header required",
-        )
-    return if_match
-
-
-@router.post("", response_model=ChapterRead, status_code=HTTPStatus.CREATED)
+@router.post(
+    "",
+    response_model=ChapterRead,
+    status_code=HTTPStatus.CREATED,
+    dependencies=[Depends(RequireAuthority("chapter.write", "global"))],
+)
 def create_chapter(
     chapter: ChapterCreate,
+    request: Request,
     response: Response,
-    service: ChapterService = Depends(get_chapter_service),
+    actor=Depends(get_current_actor),
 ) -> ChapterRead:
-    read, etag = service.create_chapter(chapter)
-    response.headers["etag"] = etag
+    try:
+        read, result = create_chapter_service(_db(request), chapter, actor)
+    except Exception as error:
+        _raise_for_chapter_error(error)
+    _set_etag(response, result.etag)
     return read
 
 
-@router.get("", response_model=list[ChapterRead])
-def list_chapters(
-    service: ChapterService = Depends(get_chapter_service),
-) -> list[ChapterRead]:
-    return service.list_chapters()
-
-
-@router.get("/{chapter_id}", response_model=ChapterRead)
+@router.get(
+    "/{chapter_id}",
+    response_model=ChapterRead,
+    dependencies=[Depends(RequireAuthority("chapter.read", "global"))],
+)
 def get_chapter(
-    chapter_id: int,
+    chapter_id: str,
+    request: Request,
     response: Response,
-    service: ChapterService = Depends(get_chapter_service),
 ) -> ChapterRead:
     try:
-        read, etag = service.get_chapter(chapter_id)
+        read, etag = read_chapter_service(_db(request), chapter_id)
     except Exception as error:
         _raise_for_chapter_error(error)
-    response.headers["etag"] = etag
+    _set_etag(response, etag)
     return read
 
 
-@router.patch("/{chapter_id}", response_model=ChapterRead)
-def update_chapter(
-    chapter_id: int,
-    chapter: ChapterUpdate,
+@router.post(
+    "/{chapter_id}/transitions",
+    response_model=ChapterRead,
+    dependencies=[Depends(RequireAuthority("chapter.write", "global"))],
+)
+def transition_chapter_endpoint(
+    chapter_id: str,
+    transition: ChapterTransitionRequest,
     request: Request,
     response: Response,
-    service: ChapterService = Depends(get_chapter_service),
+    actor=Depends(get_current_actor),
 ) -> ChapterRead:
-    expected_head = _require_if_match(request)
+    expected_version = _parse_if_match(request)
     try:
-        read, etag = service.update_chapter(
-            chapter_id, chapter, expected_head=expected_head,
+        read, result = transition_chapter(
+            _db(request),
+            chapter_id,
+            transition,
+            actor,
+            expected_version,
         )
     except Exception as error:
         _raise_for_chapter_error(error)
-    response.headers["etag"] = etag
+    _set_etag(response, result.etag)
     return read
 
 
-@router.post("/{chapter_id}/archive", response_model=ChapterRead)
-def archive_chapter(
-    chapter_id: int,
+@router.patch(
+    "/{chapter_id}/discord-resources",
+    response_model=ChapterRead,
+    dependencies=[Depends(RequireAuthority("chapter.write", "global"))],
+)
+def patch_chapter_discord_resources_endpoint(
+    chapter_id: str,
+    resources: ChapterResourcesPatchRequest,
     request: Request,
     response: Response,
-    service: ChapterService = Depends(get_chapter_service),
+    actor=Depends(get_current_actor),
 ) -> ChapterRead:
-    expected_head = _require_if_match(request)
+    expected_version = _parse_if_match(request)
     try:
-        read, etag = service.archive_chapter(
-            chapter_id, expected_head=expected_head,
+        read, result = patch_chapter_discord_resources(
+            _db(request),
+            chapter_id,
+            resources,
+            actor,
+            expected_version,
         )
     except Exception as error:
         _raise_for_chapter_error(error)
-    response.headers["etag"] = etag
+    _set_etag(response, result.etag)
     return read

@@ -49,6 +49,21 @@ def test_main_module_has_expected_docstring() -> None:
     assert module.__doc__ == EXPECTED_MODULE_DOCSTRING
 
 
+def test_build_bot_with_registry_registers_chapter_command() -> None:
+    module = _import_main_module()
+    settings = _make_settings()
+    registered: list[str] = []
+    bot = SimpleNamespace(
+        register_interaction_handler=lambda name, handler: registered.append(name),
+    )
+
+    with patch.object(module, "HumilityBot", return_value=bot, create=True):
+        result = module.build_bot_with_registry(settings=settings, api_client=object())
+
+    assert result is bot
+    assert registered == ["provision_chapter"]
+
+
 @pytest.mark.asyncio
 async def test_main_returns_one_when_settings_construction_fails(
     monkeypatch: pytest.MonkeyPatch,

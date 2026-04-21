@@ -27,6 +27,11 @@ class DiscordSettingsRead(BaseModel):
     discord_bot_token: str = Field(repr=False)
     discord_guild_id: int
     api_base_url: str
+    required_bot_permissions: tuple[str, ...] = (
+        "MANAGE_ROLES",
+        "MANAGE_CHANNELS",
+        "VIEW_CHANNEL",
+    )
 
 
 DISCORD_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
@@ -34,4 +39,3 @@ DISCORD_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
     optional_env_vars=frozenset(),
     secret_mounts=frozenset(),
 )
-
