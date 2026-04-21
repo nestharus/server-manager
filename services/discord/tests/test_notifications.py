@@ -26,13 +26,14 @@ def _command(
     *,
     envelope_id: UUID,
     channel: str = "dm",
+    recipient_discord_id: str | None = "1001",
     destination_channel_id: str | None = None,
 ) -> Any:
     envelope = SimpleNamespace(
         id=envelope_id,
         rendered_title="Title",
         rendered_body="Body",
-        recipient_discord_id="1001",
+        recipient_discord_id=recipient_discord_id,
         recipient_display="1001",
         channel=channel,
         destination_channel_id=destination_channel_id,
@@ -81,3 +82,44 @@ async def test_delivery_uses_deterministic_nonce_derived_from_envelope_id() -> N
     assert str(result.envelope_id) == str(envelope_id)
     assert result.discord_message_id == "discord-message-1"
     assert result.delivered_at <= datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+async def test_malformed_recipient_discord_id_is_definitive_failure() -> None:
+    handler_module = _load_notifications_handler()
+    deliver_notification = getattr(handler_module, "deliver_notification")
+    delivery_error = getattr(handler_module, "NotificationDeliveryError")
+    bot = SimpleNamespace(fetch_user=AsyncMock())
+
+    with pytest.raises(delivery_error) as exc_info:
+        await deliver_notification(
+            _command(
+                envelope_id=UUID("12345678-1234-5678-1234-567812345678"),
+                recipient_discord_id="not-a-number",
+            ),
+            bot=bot,
+        )
+
+    assert exc_info.value.definitive_failure is True
+    bot.fetch_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_malformed_destination_channel_id_is_definitive_failure() -> None:
+    handler_module = _load_notifications_handler()
+    deliver_notification = getattr(handler_module, "deliver_notification")
+    delivery_error = getattr(handler_module, "NotificationDeliveryError")
+    bot = SimpleNamespace(fetch_channel=AsyncMock())
+
+    with pytest.raises(delivery_error) as exc_info:
+        await deliver_notification(
+            _command(
+                envelope_id=UUID("12345678-1234-5678-1234-567812345678"),
+                channel="designated_channel",
+                destination_channel_id="not-a-number",
+            ),
+            bot=bot,
+        )
+
+    assert exc_info.value.definitive_failure is True
+    bot.fetch_channel.assert_not_awaited()

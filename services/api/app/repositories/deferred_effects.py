@@ -320,6 +320,7 @@ def query_degraded_state_summary(
                 FROM notification_envelopes
                 WHERE delivery_status = 'delivered_in_flight'
                   AND claimed_at < %s - INTERVAL '1 hour'
+                HAVING COUNT(*) > 0
             ),
             subsystems AS (
                 SELECT subsystem FROM effect_summary

@@ -221,7 +221,7 @@ def materialize_event(
                         "claimed_at": None,
                         "lease_until": None,
                         "attempts": 0,
-                        "max_attempts": 3,
+                        "max_attempts": DEFAULT_MAX_ATTEMPTS,
                         "last_error_json": None if reason is None else {"reason": reason},
                         "discord_message_id": None,
                         "delivered_at": None,

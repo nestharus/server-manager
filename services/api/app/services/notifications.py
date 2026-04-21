@@ -162,12 +162,22 @@ def patch_notification_rule(
         locked_row = fetch_notification_rule_for_update(connection, rule_id)
         if locked_row is None:
             raise NotificationRuleNotFoundError(rule_id)
-        updated = update_notification_rule(connection, rule_id=rule_id, patch_row=merged)
-        if updated != 1:
+        updated_row = update_notification_rule(connection, rule_id=rule_id, patch_row=merged)
+        if updated_row is None:
             raise NotificationRuleNotFoundError(rule_id)
+        updated_read = NotificationRuleRead(
+            id=rule_id,
+            **merged,
+            created_at=locked_row["created_at"],
+            updated_at=updated_row["updated_at"],
+            version=int(locked_row["version"]) + 1,
+        )
         return StateChangeDraft(
             change_type="notification_rule.updated",
-            payload_json={"rule_id": str(rule_id), **NotificationRuleRead(id=rule_id, **merged, created_at=locked_row["created_at"], updated_at=locked_row["updated_at"], version=int(locked_row["version"])).model_dump(mode="json", by_alias=True)},
+            payload_json={
+                "rule_id": str(rule_id),
+                **updated_read.model_dump(mode="json", by_alias=True),
+            },
         )
 
     result = mutate_entity(
@@ -179,7 +189,7 @@ def patch_notification_rule(
             actor=actor,
             request_surface=f"api:/api/v1/notification-rules/{rule_id}",
         ),
-        action_type="notification_rule.update",
+        action_type="notification_rule.patch",
         action_payload=NotificationRuleCreate.model_validate(merged).model_dump(mode="json"),
         payload_allowlist=RULE_PAYLOAD_FIELDS,
         mutate_projection=mutate_projection,

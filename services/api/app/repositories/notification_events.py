@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,9 +18,8 @@ def insert_notification_event(
     causation_id: UUID | None,
     draft: NotificationEventDraft,
     payload_json: dict[str, Any],
-) -> UUID:
+) -> tuple[UUID, datetime]:
     event_id = uuid4()
-    created_at = datetime.now(UTC)
     row = connection.execute(
         """
         INSERT INTO notification_events (
@@ -30,11 +29,10 @@ def insert_notification_event(
             causation_id,
             scope_kind,
             scope_id,
-            payload_json,
-            created_at
+            payload_json
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, created_at
         """,
         (
             event_id,
@@ -44,12 +42,11 @@ def insert_notification_event(
             draft.scope_kind,
             draft.scope_id,
             Jsonb(payload_json),
-            created_at,
         ),
     ).fetchone()
     if row is None:
         raise RuntimeError("failed to insert notification event")
-    return UUID(str(row[0]))
+    return UUID(str(row[0])), row[1]
 
 
 def fetch_notification_event(

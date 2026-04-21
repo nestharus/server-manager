@@ -146,6 +146,38 @@ def _fetch_create_action(dsn: str, rule_id: str | UUID) -> dict[str, Any] | None
         ).fetchone()
 
 
+def _fetch_patch_action(dsn: str, rule_id: str | UUID) -> dict[str, Any] | None:
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        return conn.execute(
+            """
+            SELECT action_type, aggregate_type, aggregate_id, request_json
+            FROM activity_actions
+            WHERE aggregate_type = 'notification_rule'
+              AND aggregate_id = %s
+              AND action_type = 'notification_rule.patch'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(rule_id),),
+        ).fetchone()
+
+
+def _fetch_latest_state_change(dsn: str, rule_id: str | UUID) -> dict[str, Any] | None:
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        return conn.execute(
+            """
+            SELECT aggregate_seq, change_type, payload_json
+            FROM activity_state_changes
+            WHERE aggregate_type = 'notification_rule'
+              AND aggregate_id = %s
+              AND change_type = 'notification_rule.updated'
+            ORDER BY aggregate_seq DESC
+            LIMIT 1
+            """,
+            (str(rule_id),),
+        ).fetchone()
+
+
 @pytest.mark.asyncio
 async def test_create_rule_persists_all_fields(
     migrated_async_client: AsyncClient,
@@ -250,6 +282,17 @@ async def test_patch_rule_with_current_version_succeeds(
     assert head is not None
     assert int(head["current_seq"]) == 2
 
+    action = _fetch_patch_action(governance_dsn, created["id"])
+    assert action is not None
+    assert action["action_type"] == "notification_rule.patch"
+
+    state_change = _fetch_latest_state_change(governance_dsn, created["id"])
+    assert state_change is not None
+    assert state_change["aggregate_seq"] == 2
+    assert state_change["payload_json"]["version"] == 2
+    assert state_change["payload_json"]["updated_at"] == body["updated_at"]
+    assert state_change["payload_json"]["updated_at"] != created["updated_at"]
+
 
 @pytest.mark.asyncio
 async def test_patch_rule_stale_version_returns_412(
@@ -345,6 +388,36 @@ async def test_rule_create_requires_notification_write_permission(
     body = response.json()
     assert body["code"] == "authority_decision_denied"
     assert body["decision"]["denial_reason"] == "permission_missing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope_kind", "scope_id"),
+    [
+        ("global", "chapter-1"),
+        ("chapter", None),
+        ("member", None),
+    ],
+)
+async def test_rule_create_rejects_scope_kind_scope_id_mismatch(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,  # noqa: ARG001
+    scope_kind: str,
+    scope_id: str | None,
+) -> None:
+    _seed_permissions(
+        governance_db,
+        permissions=frozenset({"notification.read", "notification.write"}),
+    )
+
+    response = await migrated_async_client.post(
+        BASE_URL,
+        json=_rule_payload(scope_kind=scope_kind, scope_id=scope_id),
+        headers=_actor_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
 
 
 @pytest.mark.asyncio

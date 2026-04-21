@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+
+from app.repositories._claim import claim_due_rows
 
 
 _RULE_SELECT = """
@@ -61,7 +63,9 @@ _ENVELOPE_SELECT = """
 """
 
 
-def insert_notification_rule(connection: Connection[Any], *, row: dict[str, Any]) -> None:
+def insert_notification_rule(
+    connection: Connection[Any], *, row: dict[str, Any]
+) -> None:
     connection.execute(
         """
         INSERT INTO notification_rules (
@@ -98,9 +102,10 @@ def update_notification_rule(
     *,
     rule_id: UUID,
     patch_row: dict[str, Any],
-) -> int:
-    cursor = connection.execute(
-        """
+) -> dict[str, Any] | None:
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            """
         UPDATE notification_rules
         SET trigger_json = %s,
             scope_kind = %s,
@@ -113,21 +118,21 @@ def update_notification_rule(
             enabled = %s,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = %s
+        RETURNING updated_at
         """,
-        (
-            Jsonb(patch_row["trigger_json"]),
-            patch_row["scope_kind"],
-            patch_row.get("scope_id"),
-            Jsonb(patch_row["recipients_json"]),
-            patch_row["channel"],
-            Jsonb(patch_row["template_json"]),
-            patch_row["actionable"],
-            patch_row["grouping"],
-            patch_row["enabled"],
-            rule_id,
-        ),
-    )
-    return cursor.rowcount
+            (
+                Jsonb(patch_row["trigger_json"]),
+                patch_row["scope_kind"],
+                patch_row.get("scope_id"),
+                Jsonb(patch_row["recipients_json"]),
+                patch_row["channel"],
+                Jsonb(patch_row["template_json"]),
+                patch_row["actionable"],
+                patch_row["grouping"],
+                patch_row["enabled"],
+                rule_id,
+            ),
+        ).fetchone()
 
 
 def fetch_notification_rule(
@@ -192,7 +197,12 @@ def list_enabled_rules_for_event(
             """
         )
         params.extend([event_scope_kind, event_scope_id])
-    query = _RULE_SELECT + " WHERE " + " AND ".join(predicates) + " ORDER BY r.created_at ASC, r.id ASC"
+    query = (
+        _RULE_SELECT
+        + " WHERE "
+        + " AND ".join(predicates)
+        + " ORDER BY r.created_at ASC, r.id ASC"
+    )
     with connection.cursor(row_factory=dict_row) as cursor:
         return cursor.execute(query, params).fetchall()
 
@@ -290,7 +300,9 @@ def insert_notification_envelope_on_conflict_do_nothing(
                 row.get("lease_until"),
                 row["attempts"],
                 row["max_attempts"],
-                None if row.get("last_error_json") is None else Jsonb(row["last_error_json"]),
+                None
+                if row.get("last_error_json") is None
+                else Jsonb(row["last_error_json"]),
                 row.get("discord_message_id"),
                 row.get("delivered_at"),
                 row["created_at"],
@@ -304,7 +316,9 @@ def fetch_notification_envelope(
     envelope_id: UUID,
 ) -> dict[str, Any] | None:
     with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(_ENVELOPE_SELECT + " WHERE id = %s", (envelope_id,)).fetchone()
+        return cursor.execute(
+            _ENVELOPE_SELECT + " WHERE id = %s", (envelope_id,)
+        ).fetchone()
 
 
 def claim_notification_envelope(
@@ -315,30 +329,25 @@ def claim_notification_envelope(
     now: datetime,
     lease_seconds: int,
 ) -> dict[str, Any] | None:
-    lease_until = now + timedelta(seconds=lease_seconds)
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            """
-            WITH claimable AS (
-                SELECT id
-                FROM notification_envelopes
-                WHERE id = %s
-                  AND delivery_status = 'pending'
-                  AND attempts < max_attempts
-                  AND (claimed_by IS NULL OR lease_until < %s)
-                FOR UPDATE SKIP LOCKED
-            )
-            UPDATE notification_envelopes AS target
-            SET claimed_by = %s,
-                claimed_at = %s,
-                lease_until = %s,
-                updated_at = %s
-            FROM claimable
-            WHERE target.id = claimable.id
-            RETURNING target.*
-            """,
-            (envelope_id, now, worker_id, now, lease_until, now),
-        ).fetchone()
+    rows = claim_due_rows(
+        connection,
+        table="notification_envelopes",
+        primary_key="id",
+        worker_id=worker_id,
+        batch_size=1,
+        now=now,
+        lease_seconds=lease_seconds,
+        ready_predicate=(
+            "id = %s "
+            "AND delivery_status = 'pending' "
+            "AND attempts < max_attempts "
+            "AND (claimed_by IS NULL OR lease_until < %s)"
+        ),
+        predicate_params=(envelope_id, now),
+        order_by="id",
+        claim_status=None,
+    )
+    return rows[0] if rows else None
 
 
 def mark_envelope_delivered_in_flight(

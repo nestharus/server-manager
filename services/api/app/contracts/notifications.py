@@ -36,7 +36,9 @@ class NotificationTrigger(_NotificationModel):
                 raise ValueError("wildcard event_type must end with a non-empty prefix")
             return value
         if "*" in value:
-            raise ValueError("event_type wildcards are only allowed as a trailing .* suffix")
+            raise ValueError(
+                "event_type wildcards are only allowed as a trailing .* suffix"
+            )
         return value
 
 
@@ -50,6 +52,14 @@ class NotificationRuleCreate(_NotificationModel):
     actionable: bool
     grouping: NotificationGrouping
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_scope_id_matches_scope_kind(self) -> "NotificationRuleCreate":
+        if self.scope_kind == "global" and self.scope_id is not None:
+            raise ValueError("global notification rules must not set scope_id")
+        if self.scope_kind in {"chapter", "member"} and self.scope_id is None:
+            raise ValueError("chapter and member notification rules require scope_id")
+        return self
 
 
 class NotificationRulePatch(_NotificationModel):
@@ -176,7 +186,9 @@ class UnsupportedNotificationTriggerError(Exception):
 
 
 class NotificationRuleVersionError(Exception):
-    def __init__(self, rule_id: UUID, expected_version: int, current_version: int) -> None:
+    def __init__(
+        self, rule_id: UUID, expected_version: int, current_version: int
+    ) -> None:
         self.rule_id = rule_id
         self.expected_version = expected_version
         self.current_version = current_version

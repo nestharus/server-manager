@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -12,7 +11,10 @@ from app.contracts.scheduler import DeferredEffectCreate
 from app.core.context import MissingCorrelationContextError, get_current_audit_context
 from app.repositories.db import PostgresDatabase
 from app.repositories.deferred_effects import enqueue_effect
-from app.repositories.notification_events import insert_notification_event, list_for_correlation
+from app.repositories.notification_events import (
+    insert_notification_event,
+    list_for_correlation,
+)
 from app.services.scheduler import DEFAULT_MAX_ATTEMPTS
 
 
@@ -23,9 +25,7 @@ def _redact_payload(
     if payload_allowlist is None:
         return {}
     return {
-        key: value
-        for key, value in payload_json.items()
-        if key in payload_allowlist
+        key: value for key, value in payload_json.items() if key in payload_allowlist
     }
 
 
@@ -44,7 +44,7 @@ def emit(
     redacted_payload = _redact_payload(event.payload_json, payload_allowlist)
 
     def _emit(active_connection: Connection[Any]) -> NotificationEventRead:
-        event_id = insert_notification_event(
+        event_id, created_at = insert_notification_event(
             active_connection,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.causation_id,
@@ -72,7 +72,7 @@ def emit(
             scope_kind=event.scope_kind,
             scope_id=event.scope_id,
             payload=redacted_payload,
-            created_at=datetime.now(UTC),
+            created_at=created_at,
         )
 
     if connection is not None:

@@ -64,7 +64,7 @@ class DegradedStateSummaryRead(BaseModel):
     subsystem: str
     pending_effect_count: int = Field(ge=0)
     scheduled_job_count: int = Field(ge=0)
-    stuck_in_flight_envelopes: int = Field(default=0, ge=0)
+    stuck_in_flight_envelopes: int | None = Field(default=None, ge=0)
     oldest_pending_at: datetime | None = None
 
 

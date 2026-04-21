@@ -48,7 +48,14 @@ async def deliver_notification(
                     "recipient_discord_id is required for dm notifications",
                     definitive_failure=True,
                 )
-            user = await bot.fetch_user(int(envelope.recipient_discord_id))
+            try:
+                recipient_id = int(envelope.recipient_discord_id)
+            except ValueError as error:
+                raise NotificationDeliveryError(
+                    "recipient_discord_id must be numeric for dm notifications",
+                    definitive_failure=True,
+                ) from error
+            user = await bot.fetch_user(recipient_id)
             dm_channel = getattr(user, "dm_channel", None)
             if dm_channel is None:
                 dm_channel = await user.create_dm()
@@ -59,7 +66,14 @@ async def deliver_notification(
                     "destination_channel_id is required for designated_channel notifications",
                     definitive_failure=True,
                 )
-            channel = await bot.fetch_channel(int(envelope.destination_channel_id))
+            try:
+                destination_channel_id = int(envelope.destination_channel_id)
+            except ValueError as error:
+                raise NotificationDeliveryError(
+                    "destination_channel_id must be numeric for designated_channel notifications",
+                    definitive_failure=True,
+                ) from error
+            channel = await bot.fetch_channel(destination_channel_id)
             message = await _send_message(channel, content=content, nonce=nonce)
         else:
             raise NotificationDeliveryError(

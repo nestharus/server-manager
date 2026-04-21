@@ -98,9 +98,9 @@ No Discord-visible Tier 3 action was executed.
 
 ## Verification
 
-- `cd /home/nes/projects/server-manager/worktrees/slice-015/services/api && uv run pytest tests/ -q`
+- `cd services/api && uv run pytest tests/ -q`
   - `401 passed, 1 warning in 150.62s`
-- `cd /home/nes/projects/server-manager/worktrees/slice-015/services/discord && uv run pytest tests/ -q`
+- `cd services/discord && uv run pytest tests/ -q`
   - `66 passed, 20 warnings in 0.28s`
 
 Warnings were pre-existing test-environment warnings:

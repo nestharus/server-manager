@@ -125,8 +125,11 @@ paths around them.
   Materialization and delivery are scheduled handlers registered through the
   SLICE-004 `register_scheduler_handler` mechanism. Each `notification_events`
   insert enqueues a `deferred_effects` row with
-  `handler = "notifications_materialize"`. The materialize handler then
-  enqueues a delivery effect for each materialized envelope in the same
+  `effect_type = "notifications_materialize"` and
+  `payload_json = {"event_id": <notification_events.id>}`. The
+  `notifications_materialize` handler then enqueues one
+  `notifications_deliver` effect per materialized envelope with
+  `payload_json = {"envelope_id": <notification_envelopes.id>}` in the same
   database transaction as the envelope insert.
 
   AC traceability: supports AC4 by making materialization and delivery

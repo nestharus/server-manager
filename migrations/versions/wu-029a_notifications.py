@@ -258,6 +258,7 @@ def upgrade() -> None:
               AND scope_kind = 'global'
               AND scope_id IS NULL
               AND permissions @> '["notification.read", "notification.deliver"]'::jsonb
+              AND permissions <@ '["notification.read", "notification.deliver"]'::jsonb
               AND revoked_at IS NULL
         )
         """
@@ -272,6 +273,8 @@ def downgrade() -> None:
           AND scope_kind = 'global'
           AND scope_id IS NULL
           AND permissions @> '["notification.read", "notification.deliver"]'::jsonb
+          AND permissions <@ '["notification.read", "notification.deliver"]'::jsonb
+          AND revoked_at IS NULL
         """
     )
     op.drop_index(
