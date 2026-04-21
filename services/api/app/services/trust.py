@@ -25,13 +25,10 @@ from app.contracts.trust import (
     TrustSignalScope,
     TrustSignalsInput,
 )
-from app.core.context import MissingCorrelationContextError, get_current_audit_context
 from app.repositories.db import PostgresDatabase
 from app.repositories.members import fetch_member_by_id
-from app.repositories.mutations import insert_action
 from app.repositories.policies import fetch_latest_version
 from app.repositories.trust import (
-    _insert_trust_profile,
     fetch_trust_profile_by_member_id,
     get_trust_profile_for_update,
     insert_trust_signal,
@@ -44,6 +41,10 @@ from app.services.mutations import mutate_entity
 TRUST_POLICY_TYPE = "trust_computation"
 TRUST_PROFILE_AGGREGATE_TYPE = "trust_profile"
 TRUST_SIGNAL_AGGREGATE_TYPE = "trust_signal"
+TRUST_SIGNAL_CREATE_ACTION = "trust.signal.created"
+TRUST_SIGNAL_CREATE_CHANGE = "trust.signal.created"
+TRUST_RECOMPUTE_ACTION = "trust.recompute"
+TRUST_RECOMPUTE_CHANGE = "trust.recomputed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +131,8 @@ def _policy_config(policy_content: Mapping[str, Any]) -> dict[str, Any]:
 
     signal_weights = _as_mapping(policy_content.get("signal_weights"), "policy.content.signal_weights")
     decay_rules = _as_mapping(policy_content.get("decay_rules"), "policy.content.decay_rules")
+    if decay_rules:
+        raise InvalidTrustPolicyError("decay_rules not yet supported")
     thresholds = policy_content.get("level_thresholds")
     if not isinstance(thresholds, Sequence) or isinstance(thresholds, (str, bytes)):
         raise InvalidTrustPolicyError("policy.content.level_thresholds must be an array")
@@ -147,6 +150,8 @@ def _policy_config(policy_content: Mapping[str, Any]) -> dict[str, Any]:
             f"policy.content.level_thresholds.{index}.max_score",
         )
         parsed_thresholds.append({"tier": tier, "max_score": max_score})
+
+    parsed_thresholds.sort(key=lambda threshold: float(threshold["max_score"]))
 
     return {
         "score_floor": floor,
@@ -204,9 +209,7 @@ def _signal_magnitude(row: Mapping[str, Any]) -> float:
 def compute_score(
     active_signals: Sequence[Mapping[str, Any]],
     policy_content: Mapping[str, Any],
-    as_of: datetime,
 ) -> tuple[int, str, dict[str, Any]]:
-    del as_of
     config = _policy_config(policy_content)
     score = float(config["default_score"])
     included: list[Mapping[str, Any]] = []
@@ -272,34 +275,38 @@ def validate_trust_signal_scope(request: TrustSignalCreate) -> None:
         raise InvalidTrustSignalScopeError("chapter/member scope requires scope_id")
 
 
-def _current_correlation_id() -> UUID:
-    context = get_current_audit_context()
-    if context is None:
-        raise MissingCorrelationContextError()
-    return context.correlation_id
-
-
 def create_trust_signal(
     db: PostgresDatabase,
     request: TrustSignalCreate,
     actor: ActorIdentity,
-) -> TrustSignalRead:
+) -> tuple[TrustSignalRead, MutationResult]:
     if actor.actor_kind == "system":
         raise InvalidTrustSignalActorError()
     validate_trust_signal_scope(request)
 
     signal_id = uuid4()
     persisted_scope = request.scope.to_persisted_json()
-    action_payload = request.model_dump(mode="json", exclude={"member_id"})
-    redacted_payload = {
-        key: value
-        for key, value in action_payload.items()
-        if key in {"signal_type", "scope", "value", "observed_at", "expires_at"}
+    action_payload = request.model_dump(mode="json")
+    change_payload = {
+        "id": str(signal_id),
+        "member_id": str(request.member_id),
+        "signal_type": request.signal_type,
+        "scope": action_payload["scope"],
+        "value": action_payload["value"],
+        "source_actor_kind": actor.actor_kind,
+        "source_actor_id": actor.actor_id,
+        "observed_at": action_payload["observed_at"],
+        "expires_at": action_payload["expires_at"],
     }
 
-    with db.transaction() as connection:
+    with db.connection() as connection:
         if fetch_member_by_id(connection, request.member_id) is None:
             raise MemberNotFoundError(member_id=request.member_id)
+
+    created_row: dict[str, Any] | None = None
+
+    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+        nonlocal created_row
         row = insert_trust_signal(
             connection,
             row={
@@ -316,24 +323,46 @@ def create_trust_signal(
                 "expires_at": request.expires_at,
             },
         )
-        insert_action(
-            connection,
-            action_type="trust.signal.created",
-            aggregate_type=TRUST_SIGNAL_AGGREGATE_TYPE,
-            aggregate_id=str(signal_id),
-            actor_kind=actor.actor_kind,
-            actor_id=actor.actor_id,
-            correlation_id=_current_correlation_id(),
-            causation_id=None,
-            scope_kind=request.scope.scope_kind,
-            scope_id=request.scope.scope_id,
-            request_surface="api:/api/v1/trust/signals",
-            request_json=redacted_payload,
-            status="accepted",
-            reason_text=None,
+        created_row = row
+        return StateChangeDraft(
+            change_type=TRUST_SIGNAL_CREATE_CHANGE,
+            payload_json=change_payload,
+            diff_json={
+                "signal_type": request.signal_type,
+                "scope": action_payload["scope"],
+                "value": action_payload["value"],
+                "observed_at": action_payload["observed_at"],
+                "expires_at": action_payload["expires_at"],
+            },
         )
 
-    return _signal_from_row(row)
+    result = mutate_entity(
+        db=db,
+        aggregate_type=TRUST_SIGNAL_AGGREGATE_TYPE,
+        aggregate_id=str(signal_id),
+        request=_make_request(
+            expected_version=0,
+            actor=actor,
+            request_surface="api:/api/v1/trust/signals",
+        ),
+        action_type=TRUST_SIGNAL_CREATE_ACTION,
+        action_payload=action_payload,
+        payload_allowlist={
+            "member_id",
+            "signal_type",
+            "scope",
+            "value",
+            "expires_at",
+            "observed_at",
+            "observation_timestamp",
+        },
+        mutate_projection=mutate_projection,
+        scope_kind=request.scope.scope_kind,
+        scope_id=request.scope.scope_id,
+    )
+    if created_row is None:
+        raise RuntimeError("failed to insert trust signal")
+    return _signal_from_row(created_row), result
 
 
 def compute_trust(
@@ -369,7 +398,7 @@ def compute_trust(
         return _profile_from_row(row), None, False
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        _insert_trust_profile(
+        upsert_trust_profile_for_recompute(
             connection,
             row={
                 "member_id": member_id,
@@ -444,7 +473,6 @@ def _recompute_once(
         score, tier, signal_summary = compute_score(
             signals,
             _as_mapping(policy["content"], "policy.content"),
-            as_of,
         )
         old_values = {
             "score": None if existing is None else int(existing["score"]),
@@ -475,7 +503,7 @@ def _recompute_once(
                 },
             )
             return StateChangeDraft(
-                change_type="trust.recomputed",
+                change_type=TRUST_RECOMPUTE_CHANGE,
                 payload_json={
                     "member_id": str(member_id),
                     "score": score,
@@ -500,12 +528,12 @@ def _recompute_once(
                 actor=actor,
                 request_surface=f"api:/api/v1/trust/recompute/{member_id}",
             ),
-            action_type="trust.recompute",
+            action_type=TRUST_RECOMPUTE_ACTION,
             action_payload={"member_id": str(member_id)},
             payload_allowlist={"member_id"},
             mutate_projection=mutate_projection,
-            scope_kind="global",
-            scope_id=None,
+            scope_kind="member",
+            scope_id=str(member_id),
         )
         row = _fetch_profile_row(connection, member_id)
         return _profile_from_row(row), result
@@ -537,6 +565,10 @@ def get_trust_profile(
 
 __all__ = [
     "TRUST_POLICY_TYPE",
+    "TRUST_RECOMPUTE_ACTION",
+    "TRUST_RECOMPUTE_CHANGE",
+    "TRUST_SIGNAL_CREATE_ACTION",
+    "TRUST_SIGNAL_CREATE_CHANGE",
     "compute_score",
     "compute_trust",
     "create_trust_signal",

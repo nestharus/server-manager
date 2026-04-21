@@ -10,8 +10,9 @@ import pytest
 from httpx import AsyncClient
 from psycopg.rows import dict_row
 
-from app.contracts.trust import TrustProfileRead
+from app.contracts.trust import InvalidTrustPolicyError, TrustProfileRead
 from app.repositories.db import PostgresDatabase
+from app.services.trust import compute_score
 
 from tests.trust_helpers import (
     TRUST_RECOMPUTE_URL,
@@ -82,6 +83,7 @@ async def test_recompute_pins_current_policy_version(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust recompute; D5 pins the current policy version in the profile."""
     actor_id = "recompute-policy"
     seed_trust_policy_version(governance_dsn, version_number=1)
     latest_policy_id = seed_trust_policy_version(governance_dsn, version_number=2)
@@ -106,6 +108,7 @@ async def test_recompute_deterministic_for_same_inputs(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust recompute; D10 produces deterministic output for identical inputs."""
     actor_id = "recompute-deterministic"
     seed_trust_policy_version(governance_dsn, version_number=1)
     member_id = await _setup_recompute_member(migrated_async_client, governance_db, actor_id=actor_id)
@@ -149,6 +152,7 @@ async def test_recompute_produces_new_profile_version(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust recompute; D8 advances optimistic-lock profile versions."""
     actor_id = "recompute-version"
     seed_trust_policy_version(governance_dsn, version_number=1)
     member_id = await _setup_recompute_member(migrated_async_client, governance_db, actor_id=actor_id)
@@ -176,6 +180,7 @@ async def test_recompute_returns_409_on_stale_conflict_after_retry(
     governance_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """AC trust recompute; D8 returns conflict after retrying stale mutations."""
     actor_id = "recompute-conflict"
     seed_trust_policy_version(governance_dsn, version_number=1)
     member_id = await _setup_recompute_member(migrated_async_client, governance_db, actor_id=actor_id)
@@ -206,6 +211,7 @@ async def test_recompute_honors_expired_signals_by_ignoring_them(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust recompute; D10 excludes expired signals from deterministic scoring."""
     actor_id = "recompute-expiry"
     seed_trust_policy_version(governance_dsn, version_number=1)
     member_id = await _setup_recompute_member(migrated_async_client, governance_db, actor_id=actor_id)
@@ -242,6 +248,7 @@ async def test_recompute_requires_trust_recompute_at_member_scope(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust recompute; D7 authorizes recompute at member scope only."""
     actor_id = "recompute-authority"
     seed_trust_policy_version(governance_dsn, version_number=1)
     grant_permissions(governance_db, actor_id=actor_id, permissions=frozenset({"member.write"}))
@@ -280,6 +287,7 @@ async def test_recompute_audit_records_correct_diff(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust recompute; D8 records scoped audit diff through mutate_entity."""
     actor_id = "recompute-audit"
     policy_id = seed_trust_policy_version(governance_dsn, version_number=1)
     member_id = await _setup_recompute_member(migrated_async_client, governance_db, actor_id=actor_id)
@@ -294,7 +302,12 @@ async def test_recompute_audit_records_correct_diff(
     with psycopg.connect(governance_dsn, row_factory=dict_row) as conn:
         row = conn.execute(
             """
-            SELECT aa.action_type, aa.request_json, ascg.change_type, ascg.diff_json
+            SELECT aa.action_type,
+                   aa.scope_kind,
+                   aa.scope_id,
+                   aa.request_json,
+                   ascg.change_type,
+                   ascg.diff_json
             FROM activity_actions AS aa
             JOIN activity_state_changes AS ascg ON ascg.action_id = aa.id
             WHERE aa.aggregate_type = 'trust_profile'
@@ -306,6 +319,8 @@ async def test_recompute_audit_records_correct_diff(
         ).fetchone()
     assert row is not None
     assert row["action_type"] == "trust.recompute"
+    assert row["scope_kind"] == "member"
+    assert row["scope_id"] == member_id
     assert row["request_json"] == {"member_id": member_id}
     assert row["change_type"] == "trust.recomputed"
     assert row["diff_json"]["score"] == {"old": None, "new": 70}
@@ -315,15 +330,44 @@ async def test_recompute_audit_records_correct_diff(
     assert row["diff_json"]["signal_ids"] == {"old": [], "new": [signal_id]}
 
 
+def test_policy_with_decay_rules_rejected_until_supported() -> None:
+    """AC trust recompute; D10 rejects unsupported decay policies explicitly."""
+    content = valid_trust_policy_content()
+    content["decay_rules"] = {"half_life_days": 30}
+
+    with pytest.raises(InvalidTrustPolicyError, match="decay_rules not yet supported"):
+        compute_score([], content)
+
+
+def test_tier_selection_independent_of_policy_order() -> None:
+    """AC trust recompute; D10 sorts policy thresholds before tier selection."""
+    content = valid_trust_policy_content(default_score=50)
+    content["level_thresholds"] = [
+        {"tier": "high", "max_score": 100},
+        {"tier": "low", "max_score": 39},
+        {"tier": "medium", "max_score": 79},
+    ]
+
+    score, tier, summary = compute_score([], content)
+
+    assert score == 50
+    assert tier == "medium"
+    assert summary["count"] == 0
+
+
 def test_no_trust_signal_bypass_remains(repo_root: Path) -> None:
+    """AC trust recompute; D8 keeps profile and signal writes behind mutate_entity."""
     allowed = {
         Path("services/api/app/services/trust.py"),
         Path("services/api/app/repositories/trust.py"),
     }
     patterns = (
         "INSERT INTO trust_signals",
+        "UPDATE trust_signals",
+        "DELETE FROM trust_signals",
         "UPDATE trust_profiles",
         "INSERT INTO trust_profiles",
+        "DELETE FROM trust_profiles",
     )
     violations: list[str] = []
     for path in repo_root.rglob("*.py"):

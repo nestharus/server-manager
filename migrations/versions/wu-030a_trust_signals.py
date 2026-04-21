@@ -32,7 +32,11 @@ def upgrade() -> None:
             CONSTRAINT trust_signals_scope_id_shape
                 CHECK (
                     (scope_kind = 'global' AND scope_id IS NULL)
-                    OR (scope_kind IN ('chapter', 'member') AND scope_id IS NOT NULL)
+                    OR (
+                        scope_kind IN ('chapter', 'member')
+                        AND scope_id IS NOT NULL
+                        AND length(trim(scope_id)) > 0
+                    )
                 ),
             CONSTRAINT trust_signals_source_actor_kind_valid
                 CHECK (source_actor_kind IN ('user', 'service')),
@@ -100,4 +104,3 @@ def downgrade() -> None:
     op.execute("DROP INDEX ix_trust_signals__member_type_observed")
     op.execute("DROP INDEX ix_trust_signals__member_created")
     op.execute("DROP TABLE trust_signals")
-

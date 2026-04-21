@@ -52,6 +52,7 @@ async def test_create_signal_persists_fields_without_mutating_profile(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust signal create; D8 records signal state without changing profile."""
     actor_id = "signal-operator"
     seed_trust_policy_version(
         governance_dsn,
@@ -105,6 +106,7 @@ async def test_create_signal_persists_fields_without_mutating_profile(
     )
 
     assert response.status_code == HTTPStatus.CREATED, response.text
+    assert response.headers["etag"] == '"1"'
     body = response.json()
     assert body["member_id"] == str(member.id)
     assert body["signal_type"] == "positive"
@@ -145,12 +147,41 @@ async def test_create_signal_persists_fields_without_mutating_profile(
     )
     assert after == before
 
+    audit = fetch_one(
+        governance_dsn,
+        """
+        SELECT aa.action_type,
+               aa.request_json,
+               ascg.change_type,
+               ascg.payload_json,
+               ascg.diff_json,
+               h.current_seq
+        FROM activity_actions AS aa
+        JOIN activity_state_changes AS ascg ON ascg.action_id = aa.id
+        JOIN aggregate_heads AS h
+          ON h.aggregate_type = aa.aggregate_type
+         AND h.aggregate_id = aa.aggregate_id
+        WHERE aa.aggregate_type = 'trust_signal'
+          AND aa.aggregate_id = %s
+        """,
+        (body["id"],),
+    )
+    assert audit["action_type"] == "trust.signal.created"
+    assert audit["request_json"]["member_id"] == str(member.id)
+    assert audit["request_json"]["observed_at"] == observed_at.isoformat().replace("+00:00", "Z")
+    assert audit["change_type"] == "trust.signal.created"
+    assert audit["payload_json"]["id"] == body["id"]
+    assert audit["payload_json"]["member_id"] == str(member.id)
+    assert audit["diff_json"]["signal_type"] == "positive"
+    assert audit["current_seq"] == 1
+
 
 @pytest.mark.asyncio
 async def test_create_signal_requires_authority_at_scope(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
 ) -> None:
+    """AC trust signal create; D7 requires authority at the requested scope."""
     actor_id = "chapter-denied"
     grant_permissions(governance_db, actor_id=actor_id, permissions=frozenset({"member.write"}))
     grant_permissions(
@@ -177,6 +208,7 @@ async def test_create_signal_rejects_invalid_scope_shape(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
 ) -> None:
+    """AC trust signal create; D2 rejects malformed scope and timestamp payloads."""
     actor_id = "invalid-signal"
     grant_permissions(
         governance_db,
@@ -185,10 +217,13 @@ async def test_create_signal_rejects_invalid_scope_shape(
     )
     member = await create_member(migrated_async_client, actor_id=actor_id)
 
+    naive_timestamp = _signal_payload(str(member.id))
+    naive_timestamp["observed_at"] = "2025-02-01T00:00:00"
     invalid_payloads = [
         _signal_payload(str(member.id), scope_kind="global", scope_id="not-allowed"),
         _signal_payload(str(member.id), scope_kind="chapter"),
         _signal_payload(str(member.id), value={"magnitude": 1}),
+        naive_timestamp,
     ]
 
     for payload in invalid_payloads:
@@ -206,6 +241,7 @@ async def test_create_signal_with_expires_at_persists_correctly(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust signal create; D2 persists aware expiry timestamps only."""
     actor_id = "expiry-signal"
     grant_permissions(
         governance_db,
@@ -244,6 +280,7 @@ async def test_trust_signal_db_constraints_reject_malformed_json(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """AC trust signal create; D2 keeps database constraints as the final boundary."""
     actor_id = "db-constraint"
     grant_permissions(governance_db, actor_id=actor_id, permissions=frozenset({"member.write"}))
     member = await create_member(migrated_async_client, actor_id=actor_id)
@@ -264,6 +301,24 @@ async def test_trust_signal_db_constraints_reject_malformed_json(
                     member.id,
                     '{"scope_kind":"member"}',
                     '{"magnitude":1}',
+                    datetime(2025, 2, 1, tzinfo=UTC),
+                ),
+            )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(
+                """
+                INSERT INTO trust_signals (
+                    id, member_id, signal_type, scope_kind, scope_id, scope,
+                    value, source_actor_kind, source_actor_id, observed_at
+                )
+                VALUES (%s, %s, 'positive', 'chapter', '', %s::jsonb,
+                        %s::jsonb, 'user', 'operator', %s)
+                """,
+                (
+                    uuid4(),
+                    member.id,
+                    '{"scope_kind":"chapter","scope_id":""}',
+                    '{"schema_version":1}',
                     datetime(2025, 2, 1, tzinfo=UTC),
                 ),
             )

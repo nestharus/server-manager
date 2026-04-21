@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 
 from app.contracts.scope import ScopeKind
@@ -62,8 +62,8 @@ class TrustSignalCreate(_TrustModel):
     signal_type: str = Field(min_length=1)
     scope: TrustSignalScope
     value: dict[str, Any]
-    observed_at: datetime
-    expires_at: datetime | None = None
+    observed_at: AwareDatetime
+    expires_at: AwareDatetime | None = None
 
     @field_validator("value")
     @classmethod

@@ -35,36 +35,6 @@ def fetch_trust_profile_by_member_id(
         ).fetchone()
 
 
-def _insert_trust_profile(
-    connection: Connection[Any],
-    *,
-    row: dict[str, Any],
-) -> None:
-    connection.execute(
-        """
-        INSERT INTO trust_profiles (
-            member_id,
-            score,
-            tier,
-            signals,
-            policy_version_id,
-            config_version,
-            computed_at
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            row["member_id"],
-            row["score"],
-            row["tier"],
-            Jsonb(row["signals"]),
-            row["policy_version_id"],
-            row["config_version"],
-            row["computed_at"],
-        ),
-    )
-
-
 def update_trust_profile(
     connection: Connection[Any],
     *,
@@ -217,7 +187,6 @@ def get_trust_profile_for_update(
 
 
 __all__ = [
-    "_insert_trust_profile",
     "fetch_trust_profile_by_member_id",
     "get_trust_profile_for_update",
     "insert_trust_signal",

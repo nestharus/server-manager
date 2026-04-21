@@ -17,10 +17,6 @@ def upgrade() -> None:
         UPDATE policy_versions
         SET policy_type = 'trust_computation'
         WHERE policy_type = 'trust'
-          AND id IN (
-              SELECT policy_version_id
-              FROM trust_profiles
-          )
         """
     )
     op.execute(
@@ -72,10 +68,5 @@ def downgrade() -> None:
         UPDATE policy_versions
         SET policy_type = 'trust'
         WHERE policy_type = 'trust_computation'
-          AND id IN (
-              SELECT policy_version_id
-              FROM trust_profiles
-          )
         """
     )
-
