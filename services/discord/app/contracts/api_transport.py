@@ -12,6 +12,7 @@ class ApiTransportRequest(BaseModel):
     path: str = Field(min_length=1)
     query: dict[str, str] | None = None
     body: dict[str, Any] | None = None
+    headers: dict[str, str] | None = None
 
 
 class ApiTransportResponse(BaseModel):
