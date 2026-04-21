@@ -42,6 +42,7 @@ class DeferredEffectCreate(BaseModel):
     payload_json: dict[str, Any]
     consequence_level: ConsequenceLevel
     correlation_id: UUID | None = None
+    causation_id: UUID | None = None
 
 
 class DeferredEffectRead(BaseModel):
@@ -56,6 +57,7 @@ class DeferredEffectRead(BaseModel):
     attempts: int = Field(ge=0)
     max_attempts: int = Field(gt=0)
     correlation_id: UUID
+    causation_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -315,6 +315,7 @@ def _enqueue_roster_sync_retry(
         },
         consequence_level="consequential",
         correlation_id=ctx.correlation_id,
+        causation_id=ctx.causation_id,
     )
     return enqueue_effect(
         connection,
