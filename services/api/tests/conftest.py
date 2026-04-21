@@ -15,6 +15,7 @@ from testcontainers.postgres import PostgresContainer
 
 from app.contracts.testing import API_TEST_HARNESS, ApiTestHarnessRead
 from app.core.factory import create_api_app
+from app.repositories.db import PostgresDatabase
 from app.core.settings import Settings
 
 
@@ -26,6 +27,7 @@ GOVERNANCE_TABLES = (
     "activity_actions",
     "aggregate_heads",
     "authority_grants",
+    "trust_signals",
     "trust_profiles",
     "members",
     "policy_versions",
@@ -224,3 +226,12 @@ def governance_dsn(migrated_postgres_db: str) -> Iterator[str]:
     reset_governance_state(migrated_postgres_db)
     yield migrated_postgres_db
     reset_governance_state(migrated_postgres_db)
+
+
+@pytest.fixture()
+def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
+    db = PostgresDatabase(dsn=governance_dsn)
+    try:
+        yield db
+    finally:
+        db.close()

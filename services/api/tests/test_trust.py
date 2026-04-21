@@ -104,7 +104,7 @@ def _seed_trust_policy_version(
     content: dict[str, Any],
 ) -> UUID:
     row_id = uuid4()
-    aggregate_id = "trust|global|"
+    aggregate_id = "trust_computation|global|"
 
     with psycopg.connect(database_url, autocommit=True) as conn:
         conn.execute(
@@ -113,7 +113,7 @@ def _seed_trust_policy_version(
                 id, policy_type, scope_kind, scope_id,
                 version_number, content, effective_at
             )
-            VALUES (%s, 'trust', 'global', NULL, %s, %s::jsonb, %s)
+            VALUES (%s, 'trust_computation', 'global', NULL, %s, %s::jsonb, %s)
             """,
             (row_id, version_number, json.dumps(content), datetime.now(UTC)),
         )
@@ -134,22 +134,21 @@ def _seed_trust_policy_version(
 
 def _valid_trust_policy_rules() -> dict[str, Any]:
     return {
-        "rules": {
-            "score_floor": 0,
-            "score_ceiling": 100,
-            "default_score": 50,
-            "weights": {
-                "discord_account_age_days": 2,
-                "has_avatar": 7,
-                "has_verified_badge": 13,
-            },
-            "flags": {},
-            "tiers": [
-                {"name": "low", "max_score": 39},
-                {"name": "medium", "max_score": 79},
-                {"name": "high", "max_score": 100},
-            ],
-        }
+        "schema_version": 1,
+        "score_floor": 0,
+        "score_ceiling": 100,
+        "default_score": 50,
+        "signal_weights": {
+            "discord_account_age_days": 2,
+            "has_avatar": 7,
+            "has_verified_badge": 13,
+        },
+        "decay_rules": {},
+        "level_thresholds": [
+            {"tier": "low", "max_score": 39},
+            {"tier": "medium", "max_score": 79},
+            {"tier": "high", "max_score": 100},
+        ],
     }
 
 
@@ -515,7 +514,7 @@ async def test_compute_trust_returns_409_when_policy_weights_missing(
 ) -> None:
     actor_id = "operator"
     content = _valid_trust_policy_rules()
-    del content["rules"]["weights"]
+    del content["signal_weights"]
     _seed_trust_policy_version(
         governance_dsn,
         version_number=1,
