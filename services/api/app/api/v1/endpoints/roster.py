@@ -230,7 +230,7 @@ def record_sync_failure_endpoint(
     request: Request,
     response: Response,
     db: PostgresDatabase = Depends(get_db),
-    actor: ActorIdentity = Depends(_service_actor_only),
+    actor: ActorIdentity = Depends(get_current_actor),
 ) -> RosterEntryRead:
     expected_version = _parse_if_match(request)
     try:

@@ -176,7 +176,7 @@ def downgrade() -> None:
         WHERE grantee_id = 'roster-syncer'
           AND scope_kind = 'global'
           AND scope_id IS NULL
-          AND permissions = '["roster.read", "roster.write"]'::jsonb
+          AND permissions @> '["roster.read", "roster.write"]'::jsonb
         """
     )
     op.drop_index("ix_roster_transitions__chapter_recorded", table_name="roster_transitions")

@@ -5,7 +5,11 @@ from typing import Any
 
 import discord
 
-from app.contracts.api_transport import ApiTransportRequest
+from app.contracts.api_transport import (
+    ApiTransportError,
+    ApiTransportRequest,
+    ApiUnreachableError,
+)
 from app.contracts.roster import RosterSyncEvent, RosterSyncResult
 
 
@@ -157,7 +161,7 @@ async def _record_sync_failure(
                 method="POST",
                 path=f"/api/v1/roster-entries/{event.roster_entry_id}/sync-failure",
                 body={
-                    "transition_id": event.transition_id,
+                    "transition_id": str(event.transition_id),
                     "reason": reason,
                     "member_discord_user_id": event.member_discord_user_id,
                     "operation": operation,
@@ -173,7 +177,7 @@ async def _record_sync_failure(
                 },
             )
         )
-    except Exception:
+    except (ApiTransportError, ApiUnreachableError):
         return False
     return 200 <= response.status < 300
 
@@ -206,17 +210,17 @@ async def sync_roster(
             if not _has_role(member, desired_role_id):
                 skipped.append(desired_role_id)
             else:
-                await member.remove_roles([role], reason=reason)
+                await member.remove_roles(role, reason=reason)
                 applied.append(desired_role_id)
         else:
             if _has_role(member, desired_role_id):
                 skipped.append(desired_role_id)
             else:
-                await member.add_roles([role], reason=reason)
+                await member.add_roles(role, reason=reason)
                 applied.append(desired_role_id)
         return RosterSyncResult(
             roster_entry_id=event.roster_entry_id,
-            transition_id=event.transition_id,
+            transition_id=str(event.transition_id),
             applied_role_ids=applied,
             skipped_role_ids=skipped,
         )
@@ -232,7 +236,7 @@ async def sync_roster(
         )
         return RosterSyncResult(
             roster_entry_id=event.roster_entry_id,
-            transition_id=event.transition_id,
+            transition_id=str(event.transition_id),
             applied_role_ids=applied,
             skipped_role_ids=skipped,
             failure_recorded=failure_recorded,
@@ -250,7 +254,7 @@ async def sync_roster(
         )
         return RosterSyncResult(
             roster_entry_id=event.roster_entry_id,
-            transition_id=event.transition_id,
+            transition_id=str(event.transition_id),
             applied_role_ids=applied,
             skipped_role_ids=skipped,
             failure_recorded=failure_recorded,

@@ -86,7 +86,6 @@ def _fetch_entry_row(connection: Connection[Any], entry_id: UUID) -> dict[str, A
 def _validate_role(connection: Connection[Any], *, chapter_id: str, role_id: UUID) -> None:
     role = _fetch_chapter_role_for_update_or_validate(
         connection,
-        chapter_id=chapter_id,
         role_id=role_id,
     )
     if role is None:
@@ -95,7 +94,17 @@ def _validate_role(connection: Connection[Any], *, chapter_id: str, role_id: UUI
         raise RosterRoleChapterMismatchError(role_id, chapter_id)
 
 
-def _verify_transition(*, current_status: str, new_status: str) -> None:
+def _verify_transition(
+    *,
+    current_status: str,
+    new_status: str,
+    current_role_id: UUID,
+    new_role_id: UUID | None,
+) -> None:
+    if current_status == new_status:
+        if new_role_id is None or new_role_id == current_role_id:
+            raise InvalidRosterStatusTransitionError(current_status, new_status)
+        return
     if (current_status, new_status) not in VALID_TRANSITIONS:
         raise InvalidRosterStatusTransitionError(current_status, new_status)
 
@@ -190,11 +199,13 @@ def transition_roster_entry(
         if row is None:
             raise RosterEntryNotFoundError(entry_id)
 
+        next_role_id = request.to_role_id or row["role_id"]
         _verify_transition(
             current_status=row["status"],
             new_status=request.to_status,
+            current_role_id=row["role_id"],
+            new_role_id=request.to_role_id,
         )
-        next_role_id = request.to_role_id or row["role_id"]
         if request.to_role_id is not None:
             _validate_role(
                 connection,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,7 +16,7 @@ class _RosterModel(BaseModel):
 class RosterSyncEvent(_RosterModel):
     roster_entry_id: str = Field(min_length=1)
     roster_entry_version: int = Field(ge=1)
-    transition_id: str = Field(min_length=1)
+    transition_id: UUID
     chapter_id: str = Field(min_length=1)
     member_id: str = Field(min_length=1)
     member_discord_user_id: str = Field(min_length=1)

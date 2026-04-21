@@ -56,3 +56,28 @@ Result: no matches.
 ## Notes
 
 - `.pipeline/proposal.md`, `.pipeline/synthesis.md`, `.pipeline/research.md`, and `plans/risk/slice-018-*.md` were treated as inputs. Existing unstaged input-file changes were left intact.
+
+## CodeRabbit Fix Pass
+
+Applied critical and major review fixes:
+
+- Allowed same-status roster transitions when `to_role_id` changes, while keeping no-op same-status transitions rejected with `409`.
+- Added API regression coverage for active-to-active role reassignment success and same-role no-op rejection.
+- Updated Discord roster sync to call `member.add_roles(role, ...)` and `member.remove_roles(role, ...)` with discord.py varargs instead of list arguments.
+- Updated Discord test fakes and assertions to match `add_roles(*roles, reason=None, atomic=True)` / `remove_roles(*roles, reason=None, atomic=True)`.
+- Typed Discord `RosterSyncEvent.transition_id` as `UUID` and serialized it back to a string in API payloads/results.
+- Replaced the bare sync-failure API exception swallow with explicit `ApiTransportError` / `ApiUnreachableError` handling.
+
+Quick low-risk nits included:
+
+- Changed the roster syncer grant downgrade to use JSONB containment.
+- Removed the duplicate `_service_actor_only` dependency from the sync-failure endpoint signature.
+- Dropped the unused `chapter_id` parameter from the chapter-role repository helper.
+- Converted `services/api/tests/test_roster.py` to `@pytest.fixture`.
+
+Verification:
+
+- `cd /home/nes/projects/server-manager/worktrees/slice-018/services/api && uv run pytest tests/ -q`
+  - `356 passed, 1 warning`
+- `cd /home/nes/projects/server-manager/worktrees/slice-018/services/discord && uv run pytest tests/ -q`
+  - `59 passed, 20 warnings`

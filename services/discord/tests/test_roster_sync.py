@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import discord
 import pytest
@@ -10,6 +11,9 @@ import pytest
 from app.contracts.api_transport import ApiTransportRequest, ApiTransportResponse
 from app.contracts.roster import RosterSyncEvent
 from app.handlers.roster import SERVICE_ACTOR_HEADERS, sync_roster
+
+
+TRANSITION_ID = UUID("11111111-1111-4111-8111-111111111111")
 
 
 class FakeApiClient:
@@ -30,12 +34,22 @@ class FakeMember:
         self.add_roles = AsyncMock(side_effect=self._add_roles)
         self.remove_roles = AsyncMock(side_effect=self._remove_roles)
 
-    async def _add_roles(self, roles: list[Any], *, reason: str) -> None:
+    async def _add_roles(
+        self,
+        *roles: Any,
+        reason: str | None = None,
+        atomic: bool = True,
+    ) -> None:
         if self._fail is not None:
             raise self._fail
         self.roles.extend(roles)
 
-    async def _remove_roles(self, roles: list[Any], *, reason: str) -> None:
+    async def _remove_roles(
+        self,
+        *roles: Any,
+        reason: str | None = None,
+        atomic: bool = True,
+    ) -> None:
         if self._fail is not None:
             raise self._fail
         for role in roles:
@@ -64,7 +78,7 @@ def _event(**overrides: Any) -> RosterSyncEvent:
     payload: dict[str, Any] = {
         "roster_entry_id": "entry-1",
         "roster_entry_version": 2,
-        "transition_id": "transition-1",
+        "transition_id": str(TRANSITION_ID),
         "chapter_id": "ch-1",
         "member_id": "member-1",
         "member_discord_user_id": "1234",
@@ -101,7 +115,7 @@ async def test_discord_handler_calls_sync_failure_on_forbidden() -> None:
     assert call.method == "POST"
     assert call.path == "/api/v1/roster-entries/entry-1/sync-failure"
     assert call.headers == {**SERVICE_ACTOR_HEADERS, "If-Match": '"2"'}
-    assert call.body["transition_id"] == "transition-1"
+    assert call.body["transition_id"] == str(TRANSITION_ID)
     assert call.body["operation"] == "add_roles"
     assert call.body["desired_discord_role_ids"] == ["role-1"]
     assert call.body["error_type"] == "Forbidden"
@@ -125,7 +139,7 @@ async def test_discord_handler_rediscovers_role_id_by_name() -> None:
     assert result.failure_recorded is False
     member.add_roles.assert_awaited_once()
     roles_arg = member.add_roles.await_args.args[0]
-    assert roles_arg == [rediscovered]
+    assert roles_arg == rediscovered
     assert api.calls == []
 
 

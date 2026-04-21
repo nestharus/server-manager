@@ -77,7 +77,6 @@ def _fetch_roster_entry_for_update(
 def _fetch_chapter_role_for_update_or_validate(
     connection: Connection[Any],
     *,
-    chapter_id: str,
     role_id: UUID,
 ) -> dict[str, Any] | None:
     with connection.cursor(row_factory=dict_row) as cursor:

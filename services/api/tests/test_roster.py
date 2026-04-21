@@ -31,7 +31,7 @@ def _audit_context() -> AuditContextRead:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def governance_db(governance_dsn: str) -> PostgresDatabase:
     db = PostgresDatabase(dsn=governance_dsn)
     try:
@@ -433,6 +433,49 @@ def test_transition_disallowed_state_pairs_return_409(
         assert status == HTTPStatus.OK
 
     body, _, status = _transition(client, entry["id"], etag, to_status)
+
+    assert status == HTTPStatus.CONFLICT
+    assert body["code"] == "invalid_roster_transition"
+
+
+def test_transition_role_only_same_status_succeeds(
+    client: TestClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    roles = _seed_chapter_and_roles(governance_db)
+    _seed_grant(governance_db)
+    entry, etag = _create_entry(client, roles["member"])
+
+    body, next_etag, status = _transition(
+        client,
+        entry["id"],
+        etag,
+        "active",
+        role_id=roles["officer"],
+    )
+
+    assert status == HTTPStatus.OK
+    assert body["status"] == "active"
+    assert body["role_id"] == str(roles["officer"])
+    assert body["version"] == 2
+    assert next_etag == '"2"'
+
+
+def test_transition_same_status_same_role_returns_409(
+    client: TestClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    roles = _seed_chapter_and_roles(governance_db)
+    _seed_grant(governance_db)
+    entry, etag = _create_entry(client, roles["member"])
+
+    body, _, status = _transition(
+        client,
+        entry["id"],
+        etag,
+        "active",
+        role_id=roles["member"],
+    )
 
     assert status == HTTPStatus.CONFLICT
     assert body["code"] == "invalid_roster_transition"
