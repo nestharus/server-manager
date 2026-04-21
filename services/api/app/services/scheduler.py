@@ -200,10 +200,7 @@ class SchedulerLoop:
 
         self._last_ticket_sla_tick_at = now
         try:
-            await asyncio.to_thread(
-                ticket_sla_worker_tick,
-                worker_id=self._worker_id,
-            )
+            await asyncio.to_thread(ticket_sla_worker_tick)
         except Exception:
             logger.exception(
                 "ticket SLA worker tick failed for worker %s",

@@ -298,7 +298,8 @@ def test_auto_escalate_reachable_target_transitions_ticket(
                             "elapsed_seconds": 60,
                             "consequence": "auto_escalate",
                             "target_state": "triaged",
-                        }
+                        },
+                        {"elapsed_seconds": 120, "consequence": "notify_scope"},
                     ],
                 }
             ],
@@ -311,6 +312,7 @@ def test_auto_escalate_reachable_target_transitions_ticket(
     assert len(applied) == 1
     assert applied[0].consequence == "auto_escalate"
     assert applied[0].effect_summary["result"] == "transitioned"
+    assert _fetch_events(governance_dsn) == []
     assert _fetch_ticket(governance_dsn, ticket_id)["state"] == "triaged"
     transitions = _fetch_transitions(governance_dsn, ticket_id)
     assert [(row["action"], row["to_state"]) for row in transitions] == [
@@ -438,6 +440,46 @@ def test_notifications_are_published_through_notification_events_emit(
     assert kwargs["actor"] == ActorIdentity(actor_kind="service", actor_id="sla-worker")
     assert kwargs["payload_allowlist"] == SLA_NOTIFICATION_PAYLOAD_ALLOWLIST
     assert _fetch_events(governance_dsn)[0]["payload_json"]["owner_id"] == "owner-1"
+
+
+def test_notify_owner_with_no_owner_records_fallback_summary(
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
+    ticket_id = _create_ticket_with_sla(
+        governance_db,
+        sla_rules={
+            "schema_version": 1,
+            "rules": [
+                {
+                    "key": "owner",
+                    "states": ["open"],
+                    "thresholds": [
+                        {"elapsed_seconds": 30, "consequence": "notify_owner"},
+                    ],
+                }
+            ],
+        },
+    )
+    _age_ticket(governance_dsn, ticket_id, created_at=now - timedelta(minutes=5))
+
+    applied = evaluate_ticket_sla(governance_db, now=now)
+
+    assert len(applied) == 1
+    assert applied[0].consequence == "notify_owner"
+    assert applied[0].effect_summary["result"] == "flag_for_review"
+    assert applied[0].effect_summary["fallback_from"] == "notify_owner"
+    assert applied[0].effect_summary["fallback_reason"] == "missing_owner"
+    assert "notification_event_id" in applied[0].effect_summary
+    triggers = _fetch_triggers(governance_dsn, ticket_id)
+    assert len(triggers) == 1
+    assert triggers[0]["consequence"] == "notify_owner"
+    assert triggers[0]["effect_summary_json"]["fallback_reason"] == "missing_owner"
+    events = _fetch_events(governance_dsn)
+    assert [row["event_type"] for row in events] == ["ticket.sla.flag_for_review"]
+    assert events[0]["payload_json"]["consequence"] == "notify_owner"
+    assert events[0]["payload_json"]["owner_id"] is None
 
 
 def test_concurrent_auto_escalate_stale_version_skips_cycle(

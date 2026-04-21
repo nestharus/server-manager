@@ -19,5 +19,5 @@ def get_ticket_sla_db() -> PostgresDatabase:
     return _DB
 
 
-def ticket_sla_worker_tick(*, worker_id: str = "sla-worker") -> list[SlaTriggerRead]:
-    return evaluate_ticket_sla(get_ticket_sla_db(), worker_id=worker_id)
+def ticket_sla_worker_tick() -> list[SlaTriggerRead]:
+    return evaluate_ticket_sla(get_ticket_sla_db())

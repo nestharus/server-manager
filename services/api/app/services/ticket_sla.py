@@ -443,8 +443,8 @@ def _handle_auto_escalate(
                 resolution=None,
                 owner_id=None,
                 priority=None,
-                originating_actor_kind="service",
-                originating_actor_id=SLA_WORKER_ID,
+                originating_actor_kind=actor.actor_kind,
+                originating_actor_id=actor.actor_id,
             ),
             actor=actor,
             connection=connection,
@@ -501,11 +501,10 @@ def evaluate_ticket_sla(
     db: PostgresDatabase,
     *,
     now: datetime | None = None,
-    worker_id: str = SLA_WORKER_ID,
     limit: int = 100,
 ) -> list[SlaTriggerRead]:
     resolved_now = now or datetime.now(tz=UTC)
-    actor = ActorIdentity(actor_kind="service", actor_id=worker_id)
+    actor = ActorIdentity(actor_kind="service", actor_id=SLA_WORKER_ID)
     existing_ctx = get_current_audit_context()
     context = (
         use_audit_context(_root_audit_context())
@@ -554,6 +553,8 @@ def evaluate_ticket_sla(
                         continue
                     existing.add(trigger_key)
                     applied.append(trigger)
+                    if trigger.consequence == "auto_escalate":
+                        break
     return applied
 
 
