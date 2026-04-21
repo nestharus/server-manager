@@ -26,3 +26,20 @@
 
 - `cd services/api && uv run pytest tests/ -q`: 335 passed, 1 warning.
 - `cd services/discord && uv run pytest tests/ -q`: 56 passed, 20 warnings.
+
+## Justification Fix Pass
+
+- Deleted unused `list_chapter_transitions` from `services/api/app/repositories/chapter_transitions.py` and removed its now-unused `dict_row` import.
+- Deleted unused `ChapterProvisionResult` and `ProvisioningStep` from `services/discord/app/contracts/chapters.py`.
+- Kept live `ChapterProvisioningError` and simplified its `step` argument to `str`; removed the obsolete handler type ignore.
+
+## Justification Grep Invariants
+
+- `grep -r list_chapter_transitions services/api`: 0 hits.
+- `grep -r ChapterProvisionResult services/discord`: 0 hits.
+- `grep -r ProvisioningStep services/discord`: 0 hits.
+
+## Justification Verification
+
+- `cd services/api && uv run pytest tests/ -q`: 335 passed, 1 warning.
+- `cd services/discord && uv run pytest tests/ -q`: 56 passed, 20 warnings.

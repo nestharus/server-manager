@@ -72,7 +72,7 @@ async def _api_call(api_client: Any, request: ApiTransportRequest, *, step: str)
     response = await api_client.call(request)
     if response.status >= 400:
         raise ChapterProvisioningError(
-            step=step,  # type: ignore[arg-type]
+            step=step,
             reason=f"API returned status {response.status}",
         )
     return response
