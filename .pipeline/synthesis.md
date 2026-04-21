@@ -1,212 +1,345 @@
-# SLICE-015 Phase 2 Synthesis: Binding Decisions
+# SLICE-016 Phase 2 Synthesis: Binding Decisions
 
-These decisions are binding for the SLICE-015 proposal and implementation.
+Revision 1 note: D7 now evaluates `trust.recompute` at member scope using
+the `{member_id}` path parameter, while preserving body-scope evaluation for
+`trust.signal.create`.
+
+These decisions are binding for the SLICE-016 proposal and implementation.
 The proposal may choose implementation mechanics inside these boundaries, but
 it must not add scope, replace these directions, or introduce compatibility
 paths around them.
 
 ## Acceptance Criteria Reference
 
-- **AC1**: Rule create/update persists grouping, recipients, channel, and
-  actionable state exactly as submitted, with stale updates rejected by
-  optimistic locking.
-- **AC2**: Per-root-cause rules emit one envelope per root correlation ID and
-  per-event rules emit one per triggering event.
-- **AC3**: Replaying the same persisted notification event does not
-  materialize duplicate envelopes.
-- **AC4**: Scheduled delivery marks envelopes exactly once and Discord delivery
-  failures do not mutate rule definitions.
+- **AC1**: Creating a trust signal persists type, scope, value, and optional
+  expiry without mutating the current trust profile immediately.
+- **AC2**: Recompute pins the current trust policy/config version when
+  producing the new profile.
+- **AC3**: Recompute is deterministic for the same signal set and policy
+  version.
+- **AC4**: Trust writes remain audit-safe and do not accept Discord-local ad
+  hoc overrides.
+
+## Resolved Existing State
+
+- Current `trust_profiles` columns from `migrations/versions/wu-012_trust.py`
+  are: `member_id`, `score`, `tier`, `signals`, `policy_version_id`,
+  `created_at`, and `updated_at`. The aggregate version is in
+  `aggregate_heads` for `aggregate_type = "trust_profile"`.
+- Current SLICE-007 trust code uses `policy_type = "trust"`. SLICE-016
+  replaces that with `policy_type = "trust_computation"` everywhere trust
+  computation policy is read, seeded, or tested. Do not keep aliases.
+- Current SLICE-010 policy identity is
+  `(policy_type, scope_kind, scope_id, version_number)`. "Current active"
+  means the row returned by `fetch_latest_version()`: highest
+  `version_number`, then latest `effective_at`, then latest `id`, for the
+  same `(policy_type, scope_kind, scope_id)`.
+- Current trust output contract is stable around `member_id`, `score`, `tier`,
+  `signals`, `policy_version_id`, and aggregate `version`. SLICE-016 may add
+  `config_version`; it must not expose recompute timestamps in
+  `TrustProfileRead`.
 
 ## Binding Decisions
 
-- **D1 — BINDING: NotificationRule aggregate and table.**
-  `NotificationRule` uses `aggregate_type = "notification_rule"` and persists
-  to `notification_rules`. The table shape is:
-  `id UUID PRIMARY KEY`, `trigger_json JSONB NOT NULL`,
-  `scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','chapter','member'))`,
-  `scope_id TEXT NULL`, `recipients_json JSONB NOT NULL`,
-  `channel TEXT NOT NULL CHECK (channel IN ('dm','thread','designated_channel'))`,
-  `template_json JSONB NOT NULL`, `actionable BOOL NOT NULL`,
-  `grouping TEXT NOT NULL CHECK (grouping IN ('per_event','per_root_cause'))`,
-  `enabled BOOL NOT NULL DEFAULT TRUE`, `created_at`, and `updated_at`.
-  Version comes from `aggregate_heads`, not a rule-table version column.
+- **D1 - BINDING: TrustSignal table shape.**
+  SLICE-016 creates `trust_signals` as an append-only evidence table:
+  `id UUID PRIMARY KEY`, `member_id UUID NOT NULL REFERENCES members(id) ON
+  DELETE RESTRICT`, `signal_type TEXT NOT NULL`, `scope_kind TEXT NOT NULL`,
+  `scope_id TEXT NULL`, `scope JSONB NOT NULL`, `value JSONB NOT NULL`,
+  `source_actor_kind TEXT NOT NULL`, `source_actor_id TEXT NOT NULL`,
+  `observed_at TIMESTAMPTZ NOT NULL`, `expires_at TIMESTAMPTZ NULL`, and
+  `created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`.
 
-  AC traceability: supports AC1 by defining the persisted rule fields and
-  optimistic-locking source. Supports AC2 by making grouping a persisted rule
-  field used by materialization.
+  Required CHECK constraints:
+  `scope_kind IN ('global','chapter','member')`;
+  global scope requires `scope_id IS NULL`; chapter/member scope require
+  `scope_id IS NOT NULL`;
+  `source_actor_kind IN ('user','service')`;
+  `char_length(signal_type) > 0`;
+  `jsonb_typeof(scope) = 'object'`;
+  `scope->>'scope_kind' = scope_kind`;
+  global scope has no JSON scope id, while chapter/member scope has
+  `scope->>'scope_id' = scope_id`;
+  `jsonb_typeof(value) = 'object'`;
+  `value ? 'schema_version'`;
+  `jsonb_typeof(value->'schema_version') = 'number'`;
+  and `expires_at IS NULL OR expires_at > observed_at`.
 
-- **D2 — BINDING: Trigger shape.**
-  `trigger_json` has this contract:
-  `{"event_type": str | prefix_pattern_ending_in_.*, "payload_filters": dict | None}`.
-  Exact dotted event names and suffix `.*` prefix patterns are valid. Trigger
-  values are not DB-enumerated; `trigger_json` remains flexible JSONB.
+  Required indexes:
+  `(member_id, created_at DESC, id DESC)`;
+  `(member_id, signal_type, observed_at DESC)`;
+  `(scope_kind, scope_id)`;
+  a GIN index on `value`;
+  and `(member_id, expires_at)`. Do not create a partial "active signal" index
+  with `CURRENT_TIMESTAMP`; PostgreSQL partial indexes cannot depend on moving
+  time. Filter active rows in the query.
 
-  AC traceability: supports AC2 by defining how rules match triggering events.
-  Supports AC1 by requiring triggers to be persisted as submitted instead of
-  normalized into a restrictive enum.
+  Do not add a uniqueness or dedupe constraint. Duplicate semantics belong in
+  the deterministic combiner, not in the table.
 
-- **D3 — BINDING: Scope matching.**
-  Notification rules use the same `ScopeKind` vocabulary as the rest of the
-  system: `global`, `chapter`, and `member`. A global rule matches any event.
-  A chapter rule matches only events with the same `scope_kind = 'chapter'` and
-  `scope_id`. A member rule matches only events with the same
-  `scope_kind = 'member'` and `scope_id`. SLICE-015 does not infer scope from
-  arbitrary payload fields.
+  AC traceability: supports AC1 by defining the persisted evidence fields and
+  preventing arbitrary malformed scope/value JSON from entering the evidence
+  table.
 
-  AC traceability: supports AC2 by making envelope emission deterministic for
-  scoped rules. Supports AC3 by keeping replay matching dependent only on
-  persisted event scope and rule scope.
+- **D2 - BINDING: TrustComputationConfig uses policies.**
+  `TrustComputationConfig` is stored as `policy_versions.content` with
+  `policy_type = "trust_computation"`. Do not create a
+  `trust_computation_configs` table.
 
-- **D4 — BINDING: Materialization flow and envelope table.**
-  `notification_events` is the queue. A separate `notification_envelopes` table
-  stores materialized per-recipient envelopes with
-  `delivery_status IN ('pending','delivered_in_flight','delivered','skipped','failed')`.
-  The materialize worker claims unprocessed `notification_events`, matches them
-  against enabled rules, and emits one `notification_envelopes` row for each
-  `(event, rule, recipient)` that resolves successfully, plus skipped envelope
-  rows for supported failure cases such as unresolved recipients, missing
-  destinations, or missing template keys.
-  Envelope uniqueness is:
-  `UNIQUE(event_id, rule_id, recipient_key)` for `per_event`, and
-  `UNIQUE(rule_id, root_correlation_id, recipient_key)` for `per_root_cause`.
-  For SLICE-015, `root_correlation_id` is the event correlation/root value used
-  for causal grouping.
+  Minimum content shape for SLICE-016:
 
-  AC traceability: supports AC2 by separating persisted events from
-  per-recipient envelopes. Supports AC3 through unique materialization keys.
-  Supports AC4 by giving delivery its own status-bearing work units.
+  ```json
+  {
+    "schema_version": 1,
+    "score_floor": 0,
+    "score_ceiling": 100,
+    "default_score": 50,
+    "signal_weights": {},
+    "decay_rules": {},
+    "level_thresholds": [
+      {"tier": "low", "max_score": 39},
+      {"tier": "medium", "max_score": 79},
+      {"tier": "high", "max_score": 100}
+    ]
+  }
+  ```
 
-- **D5 — BINDING: Grouping semantics.**
-  `per_event` creates one envelope per `(event, rule, recipient)` and the
-  unique key includes `event_id`. `per_root_cause` creates one envelope per
-  `(root_correlation_id, rule, recipient)` and the unique key omits `event_id`;
-  multiple events sharing the same root correlation produce a single envelope.
+  SLICE-016 must update SLICE-007 trust tests and seeds from
+  `policy_type = "trust"` to `policy_type = "trust_computation"` and to the
+  new content shape. Supporting both the old `rules` shape and the new shape
+  is forbidden.
 
-  AC traceability: directly satisfies AC2. Supports AC3 because repeated
-  materialization attempts collide on the same grouping key instead of creating
-  duplicate envelopes.
+  AC traceability: supports AC2 by using the existing versioned policy
+  substrate as the config pin instead of creating a parallel config system.
 
-- **D6 — BINDING: Delivery worker behavior.**
-  The delivery worker claims
-  `notification_envelopes WHERE delivery_status = 'pending' AND attempts < max_attempts`
-  using `FOR UPDATE SKIP LOCKED`. It calls the Discord adapter with the
-  materialized envelope. Immediately before calling the adapter, it sets
-  `delivery_status = 'delivered_in_flight'` so retries outside Discord's nonce
-  window do not resend a message that may already have been submitted. On
-  success, it sets `delivery_status = 'delivered'`.
-  On definitive failure, it increments `attempts` and records failure detail;
-  at `max_attempts`, it sets `delivery_status = 'failed'`. On ambiguous
-  transport failure after Discord may have accepted the request, it leaves the
-  row `delivered_in_flight` for operator reconciliation instead of retrying.
+- **D3 - BINDING: Signal scope vocabulary.**
+  Trust signals use the existing `ScopeKind =
+  Literal["global","chapter","member"]`. The API accepts a structured scope:
 
-  AC traceability: directly satisfies AC4 by making envelope delivery the
-  once-marked unit and by isolating retry/failure state from rule definitions.
+  ```text
+  TrustSignalScope
+    scope_kind: ScopeKind
+    scope_id: str | None
+  ```
 
-- **D7 — BINDING: Discord idempotency.**
-  Discord sends use Create Message `nonce` with `enforce_nonce = true`. The
-  nonce is a deterministic Discord-safe token derived from `envelope_id`, not
-  the raw UUID string: base32-encode the UUID bytes, strip padding, and use the
-  first 25 characters. This satisfies Discord's 25-character nonce limit while
-  preserving deterministic retry behavior. The nonce deduplicates duplicate
-  retry sends within Discord's nonce window.
+  The service constructs the persisted `scope` JSON from `scope_kind` and
+  `scope_id`; clients do not submit arbitrary scope JSON. Scope rules are:
+  `global` means server-wide evidence and must have `scope_id = None`;
+  `chapter` means chapter-specific evidence and must have `scope_id`;
+  `member` means member-scoped evidence and must have `scope_id`.
 
-  AC traceability: supports AC4 by adding adapter-level idempotency in addition
-  to database-level envelope claiming.
+  AC traceability: supports AC1 by making signal scope inspectable and
+  authority-addressable.
 
-- **D8 — BINDING: Replay deduplication.**
-  The materialize worker inserts envelopes with `INSERT ... ON CONFLICT DO
-  NOTHING` against the D5 uniqueness rules. Replaying the same
-  `notification_events.id` must not create duplicate envelopes.
+- **D4 - BINDING: TrustProfile extension and aggregate versioning.**
+  Extend `trust_profiles` in place. Do not create a parallel
+  `trust_profile_versions` table.
 
-  AC traceability: directly satisfies AC3. Supports AC2 by preserving the same
-  grouping semantics during original processing and replay.
+  Required added columns:
+  `config_version BIGINT NOT NULL` and
+  `computed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`.
 
-- **D9 — BINDING: Scheduler integration.**
-  Materialization and delivery are scheduled handlers registered through the
-  SLICE-004 `register_scheduler_handler` mechanism. Each `notification_events`
-  insert enqueues a `deferred_effects` row with
-  `effect_type = "notifications_materialize"` and
-  `payload_json = {"event_id": <notification_events.id>}`. The
-  `notifications_materialize` handler then enqueues one
-  `notifications_deliver` effect per materialized envelope with
-  `payload_json = {"envelope_id": <notification_envelopes.id>}` in the same
-  database transaction as the envelope insert.
+  Backfill `config_version` from the referenced `policy_versions.version_number`
+  and backfill `computed_at` from `updated_at`. Keep `policy_version_id` as the
+  durable config pin and treat `config_version` as denormalized operator-facing
+  metadata. Do not add `signal_revision_at` in SLICE-016; no profile-listing or
+  staleness UI requires it.
 
-  AC traceability: supports AC4 by making materialization and delivery
-  scheduled, claimable effects. Supports AC3 because replay uses the same
-  materialization handler and D8 conflict behavior.
+  Aggregate version remains in `aggregate_heads` for
+  `aggregate_type = "trust_profile"` and `aggregate_id = str(member_id)`.
+  `TrustProfileRead` adds `config_version` but does not add `computed_at`.
 
-- **D10 — BINDING: Recipient resolution timing and envelope snapshot.**
-  `recipients_json` is shaped as rule-owned JSON such as
-  `{"kind": "discord_role", "chapter_id": UUID, "role_name": str}`. Recipient
-  resolution happens at materialization time. The envelope stores the resolved
-  `recipient_discord_id` as a string and a human-readable
-  `recipient_display`. Destination channel resolution also happens at
-  materialization time: `channel = "dm"` stores
-  `destination_channel_id = NULL`, `channel = "designated_channel"` stores the
-  rule `recipients_json.designated_channel_id`, and `channel = "thread"` is
-  out of scope for SLICE-015. If recipient or destination resolution fails,
-  the envelope is marked `skipped` with a reason.
+  AC traceability: supports AC2 by recording both the policy row id and numeric
+  policy version used for the profile, while preserving existing optimistic
+  locking.
 
-  AC traceability: supports AC1 by persisting recipient configuration exactly
-  as submitted. Supports AC2 by converting a matching rule into concrete
-  per-recipient envelopes. Supports AC4 by snapshotting delivery recipients so
-  retries do not depend on later rule or role changes.
+- **D5 - BINDING: Signal append API.**
+  Add `POST /api/v1/trust/signals -> TrustSignalRead` with status `201`.
 
-- **D11 — BINDING: Template rendering timing and snapshot.**
-  `template_json` is a Python-compatible template, for example
-  `{"title": "Chapter ${chapter_id} transitioned to ${to_state}", "body": "..."}`.
-  Rendering happens strictly at materialization time with
-  `string.Template.substitute()`. Missing keys raise a render error and
-  produce a skipped envelope with reason `template_missing_key`; unresolved
-  `${missing_key}` text must not be shipped to users. The envelope stores fully
-  rendered `rendered_title` and `rendered_body`. The delivery worker only
-  transmits rendered strings. Rule edits after materialization do not affect
-  already created envelopes.
+  Request shape:
 
-  AC traceability: supports AC1 by persisting template configuration as
-  submitted. Directly supports AC4 by ensuring delivery failures and retries do
-  not mutate or reread rule definitions.
+  ```text
+  TrustSignalCreate
+    member_id: UUID
+    signal_type: str
+    scope: TrustSignalScope
+    value: dict[str, Any]  # object, must include schema_version
+    observed_at: datetime
+    expires_at: datetime | None = None
+  ```
 
-- **D12 — BINDING: Authority model and service actor grants.**
-  Rule reads require `notification.read` at `scope_kind = 'global'`. Rule
-  creates and updates require `notification.write` at `scope_kind = 'global'`.
-  The service actor `notification-dispatcher` has `notification.read` and
-  `notification.deliver` globally. These grants are seeded in the WU-029A
-  migration.
+  Response shape:
 
-  AC traceability: supports AC1 by governing rule create/update through the
-  authority model. Supports AC4 by authorizing worker delivery without granting
-  worker write access to mutate rule definitions.
+  ```text
+  TrustSignalRead
+    id: UUID
+    member_id: UUID
+    signal_type: str
+    scope: TrustSignalScope
+    value: dict[str, Any]
+    source_actor_kind: Literal["user","service"]
+    source_actor_id: str
+    observed_at: datetime
+    expires_at: datetime | None
+    created_at: datetime
+  ```
 
-- **D13 — BINDING: Worker actor identity.**
-  Internal worker API calls use
-  `X-Actor-Kind: service` and `X-Actor-Id: notification-dispatcher`.
-  Materialization operations record this actor in audit payloads.
+  Clients must not submit source actor fields. The service derives
+  `source_actor_kind` and `source_actor_id` from the authenticated actor.
+  Signal append verifies the member exists, writes only `trust_signals`, and
+  does not read, update, or recompute `trust_profiles`.
 
-  AC traceability: supports AC4 by making scheduled worker actions attributable
-  while keeping them separate from human rule edits. Supports AC3 by making
-  replay materialization auditable under the same service identity.
+  Authority is body-scope driven: evaluate
+  `AuthorityRequirement(permission="trust.signal.create", scope_kind=body.scope.scope_kind,
+  scope_id=body.scope.scope_id)` manually in the endpoint before calling the
+  service.
 
-- **D14 — BINDING: Anti-scope.**
-  SLICE-015 does not implement notification acknowledgement or ack UI,
-  recurring notification schedules, notification digests,
-  compliance-driven notification templates, per-recipient preference
-  management, email or SMS channels, notification archival, or cross-guild
-  federation.
+  AC traceability: directly satisfies AC1 and supports AC4 by separating
+  evidence append from derived profile mutation.
 
-  AC traceability: supports AC1-AC4 by limiting the slice to configurable
-  rules, materialization, replay deduplication, and scheduled Discord delivery.
-  Excluded features must not be introduced to satisfy any SLICE-015 AC.
+- **D6 - BINDING: Recompute API.**
+  Add `POST /api/v1/trust/recompute/{member_id} -> TrustProfileRead`.
+  The request has no body and no client-supplied expected version. The response
+  status is `200` whether the profile already existed or had to be created,
+  and the response `ETag` is the new trust-profile aggregate version.
+
+  Recompute flow:
+  verify the member exists; read current
+  `policy_type = "trust_computation"` at `scope_kind = "global"` and
+  `scope_id = None`; read active signals for the member; run the pure
+  evaluator; upsert/update `trust_profiles`; pin `policy_version_id` and
+  `config_version`; and return the profile.
+
+  Profile scope remains global for SLICE-016 because `trust_profiles` is keyed
+  only by `member_id` and the endpoint path carries no profile scope. Scoped
+  computation configs may be stored in policies, but this endpoint consumes
+  only the global `trust_computation` config until a later slice introduces
+  scoped trust profiles.
+
+  AC traceability: directly satisfies AC2 and AC3 by making recompute the only
+  operation that converts persisted evidence plus current config into derived
+  score/tier state.
+
+- **D7 - BINDING: Authority grants.**
+  New trust operations use these permissions:
+  `trust.signal.create` at the request body signal scope, with
+  `scope_kind = body.scope.scope_kind` and `scope_id = body.scope.scope_id`;
+  and `trust.recompute` at member scope for
+  `POST /trust/recompute/{member_id}`, with `scope_kind = "member"` and
+  `scope_id = str(member_id)`.
+
+  Do not seed a new trust service actor. Existing user and service actors must
+  receive normal authority grants if they need these permissions. Existing
+  `member-onboarder` grants may remain for SLICE-007 onboarding behavior but
+  must not be broadened to include advanced trust signal or recompute
+  permissions unless a later migration explicitly grants them.
+
+  AC traceability: supports AC4 by keeping writes inside the established
+  authority model without adding an unreviewed service bypass.
+
+- **D8 - BINDING: Audit action and state-change names.**
+  Signal creation uses `mutate_entity()` with
+  `aggregate_type = "trust_signal"`, `aggregate_id = str(signal_id)`,
+  `expected_version = 0`, `action_type = "trust.signal.created"`, and
+  `StateChangeDraft.change_type = "trust.signal.created"`.
+
+  Recompute uses `mutate_entity()` with
+  `aggregate_type = "trust_profile"`, `aggregate_id = str(member_id)`,
+  `action_type = "trust.recompute"`, and
+  `StateChangeDraft.change_type = "trust.recomputed"`.
+
+  Recompute state changes must include `diff_json` with old/new values for at
+  least `score`, `tier`, `policy_version_id`, `config_version`, and the
+  canonical included signal id list. Signal creation may omit `diff_json`
+  because it creates a new aggregate.
+
+  AC traceability: directly supports AC4 and gives operators an inspectable
+  derived-state change record.
+
+- **D9 - BINDING: Migration split.**
+  Use two migrations:
+  `migrations/versions/wu-030a_trust_signals.py` creates `trust_signals`, its
+  constraints, and its indexes; `migrations/versions/wu-030b_trust_profile_recompute_metadata.py`
+  extends and backfills `trust_profiles`.
+
+  `wu-030b` also performs the no-shim data rename for existing trust
+  computation policy rows from `policy_type = "trust"` to
+  `policy_type = "trust_computation"` where those rows are referenced by
+  `trust_profiles`. Runtime code and tests must not support both names.
+
+  Chain these migrations after the current Alembic head in the implementation
+  worktree, with `wu-030b` depending on `wu-030a`.
+
+  AC traceability: supports AC1 and AC2 by separating evidence-table creation
+  from profile metadata and data backfill.
+
+- **D10 - BINDING: Determinism boundary.**
+  Trust computation is a pure function of `(active_signals, policy_content)`.
+  It returns only deterministic score output: `score`, `tier`, and a canonical
+  `signals` summary. It must not use randomness, actor identity, database row
+  read order, or wall-clock time inside the evaluator.
+
+  Signal ordering is canonical:
+  `(observed_at ASC, created_at ASC, id ASC)`. The evaluator may dedupe exact
+  retry duplicates by canonical key
+  `(member_id, signal_type, scope_kind, scope_id, observed_at,
+  source_actor_kind, source_actor_id, canonical_value)`.
+
+  Expiry filtering happens outside the evaluator by capturing one `as_of` time
+  at the start of recompute and selecting rows where
+  `expires_at IS NULL OR expires_at > as_of`. That `as_of` value is not part
+  of `TrustProfileRead` and is not a score input.
+
+  AC traceability: directly satisfies AC3.
+
+- **D11 - BINDING: Signal revocation is out of scope.**
+  SLICE-016 has no signal revocation endpoint, no `trust_signal.revoke` action,
+  and no `revoked_at` column. If revocation is needed later, it must be a
+  separate audited mutation and migration rather than a hidden update path
+  added to this slice.
+
+  AC traceability: supports AC1 and AC4 by keeping this slice to signal append
+  and deterministic recompute.
+
+- **D12 - BINDING: Recompute concurrency.**
+  Recompute reads the current trust-profile aggregate version internally and
+  calls `mutate_entity(expected_version=current_version)`. If
+  `StaleMutationError` occurs, the service must re-read member, policy,
+  active signals, and profile version, then retry once. If the retry also
+  sees a stale version, return HTTP `409 Conflict` with a trust-specific error
+  code such as `trust_recompute_conflict`.
+
+  Do not require `If-Match` on recompute. Recompute is server-derived, so
+  operator clients should not provide an expected profile version.
+
+  AC traceability: supports AC3 and AC4 by preserving optimistic locking while
+  avoiding client-supplied OCC for a deterministic server-side operation.
+
+- **D13 - BINDING: No Discord bypass or alternate write path.**
+  SLICE-016 adds no Discord interaction and no Discord-side direct database
+  writes. Any future Discord UI for trust evidence must call the HTTP API.
+
+  New operator-managed trust evidence can only be written through
+  `POST /api/v1/trust/signals`. Derived trust profile updates can only be
+  written through the API service path that calls `mutate_entity()` for
+  `trust_profile`. No daemon, task, repository helper, or Discord adapter may
+  write `trust_signals` or `trust_profiles` directly outside these service
+  functions.
+
+  The existing SLICE-007 `/api/v1/trust/compute/{member_id}` onboarding path is
+  not an advanced trust-signal path. During SLICE-016 it must be updated to
+  use `policy_type = "trust_computation"` if it remains public, and it must
+  not accept operator-managed TrustSignal evidence or bypass the new
+  signal/recompute flow.
+
+  AC traceability: directly satisfies AC4.
 
 ## Synthesis Notes
 
-- Rule state is governed aggregate state. Delivery state is operational worker
-  state. The two must remain physically separate so retries and failures cannot
-  mutate rules.
-- Materialization is the boundary where flexible rule configuration becomes a
-  stable delivery contract: recipients and rendered content are snapshotted on
-  envelopes.
-- Idempotency is layered: envelope uniqueness prevents replay duplicates, row
-  claiming prevents concurrent delivery duplication, and Discord nonce handling
-  reduces duplicate sends during retry windows.
+- The central boundary is evidence versus derived state. `trust_signals` is
+  append-only evidence; `trust_profiles` is recomputed derived state.
+- `policy_versions` is already the right substrate for
+  `TrustComputationConfig`; adding a second config table would duplicate
+  versioning, preview/confirm, scope, and audit behavior.
+- Timestamps are allowed as persistence/audit metadata, but deterministic
+  trust output must remain score/tier/signals/config pin only.
