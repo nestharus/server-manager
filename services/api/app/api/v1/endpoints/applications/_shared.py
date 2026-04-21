@@ -8,9 +8,12 @@ from fastapi import HTTPException, Request, Response
 from app.contracts.applications import (
     ApplicationAlreadyClaimedError,
     ApplicationDecisionReasonRequiredError,
+    ApplicationInterviewThreadMismatchError,
     ApplicationNotFoundError,
     ApplicationNotOwnerError,
+    ApplicationReactivateOwnerRequiredError,
     ApplicationReviewNotesRequiredError,
+    ApplicationWaitlistReasonRequiredError,
     DuplicateApplicationCreateError,
     FormDefinitionNotFoundError,
     InvalidApplicationResponseError,
@@ -101,6 +104,16 @@ def raise_known_application_error(error: Exception) -> NoReturn:
                 "actor_id": str(error.actor_id),
             },
         ) from error
+    if isinstance(error, ApplicationInterviewThreadMismatchError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={
+                "code": "application_interview_thread_mismatch",
+                "message": str(error),
+                "current_thread_id": error.current_thread_id,
+                "requested_thread_id": error.requested_thread_id,
+            },
+        ) from error
     if isinstance(error, DuplicateApplicationCreateError):
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
@@ -134,6 +147,16 @@ def raise_known_application_error(error: Exception) -> NoReturn:
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
             detail={"code": "application_review_notes_required", "message": str(error)},
+        ) from error
+    if isinstance(error, ApplicationWaitlistReasonRequiredError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={"code": "application_waitlist_reason_required", "message": str(error)},
+        ) from error
+    if isinstance(error, ApplicationReactivateOwnerRequiredError):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={"code": "application_reactivate_owner_required", "message": str(error)},
         ) from error
     if isinstance(error, InvalidApplicationResponseError):
         raise HTTPException(

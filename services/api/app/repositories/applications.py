@@ -19,6 +19,7 @@ _APPLICATION_SELECT = """
            a.responses,
            a.state,
            a.owner_id,
+           a.interview_thread_id,
            a.decision_reason,
            a.client_application_id,
            a.submitted_at,
@@ -52,6 +53,7 @@ def insert_application(connection: Connection[Any], *, row: dict[str, Any]) -> d
                 responses,
                 state,
                 owner_id,
+                interview_thread_id,
                 decision_reason,
                 client_application_id,
                 submitted_at,
@@ -62,7 +64,7 @@ def insert_application(connection: Connection[Any], *, row: dict[str, Any]) -> d
                 withdrawn_at
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING *
             """,
@@ -77,6 +79,7 @@ def insert_application(connection: Connection[Any], *, row: dict[str, Any]) -> d
                 Jsonb(row["responses"]),
                 row["state"],
                 row.get("owner_id"),
+                row.get("interview_thread_id"),
                 row.get("decision_reason"),
                 row.get("client_application_id"),
                 row["submitted_at"],
@@ -139,6 +142,7 @@ def update_application(
             UPDATE applications
             SET state = %s,
                 owner_id = %s,
+                interview_thread_id = %s,
                 decision_reason = %s,
                 queued_at = %s,
                 claimed_at = %s,
@@ -152,6 +156,7 @@ def update_application(
             (
                 row["state"],
                 row.get("owner_id"),
+                row.get("interview_thread_id"),
                 row.get("decision_reason"),
                 row.get("queued_at"),
                 row.get("claimed_at"),
@@ -197,4 +202,3 @@ def insert_review_row(connection: Connection[Any], *, row: dict[str, Any]) -> di
                 row.get("decision_reason"),
             ),
         ).fetchone()
-
