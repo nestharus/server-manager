@@ -35,6 +35,8 @@ class ApplicationState(str, Enum):
     queued = "queued"
     claimed = "claimed"
     in_review = "in_review"
+    interview = "interview"
+    waitlisted = "waitlisted"
     approved = "approved"
     denied = "denied"
     withdrawn = "withdrawn"
@@ -44,6 +46,9 @@ class ApplicationTransitionAction(str, Enum):
     route = "route"
     claim = "claim"
     review = "review"
+    request_interview = "request_interview"
+    waitlist = "waitlist"
+    reactivate = "reactivate"
     approve = "approve"
     deny = "deny"
     withdraw = "withdraw"
@@ -212,6 +217,88 @@ class ApplicationTransitionRequest(_ApplicationModel):
     action: ApplicationTransitionAction
     notes: str | None = None
     decision_reason: str | None = None
+    thread_id: str | None = None
+    reason: str | None = None
+    new_owner_id: UUID | None = None
+    # Originating actor fields are honored only for service-authenticated callers.
+    # User and system callers are normalized to the authenticated actor in the
+    # application service, so request bodies cannot spoof audit origin.
+    originating_actor_kind: Literal["user", "service", "system"] | None = None
+    originating_actor_id: str | None = None
+
+    @field_validator("notes", "decision_reason", "thread_id", "reason", "originating_actor_id")
+    @classmethod
+    def validate_optional_nonblank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("optional string fields must not be blank")
+        return stripped
+
+
+class ApplicationInterviewRequest(_ApplicationModel):
+    thread_id: str | None = None
+    reason: str | None = None
+    originating_actor_kind: Literal["user", "service", "system"]
+    originating_actor_id: str = Field(min_length=1)
+
+    @field_validator("thread_id", "reason")
+    @classmethod
+    def validate_optional_nonblank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("optional string fields must not be blank")
+        return stripped
+
+    @field_validator("originating_actor_id")
+    @classmethod
+    def validate_originating_actor_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("originating_actor_id must not be blank")
+        return stripped
+
+
+class ApplicationWaitlistRequest(_ApplicationModel):
+    reason: str
+    originating_actor_kind: Literal["user", "service", "system"]
+    originating_actor_id: str = Field(min_length=1)
+
+    @field_validator("reason", "originating_actor_id")
+    @classmethod
+    def validate_nonblank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("field must not be blank")
+        return stripped
+
+
+class ApplicationReactivateRequest(_ApplicationModel):
+    new_owner_id: UUID | None = None
+    reason: str | None = None
+    originating_actor_kind: Literal["user", "service", "system"]
+    originating_actor_id: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_optional_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("reason must not be blank")
+        return stripped
+
+    @field_validator("originating_actor_id")
+    @classmethod
+    def validate_originating_actor_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("originating_actor_id must not be blank")
+        return stripped
 
 
 class ApplicationReviewRead(_ApplicationModel):
@@ -239,6 +326,7 @@ class ApplicationRead(_ApplicationModel):
     responses: dict[str, Any]
     state: ApplicationState
     owner_id: UUID | None = None
+    interview_thread_id: str | None = None
     decision_reason: str | None = None
     submitted_at: datetime
     queued_at: datetime | None = None
@@ -289,6 +377,28 @@ class ApplicationReviewNotesRequiredError(Exception):
         super().__init__("notes are required for review")
 
 
+class ApplicationWaitlistReasonRequiredError(Exception):
+    def __init__(self) -> None:
+        super().__init__("reason is required for waitlist")
+
+
+class ApplicationReactivateOwnerRequiredError(Exception):
+    def __init__(self) -> None:
+        super().__init__("reactivate requires an existing owner or new_owner_id")
+
+
+class ApplicationInterviewThreadMismatchError(Exception):
+    def __init__(
+        self,
+        *,
+        current_thread_id: str,
+        requested_thread_id: str | None,
+    ) -> None:
+        self.current_thread_id = current_thread_id
+        self.requested_thread_id = requested_thread_id
+        super().__init__("application interview thread id does not match stored thread")
+
+
 class ApplicationAlreadyClaimedError(Exception):
     def __init__(self, *, application: ApplicationRead) -> None:
         self.application = application
@@ -317,9 +427,13 @@ __all__ = [
     "ApplicationCreate",
     "ApplicationDecisionReasonRequiredError",
     "ApplicationFormField",
+    "ApplicationInterviewRequest",
+    "ApplicationInterviewThreadMismatchError",
     "ApplicationNotFoundError",
     "ApplicationNotOwnerError",
     "ApplicationRead",
+    "ApplicationReactivateOwnerRequiredError",
+    "ApplicationReactivateRequest",
     "ApplicationReviewNotesRequiredError",
     "ApplicationReviewRead",
     "ApplicationRoutingRules",
@@ -328,6 +442,8 @@ __all__ = [
     "ApplicationSubmission",
     "ApplicationTransitionAction",
     "ApplicationTransitionRequest",
+    "ApplicationWaitlistReasonRequiredError",
+    "ApplicationWaitlistRequest",
     "DuplicateApplicationCreateError",
     "FormDefinitionCreate",
     "FormDefinitionNotFoundError",
