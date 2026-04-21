@@ -105,6 +105,31 @@ async def test_api_client_omits_causation_header_when_none(
 
 
 @pytest.mark.asyncio()
+async def test_api_client_merges_request_headers_without_overriding_correlation(
+    api_client_stub: httpx.MockTransport,
+) -> None:
+    client = _build_client(api_client_stub)
+    correlation_id = uuid4()
+    request = ApiTransportRequest(
+        method="GET",
+        path="/api/v1/health",
+        headers={
+            "X-Actor-Kind": "service",
+            "X-Actor-Id": "discord-provisioner",
+            "X-Correlation-Id": "caller-cannot-override",
+        },
+    )
+
+    with use_audit_context(_make_audit_context(correlation_id=correlation_id)):
+        await client.call(request)
+
+    recorded = api_client_stub.requests  # type: ignore[attr-defined]
+    assert recorded[0].headers.get("X-Actor-Kind") == "service"
+    assert recorded[0].headers.get("X-Actor-Id") == "discord-provisioner"
+    assert recorded[0].headers.get("X-Correlation-Id") == str(correlation_id)
+
+
+@pytest.mark.asyncio()
 async def test_api_client_raises_missing_correlation_context_error_without_context(
     api_client_stub: httpx.MockTransport,
 ) -> None:

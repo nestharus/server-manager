@@ -36,6 +36,16 @@ class HumilityBot(commands.Bot):
         return self.registry.register(command_name, handler)
 
     async def dispatch_interaction(self, raw_interaction: Any) -> InteractionResult:
+        deferred = False
+
+        async def ack_deferred() -> None:
+            nonlocal deferred
+            if deferred:
+                return
+            if hasattr(raw_interaction.response, "defer"):
+                await raw_interaction.response.defer(ephemeral=True)
+                deferred = True
+
         envelope = InteractionEnvelope(
             interaction_id=str(raw_interaction.id),
             correlation_id=_interaction_correlation_id(),
@@ -47,9 +57,15 @@ class HumilityBot(commands.Bot):
             else str(raw_interaction.guild.id),
             command_name=_interaction_command_name(raw_interaction),
             arguments=_interaction_arguments(raw_interaction),
+            ack_deferred=ack_deferred,
         )
         result = await self.registry.dispatch(envelope)
-        if result.response_text is not None and hasattr(raw_interaction.response, "send_message"):
+        if result.response_text is not None and deferred and hasattr(raw_interaction, "followup"):
+            await raw_interaction.followup.send(
+                result.response_text,
+                ephemeral=result.ephemeral,
+            )
+        elif result.response_text is not None and hasattr(raw_interaction.response, "send_message"):
             await raw_interaction.response.send_message(
                 result.response_text,
                 ephemeral=result.ephemeral,

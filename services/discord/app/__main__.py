@@ -12,6 +12,7 @@ import discord
 import httpx
 
 from app.contracts.api_transport import ApiUnreachableError
+from app.commands import register_chapter_commands
 from app.contracts.runtime import CommandSyncError, DiscordLoginError, DiscordRuntimeRead
 from app.core.bot import HumilityBot
 from app.core.settings import (
@@ -57,7 +58,10 @@ def build_api_client(*, settings: Settings, client: httpx.AsyncClient) -> ApiCli
 
 
 def build_bot_with_registry(*, settings: Settings, api_client: ApiClient) -> HumilityBot:
-    return HumilityBot(settings, api_client=api_client)
+    bot = HumilityBot(settings, api_client=api_client)
+    if hasattr(bot, "register_interaction_handler"):
+        register_chapter_commands(bot)
+    return bot
 
 
 async def sync_command_tree(bot: HumilityBot) -> None:
