@@ -19,8 +19,12 @@ def claim_due_rows(
     ready_predicate: str,
     predicate_params: tuple[Any, ...] = (),
     order_by: str,
+    claim_status: str | None = "claimed",
 ) -> list[dict[str, Any]]:
     lease_until = now + timedelta(seconds=lease_seconds)
+    status_assignment = sql.SQL("")
+    if claim_status is not None:
+        status_assignment = sql.SQL("status = %s, ")
     query = sql.SQL(
         """
         WITH claimable AS (
@@ -32,8 +36,7 @@ def claim_due_rows(
             LIMIT %s
         )
         UPDATE {table} AS target
-        SET status = 'claimed',
-            claimed_by = %s,
+        SET {status_assignment}claimed_by = %s,
             claimed_at = %s,
             lease_until = %s,
             updated_at = %s
@@ -46,7 +49,20 @@ def claim_due_rows(
         primary_key=sql.Identifier(primary_key),
         ready_predicate=sql.SQL(ready_predicate),
         order_by=sql.SQL(order_by),
+        status_assignment=status_assignment,
     )
-    params = (*predicate_params, batch_size, worker_id, now, lease_until, now)
+    params: tuple[Any, ...]
+    if claim_status is None:
+        params = (*predicate_params, batch_size, worker_id, now, lease_until, now)
+    else:
+        params = (
+            *predicate_params,
+            batch_size,
+            claim_status,
+            worker_id,
+            now,
+            lease_until,
+            now,
+        )
     with connection.cursor(row_factory=dict_row) as cursor:
         return cursor.execute(query, params).fetchall()

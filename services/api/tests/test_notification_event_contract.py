@@ -22,6 +22,7 @@ import pytest
 from psycopg import Connection
 from psycopg.rows import dict_row
 
+from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.mutations import (
     MissingCorrelationContextError,
@@ -37,6 +38,7 @@ from app.services.notification_events import replay as replay_notification_event
 
 
 AGGREGATE_TYPE = "test_notification_aggregate"
+ACTOR = ActorIdentity(actor_kind="service", actor_id="notification-test")
 
 
 def _make_audit_context(
@@ -118,7 +120,8 @@ def test_emit_persists_replayable_envelope_with_correlation_context(
     governance_dsn: str,
 ) -> None:
     """Inside a ``mutate_entity()`` call that resolves correlation to X,
-    ``emit(connection, draft, payload_allowlist={...})`` must persist a
+    ``emit(db, event=..., connection=..., payload_allowlist={...})`` must
+    persist a
     notification row with ``correlation_id=X`` after the outer transaction
     commits.
     """
@@ -127,11 +130,13 @@ def test_emit_persists_replayable_envelope_with_correlation_context(
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
         emit_notification_event(
-            connection,
-            _make_draft(
+            None,
+            event=_make_draft(
                 event_type="test.notification.emitted",
                 payload_json={"key": "value", "secret": "x"},
             ),
+            actor=ACTOR,
+            connection=connection,
             payload_allowlist=frozenset({"key"}),
         )
         return StateChangeDraft(
@@ -178,8 +183,10 @@ def test_notification_event_emit_redacts_payload_without_allowlist(
     with use_audit_context(ctx):
         with governance_db.transaction() as connection:
             emit_notification_event(
-                connection,
-                draft,
+                None,
+                event=draft,
+                actor=ACTOR,
+                connection=connection,
                 payload_allowlist=None,
             )
 
@@ -201,8 +208,10 @@ def test_notification_event_emit_allows_explicit_keys(
     with use_audit_context(ctx):
         with governance_db.transaction() as connection:
             emit_notification_event(
-                connection,
-                draft,
+                None,
+                event=draft,
+                actor=ACTOR,
+                connection=connection,
                 payload_allowlist=frozenset({"safe"}),
             )
 
@@ -233,18 +242,24 @@ def test_replay_is_semantically_equivalent_after_fresh_database_instance(
         with use_audit_context(ctx):
             with db.transaction() as connection:
                 emit_notification_event(
-                    connection,
-                    _make_draft(event_type="test.event.a", payload_json={"n": 1}),
+                    None,
+                    event=_make_draft(event_type="test.event.a", payload_json={"n": 1}),
+                    actor=ACTOR,
+                    connection=connection,
                     payload_allowlist=frozenset({"n"}),
                 )
                 emit_notification_event(
-                    connection,
-                    _make_draft(event_type="test.event.b", payload_json={"n": 2}),
+                    None,
+                    event=_make_draft(event_type="test.event.b", payload_json={"n": 2}),
+                    actor=ACTOR,
+                    connection=connection,
                     payload_allowlist=frozenset({"n"}),
                 )
                 emit_notification_event(
-                    connection,
-                    _make_draft(event_type="test.event.c", payload_json={"n": 3}),
+                    None,
+                    event=_make_draft(event_type="test.event.c", payload_json={"n": 3}),
+                    actor=ACTOR,
+                    connection=connection,
                     payload_allowlist=frozenset({"n"}),
                 )
     finally:
@@ -293,8 +308,10 @@ def test_notification_event_emit_outside_audit_context_raises(
     with governance_db.transaction() as connection:
         with pytest.raises(MissingCorrelationContextError):
             emit_notification_event(
-                connection,
-                _make_draft(payload_json={"k": "v"}),
+                None,
+                event=_make_draft(payload_json={"k": "v"}),
+                actor=ACTOR,
+                connection=connection,
                 payload_allowlist=None,
             )
 
@@ -319,8 +336,10 @@ def test_notification_emit_inside_mutate_projection_uses_mutation_correlation(
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
         emit_notification_event(
-            connection,
-            _make_draft(event_type="test.override", payload_json={"k": "v"}),
+            None,
+            event=_make_draft(event_type="test.override", payload_json={"k": "v"}),
+            actor=ACTOR,
+            connection=connection,
             payload_allowlist=frozenset({"k"}),
         )
         return StateChangeDraft(

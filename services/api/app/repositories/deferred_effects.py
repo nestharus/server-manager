@@ -313,21 +313,42 @@ def query_degraded_state_summary(
                    OR (status = 'claimed' AND lease_until < %s)
                 GROUP BY subsystem
             ),
+            envelope_summary AS (
+                SELECT
+                    'notifications'::text AS subsystem,
+                    COUNT(*)::int AS stuck_in_flight_envelopes
+                FROM notification_envelopes
+                WHERE delivery_status = 'delivered_in_flight'
+                  AND claimed_at < %s - INTERVAL '1 hour'
+            ),
+            subsystems AS (
+                SELECT subsystem FROM effect_summary
+                UNION
+                SELECT subsystem FROM job_summary
+                UNION
+                SELECT subsystem FROM envelope_summary
+            ),
             merged AS (
                 SELECT
-                    COALESCE(effect_summary.subsystem, job_summary.subsystem) AS subsystem,
+                    subsystems.subsystem AS subsystem,
                     COALESCE(effect_summary.pending_effect_count, 0) AS pending_effect_count,
                     COALESCE(job_summary.scheduled_job_count, 0) AS scheduled_job_count,
+                    COALESCE(envelope_summary.stuck_in_flight_envelopes, 0) AS stuck_in_flight_envelopes,
                     effect_summary.oldest_effect_at,
                     job_summary.oldest_job_at
-                FROM effect_summary
-                FULL OUTER JOIN job_summary
-                  ON job_summary.subsystem = effect_summary.subsystem
+                FROM subsystems
+                LEFT JOIN effect_summary
+                  ON effect_summary.subsystem = subsystems.subsystem
+                LEFT JOIN job_summary
+                  ON job_summary.subsystem = subsystems.subsystem
+                LEFT JOIN envelope_summary
+                  ON envelope_summary.subsystem = subsystems.subsystem
             )
             SELECT
                 subsystem,
                 pending_effect_count,
                 scheduled_job_count,
+                stuck_in_flight_envelopes,
                 CASE
                     WHEN oldest_effect_at IS NULL THEN oldest_job_at
                     WHEN oldest_job_at IS NULL THEN oldest_effect_at
@@ -336,5 +357,5 @@ def query_degraded_state_summary(
             FROM merged
             ORDER BY subsystem ASC
             """,
-            (now, now),
+            (now, now, now),
         ).fetchall()

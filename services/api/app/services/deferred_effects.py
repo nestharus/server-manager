@@ -51,6 +51,7 @@ def _summary_from_row(row: dict[str, Any]) -> DegradedStateSummaryRead:
         subsystem=row["subsystem"],
         pending_effect_count=int(row["pending_effect_count"]),
         scheduled_job_count=int(row["scheduled_job_count"]),
+        stuck_in_flight_envelopes=int(row.get("stuck_in_flight_envelopes", 0) or 0),
         oldest_pending_at=row["oldest_pending_at"],
     )
 
