@@ -220,6 +220,9 @@ class ApplicationTransitionRequest(_ApplicationModel):
     thread_id: str | None = None
     reason: str | None = None
     new_owner_id: UUID | None = None
+    # Originating actor fields are honored only for service-authenticated callers.
+    # User and system callers are normalized to the authenticated actor in the
+    # application service, so request bodies cannot spoof audit origin.
     originating_actor_kind: Literal["user", "service", "system"] | None = None
     originating_actor_id: str | None = None
 

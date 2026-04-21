@@ -520,6 +520,50 @@ async def test_waitlist_validation_and_owner_guard(
 
 
 @pytest.mark.asyncio
+async def test_user_actor_cannot_spoof_originating_actor(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    """User-authenticated transitions record the authenticated actor as origin."""
+    application_id, owner_id, _applicant_id, etag = await _prepare_in_review(
+        migrated_async_client,
+        governance_db,
+        applicant_discord_id="applicant-origin",
+        owner_discord_id="reviewer-origin",
+    )
+
+    response = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={
+            "action": "waitlist",
+            "reason": "waiting",
+            "originating_actor_kind": "service",
+            "originating_actor_id": "discord-ticket-bot",
+        },
+        headers=_headers(owner_id, **{"If-Match": etag}),
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    with psycopg.connect(governance_dsn, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT request_json
+            FROM activity_actions
+            WHERE aggregate_id = %s
+              AND action_type = 'application.waitlist'
+              AND status = 'accepted'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (application_id,),
+        ).fetchone()
+    assert row is not None
+    assert row["request_json"]["originating_actor_kind"] == "user"
+    assert row["request_json"]["originating_actor_id"] == owner_id
+
+
+@pytest.mark.asyncio
 async def test_reactivate_from_waitlisted_uses_occ_and_handoff(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,

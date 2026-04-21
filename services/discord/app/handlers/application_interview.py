@@ -110,30 +110,51 @@ async def _create_interview_thread(guild: Any, *, application_id: str) -> Any:
     return thread
 
 
+async def _cleanup_interview_thread(thread: Any) -> None:
+    delete = getattr(thread, "delete", None)
+    if callable(delete):
+        try:
+            await delete()
+            return
+        except Exception:
+            pass
+
+    edit = getattr(thread, "edit", None)
+    if callable(edit):
+        for kwargs in ({"archived": True, "locked": True}, {"archived": True}):
+            try:
+                await edit(**kwargs)
+                return
+            except TypeError:
+                continue
+            except Exception:
+                break
+
+
 async def _resolve_or_create_interview_thread(
     guild: Any,
     *,
     application_id: str,
     stored_thread_id: str | None,
-) -> str:
+) -> tuple[str, Any | None]:
     if stored_thread_id:
         existing = _find_thread_by_id(guild, stored_thread_id)
         if existing is not None:
-            return str(stored_thread_id)
+            return str(stored_thread_id), None
         discovered = _find_thread_by_application(guild, application_id)
-        if discovered is not None and _thread_id(discovered) == str(stored_thread_id):
-            return str(stored_thread_id)
-        return str(stored_thread_id)
+        discovered_thread_id = _thread_id(discovered) if discovered is not None else None
+        if discovered_thread_id is not None:
+            return str(discovered_thread_id), None
 
     discovered = _find_thread_by_application(guild, application_id)
     if discovered is not None and _thread_id(discovered) is not None:
-        return str(_thread_id(discovered))
+        return str(_thread_id(discovered)), None
 
     thread = await _create_interview_thread(guild, application_id=application_id)
     thread_id = _thread_id(thread)
     if thread_id is None:
         raise RuntimeError("created interview thread did not expose an id")
-    return thread_id
+    return thread_id, thread
 
 
 async def handle_application_interview(
@@ -149,6 +170,12 @@ async def handle_application_interview(
         return InteractionResult(success=False, response_text="Application interview is not configured.")
 
     command = ApplicationInterviewCommand.model_validate(envelope.arguments)
+    created_thread: Any | None = None
+
+    async def cleanup_created_thread() -> None:
+        if created_thread is not None:
+            await _cleanup_interview_thread(created_thread)
+
     try:
         member_id = await resolve_member_id(api_client, envelope.actor_id)
         headers = build_user_actor_headers(member_id)
@@ -162,7 +189,7 @@ async def handle_application_interview(
         )
         if current.status >= 400 or current.body is None:
             return InteractionResult(success=False, response_text="Application interview failed.")
-        thread_id = await _resolve_or_create_interview_thread(
+        thread_id, created_thread = await _resolve_or_create_interview_thread(
             guild,
             application_id=command.application_id,
             stored_thread_id=current.body.get("interview_thread_id"),
@@ -182,20 +209,24 @@ async def handle_application_interview(
             ),
         )
     except (ApiTransportError, ApiUnreachableError, RuntimeError):
+        await cleanup_created_thread()
         return InteractionResult(success=False, response_text="Application interview failed.")
 
     payload = response.body or {}
     if response.status == 409 and payload.get("code") == "application_interview_thread_mismatch":
+        await cleanup_created_thread()
         return InteractionResult(
             success=False,
             response_text="Application already has a different interview thread.",
         )
     if response.status == 412:
+        await cleanup_created_thread()
         return InteractionResult(
             success=False,
             response_text="Application changed. Retry the interview request.",
         )
     if response.status >= 400:
+        await cleanup_created_thread()
         return InteractionResult(success=False, response_text="Application interview failed.")
 
     return InteractionResult(

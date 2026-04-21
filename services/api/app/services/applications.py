@@ -186,6 +186,15 @@ def _reviewer_id(actor: ActorIdentity, action: str) -> UUID | None:
     return UUID(actor.actor_id)
 
 
+def _originating_actor(
+    request: ApplicationTransitionRequest,
+    actor: ActorIdentity,
+) -> tuple[str | None, str | None]:
+    if actor.actor_kind == "service":
+        return request.originating_actor_kind, request.originating_actor_id
+    return actor.actor_kind, actor.actor_id
+
+
 def _require_authority(
     db: PostgresDatabase,
     *,
@@ -775,6 +784,7 @@ def transition_application(
                 version=int(idempotent["version"]),
                 etag=f'"{int(idempotent["version"])}"',
             )
+    originating_actor_kind, originating_actor_id = _originating_actor(request, actor)
     action_payload = {
         "action": action,
         "reviewer_id": None if reviewer_id is None else str(reviewer_id),
@@ -783,8 +793,8 @@ def transition_application(
         "thread_id": request.thread_id,
         "reason": request.reason,
         "new_owner_id": None if request.new_owner_id is None else str(request.new_owner_id),
-        "originating_actor_kind": request.originating_actor_kind,
-        "originating_actor_id": request.originating_actor_id,
+        "originating_actor_kind": originating_actor_kind,
+        "originating_actor_id": originating_actor_id,
     }
     try:
         result = _transition_application_locked(
