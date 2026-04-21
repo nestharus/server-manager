@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from psycopg import Connection, errors
 
@@ -11,19 +14,43 @@ from app.contracts.members import MemberNotFoundError
 from app.contracts.mutations import MutationRequest, MutationResult, StaleMutationError, StateChangeDraft
 from app.contracts.trust import (
     InvalidTrustPolicyError,
+    InvalidTrustSignalActorError,
+    InvalidTrustSignalScopeError,
     NoTrustPolicyConfiguredError,
     TrustProfileNotFoundError,
     TrustProfileRead,
+    TrustRecomputeConflictError,
+    TrustSignalCreate,
+    TrustSignalRead,
+    TrustSignalScope,
     TrustSignalsInput,
 )
+from app.core.context import MissingCorrelationContextError, get_current_audit_context
 from app.repositories.db import PostgresDatabase
 from app.repositories.members import fetch_member_by_id
+from app.repositories.mutations import insert_action
 from app.repositories.policies import fetch_latest_version
 from app.repositories.trust import (
     _insert_trust_profile,
     fetch_trust_profile_by_member_id,
+    get_trust_profile_for_update,
+    insert_trust_signal,
+    list_active_signals_for_member,
+    upsert_trust_profile_for_recompute,
 )
 from app.services.mutations import mutate_entity
+
+
+TRUST_POLICY_TYPE = "trust_computation"
+TRUST_PROFILE_AGGREGATE_TYPE = "trust_profile"
+TRUST_SIGNAL_AGGREGATE_TYPE = "trust_signal"
+
+
+@dataclass(frozen=True, slots=True)
+class ComputedTrust:
+    score: int
+    tier: str
+    summary: dict[str, Any]
 
 
 def _make_request(
@@ -48,7 +75,23 @@ def _profile_from_row(row: dict[str, Any]) -> TrustProfileRead:
         tier=row["tier"],
         signals=dict(row["signals"]),
         policy_version_id=row["policy_version_id"],
+        config_version=int(row["config_version"]),
         version=int(row["version"]),
+    )
+
+
+def _signal_from_row(row: dict[str, Any]) -> TrustSignalRead:
+    return TrustSignalRead(
+        id=row["id"],
+        member_id=row["member_id"],
+        signal_type=row["signal_type"],
+        scope=TrustSignalScope(scope_kind=row["scope_kind"], scope_id=row["scope_id"]),
+        value=dict(row["value"]),
+        source_actor_kind=row["source_actor_kind"],
+        source_actor_id=row["source_actor_id"],
+        observed_at=row["observed_at"],
+        expires_at=row["expires_at"],
+        created_at=row["created_at"],
     )
 
 
@@ -74,73 +117,223 @@ def _as_number(value: Any, path: str) -> float:
     return float(value)
 
 
-def _required_number(rules: Mapping[str, Any], key: str) -> float:
-    if key not in rules:
-        raise InvalidTrustPolicyError(f"rules.{key} is required")
-    return _as_number(rules[key], f"rules.{key}")
+def _policy_config(policy_content: Mapping[str, Any]) -> dict[str, Any]:
+    schema_version = policy_content.get("schema_version")
+    if schema_version != 1:
+        raise InvalidTrustPolicyError("policy.content.schema_version must be 1")
 
+    floor = _as_number(policy_content.get("score_floor"), "policy.content.score_floor")
+    ceiling = _as_number(policy_content.get("score_ceiling"), "policy.content.score_ceiling")
+    default = _as_number(policy_content.get("default_score"), "policy.content.default_score")
+    if floor > ceiling:
+        raise InvalidTrustPolicyError("policy.content.score_floor must be <= score_ceiling")
 
-def _age_weight(value: Any) -> tuple[float, float | None]:
-    return _as_number(value, "rules.weights.discord_account_age_days"), None
+    signal_weights = _as_mapping(policy_content.get("signal_weights"), "policy.content.signal_weights")
+    decay_rules = _as_mapping(policy_content.get("decay_rules"), "policy.content.decay_rules")
+    thresholds = policy_content.get("level_thresholds")
+    if not isinstance(thresholds, Sequence) or isinstance(thresholds, (str, bytes)):
+        raise InvalidTrustPolicyError("policy.content.level_thresholds must be an array")
+    if not thresholds:
+        raise InvalidTrustPolicyError("policy.content.level_thresholds must not be empty")
 
-
-def _tier_for_score(score: int, tiers_value: Any) -> str:
-    if not isinstance(tiers_value, Sequence) or isinstance(tiers_value, (str, bytes)):
-        raise InvalidTrustPolicyError("rules.tiers must be an array")
-    if not tiers_value:
-        raise InvalidTrustPolicyError("rules.tiers must not be empty")
-    for index, tier_value in enumerate(tiers_value):
-        tier = _as_mapping(tier_value, f"rules.tiers.{index}")
-        name = tier.get("name")
-        if not isinstance(name, str) or not name:
-            raise InvalidTrustPolicyError(f"rules.tiers.{index}.name is required")
+    parsed_thresholds: list[dict[str, Any]] = []
+    for index, threshold_raw in enumerate(thresholds):
+        threshold = _as_mapping(threshold_raw, f"policy.content.level_thresholds.{index}")
+        tier = threshold.get("tier")
+        if not isinstance(tier, str) or not tier:
+            raise InvalidTrustPolicyError(f"policy.content.level_thresholds.{index}.tier is required")
         max_score = _as_number(
-            tier.get("max_score"),
-            f"rules.tiers.{index}.max_score",
+            threshold.get("max_score"),
+            f"policy.content.level_thresholds.{index}.max_score",
         )
-        if score <= max_score:
-            return name
-    raise InvalidTrustPolicyError("rules.tiers does not cover score")
+        parsed_thresholds.append({"tier": tier, "max_score": max_score})
+
+    return {
+        "score_floor": floor,
+        "score_ceiling": ceiling,
+        "default_score": default,
+        "signal_weights": signal_weights,
+        "decay_rules": decay_rules,
+        "level_thresholds": parsed_thresholds,
+    }
+
+
+def _tier_for_score(score: int, thresholds: Sequence[Mapping[str, Any]]) -> str:
+    for threshold in thresholds:
+        if score <= float(threshold["max_score"]):
+            return str(threshold["tier"])
+    raise InvalidTrustPolicyError("policy.content.level_thresholds does not cover score")
+
+
+def _canonical_json(value: Mapping[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _canonical_signal_rows(active_signals: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return sorted(
+        active_signals,
+        key=lambda row: (
+            row["observed_at"],
+            row["created_at"],
+            str(row["id"]),
+        ),
+    )
+
+
+def _dedupe_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(row["member_id"]),
+        row["signal_type"],
+        row["scope_kind"],
+        row["scope_id"],
+        row["observed_at"].isoformat(),
+        row["source_actor_kind"],
+        row["source_actor_id"],
+        _canonical_json(_as_mapping(row["value"], "trust_signal.value")),
+    )
+
+
+def _signal_magnitude(row: Mapping[str, Any]) -> float:
+    value = _as_mapping(row["value"], "trust_signal.value")
+    magnitude = value.get("magnitude", 1)
+    if isinstance(magnitude, bool) or not isinstance(magnitude, (int, float)):
+        raise InvalidTrustPolicyError("trust_signal.value.magnitude must be numeric")
+    return float(magnitude)
+
+
+def compute_score(
+    active_signals: Sequence[Mapping[str, Any]],
+    policy_content: Mapping[str, Any],
+    as_of: datetime,
+) -> tuple[int, str, dict[str, Any]]:
+    del as_of
+    config = _policy_config(policy_content)
+    score = float(config["default_score"])
+    included: list[Mapping[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    deduplicated_count = 0
+
+    for row in _canonical_signal_rows(active_signals):
+        key = _dedupe_key(row)
+        if key in seen:
+            deduplicated_count += 1
+            continue
+        seen.add(key)
+        included.append(row)
+        weight = _as_number(
+            config["signal_weights"].get(row["signal_type"], 0),
+            f"policy.content.signal_weights.{row['signal_type']}",
+        )
+        score += weight * _signal_magnitude(row)
+
+    bounded = int(round(max(config["score_floor"], min(config["score_ceiling"], score))))
+    tier = _tier_for_score(bounded, config["level_thresholds"])
+    summary = {
+        "signal_ids": [str(row["id"]) for row in included],
+        "count": len(included),
+        "included_signal_types": sorted({str(row["signal_type"]) for row in included}),
+        "deduplicated_count": deduplicated_count,
+    }
+    return bounded, tier, summary
 
 
 def evaluate_trust(
     signals: TrustSignalsInput,
-    policy_rules: Mapping[str, Any],
+    policy_content: Mapping[str, Any],
 ) -> tuple[int, str]:
-    rules = _as_mapping(policy_rules, "rules")
-    floor = _required_number(rules, "score_floor")
-    ceiling = _required_number(rules, "score_ceiling")
-    score = _required_number(rules, "default_score")
-    if floor > ceiling:
-        raise InvalidTrustPolicyError("rules.score_floor must be <= rules.score_ceiling")
-
-    weights_raw = rules.get("weights")
-    if weights_raw is None:
-        raise InvalidTrustPolicyError("weights missing")
-    weights = _as_mapping(weights_raw, "rules.weights")
-    age_per_day, age_max = _age_weight(weights.get("discord_account_age_days"))
-    age_score = signals.discord_account_age_days * age_per_day
-    if age_max is not None:
-        age_score = min(age_score, age_max)
-    score += age_score
-
-    avatar_weight = _as_number(weights.get("has_avatar"), "rules.weights.has_avatar")
-    verified_weight = _as_number(
-        weights.get("has_verified_badge"),
-        "rules.weights.has_verified_badge",
+    config = _policy_config(policy_content)
+    weights = config["signal_weights"]
+    score = float(config["default_score"])
+    score += signals.discord_account_age_days * _as_number(
+        weights.get("discord_account_age_days", 0),
+        "policy.content.signal_weights.discord_account_age_days",
     )
     if signals.has_avatar:
-        score += avatar_weight
+        score += _as_number(weights.get("has_avatar", 0), "policy.content.signal_weights.has_avatar")
     if signals.has_verified_badge:
-        score += verified_weight
-
-    flag_rules = _as_mapping(rules.get("flags"), "rules.flags")
+        score += _as_number(
+            weights.get("has_verified_badge", 0),
+            "policy.content.signal_weights.has_verified_badge",
+        )
     for flag in signals.account_flags:
-        if flag in flag_rules:
-            score += _as_number(flag_rules[flag], f"rules.flags.{flag}")
+        score += _as_number(
+            weights.get(f"flag:{flag}", 0),
+            f"policy.content.signal_weights.flag:{flag}",
+        )
 
-    bounded = int(round(max(floor, min(ceiling, score))))
-    return bounded, _tier_for_score(bounded, rules.get("tiers"))
+    bounded = int(round(max(config["score_floor"], min(config["score_ceiling"], score))))
+    return bounded, _tier_for_score(bounded, config["level_thresholds"])
+
+
+def validate_trust_signal_scope(request: TrustSignalCreate) -> None:
+    if request.scope.scope_kind == "global" and request.scope.scope_id is not None:
+        raise InvalidTrustSignalScopeError("global scope must not include scope_id")
+    if request.scope.scope_kind in {"chapter", "member"} and not request.scope.scope_id:
+        raise InvalidTrustSignalScopeError("chapter/member scope requires scope_id")
+
+
+def _current_correlation_id() -> UUID:
+    context = get_current_audit_context()
+    if context is None:
+        raise MissingCorrelationContextError()
+    return context.correlation_id
+
+
+def create_trust_signal(
+    db: PostgresDatabase,
+    request: TrustSignalCreate,
+    actor: ActorIdentity,
+) -> TrustSignalRead:
+    if actor.actor_kind == "system":
+        raise InvalidTrustSignalActorError()
+    validate_trust_signal_scope(request)
+
+    signal_id = uuid4()
+    persisted_scope = request.scope.to_persisted_json()
+    action_payload = request.model_dump(mode="json", exclude={"member_id"})
+    redacted_payload = {
+        key: value
+        for key, value in action_payload.items()
+        if key in {"signal_type", "scope", "value", "observed_at", "expires_at"}
+    }
+
+    with db.transaction() as connection:
+        if fetch_member_by_id(connection, request.member_id) is None:
+            raise MemberNotFoundError(member_id=request.member_id)
+        row = insert_trust_signal(
+            connection,
+            row={
+                "id": signal_id,
+                "member_id": request.member_id,
+                "signal_type": request.signal_type,
+                "scope_kind": request.scope.scope_kind,
+                "scope_id": request.scope.scope_id,
+                "scope": persisted_scope,
+                "value": request.value,
+                "source_actor_kind": actor.actor_kind,
+                "source_actor_id": actor.actor_id,
+                "observed_at": request.observed_at,
+                "expires_at": request.expires_at,
+            },
+        )
+        insert_action(
+            connection,
+            action_type="trust.signal.created",
+            aggregate_type=TRUST_SIGNAL_AGGREGATE_TYPE,
+            aggregate_id=str(signal_id),
+            actor_kind=actor.actor_kind,
+            actor_id=actor.actor_id,
+            correlation_id=_current_correlation_id(),
+            causation_id=None,
+            scope_kind=request.scope.scope_kind,
+            scope_id=request.scope.scope_id,
+            request_surface="api:/api/v1/trust/signals",
+            request_json=redacted_payload,
+            status="accepted",
+            reason_text=None,
+        )
+
+    return _signal_from_row(row)
 
 
 def compute_trust(
@@ -149,21 +342,20 @@ def compute_trust(
     signals: TrustSignalsInput,
     actor: ActorIdentity,
 ) -> tuple[TrustProfileRead, MutationResult | None, bool]:
+    computed_at = datetime.now(UTC)
     with db.connection() as connection:
         if fetch_member_by_id(connection, member_id) is None:
             raise MemberNotFoundError(member_id=member_id)
         existing = fetch_trust_profile_by_member_id(connection, member_id)
         if existing is not None:
             return _profile_from_row(existing), None, False
-        policy = fetch_latest_version(connection, "trust", "global", None)
+        policy = fetch_latest_version(connection, TRUST_POLICY_TYPE, "global", None)
 
     if policy is None:
         raise NoTrustPolicyConfiguredError()
 
     content = _as_mapping(policy["content"], "policy.content")
-    if "rules" not in content:
-        raise InvalidTrustPolicyError("policy.content.rules is required")
-    score, tier = evaluate_trust(signals, _as_mapping(content["rules"], "rules"))
+    score, tier = evaluate_trust(signals, content)
     signal_payload = signals.model_dump(
         mode="json",
         exclude={"originating_actor_kind", "originating_actor_id"},
@@ -185,6 +377,8 @@ def compute_trust(
                 "tier": tier,
                 "signals": signal_payload,
                 "policy_version_id": policy["id"],
+                "config_version": policy["version_number"],
+                "computed_at": computed_at,
             },
         )
         return StateChangeDraft(
@@ -195,6 +389,7 @@ def compute_trust(
                 "tier": tier,
                 "signals": signal_payload,
                 "policy_version_id": str(policy["id"]),
+                "config_version": policy["version_number"],
                 "originating_actor_kind": signals.originating_actor_kind,
                 "originating_actor_id": signals.originating_actor_id,
             },
@@ -203,7 +398,7 @@ def compute_trust(
     try:
         result = mutate_entity(
             db=db,
-            aggregate_type="trust_profile",
+            aggregate_type=TRUST_PROFILE_AGGREGATE_TYPE,
             aggregate_id=str(member_id),
             request=_make_request(
                 expected_version=0,
@@ -228,6 +423,109 @@ def compute_trust(
     return _profile_from_row(row), result, True
 
 
+def _recompute_once(
+    db: PostgresDatabase,
+    member_id: UUID,
+    actor: ActorIdentity,
+    *,
+    as_of: datetime,
+) -> tuple[TrustProfileRead, MutationResult]:
+    with db.transaction() as connection:
+        if fetch_member_by_id(connection, member_id) is None:
+            raise MemberNotFoundError(member_id=member_id)
+
+        existing = get_trust_profile_for_update(connection, member_id)
+        expected_version = 0 if existing is None else int(existing["version"])
+        policy = fetch_latest_version(connection, TRUST_POLICY_TYPE, "global", None)
+        if policy is None:
+            raise NoTrustPolicyConfiguredError()
+
+        signals = list_active_signals_for_member(connection, member_id=member_id, as_of=as_of)
+        score, tier, signal_summary = compute_score(
+            signals,
+            _as_mapping(policy["content"], "policy.content"),
+            as_of,
+        )
+        old_values = {
+            "score": None if existing is None else int(existing["score"]),
+            "tier": None if existing is None else existing["tier"],
+            "policy_version_id": None if existing is None else str(existing["policy_version_id"]),
+            "config_version": None if existing is None else int(existing["config_version"]),
+            "signal_ids": [] if existing is None else list(existing["signals"].get("signal_ids", [])),
+        }
+        new_values = {
+            "score": score,
+            "tier": tier,
+            "policy_version_id": str(policy["id"]),
+            "config_version": int(policy["version_number"]),
+            "signal_ids": signal_summary["signal_ids"],
+        }
+
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            upsert_trust_profile_for_recompute(
+                active_connection,
+                row={
+                    "member_id": member_id,
+                    "score": score,
+                    "tier": tier,
+                    "signals": signal_summary,
+                    "policy_version_id": policy["id"],
+                    "config_version": policy["version_number"],
+                    "computed_at": as_of,
+                },
+            )
+            return StateChangeDraft(
+                change_type="trust.recomputed",
+                payload_json={
+                    "member_id": str(member_id),
+                    "score": score,
+                    "tier": tier,
+                    "policy_version_id": str(policy["id"]),
+                    "config_version": int(policy["version_number"]),
+                    "signal_count": signal_summary["count"],
+                },
+                diff_json={
+                    key: {"old": old_values[key], "new": new_values[key]}
+                    for key in old_values
+                },
+            )
+
+        result = mutate_entity(
+            db=db,
+            connection=connection,
+            aggregate_type=TRUST_PROFILE_AGGREGATE_TYPE,
+            aggregate_id=str(member_id),
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface=f"api:/api/v1/trust/recompute/{member_id}",
+            ),
+            action_type="trust.recompute",
+            action_payload={"member_id": str(member_id)},
+            payload_allowlist={"member_id"},
+            mutate_projection=mutate_projection,
+            scope_kind="global",
+            scope_id=None,
+        )
+        row = _fetch_profile_row(connection, member_id)
+        return _profile_from_row(row), result
+
+
+def recompute_trust_profile(
+    db: PostgresDatabase,
+    member_id: UUID,
+    actor: ActorIdentity,
+) -> tuple[TrustProfileRead, MutationResult]:
+    as_of = datetime.now(UTC)
+    for attempt in range(2):
+        try:
+            return _recompute_once(db, member_id, actor, as_of=as_of)
+        except StaleMutationError:
+            if attempt == 1:
+                raise TrustRecomputeConflictError() from None
+    raise TrustRecomputeConflictError()
+
+
 def get_trust_profile(
     db: PostgresDatabase,
     member_id: UUID,
@@ -238,7 +536,12 @@ def get_trust_profile(
 
 
 __all__ = [
+    "TRUST_POLICY_TYPE",
+    "compute_score",
     "compute_trust",
+    "create_trust_signal",
     "evaluate_trust",
     "get_trust_profile",
+    "recompute_trust_profile",
+    "validate_trust_signal_scope",
 ]
