@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.contracts.ticket_categories import (
     RoutingScope,
     TicketPrivacyLevel,
+    TicketSlaConsequence,
     TicketSlaRules,
     TicketStateMachine,
 )
@@ -66,6 +67,26 @@ class TicketTransitionRequest(_TicketModel):
         if not self.originating_actor_id.strip():
             raise ValueError("originating_actor_id must not be blank")
         return self
+
+
+class SlaThresholdRead(_TicketModel):
+    elapsed_seconds: int = Field(gt=0)
+    consequence: TicketSlaConsequence
+    target_state: str | None = None
+
+
+class SlaTriggerRead(_TicketModel):
+    id: UUID
+    ticket_id: UUID
+    rule_key: str
+    threshold_seconds: int
+    consequence: TicketSlaConsequence
+    target_state: str | None
+    state: str
+    state_entered_at: datetime
+    elapsed_seconds: int
+    applied_at: datetime
+    effect_summary: dict[str, Any]
 
 
 class TicketRead(_TicketModel):
@@ -167,6 +188,8 @@ class TicketTransitionPriorityChangeForbiddenError(Exception):
 __all__ = [
     "DuplicateTicketCreateError",
     "InvalidTicketTransitionError",
+    "SlaThresholdRead",
+    "SlaTriggerRead",
     "TicketCategorySnapshotRead",
     "TicketCreate",
     "TicketCreateRead",

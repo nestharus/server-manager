@@ -393,6 +393,7 @@ def transition_ticket(
     expected_version: int,
     request: TicketTransitionRequest,
     actor: ActorIdentity,
+    connection: Connection[Any] | None = None,
 ) -> tuple[TicketRead, MutationResult]:
     transition_id = uuid4()
 
@@ -452,7 +453,10 @@ def transition_ticket(
             diff_json=_build_transition_diff(ticket_row, validated),
         )
 
-    with db.connection() as connection:
+    if connection is None:
+        with db.connection() as read_connection:
+            current = _fetch_ticket_row(read_connection, ticket_id)
+    else:
         current = _fetch_ticket_row(connection, ticket_id)
     routing_scope = current["category_snapshot"]["routing_scope"]
     result = mutate_entity(
@@ -470,7 +474,11 @@ def transition_ticket(
         mutate_projection=mutate_projection,
         scope_kind=routing_scope["scope_kind"],
         scope_id=routing_scope.get("scope_id"),
+        connection=connection,
     )
-    with db.connection() as connection:
+    if connection is None:
+        with db.connection() as read_connection:
+            read = _ticket_from_row(_fetch_ticket_row(read_connection, ticket_id))
+    else:
         read = _ticket_from_row(_fetch_ticket_row(connection, ticket_id))
     return read, result

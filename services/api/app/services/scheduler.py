@@ -28,6 +28,7 @@ LEASE_SECONDS = 300
 POLL_INTERVAL_SECONDS = 5
 DEFAULT_MAX_ATTEMPTS = 3
 CLAIM_BATCH_SIZE = 10
+TICKET_SLA_INTERVAL_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,7 @@ class SchedulerLoop:
         self._claim_batch_size = claim_batch_size
         self._stop_event = asyncio.Event()
         self._is_running = False
+        self._last_ticket_sla_tick_at: datetime | None = None
 
     @property
     def is_running(self) -> bool:
@@ -184,6 +186,26 @@ class SchedulerLoop:
             self._db,
             worker_id=self._worker_id,
         )
+        await self._run_ticket_sla_if_due(now)
+
+    async def _run_ticket_sla_if_due(self, now: datetime) -> None:
+        if (
+            self._last_ticket_sla_tick_at is not None
+            and (now - self._last_ticket_sla_tick_at).total_seconds()
+            < TICKET_SLA_INTERVAL_SECONDS
+        ):
+            return
+
+        from app.tasks.ticket_sla import ticket_sla_worker_tick
+
+        self._last_ticket_sla_tick_at = now
+        try:
+            await asyncio.to_thread(ticket_sla_worker_tick)
+        except Exception:
+            logger.exception(
+                "ticket SLA worker tick failed for worker %s",
+                self._worker_id,
+            )
 
     def _claim_due_jobs(self, now: datetime) -> list[ScheduledJobRead]:
         with self._db.connection() as connection:
@@ -254,6 +276,7 @@ __all__ = [
     "LEASE_SECONDS",
     "POLL_INTERVAL_SECONDS",
     "SchedulerLoop",
+    "TICKET_SLA_INTERVAL_SECONDS",
     "_lookup_handler",
     "build_scheduler_loop",
     "extend_lease",
