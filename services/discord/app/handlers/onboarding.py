@@ -85,7 +85,13 @@ async def handle_member_join(
             body=response.body,
         )
 
-    member = response.body or {}
+    member = response.body
+    if not isinstance(member, dict) or not member.get("id"):
+        raise MemberOnboardingError(
+            step="member_create" if response.status == 201 else "member_lookup",
+            status=response.status,
+            body=response.body,
+        )
     trust_response = await _api_call(
         api_client,
         ApiTransportRequest(
@@ -96,11 +102,17 @@ async def handle_member_join(
         ),
         step="trust_compute",
     )
-    trust = trust_response.body or {}
+    trust = trust_response.body
+    if not isinstance(trust, dict) or not trust.get("tier"):
+        raise MemberOnboardingError(
+            step="trust_compute",
+            status=trust_response.status,
+            body=trust_response.body,
+        )
     return MemberJoinOutcomeRead(
         member=member,
         trust=trust,
-        intake_required=trust.get("tier") == "low",
+        intake_required=trust["tier"] == "low",
     )
 
 

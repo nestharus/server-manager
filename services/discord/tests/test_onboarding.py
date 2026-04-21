@@ -268,3 +268,65 @@ async def test_handle_member_join_records_originating_user_in_audit() -> None:
     assert outcome.member["discord_user_id"] == event.discord_user_id
     assert api.calls[1].body["originating_actor_id"] == "9999"
     assert api.calls[2].body["originating_actor_id"] == "9999"
+
+
+@pytest.mark.asyncio
+async def test_handle_member_join_raises_on_malformed_api_response() -> None:
+    event = _event()
+    api = FakeApiClient(
+        [
+            ApiTransportResponse(
+                status=200,
+                body={"discord_user_id": event.discord_user_id},
+                headers={"etag": '"1"'},
+            ),
+        ]
+    )
+
+    from app.handlers.onboarding import MemberOnboardingError, handle_member_join
+
+    with pytest.raises(MemberOnboardingError) as exc_info:
+        await handle_member_join(event, api_client=api)
+
+    assert exc_info.value.step == "member_lookup"
+    assert exc_info.value.status == 200
+    assert len(api.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_member_join_raises_on_malformed_trust_api_response() -> None:
+    member_id = str(uuid4())
+    event = _event()
+    api = FakeApiClient(
+        [
+            ApiTransportResponse(
+                status=200,
+                body=_member_body(
+                    member_id=member_id,
+                    discord_user_id=event.discord_user_id,
+                    joined_at=datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC),
+                ),
+                headers={"etag": '"1"'},
+            ),
+            ApiTransportResponse(
+                status=200,
+                body={
+                    "member_id": member_id,
+                    "score": 42,
+                    "signals": {},
+                    "policy_version_id": str(uuid4()),
+                    "version": 1,
+                },
+                headers={"etag": '"1"'},
+            ),
+        ]
+    )
+
+    from app.handlers.onboarding import MemberOnboardingError, handle_member_join
+
+    with pytest.raises(MemberOnboardingError) as exc_info:
+        await handle_member_join(event, api_client=api)
+
+    assert exc_info.value.step == "trust_compute"
+    assert exc_info.value.status == 200
+    assert [call.method for call in api.calls] == ["GET", "POST"]

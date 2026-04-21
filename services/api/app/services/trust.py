@@ -81,49 +81,26 @@ def _required_number(rules: Mapping[str, Any], key: str) -> float:
 
 
 def _age_weight(value: Any) -> tuple[float, float | None]:
-    if isinstance(value, Mapping):
-        per_day = _as_number(value.get("per_day"), "rules.weights.discord_account_age_days.per_day")
-        max_score = value.get("max")
-        return per_day, None if max_score is None else _as_number(
-            max_score,
-            "rules.weights.discord_account_age_days.max",
-        )
     return _as_number(value, "rules.weights.discord_account_age_days"), None
 
 
 def _tier_for_score(score: int, tiers_value: Any) -> str:
-    if isinstance(tiers_value, Sequence) and not isinstance(tiers_value, (str, bytes)):
-        if not tiers_value:
-            raise InvalidTrustPolicyError("rules.tiers must not be empty")
-        for index, tier_value in enumerate(tiers_value):
-            tier = _as_mapping(tier_value, f"rules.tiers.{index}")
-            name = tier.get("name")
-            if not isinstance(name, str) or not name:
-                raise InvalidTrustPolicyError(f"rules.tiers.{index}.name is required")
-            max_score = _as_number(
-                tier.get("max_score"),
-                f"rules.tiers.{index}.max_score",
-            )
-            if score <= max_score:
-                return name
-        raise InvalidTrustPolicyError("rules.tiers does not cover score")
-
-    tiers = _as_mapping(tiers_value, "rules.tiers")
-    if not tiers:
+    if not isinstance(tiers_value, Sequence) or isinstance(tiers_value, (str, bytes)):
+        raise InvalidTrustPolicyError("rules.tiers must be an array")
+    if not tiers_value:
         raise InvalidTrustPolicyError("rules.tiers must not be empty")
-
-    selected: tuple[float, str] | None = None
-    for tier, minimum in tiers.items():
-        threshold = _as_number(minimum, f"rules.tiers.{tier}")
-        if score >= threshold and (selected is None or threshold >= selected[0]):
-            selected = (threshold, str(tier))
-
-    if selected is not None:
-        return selected[1]
-    return min(
-        ((float(_as_number(minimum, f"rules.tiers.{tier}")), str(tier)) for tier, minimum in tiers.items()),
-        key=lambda item: item[0],
-    )[1]
+    for index, tier_value in enumerate(tiers_value):
+        tier = _as_mapping(tier_value, f"rules.tiers.{index}")
+        name = tier.get("name")
+        if not isinstance(name, str) or not name:
+            raise InvalidTrustPolicyError(f"rules.tiers.{index}.name is required")
+        max_score = _as_number(
+            tier.get("max_score"),
+            f"rules.tiers.{index}.max_score",
+        )
+        if score <= max_score:
+            return name
+    raise InvalidTrustPolicyError("rules.tiers does not cover score")
 
 
 def evaluate_trust(
@@ -137,7 +114,10 @@ def evaluate_trust(
     if floor > ceiling:
         raise InvalidTrustPolicyError("rules.score_floor must be <= rules.score_ceiling")
 
-    weights = _as_mapping(rules.get("weights"), "rules.weights")
+    weights_raw = rules.get("weights")
+    if weights_raw is None:
+        raise InvalidTrustPolicyError("weights missing")
+    weights = _as_mapping(weights_raw, "rules.weights")
     age_per_day, age_max = _age_weight(weights.get("discord_account_age_days"))
     age_score = signals.discord_account_age_days * age_per_day
     if age_max is not None:
@@ -241,7 +221,7 @@ def compute_trust(
         try:
             return reread_existing()
         except TrustProfileNotFoundError:
-            raise error
+            raise error from None
 
     with db.connection() as connection:
         row = _fetch_profile_row(connection, member_id)

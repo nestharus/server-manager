@@ -60,6 +60,7 @@ def upgrade() -> None:
     )
     op.execute(
         """
+        -- revoked_by and revocation_reason are added by wu_014, which precedes wu_012 through wu_033 -> wu_011.
         INSERT INTO authority_grants (
             id,
             grantee_id,

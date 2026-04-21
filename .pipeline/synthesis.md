@@ -57,7 +57,7 @@ paths around them.
   The Discord handler signature is
   `handle_member_join(event: MemberJoinEvent)`. It performs:
   `GET /members/by-discord/{discord_user_id}`; if that returns 404,
-  `POST /members` with `{discord_user_id, joined_at, initial_signals}`; then
+  `POST /members` with `{discord_user_id, joined_at}`; then
   `POST /trust/compute/{member_id}` with signals. It returns
   `MemberJoinOutcome { member: MemberRead, trust: TrustProfileRead,
   intake_required: bool }`, where `intake_required` is derived from

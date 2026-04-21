@@ -176,10 +176,6 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         db.close()
 
 
-def _trust_create_payload(signals: dict[str, Any]) -> dict[str, Any]:
-    return signals
-
-
 @pytest.mark.asyncio
 async def test_compute_trust_requires_trust_write_permission(
     migrated_async_client: AsyncClient,
@@ -205,9 +201,7 @@ async def test_compute_trust_requires_trust_write_permission(
 
     response = await migrated_async_client.post(
         COMPUTE_URL.format(member_id=member.id),
-        json=_trust_create_payload(
-            _trust_signals(originating_actor_id=actor_id),
-        ),
+        json=_trust_signals(originating_actor_id=actor_id),
         headers=_actor_headers(actor_id=actor_id),
     )
 
@@ -252,9 +246,7 @@ async def test_compute_trust_creates_profile_with_current_policy_version(
 
     response = await migrated_async_client.post(
         COMPUTE_URL.format(member_id=member.id),
-        json=_trust_create_payload(
-            _trust_signals(originating_actor_id=actor_id),
-        ),
+        json=_trust_signals(originating_actor_id=actor_id),
         headers=_actor_headers(actor_id=actor_id),
     )
 
@@ -468,9 +460,7 @@ async def test_compute_trust_returns_409_when_no_trust_policy(
 
     response = await migrated_async_client.post(
         COMPUTE_URL.format(member_id=member.id),
-        json=_trust_create_payload(
-            _trust_signals(originating_actor_id=actor_id),
-        ),
+        json=_trust_signals(originating_actor_id=actor_id),
         headers=_actor_headers(actor_id=actor_id),
     )
 
@@ -509,9 +499,48 @@ async def test_compute_trust_returns_409_when_policy_shape_invalid(
 
     response = await migrated_async_client.post(
         COMPUTE_URL.format(member_id=member.id),
-        json=_trust_create_payload(
-            _trust_signals(originating_actor_id=actor_id),
+        json=_trust_signals(originating_actor_id=actor_id),
+        headers=_actor_headers(actor_id=actor_id),
+    )
+
+    assert response.status_code == HTTPStatus.CONFLICT, response.text
+    assert response.json()["code"] == "invalid_trust_policy"
+
+
+@pytest.mark.asyncio
+async def test_compute_trust_returns_409_when_policy_weights_missing(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    actor_id = "operator"
+    content = _valid_trust_policy_rules()
+    del content["rules"]["weights"]
+    _seed_trust_policy_version(
+        governance_dsn,
+        version_number=1,
+        content=content,
+    )
+    _grant_permissions(
+        governance_db,
+        actor_id=actor_id,
+        permissions=frozenset({"member.write", "trust.write"}),
+    )
+
+    member_response = await migrated_async_client.post(
+        MEMBERS_URL,
+        json=_member_payload(
+            discord_user_id=str(uuid4()),
+            joined_at=datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC),
+            originating_actor_id=actor_id,
         ),
+        headers=_actor_headers(actor_id=actor_id),
+    )
+    member = MemberRead.model_validate(member_response.json())
+
+    response = await migrated_async_client.post(
+        COMPUTE_URL.format(member_id=member.id),
+        json=_trust_signals(originating_actor_id=actor_id),
         headers=_actor_headers(actor_id=actor_id),
     )
 
