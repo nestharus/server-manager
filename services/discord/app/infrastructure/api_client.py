@@ -27,9 +27,12 @@ class ApiClient:
         if ctx is None:
             raise MissingCorrelationContextError()
 
-        headers = {"X-Correlation-Id": str(ctx.correlation_id)}
+        headers = dict(request.headers or {})
+        headers["X-Correlation-Id"] = str(ctx.correlation_id)
         if ctx.causation_id is not None:
             headers["X-Causation-Id"] = str(ctx.causation_id)
+        else:
+            headers.pop("X-Causation-Id", None)
 
         try:
             response = await self._client.request(

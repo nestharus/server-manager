@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
@@ -7,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class InteractionEnvelope(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     interaction_id: str = Field(min_length=1)
     correlation_id: UUID
@@ -17,6 +18,10 @@ class InteractionEnvelope(BaseModel):
     guild_id: str | None = None
     command_name: str = Field(min_length=1)
     arguments: dict[str, Any]
+    ack_deferred: Callable[[], Awaitable[None]] | None = Field(
+        default=None,
+        exclude=True,
+    )
 
 
 class InteractionResult(BaseModel):
