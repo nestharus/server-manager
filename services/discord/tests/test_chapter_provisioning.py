@@ -137,6 +137,21 @@ async def test_discord_handler_acks_deferred_before_api_calls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provision_rejects_when_chapter_already_provisioning() -> None:
+    api = FakeApiClient([_response(_chapter(state="provisioning"), '"4"')])
+    guild = MockGuild()
+
+    result = await provision_chapter_handler(_envelope(), api_client=api, guild=guild)
+
+    assert result.success is False
+    assert "already being provisioned" in result.response_text
+    assert [call.method for call in api.calls] == ["GET"]
+    guild.create_category.assert_not_awaited()
+    guild.create_role.assert_not_awaited()
+    guild.create_text_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_discord_handler_rediscovers_role_by_name_after_patch_failure() -> None:
     chapter = _chapter()
     guild = MockGuild()
@@ -171,3 +186,73 @@ async def test_discord_handler_rediscovers_role_by_name_after_patch_failure() ->
 
     assert retry_result.success is True
     assert guild.create_role.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_rediscovers_channel_only_within_category() -> None:
+    chapter = _chapter()
+    names = derive_resource_names(chapter)
+    outside_category = SimpleNamespace(id="cat-outside", name="outside")
+    guild = MockGuild()
+    guild.channels.append(
+        SimpleNamespace(
+            id="chan-outside",
+            name=names["channels"]["general"],
+            category=outside_category,
+        )
+    )
+
+    active_resources = {
+        "category_id": "cat-1",
+        "role_ids": {"officer": "role-1"},
+        "channel_ids": {"general": "chan-2"},
+    }
+    api = FakeApiClient(
+        [
+            _response(chapter, '"1"'),
+            _response({**chapter, "state": "provisioning"}, '"2"'),
+            _response(
+                {
+                    **chapter,
+                    "state": "provisioning",
+                    "discord_resources": {
+                        "category_id": "cat-1",
+                        "role_ids": {},
+                        "channel_ids": {},
+                    },
+                },
+                '"3"',
+            ),
+            _response(
+                {
+                    **chapter,
+                    "state": "provisioning",
+                    "discord_resources": {
+                        "category_id": "cat-1",
+                        "role_ids": {"officer": "role-1"},
+                        "channel_ids": {},
+                    },
+                },
+                '"4"',
+            ),
+            _response(
+                {**chapter, "state": "provisioning", "discord_resources": active_resources},
+                '"5"',
+            ),
+            _response({**chapter, "state": "active", "discord_resources": active_resources}, '"6"'),
+        ]
+    )
+
+    result = await provision_chapter_handler(_envelope(), api_client=api, guild=guild)
+
+    assert result.success is True
+    guild.create_text_channel.assert_awaited_once()
+    assert guild.channels[0].id == "chan-outside"
+    assert guild.channels[1].id == "chan-2"
+    assert guild.channels[1].category == guild.categories[0]
+    channel_patch = [
+        call
+        for call in api.calls
+        if call.method == "PATCH" and call.body["resources"].get("channel_ids")
+    ][0]
+    assert channel_patch.body["resources"]["channel_ids"] == {"general": "chan-2"}

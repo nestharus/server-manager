@@ -164,9 +164,7 @@ def patch_chapter_template(
 
         patch = request.model_dump(exclude_unset=True, mode="python")
         patch.pop("expected_current_version", None)
-        schema_version = patch.pop("schema_version", None)
-        if schema_version is None:
-            schema_version = latest["schema_version"]
+        schema_version = patch.pop("schema_version", None) or CURRENT_TEMPLATE_SCHEMA_VERSION
 
         new_row.update(
             {

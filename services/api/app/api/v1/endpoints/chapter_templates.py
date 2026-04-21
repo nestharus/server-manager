@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.contracts.actor import ActorIdentity
 from app.contracts.chapter_templates import (
     ChapterTemplateCreate,
     ChapterTemplateNotFoundError,
@@ -26,7 +27,7 @@ from app.services.chapter_templates import (
 router = APIRouter(prefix="/api/v1/chapter-templates")
 
 
-def _db(request: Request) -> PostgresDatabase:
+def get_db(request: Request) -> PostgresDatabase:
     return request.app.state.db
 
 
@@ -61,12 +62,12 @@ def _raise_for_template_error(error: Exception) -> None:
 )
 def create_chapter_template_endpoint(
     template: ChapterTemplateCreate,
-    request: Request,
     response: Response,
-    actor=Depends(get_current_actor),
+    db: PostgresDatabase = Depends(get_db),
+    actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterTemplateRead:
     try:
-        read, result = create_chapter_template(_db(request), template, actor)
+        read, result = create_chapter_template(db, template, actor)
     except Exception as error:
         _raise_for_template_error(error)
     response.headers["etag"] = result.etag
@@ -80,10 +81,10 @@ def create_chapter_template_endpoint(
 )
 def get_chapter_template(
     template_id: UUID,
-    request: Request,
+    db: PostgresDatabase = Depends(get_db),
 ) -> ChapterTemplateRead:
     try:
-        return read_chapter_template(_db(request), template_id)
+        return read_chapter_template(db, template_id)
     except Exception as error:
         _raise_for_template_error(error)
 
@@ -96,12 +97,12 @@ def get_chapter_template(
 def patch_chapter_template_endpoint(
     template_id: UUID,
     patch: ChapterTemplatePatch,
-    request: Request,
     response: Response,
-    actor=Depends(get_current_actor),
+    db: PostgresDatabase = Depends(get_db),
+    actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterTemplateRead:
     try:
-        read, result = patch_chapter_template(_db(request), template_id, patch, actor)
+        read, result = patch_chapter_template(db, template_id, patch, actor)
     except Exception as error:
         _raise_for_template_error(error)
     response.headers["etag"] = result.etag

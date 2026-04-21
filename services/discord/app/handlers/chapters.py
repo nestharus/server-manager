@@ -177,6 +177,13 @@ async def provision_chapter_handler(
                 to_state="provisioning",
                 reason="Discord provisioning started",
             )
+        elif chapter.get("state") == "provisioning":
+            return InteractionResult(
+                success=False,
+                response_text=(
+                    f"Chapter {chapter_id} is already being provisioned by another request."
+                ),
+            )
         elif chapter.get("state") == "active":
             return InteractionResult(
                 success=True,
@@ -216,7 +223,12 @@ async def provision_chapter_handler(
             resources = chapter["discord_resources"]
 
         for logical_name, discord_name in names["channels"].items():
-            channel = _find_by_name(getattr(resolved_guild, "channels", []), discord_name)
+            category_channels = [
+                channel
+                for channel in getattr(resolved_guild, "channels", [])
+                if getattr(channel, "category", None) == category
+            ]
+            channel = _find_by_name(category_channels, discord_name)
             if channel is None:
                 if hasattr(resolved_guild, "create_text_channel"):
                     channel = await resolved_guild.create_text_channel(

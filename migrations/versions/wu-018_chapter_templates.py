@@ -26,7 +26,7 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE chapter_templates
-        SET template_family_id = gen_random_uuid(),
+        SET template_family_id = id,
             version = 1
         WHERE template_family_id IS NULL
         """

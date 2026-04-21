@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.contracts.actor import ActorIdentity
 from app.contracts.chapter_templates import ChapterTemplateNotFoundError
 from app.contracts.chapters import (
     ChapterCreate,
@@ -30,7 +32,7 @@ from app.services.chapters import (
 router = APIRouter(prefix="/api/v1/chapters")
 
 
-def _db(request: Request) -> PostgresDatabase:
+def get_db(request: Request) -> PostgresDatabase:
     return request.app.state.db
 
 
@@ -91,12 +93,12 @@ def _raise_for_chapter_error(error: Exception) -> None:
 )
 def create_chapter(
     chapter: ChapterCreate,
-    request: Request,
     response: Response,
-    actor=Depends(get_current_actor),
+    db: PostgresDatabase = Depends(get_db),
+    actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterRead:
     try:
-        read, result = create_chapter_service(_db(request), chapter, actor)
+        read, result = create_chapter_service(db, chapter, actor)
     except Exception as error:
         _raise_for_chapter_error(error)
     _set_etag(response, result.etag)
@@ -109,12 +111,12 @@ def create_chapter(
     dependencies=[Depends(RequireAuthority("chapter.read", "global"))],
 )
 def get_chapter(
-    chapter_id: str,
-    request: Request,
+    chapter_id: UUID,
     response: Response,
+    db: PostgresDatabase = Depends(get_db),
 ) -> ChapterRead:
     try:
-        read, etag = read_chapter_service(_db(request), chapter_id)
+        read, etag = read_chapter_service(db, str(chapter_id))
     except Exception as error:
         _raise_for_chapter_error(error)
     _set_etag(response, etag)
@@ -127,17 +129,18 @@ def get_chapter(
     dependencies=[Depends(RequireAuthority("chapter.write", "global"))],
 )
 def transition_chapter_endpoint(
-    chapter_id: str,
+    chapter_id: UUID,
     transition: ChapterTransitionRequest,
     request: Request,
     response: Response,
-    actor=Depends(get_current_actor),
+    db: PostgresDatabase = Depends(get_db),
+    actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterRead:
     expected_version = _parse_if_match(request)
     try:
         read, result = transition_chapter(
-            _db(request),
-            chapter_id,
+            db,
+            str(chapter_id),
             transition,
             actor,
             expected_version,
@@ -154,17 +157,18 @@ def transition_chapter_endpoint(
     dependencies=[Depends(RequireAuthority("chapter.write", "global"))],
 )
 def patch_chapter_discord_resources_endpoint(
-    chapter_id: str,
+    chapter_id: UUID,
     resources: ChapterResourcesPatchRequest,
     request: Request,
     response: Response,
-    actor=Depends(get_current_actor),
+    db: PostgresDatabase = Depends(get_db),
+    actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterRead:
     expected_version = _parse_if_match(request)
     try:
         read, result = patch_chapter_discord_resources(
-            _db(request),
-            chapter_id,
+            db,
+            str(chapter_id),
             resources,
             actor,
             expected_version,

@@ -118,7 +118,7 @@ def upgrade() -> None:
             revocation_reason,
             predecessor_grant_id
         )
-        VALUES (
+        SELECT
             gen_random_uuid(),
             'discord-provisioner',
             'global',
@@ -129,6 +129,14 @@ def upgrade() -> None:
             NULL,
             NULL,
             NULL
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM authority_grants
+            WHERE grantee_id = 'discord-provisioner'
+              AND scope_kind = 'global'
+              AND scope_id IS NULL
+              AND permissions @> '["chapter.read", "chapter.write", "chapter_template.read"]'::jsonb
+              AND revoked_at IS NULL
         )
         """
     )
