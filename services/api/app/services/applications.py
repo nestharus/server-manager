@@ -11,12 +11,18 @@ from app.contracts.applications import (
     ApplicationAlreadyClaimedError,
     ApplicationDecisionReasonRequiredError,
     ApplicationFormField,
+    ApplicationInterviewRequest,
+    ApplicationInterviewThreadMismatchError,
     ApplicationNotFoundError,
     ApplicationNotOwnerError,
     ApplicationRead,
+    ApplicationReactivateOwnerRequiredError,
+    ApplicationReactivateRequest,
     ApplicationReviewNotesRequiredError,
     ApplicationSubmission,
     ApplicationTransitionRequest,
+    ApplicationWaitlistReasonRequiredError,
+    ApplicationWaitlistRequest,
     DuplicateApplicationCreateError,
     FormDefinitionNotFoundError,
     InvalidApplicationResponseError,
@@ -43,18 +49,29 @@ VALID_TRANSITIONS = {
     ("submitted", "route"): "queued",
     ("queued", "claim"): "claimed",
     ("claimed", "review"): "in_review",
+    ("in_review", "request_interview"): "interview",
+    ("in_review", "waitlist"): "waitlisted",
+    ("interview", "waitlist"): "waitlisted",
+    ("interview", "approve"): "approved",
+    ("interview", "deny"): "denied",
     ("in_review", "approve"): "approved",
     ("in_review", "deny"): "denied",
+    ("waitlisted", "reactivate"): "claimed",
     ("submitted", "withdraw"): "withdrawn",
     ("queued", "withdraw"): "withdrawn",
     ("claimed", "withdraw"): "withdrawn",
     ("in_review", "withdraw"): "withdrawn",
+    ("interview", "withdraw"): "withdrawn",
+    ("waitlisted", "withdraw"): "withdrawn",
 }
 
 AUDIT_ACTION_TYPE = {
     "route": "application.submit",
     "claim": "application.claim",
     "review": "application.review",
+    "request_interview": "application.interview",
+    "waitlist": "application.waitlist",
+    "reactivate": "application.reactivate",
     "approve": "application.decision",
     "deny": "application.decision",
     "withdraw": "application.review",
@@ -63,6 +80,29 @@ AUDIT_ACTION_TYPE = {
 TRANSITION_PAYLOAD_ALLOWLIST = {
     "claim": {"action", "reviewer_id"},
     "review": {"action", "reviewer_id", "notes"},
+    "request_interview": {
+        "action",
+        "reviewer_id",
+        "thread_id",
+        "reason",
+        "originating_actor_kind",
+        "originating_actor_id",
+    },
+    "waitlist": {
+        "action",
+        "reviewer_id",
+        "reason",
+        "originating_actor_kind",
+        "originating_actor_id",
+    },
+    "reactivate": {
+        "action",
+        "reviewer_id",
+        "new_owner_id",
+        "reason",
+        "originating_actor_kind",
+        "originating_actor_id",
+    },
     "approve": {"action", "reviewer_id", "decision_reason"},
     "deny": {"action", "reviewer_id", "decision_reason"},
     "withdraw": {"action", "reviewer_id", "notes"},
@@ -112,6 +152,7 @@ def _row_to_read(row: dict[str, Any]) -> ApplicationRead:
         responses=row["responses"],
         state=row["state"],
         owner_id=row["owner_id"],
+        interview_thread_id=row.get("interview_thread_id"),
         decision_reason=row["decision_reason"],
         submitted_at=row["submitted_at"],
         queued_at=row["queued_at"],
@@ -143,6 +184,15 @@ def _reviewer_id(actor: ActorIdentity, action: str) -> UUID | None:
     if actor.actor_kind != "user":
         raise ValueError("review actions require a user actor")
     return UUID(actor.actor_id)
+
+
+def _originating_actor(
+    request: ApplicationTransitionRequest,
+    actor: ActorIdentity,
+) -> tuple[str | None, str | None]:
+    if actor.actor_kind == "service":
+        return request.originating_actor_kind, request.originating_actor_id
+    return actor.actor_kind, actor.actor_id
 
 
 def _require_authority(
@@ -219,6 +269,9 @@ def require_application_read_authority(
     for permission in (
         "application.claim",
         "application.review",
+        "application.request_interview",
+        "application.waitlist",
+        "application.reactivate",
         "application.approve",
         "application.deny",
         "application.withdraw",
@@ -327,6 +380,10 @@ def validate_required_transition_fields(
         notes = None if request.notes is None else request.notes.strip()
         if not notes:
             raise ApplicationReviewNotesRequiredError()
+    if action == "waitlist":
+        reason = _transition_reason(request)
+        if not reason:
+            raise ApplicationWaitlistReasonRequiredError()
 
 
 def validate_transition(
@@ -365,6 +422,7 @@ def _transition_diff(
     }
     for key in (
         "owner_id",
+        "interview_thread_id",
         "decision_reason",
         "queued_at",
         "claimed_at",
@@ -382,6 +440,14 @@ def _transition_diff(
     if notes is not None:
         diff["notes"] = {"old": None, "new": notes}
     return diff
+
+
+def _transition_reason(request: ApplicationTransitionRequest) -> str | None:
+    raw = request.reason if request.reason is not None else request.notes
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    return stripped or None
 
 
 def submit_application(
@@ -436,6 +502,7 @@ def submit_application(
             "responses": validated.responses,
             "state": "submitted",
             "owner_id": None,
+            "interview_thread_id": None,
             "decision_reason": None,
             "client_application_id": validated.client_application_id,
             "submitted_at": submitted_at,
@@ -560,12 +627,18 @@ def _transition_application_locked(
         )
         now = datetime.now(UTC)
         reviewer_id = _reviewer_id(actor, action)
-        if action in {"review", "approve", "deny"} and current["owner_id"] != reviewer_id:
+        if (
+            action in {"review", "approve", "deny", "request_interview", "waitlist"}
+            and current["owner_id"] != reviewer_id
+        ):
             raise ApplicationNotOwnerError(
                 current_owner_id=current["owner_id"],
                 actor_id=reviewer_id,
             )
         notes = None if request.notes is None else request.notes.strip()
+        reason = _transition_reason(request)
+        if action in {"request_interview", "waitlist", "reactivate"}:
+            notes = reason
         decision_reason = (
             None if request.decision_reason is None else request.decision_reason.strip()
         )
@@ -578,6 +651,22 @@ def _transition_application_locked(
             updated["claimed_at"] = now
         elif action == "review":
             updated["review_started_at"] = now
+        elif action == "request_interview":
+            updated["interview_thread_id"] = (
+                request.thread_id
+                if request.thread_id is not None
+                else current.get("interview_thread_id")
+            )
+        elif action == "waitlist":
+            pass
+        elif action == "reactivate":
+            next_owner_id = request.new_owner_id or current["owner_id"]
+            if next_owner_id is None:
+                raise ApplicationReactivateOwnerRequiredError()
+            if fetch_member_by_id(active_connection, next_owner_id) is None:
+                raise ValueError(f"member {next_owner_id} was not found")
+            updated["owner_id"] = next_owner_id
+            updated["claimed_at"] = now
         elif action in {"approve", "deny"}:
             updated["decision_reason"] = decision_reason
             updated["decided_at"] = now
@@ -606,20 +695,28 @@ def _transition_application_locked(
                 "decision_reason": decision_reason,
             },
         )
+        payload_json = {
+            "application_id": str(application_id),
+            "application_review_id": str(review_id),
+            "action": action,
+            "from_state": current["state"],
+            "to_state": next_state,
+            "reviewer_id": None if reviewer_id is None else str(reviewer_id),
+            "notes": notes,
+            "decision_reason": decision_reason,
+        }
+        if action == "request_interview":
+            payload_json["thread_id"] = request.thread_id
+        if action == "reactivate" and request.new_owner_id is not None:
+            payload_json["new_owner_id"] = str(request.new_owner_id)
+        if action in {"request_interview", "waitlist", "reactivate"} and reason is not None:
+            payload_json["reason"] = reason
+
         return StateChangeDraft(
             change_type="application.queued"
             if action == "route"
             else "application.transitioned",
-            payload_json={
-                "application_id": str(application_id),
-                "application_review_id": str(review_id),
-                "action": action,
-                "from_state": current["state"],
-                "to_state": next_state,
-                "reviewer_id": None if reviewer_id is None else str(reviewer_id),
-                "notes": notes,
-                "decision_reason": decision_reason,
-            },
+            payload_json=payload_json,
             diff_json=_transition_diff(current, updated, notes=notes),
         )
 
@@ -648,6 +745,7 @@ def transition_application(
     expected_version: int,
     request: ApplicationTransitionRequest,
     actor: ActorIdentity,
+    request_surface: str | None = None,
 ) -> tuple[ApplicationRead, MutationResult]:
     action = request.action.value
     if action == "route":
@@ -666,11 +764,37 @@ def transition_application(
         target_scope=target_scope,
     )
     reviewer_id = _reviewer_id(actor, action)
+    if (
+        action in {"request_interview", "waitlist"}
+        and current["owner_id"] != reviewer_id
+    ):
+        raise ApplicationNotOwnerError(
+            current_owner_id=current["owner_id"],
+            actor_id=reviewer_id,
+        )
+    if action == "request_interview":
+        idempotent = _maybe_idempotent_interview(
+            current=current,
+            application_id=application_id,
+            expected_version=expected_version,
+            request=request,
+        )
+        if idempotent is not None:
+            return _row_to_read(idempotent), MutationResult(
+                version=int(idempotent["version"]),
+                etag=f'"{int(idempotent["version"])}"',
+            )
+    originating_actor_kind, originating_actor_id = _originating_actor(request, actor)
     action_payload = {
         "action": action,
         "reviewer_id": None if reviewer_id is None else str(reviewer_id),
         "notes": request.notes,
         "decision_reason": request.decision_reason,
+        "thread_id": request.thread_id,
+        "reason": request.reason,
+        "new_owner_id": None if request.new_owner_id is None else str(request.new_owner_id),
+        "originating_actor_kind": originating_actor_kind,
+        "originating_actor_id": originating_actor_id,
     }
     try:
         result = _transition_application_locked(
@@ -682,7 +806,8 @@ def transition_application(
             actor=actor,
             action_payload=action_payload,
             payload_allowlist=TRANSITION_PAYLOAD_ALLOWLIST[action],
-            request_surface=f"api:/api/v1/applications/{application_id}/transitions",
+            request_surface=request_surface
+            or f"api:/api/v1/applications/{application_id}/transitions",
         )
     except StaleMutationError as error:
         if action != "claim":
@@ -696,3 +821,108 @@ def transition_application(
     with db.connection() as read_connection:
         read = _row_to_read(_fetch_application_row(read_connection, application_id))
     return read, result
+
+
+def _maybe_idempotent_interview(
+    *,
+    current: dict[str, Any],
+    application_id: UUID,
+    expected_version: int,
+    request: ApplicationTransitionRequest,
+) -> dict[str, Any] | None:
+    stored_thread_id = current.get("interview_thread_id")
+    requested_thread_id = request.thread_id
+    if stored_thread_id and requested_thread_id and stored_thread_id != requested_thread_id:
+        raise ApplicationInterviewThreadMismatchError(
+            current_thread_id=str(stored_thread_id),
+            requested_thread_id=requested_thread_id,
+        )
+    if current["state"] != "interview" or not stored_thread_id:
+        return None
+    if requested_thread_id is not None and requested_thread_id != stored_thread_id:
+        return None
+    if int(current["version"]) != expected_version:
+        raise StaleMutationError(
+            aggregate_type="application",
+            aggregate_id=application_aggregate_id(application_id),
+            expected_version=expected_version,
+            current_version=int(current["version"]),
+        )
+    return current
+
+
+def request_interview(
+    db: PostgresDatabase,
+    *,
+    application_id: UUID,
+    expected_version: int,
+    request: ApplicationInterviewRequest,
+    actor: ActorIdentity,
+) -> tuple[ApplicationRead, str]:
+    transition_request = ApplicationTransitionRequest(
+        action="request_interview",
+        thread_id=request.thread_id,
+        reason=request.reason,
+        originating_actor_kind=request.originating_actor_kind,
+        originating_actor_id=request.originating_actor_id,
+    )
+    read, result = transition_application(
+        db,
+        application_id=application_id,
+        expected_version=expected_version,
+        request=transition_request,
+        actor=actor,
+        request_surface=f"api:/api/v1/applications/{application_id}/interview",
+    )
+    return read, result.etag
+
+
+def waitlist_application(
+    db: PostgresDatabase,
+    *,
+    application_id: UUID,
+    expected_version: int,
+    request: ApplicationWaitlistRequest,
+    actor: ActorIdentity,
+) -> tuple[ApplicationRead, str]:
+    transition_request = ApplicationTransitionRequest(
+        action="waitlist",
+        reason=request.reason,
+        originating_actor_kind=request.originating_actor_kind,
+        originating_actor_id=request.originating_actor_id,
+    )
+    read, result = transition_application(
+        db,
+        application_id=application_id,
+        expected_version=expected_version,
+        request=transition_request,
+        actor=actor,
+        request_surface=f"api:/api/v1/applications/{application_id}/waitlist",
+    )
+    return read, result.etag
+
+
+def reactivate_application(
+    db: PostgresDatabase,
+    *,
+    application_id: UUID,
+    expected_version: int,
+    request: ApplicationReactivateRequest,
+    actor: ActorIdentity,
+) -> tuple[ApplicationRead, str]:
+    transition_request = ApplicationTransitionRequest(
+        action="reactivate",
+        new_owner_id=request.new_owner_id,
+        reason=request.reason,
+        originating_actor_kind=request.originating_actor_kind,
+        originating_actor_id=request.originating_actor_id,
+    )
+    read, result = transition_application(
+        db,
+        application_id=application_id,
+        expected_version=expected_version,
+        request=transition_request,
+        actor=actor,
+        request_surface=f"api:/api/v1/applications/{application_id}/reactivate",
+    )
+    return read, result.etag

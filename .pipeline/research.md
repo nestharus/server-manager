@@ -1,399 +1,309 @@
-# SLICE-015 Phase 1 Research: Configurable Operator Notifications
+# SLICE-021 Research: Application Interview and Waitlist Handling
 
 ## 1. Prototyping Assessment
 
 **NO - production design can proceed without a disposable prototype.**
 
-The risky parts are data semantics, not unknown external mechanics:
+The unknowns in SLICE-021 are lifecycle semantics and integration points, not external API mechanics:
 
-- `notification_events` already exists as a durable, replayable event substrate with `event_type`, correlation, causation, scope, payload JSON, and created timestamp (`migrations/versions/wu-003c_notification_events.py:17`, `services/api/app/contracts/notifications.py:12`).
-- The API already has the optimistic-locking primitive needed for `NotificationRule.version`: `mutate_entity()` creates an aggregate head for `expected_version=0`, locks the head, rejects stale writes, records accepted/rejected/failed audit actions, and returns an ETag (`services/api/app/services/mutations.py:58`, `services/api/app/services/mutations.py:97`, `services/api/app/services/mutations.py:112`, `services/api/app/services/mutations.py:123`, `services/api/app/services/mutations.py:150`, `services/api/app/services/mutations.py:167`).
-- The scheduler foundation already has claim/lease mechanics through `FOR UPDATE SKIP LOCKED` and status transitions (`services/api/app/repositories/_claim.py:10`, `services/api/app/repositories/scheduler.py:104`, `services/api/app/services/scheduler.py:174`).
-- Discord message idempotency is supported by Discord's Create Message `nonce` + `enforce_nonce` fields. Official docs say `enforce_nonce=true` dedupes messages for the same sender for a few minutes when the same nonce is supplied (https://docs.discord.com/developers/resources/message#create-message, lines 930-944; https://docs.discord.com/developers/change-log, lines 2152-2154).
+- SLICE-012 already shipped the application aggregate, optimistic locking, state transition table, reviewer ownership checks, form snapshot pinning, and Discord review command pattern in commit `dc62122`.
+- The current application mutation path already serializes each aggregate through `mutate_entity()`, strong ETags, `aggregate_heads.current_seq`, and `SELECT ... FOR UPDATE` on the application projection.
+- Discord thread creation and reuse can be represented as normal adapter behavior around a nullable stored `interview_thread_id`. No Discord-visible mutation should be executed during this research phase.
+- SLICE-015 already provides configurable notification rules/envelopes and a Discord delivery adapter, but its current recipient resolver only supports explicit Discord recipients. It does not yet support "recipient is the application applicant" as a dynamic recipient selector.
 
-The proposal must still pin two design choices: how the materialize/deliver ticks are triggered under the currently one-shot scheduler model, and how authority-derived recipients become concrete Discord users.
+The proposal phase must pin two choices that are semantic rather than exploratory:
 
-## 2. Per-Question Answers
+- Whether `/reactivate` preserves the previous owner by default or defaults to the acting reviewer.
+- Whether applicant-facing waitlist notification is direct Discord handler behavior for this slice or a small extension to SLICE-015 dynamic recipient resolution.
 
-### 2.1 NotificationRule Aggregate
+## 2. Local Baseline
 
-No `NotificationRule` code exists today. The only notification production code is the Phase 0 event envelope (`services/api/app/contracts/notifications.py:12`, `services/api/app/services/notification_events.py:27`).
+### Application aggregate
 
-Recommended aggregate:
+Current application states are `submitted`, `queued`, `claimed`, `in_review`, `approved`, `denied`, and `withdrawn` in `ApplicationState` (`services/api/app/contracts/applications.py:33`). Current transition actions are `route`, `claim`, `review`, `approve`, `deny`, and `withdraw` (`services/api/app/contracts/applications.py:43`).
 
-- `aggregate_type = "notification_rule"`
-- `notification_rules.id UUID PRIMARY KEY`
-- `trigger_json JSONB NOT NULL`
-- `scope_kind TEXT NOT NULL CHECK IN ('global','chapter','member')`
-- `scope_id TEXT NULL`
-- `recipients_json JSONB NOT NULL`
-- `channel TEXT NOT NULL CHECK IN ('dm','thread','designated_channel')`
-- `template_json JSONB NOT NULL`
-- `actionable BOOLEAN NOT NULL`
-- `grouping TEXT NOT NULL CHECK IN ('per_event','per_root_cause')`
-- `enabled BOOLEAN NOT NULL DEFAULT TRUE`
-- `created_at`, `updated_at`
+The transition table in `services/api/app/services/applications.py` currently allows:
 
-`version` should come from `aggregate_heads.current_seq`, not a separate `version` column, matching `chapters` and `members` read models (`services/api/app/repositories/chapters.py:10`, `services/api/app/repositories/members.py:10`).
+- `submitted --route--> queued`
+- `queued --claim--> claimed`
+- `claimed --review--> in_review`
+- `in_review --approve|deny--> approved|denied`
+- `submitted|queued|claimed|in_review --withdraw--> withdrawn`
 
-`template` should be inline JSONB on the rule, not a template-table reference. The proposal defines `template` as JSONB (`product-strategy/proposal.md:624`, `product-strategy/proposal.md:635`), and the existing `policy_versions` table is a generic preview-confirm surface, not a notification template registry (`migrations/versions/wu-005_policy_foundation.py:17`, `services/api/app/contracts/policies.py:63`). Materialized envelopes should snapshot the rendered payload or template JSON so delivery is not affected by later rule edits.
+Those edges are encoded in `VALID_TRANSITIONS` (`services/api/app/services/applications.py:42`) and enforced by `validate_transition()` (`services/api/app/services/applications.py:332`). SLICE-021 must add new edges without removing or changing these existing SLICE-012 edges.
 
-### 2.2 Trigger Types
+`transition_application()` is the only public service-level transition entry point today. It:
 
-Current code has no trigger enum. Both audit actions and notification events are free-text dotted strings:
+- Rejects public `route` calls (`services/api/app/services/applications.py:652`).
+- Fetches the application and checks authority at `form_snapshot["target_scope"]` (`services/api/app/services/applications.py:659`).
+- Builds an action payload and delegates to `_transition_application_locked()` (`services/api/app/services/applications.py:668`).
+- Converts stale claim races into `ApplicationAlreadyClaimedError` only for `claim` (`services/api/app/services/applications.py:687`).
 
-- `notification_events.event_type` is free text (`migrations/versions/wu-003c_notification_events.py:20`).
-- `NotificationEventDraft.event_type` is an unconstrained non-empty string (`services/api/app/contracts/notifications.py:12`).
-- Existing mutation action types include `chapter.transition`, `roster_entry.transition`, `roster_entry.sync_failure`, `authority.override`, `policy.confirm`, `permission_drift.update_status`, and similar dotted names (`services/api/app/services/chapters.py:392`, `services/api/app/services/roster.py:275`, `services/api/app/services/roster.py:369`, `services/api/app/services/audit_overrides.py:50`, `services/api/app/services/policies.py:167`, `services/api/app/services/permissions.py:286`).
+`_transition_application_locked()` locks the application row, validates the transition, checks owner-only behavior for `review`, `approve`, and `deny`, updates projection timestamps, inserts `application_reviews`, and records `application.transitioned` with `diff_json` (`services/api/app/services/applications.py:548`).
 
-Recommended trigger contract:
+### Persistence constraints
 
-```text
-NotificationTrigger(
-  event_type: str,              # exact dotted name or prefix pattern ending in .*
-  payload_filters: dict | None  # optional exact-match JSON keys for later proposal if needed
-)
-```
+The `applications` table currently has no interview thread column. Its state CHECK only allows the seven SLICE-012 states (`migrations/versions/wu-022_applications.py:70`).
 
-Examples:
+The `application_reviews` table also constrains actions to the six SLICE-012 actions (`migrations/versions/wu-022_applications.py:156`) and requires `reviewer_id` only for `claim`, `review`, `approve`, and `deny` (`migrations/versions/wu-022_applications.py:160`). Any new `interview`, `waitlist`, or `reactivate` action that inserts a review row must extend this CHECK too.
 
-- `chapter.*`
-- `chapter.transition`
-- `roster_entry.*`
-- `roster_entry.sync_failure`
-- `permission_drift.*`
-- Future: `application.*`, `ticket.*`, `sla.*`, `compliance.*`
+Repository reads and writes enumerate application columns explicitly. `_APPLICATION_SELECT` must include any new `interview_thread_id`, `insert_application()` must initialize it, and `update_application()` must persist it (`services/api/app/repositories/applications.py:11`, `services/api/app/repositories/applications.py:40`, `services/api/app/repositories/applications.py:130`).
 
-Avoid a database enum for trigger values. Later slices will add producers, and enum growth would create migration conflicts. Treat `audit.*` as a naming convention only if a publisher emits `notification_events.event_type = "audit.<action_type>"`; SLICE-015 should not scan `activity_actions` directly.
+`ApplicationRead` currently exposes no `interview_thread_id` field, so Discord cannot discover/reuse an existing interview thread from the GET response until the contract is extended (`services/api/app/contracts/applications.py:232`).
 
-### 2.3 Scope and Authority
+### Discord baseline
 
-Rule scope should use the same `ScopeKind` vocabulary as audit, notification events, policies, and authority grants: `global`, `chapter`, `member` (`services/api/app/contracts/scope.py:4`, `migrations/versions/wu-003c_notification_events.py:37`, `migrations/versions/wu-004_authority_foundation.py:51`).
+The Discord application review handler already follows the desired GET-then-POST optimistic locking shape:
 
-Matching semantics:
+- Resolve Discord user to member UUID via `/api/v1/members/by-discord/{discord_user_id}`.
+- GET `/api/v1/applications/{id}` to obtain the current ETag.
+- POST a mutation with `If-Match`.
+- Post an outcome summary only after API success.
 
-- A global rule may match any event.
-- A chapter rule matches only events with `scope_kind='chapter'` and the same `scope_id`.
-- A member rule matches only events with `scope_kind='member'` and the same `scope_id`.
-- Do not infer chapter/member scope from arbitrary payload fields in Phase 2.
+This pattern is in `services/discord/app/handlers/application_review.py:51`. The current command contract only supports `claim`, `approve`, and `deny` (`services/discord/app/contracts/application_review.py:12`), and command registration only exposes those three commands (`services/discord/app/commands/application_review.py:10`).
 
-Authority:
+Member lookup by internal UUID is available through `GET /api/v1/members/{member_id}` with global `member.read` authority (`services/api/app/api/v1/endpoints/members.py:130`). That is enough for a Discord handler to resolve `ApplicationRead.applicant_id` into a Discord user ID for direct applicant messaging, if the service actor has `member.read`.
 
-- `notification.read`: list/read rules and envelopes.
-- `notification.write`: create/update rules.
-- `notification.deliver`: service-only permission for materialization and delivery workers if exposed through API routes.
+### Notification baseline
 
-Scope should be global or chapter. Use global authority for global rules and chapter authority for chapter-scoped rules. Existing `RequireAuthority` supports static route checks (`services/api/app/core/dependencies.py:56`), but list/create with body-driven scope needs manual evaluation like roster endpoints do (`services/api/app/api/v1/endpoints/roster.py:78`).
+SLICE-015 created:
 
-Seed a service grant for the delivery actor, e.g. `notification-worker`, with global `notification.deliver`. Current migrations seed service actors with guarded inserts for `discord-provisioner` and `member-onboarder`; follow that pattern rather than relying on manual grants.
+- `notification_events`, with `emit()` enqueueing a `notifications_materialize` deferred effect in the same transaction (`services/api/app/services/notification_events.py:32`).
+- `notification_rules` and `notification_envelopes`, including `dm`, `thread`, and `designated_channel` as schema-valid channels (`migrations/versions/wu-029a_notifications.py:62`, `migrations/versions/wu-029a_notifications.py:169`).
+- Unique envelope indexes for per-event and per-root-cause idempotency (`migrations/versions/wu-029a_notifications.py:190`).
+- Discord delivery for DM and designated-channel messages with deterministic nonce; thread delivery is explicitly rejected as out of scope for SLICE-015 (`services/discord/app/handlers/notifications.py:45`, `services/discord/app/handlers/notifications.py:63`, `services/discord/app/handlers/notifications.py:78`).
 
-### 2.4 Notification Event Substrate
+The current materializer only resolves explicit `discord_user` and `discord_users` recipient selectors. It cannot derive the applicant recipient from an application event payload without extension (`services/api/app/services/notifications_materialize.py:77`).
 
-The table exists from WU-003C:
+## 3. State Machine and Persistence Findings
 
-- `id UUID PRIMARY KEY`
-- `event_type TEXT NOT NULL`
-- `correlation_id UUID NOT NULL`
-- `causation_id UUID NULL`
-- `scope_kind TEXT NULL`
-- `scope_id TEXT NULL`
-- `payload_json JSONB NOT NULL DEFAULT {}`
-- `created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
-- indexes on `correlation_id` and `(event_type, created_at)` (`migrations/versions/wu-003c_notification_events.py:17`).
+### Required state extensions
 
-The service layer redacts payloads unless a caller passes an allowlist (`services/api/app/services/notification_events.py:14`) and requires an active audit context (`services/api/app/services/notification_events.py:27`). Replay is by `correlation_id`, ordered by `(created_at ASC, id ASC)` (`services/api/app/repositories/notification_events.py:71`).
+Add `interview` and `waitlisted` to `ApplicationState`. Preserve all existing SLICE-012 states and edges.
 
-No status, claim, attempts, or lease columns exist on `notification_events`. If it is used as a persistent queue, SLICE-015 must add processing metadata or create a separate processing table.
+The additional transition edges required by the ticket are:
 
-### 2.5 Grouping Semantics
+- `in_review --interview--> interview`
+- `in_review --waitlist--> waitlisted`
+- `interview --waitlist--> waitlisted`
+- `interview --approve|deny--> approved|denied`
+- `waitlisted --reactivate--> claimed`
 
-The product proposal defines root cause by correlation: all events in one causal cascade share `correlation_id`; direct causation is represented separately by `causation_id` (`product-strategy/proposal.md:610`, `product-strategy/proposal.md:620`). Current SLICE-009 implementation returns a "chain" by selecting every audit entry with the seed entry's `correlation_id`, not by walking `causation_id` recursively (`services/api/app/services/audit_queries.py:49`, `services/api/app/repositories/audit.py:39`, `services/api/tests/test_audit_api.py:451`).
+Do not add new withdrawal edges unless the proposal intentionally expands scope. The ticket says "waitlisted state; no state changes until reactivate," so `waitlisted --withdraw--> withdrawn` should be treated as out of scope unless the user explicitly changes the lifecycle contract.
 
-Therefore for SLICE-015:
+### Interview thread linkage
 
-- `per_event`: grouping key is `event:{notification_events.id}`.
-- `per_root_cause`: grouping key is `root:{notification_events.correlation_id}`.
-- Root correlation ID is currently just `correlation_id`; do not introduce a second `root_correlation_id` field unless the audit query slice later implements recursive causation backtracking.
+Add nullable `applications.interview_thread_id TEXT`. It should be part of:
 
-### 2.6 Materialization Trigger
+- Database migration column list.
+- Repository SELECT/INSERT/UPDATE.
+- `ApplicationRead`.
+- `_row_to_read()`.
+- `_transition_diff()` so audit diff captures first linkage and any attempted linkage mutations that are accepted.
 
-Current `emit()` only inserts a `notification_events` row and returns the event UUID (`services/api/app/services/notification_events.py:27`). It does not enqueue a scheduled job, dispatch a handler, or automatically inspect `activity_actions`.
+The column should stay nullable because `ApplicationInterviewRequest.thread_id` is optional. For Discord commands, the normal successful path should provide a non-null thread ID after creating or rediscovering the thread.
 
-Recommended answer: materialization should be triggered by persisted `notification_events`, not by every `activity_actions` insert. Producers decide when an operational event is notification-worthy and call `emit()` inside their mutation projection. This preserves the Phase 0 boundary that notification delivery is owned by VS-009 while event emission belongs to emitting slices (`product-strategy/engineering-roadmap-revision-cycle5.md:22`, `product-strategy/engineering-roadmap-revision-cycle5.md:46`).
+AC3 implies the stored thread ID is immutable once set:
 
-Open implementation issue: the existing scheduler is one-shot. `SchedulerLoop` claims due `scheduled_jobs`, dispatches a handler, and marks the job completed (`services/api/app/services/scheduler.py:174`, `services/api/app/services/scheduler.py:199`, `services/api/app/services/scheduler.py:234`). There is no recurring schedule field or reschedule hook in `scheduled_jobs` (`migrations/versions/wu-008a_scheduler_foundation.py:17`). The proposal must explicitly choose one:
+- If `interview_thread_id` is null and request has `thread_id`, store it.
+- If `interview_thread_id` already equals the request `thread_id`, return success without creating a second thread or second state transition.
+- If `interview_thread_id` is set and request has a different `thread_id`, reject with 409 Conflict.
+- If request omits `thread_id` and the stored value is already set, return the current stored linkage in `ApplicationRead`.
 
-1. Add notification tick calls beside `deferred_effect_worker_tick()` in `SchedulerLoop._tick()`.
-2. Add self-rescheduling notification jobs with unique time-bucket keys.
-3. Add a recurring-job primitive to the scheduler substrate.
+This idempotent repeat should be implemented outside the formal `VALID_TRANSITIONS` graph, not as an `interview -> interview` edge. Otherwise the state machine would claim a real lifecycle transition occurred when the desired behavior is "reuse the recorded thread."
 
-Given the WU-029B code boundary does not list `services/api/app/services/scheduler.py`, option 2 is the least invasive if the proposal wants to keep the scheduler boundary unchanged.
+### Waitlist semantics
 
-### 2.7 Rule Evaluation Timing
+`waitlisted` should be a parking state. While in `waitlisted`, normal decision actions should be invalid. The only ticketed exit is `reactivate` to `claimed`.
 
-Recommended: evaluate rules at materialization time against persisted events.
+The minimal schema does not add a dedicated waitlist reason column. Therefore `ApplicationWaitlistRequest.reason` must be persisted through existing review/audit surfaces:
 
-Rationale:
+- `application_reviews.notes` can carry the human reason.
+- `activity_actions.request_json` for `application.waitlist` should include `reason`.
+- `activity_state_changes.payload_json` should include the reason.
+- `diff_json` can include notes/reason the same way current `_transition_diff()` includes notes.
 
-- `notification_events` is the replayable source (`product-strategy/tickets/SLICE-002.md:21`, `product-strategy/tickets/SLICE-002.md:58`).
-- AC3 requires replaying the same persisted event without duplicate envelopes, so idempotency belongs in materialization, not event creation (`product-strategy/tickets/SLICE-015.md:55`).
-- Rule creation/update is a governed aggregate; evaluating at materialization time lets tests seed one event and multiple rules without changing every event producer.
+For reactivation ownership, the cleanest reading of `ApplicationReactivateRequest(new_owner_id: UUID | None)` is:
 
-Do not scan all events forever. Use claim/lease processing metadata on events or a separate materialization-state table, plus envelope uniqueness for replay safety.
+- If `new_owner_id` is omitted, preserve the prior `owner_id`.
+- If `new_owner_id` is supplied, set `owner_id` to that member UUID.
+- If the prior owner is null and no `new_owner_id` is supplied, reject as an application data invariant conflict.
 
-### 2.8 Template Rendering
+This matches the optional field name and avoids silently assigning ownership to the acting reviewer when the request did not say to do that. The review row's `reviewer_id` should still mean "actor who performed the reactivation," not necessarily the new owner.
 
-Render before delivery, in the API materialization service, and snapshot the result onto `notification_envelopes`.
+### Migration shape
 
-Reasons:
+The migration is mechanically small but touches three constraints:
 
-- Delivery failures must not mutate rule definitions (`product-strategy/tickets/SLICE-015.md:58`).
-- The Discord adapter should be a platform adapter that delivers one typed envelope, not a rule evaluator.
-- Snapshotting protects pending envelopes from later rule edits.
+- Add `applications.interview_thread_id TEXT NULL`.
+- Replace `applications_state_valid` with one that includes `interview` and `waitlisted`.
+- Replace `application_reviews_action_valid` with one that includes `interview`, `waitlist`, and `reactivate`.
+- Replace `application_reviews_reviewer_required` so user-reviewer actions include the new actions. `route` remains system/service-capable; `withdraw` keeps current behavior unless proposal changes it.
 
-The Discord adapter may translate the snapshot into Discord embeds/components, but it should not read current rules.
+No new table is required for this slice.
 
-### 2.9 Recipient Resolution
+## 4. API Contracts, Authority, and Audit Findings
 
-Resolve recipients at materialization time, not delivery time.
+### Request contracts
 
-Reasons:
+The ticketed request contracts fit in `services/api/app/contracts/applications.py`:
 
-- `notification_envelopes` should be one row per materialized recipient, as the work unit expects.
-- Delivery retries should not change recipient sets after a rule or authority grant changes.
-- Envelope uniqueness needs a concrete recipient key.
+- `ApplicationInterviewRequest(thread_id: str | None = None)`
+- `ApplicationWaitlistRequest(reason: str)`
+- `ApplicationReactivateRequest(new_owner_id: UUID | None = None)`
 
-Recommended recipient JSON shapes:
+Validation should reject blank strings for `thread_id` and `reason`. Discord snowflakes are strings elsewhere in this repo, so `thread_id` should remain `str`, not `int`.
 
-```json
-{"type": "discord_users", "user_ids": ["123", "456"]}
-{"type": "authority", "permission": "roster.write", "scope": "event"}
-```
+Even though dedicated endpoint bodies do not need an `action` field, `ApplicationTransitionAction` or a separate review-action type must include `interview`, `waitlist`, and `reactivate` because `ApplicationReviewRead.action` and the database review row action constraint currently use that vocabulary.
 
-Authority-derived recipients require a binding decision because `authority_grants` has `grantee_id` but no `grantee_kind` (`migrations/versions/wu-004_authority_foundation.py:17`, `services/api/app/repositories/authority.py:69`). If `grantee_id` is assumed to be a Discord user snowflake for user actors, materialization can exclude known service actor IDs and non-snowflake IDs. A stricter design would add recipient resolution through `members.discord_user_id`.
+### Endpoint shape
 
-## 3. Proposed Data Model
+Add the three dedicated endpoints under the existing `/api/v1/applications` router:
 
-### `notification_rules`
+- `POST /api/v1/applications/{application_id}/interview`
+- `POST /api/v1/applications/{application_id}/waitlist`
+- `POST /api/v1/applications/{application_id}/reactivate`
 
-- `id UUID PRIMARY KEY`
-- `trigger_json JSONB NOT NULL`
-- `scope_kind TEXT NOT NULL`
-- `scope_id TEXT NULL`
-- `recipients_json JSONB NOT NULL`
-- `channel TEXT NOT NULL`
-- `template_json JSONB NOT NULL`
-- `actionable BOOLEAN NOT NULL`
-- `grouping TEXT NOT NULL`
-- `enabled BOOLEAN NOT NULL DEFAULT TRUE`
-- `created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
-- `updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
+All three should require `If-Match` using the existing strong ETag parser (`services/api/app/api/v1/endpoints/applications/_shared.py:30`) and return `ApplicationRead` with a fresh ETag after mutation.
 
-Constraints/indexes:
+Dedicated endpoints are preferable to overloading `/transitions` because the request contracts have action-specific fields and idempotency rules. The existing `/transitions` endpoint should continue to serve SLICE-012 actions so existing edges do not break.
 
-- `CHECK scope_kind IN ('global','chapter','member')`
-- `CHECK channel IN ('dm','thread','designated_channel')`
-- `CHECK grouping IN ('per_event','per_root_cause')`
-- `INDEX (scope_kind, scope_id)`
-- `INDEX USING GIN (trigger_json)`
+### Ownership checks
 
-Version comes from `aggregate_heads` with `aggregate_type='notification_rule'`.
+The ticket explicitly requires ownership checks for interview and waitlist: the reviewer must match `current.owner_id`.
 
-### `notification_events` additions or side table
+Current code checks owner only for `review`, `approve`, and `deny` (`services/api/app/services/applications.py:563`). SLICE-021 needs that owner check to include at least `interview` and `waitlist`. It should not accidentally require ownership for `claim` or `route`.
 
-Preferred minimal addition if using event rows as the queue:
+For `reactivate`, the ticket names authority but does not explicitly require current-owner matching. Because `reactivate` may assign `new_owner_id`, requiring the actor to be the old owner would make reassignment by another authorized officer impossible. The research conclusion is that the proposal should treat `application.reactivate` authority as the gate, and should only add owner matching for reactivation if the user wants old-owner-only reactivation.
 
-- `materialization_status TEXT NOT NULL DEFAULT 'pending'`
-- `claimed_by TEXT NULL`
-- `claimed_at TIMESTAMPTZ NULL`
-- `lease_until TIMESTAMPTZ NULL`
-- `attempts INT NOT NULL DEFAULT 0`
-- `max_attempts INT NOT NULL DEFAULT 3`
-- `last_error_json JSONB NULL`
-- `updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
+### Authority
 
-Constraints/indexes:
+Current transition authority maps each action to `application.{action}` at `form_snapshot.target_scope` (`services/api/app/services/applications.py:189`). This directly supports:
 
-- `CHECK materialization_status IN ('pending','claimed','materialized','failed','skipped')`
-- partial index on `(created_at, id)` where status is `pending` or `claimed`
+- `application.interview`
+- `application.waitlist`
+- `application.reactivate`
 
-Alternative: `notification_event_materialization_state(event_id PK, ...)` if the proposal wants `notification_events` payload rows to remain physically immutable.
+`require_application_read_authority()` currently lets applicants read their own application, or any reviewer with one of `application.claim`, `application.review`, `application.approve`, `application.deny`, or `application.withdraw` read it (`services/api/app/services/applications.py:206`). Add the three new permissions to that reviewer read set, otherwise an officer with only waitlist/interview/reactivate authority could mutate through dedicated endpoints only if the endpoint does its own pre-read internally, but could not GET the application for Discord reuse.
 
-### `notification_envelopes`
+### Audit
 
-- `id UUID PRIMARY KEY`
-- `rule_id UUID NOT NULL REFERENCES notification_rules(id) ON DELETE RESTRICT`
-- `rule_version BIGINT NOT NULL`
-- `source_event_id UUID NOT NULL REFERENCES notification_events(id) ON DELETE RESTRICT`
-- `correlation_id UUID NOT NULL`
-- `causation_id UUID NULL`
-- `grouping TEXT NOT NULL`
-- `materialization_key TEXT NOT NULL`
-- `recipient_kind TEXT NOT NULL DEFAULT 'discord_user'`
-- `recipient_id TEXT NOT NULL`
-- `channel TEXT NOT NULL`
-- `destination_channel_id TEXT NULL`
-- `template_snapshot_json JSONB NOT NULL`
-- `rendered_payload_json JSONB NOT NULL`
-- `actionable BOOLEAN NOT NULL`
-- `delivery_status TEXT NOT NULL DEFAULT 'pending'`
-- `claimed_by TEXT NULL`
-- `claimed_at TIMESTAMPTZ NULL`
-- `lease_until TIMESTAMPTZ NULL`
-- `attempts INT NOT NULL DEFAULT 0`
-- `max_attempts INT NOT NULL DEFAULT 3`
-- `last_error_json JSONB NULL`
-- `discord_message_id TEXT NULL`
-- `delivered_at TIMESTAMPTZ NULL`
-- `created_at`, `updated_at`
+The existing mutation substrate already records:
 
-Constraints/indexes:
+- `activity_actions.action_type`
+- redacted `request_json`
+- accepted/rejected/failed status
+- `activity_state_changes.change_type`
+- `payload_json`
+- `diff_json`
+- aggregate version advancement
 
-- `UNIQUE (rule_id, recipient_kind, recipient_id, materialization_key)`
-- partial index on `(created_at, id)` where `delivery_status IN ('pending','claimed')`
-- `INDEX (correlation_id)`
-- `INDEX (source_event_id)`
-- `CHECK delivery_status IN ('pending','claimed','delivered','failed','skipped')`
+SLICE-021 should add action types:
 
-AC3 is satisfied by the unique materialization key. For `per_event`, `materialization_key='event:<event_id>'`; for `per_root_cause`, `materialization_key='root:<correlation_id>'`. A unique key on only `(event_id, rule_id)` is insufficient because one rule can emit one envelope per recipient, and it is wrong for `per_root_cause` because multiple events share the same root.
+- `application.interview`
+- `application.waitlist`
+- `application.reactivate`
 
-## 4. Proposed API Surface
+State changes should continue to use `application.transitioned` with `diff_json`, matching current non-route transitions (`services/api/app/services/applications.py:609`). The diff should include `state`, `owner_id`, `interview_thread_id`, timestamp changes, and notes/reason where applicable.
 
-Contracts in `services/api/app/contracts/notifications.py`:
+Current application transitions pass `scope_kind=None` and `scope_id=None` into `mutate_entity()` even though authority is evaluated at target scope (`services/api/app/services/applications.py:626`). For this slice, either keep that behavior uniformly or explicitly change all application transition audit rows to carry target scope. Do not scope only the new actions differently from existing application actions.
 
-```text
-NotificationTrigger(event_type: str, payload_filters?: dict)
-NotificationRuleCreate(trigger, scope_kind, scope_id?, recipients, channel, template, actionable, grouping, enabled=true)
-NotificationRulePatch(trigger?, scope_kind?, scope_id?, recipients?, channel?, template?, actionable?, grouping?, enabled?)
-NotificationRuleRead(id, trigger, scope_kind, scope_id?, recipients, channel, template, actionable, grouping, enabled, version, created_at, updated_at)
-NotificationRuleListRead(items, next_cursor?)
+## 5. Discord Flow and Notification Findings
 
-NotificationEnvelopeRead(id, rule_id, correlation_id, source_event_id, recipient_id, channel, actionable, delivery_status, delivered_at?)
-NotificationMaterializationResult(event_id, created_envelope_ids, skipped_envelope_ids)
-NotificationDeliveryBatchRead(delivered_envelope_ids, skipped_envelope_ids, failed_envelope_ids)
-NotificationDeliveryCommand(envelope: NotificationEnvelopeRead)
-NotificationDeliveryResult(envelope_id, delivered_at, discord_message_id)
-```
+### Interview command flow
 
-Endpoints:
+The Discord interview command should follow the existing review handler shape:
 
-- `POST /api/v1/notification-rules -> NotificationRuleRead`
-- `GET /api/v1/notification-rules?scope_kind=&scope_id= -> NotificationRuleListRead`
-- `GET /api/v1/notification-rules/{rule_id} -> NotificationRuleRead`
-- `PATCH /api/v1/notification-rules/{rule_id} -> NotificationRuleRead` with `If-Match`; stale returns `412`.
+1. Defer the interaction if `ack_deferred` exists.
+2. Resolve the Discord actor to a member UUID using existing `resolve_member_id()`.
+3. GET the application with user actor headers.
+4. If `interview_thread_id` is already present, reuse that thread and do not create a duplicate.
+5. If it is absent, create the Discord thread.
+6. POST `/api/v1/applications/{id}/interview` with `If-Match` and the created thread ID.
+7. Only after API success should the command return/post a success result.
 
-Optional internal endpoints only if the Discord service pulls from API instead of receiving commands in-process:
+The ordering matters. Creating the Discord thread before the API call means a 409/412 can leave an unused Discord thread. Creating it after the API call means the API cannot atomically record the thread ID created by Discord. The ticket explicitly says "Discord command creates thread (if not exists), POSTs /interview with thread_id," so the proposal must include the recovery path: on retry, GET the application first and reuse `interview_thread_id` if the previous API call succeeded; if Discord creation succeeded but API failed before storing the ID, the handler must rediscover by deterministic name or report failure without creating another API state.
 
-- `POST /api/v1/notifications/{envelope_id}/delivered`
-- `POST /api/v1/notifications/{envelope_id}/failed`
+No current Discord helper abstracts thread creation for applications. The closest reusable pattern is ticket thread discovery/creation in `services/discord/app/handlers/tickets.py`, but application interview should be its own handler and contract, not folded into ticket state.
 
-Authority:
+### Waitlist command flow
 
-- Reads require `notification.read` on requested rule scope.
-- Creates/updates require `notification.write` on submitted rule scope.
-- Delivery status mutation, if HTTP-exposed, requires service actor `notification-worker` with `notification.deliver`.
+The waitlist command should:
 
-## 5. Worker Design
+1. Defer the interaction.
+2. Resolve actor member UUID.
+3. GET application to obtain ETag.
+4. POST `/api/v1/applications/{id}/waitlist` with `reason` and `If-Match`.
+5. On success only, post one applicant-facing status message.
+6. On 409/412/API error, return an operator-facing failure and do not post applicant-facing status.
 
-### Materialize Worker
+This preserves AC4: API conflicts or validation failures do not duplicate Discord status messages or create divergent thread-local state.
 
-Files:
+Applicant-facing status can be implemented two ways:
 
-- `services/api/app/tasks/notifications_materialize.py`
-- `services/api/app/services/notifications_materialize.py`
-- `services/api/app/repositories/notifications.py`
+- Direct Discord handler message after API success. This is the smallest fit for WU-036b because `ApplicationRead.applicant_id` plus `GET /api/v1/members/{member_id}` can resolve the applicant Discord user ID. It requires `member.read` for the service actor.
+- SLICE-015 notification event. This is durable and configurable, but current notification materialization cannot dynamically select "the applicant from this application event" as recipient; it only supports explicit `discord_user` or `discord_users` recipients.
 
-Handler:
+The research conclusion is that SLICE-015 is useful for future applicant notification durability, but using it for WU-036b would require a recipient-resolution extension beyond this ticket's stated scope. The lower-risk SLICE-021 path is direct Discord posting after API success, with tests proving no post on conflict.
 
-```text
-@register_scheduler_handler("notifications.materialize")
-def materialize_notifications(job: ScheduledJobRead) -> NotificationMaterializationBatchRead
-```
+### Command registration
 
-Service flow:
+Add separate command modules and handlers for WU-036a and WU-036b:
 
-1. Claim pending/stale `notification_events` rows using the existing `_claim.claim_due_rows()` pattern.
-2. For each event, select enabled rules whose trigger and scope match.
-3. Resolve recipients to concrete Discord user IDs.
-4. Compute `materialization_key`.
-5. Insert one `notification_envelopes` row per concrete recipient with `ON CONFLICT DO NOTHING`.
-6. Mark event `materialized` if all rule evaluations succeeded, `skipped` if no matching rules, or requeue/fail with `last_error_json` on error.
+- `services/discord/app/contracts/application_interview.py`
+- `services/discord/app/handlers/application_interview.py`
+- `services/discord/app/commands/application_interview.py`
+- `services/discord/app/contracts/application_waitlist.py`
+- `services/discord/app/handlers/application_waitlist.py`
+- `services/discord/app/commands/application_waitlist.py`
 
-Idempotency:
+Then register those commands in `services/discord/app/commands/__init__.py` and in `build_bot_with_registry()`, following the current review command registration pattern (`services/discord/app/commands/application_review.py:15`).
 
-- Event replay calls the same insert path.
-- Duplicate materialization is prevented by `UNIQUE (rule_id, recipient_kind, recipient_id, materialization_key)`.
+## 6. Open Questions, Risks, and Test Evidence
 
-### Delivery Worker
+### Direct answers
 
-Files:
+1. **State machine extension:** add only the ticketed edges. Preserve SLICE-012 edges exactly.
+2. **Interview thread linkage:** nullable `interview_thread_id TEXT`; immutable once set; repeat with same ID is no-op success; different ID is 409.
+3. **Waitlist semantics:** `waitlisted` has no exits except `reactivate`. Reactivation should preserve prior owner unless `new_owner_id` is supplied.
+4. **Request contracts:** add the three dedicated request models; validate nonblank `reason` and nonblank optional `thread_id`.
+5. **Endpoints:** add three dedicated POST endpoints with `If-Match`; owner checks for interview/waitlist; authority check for all three.
+6. **Discord flow:** interview GETs and reuses stored thread ID; waitlist posts applicant-facing status only after API success.
+7. **Idempotency:** interview uses stored thread immutability; waitlist relies on state-machine rejection of second waitlist.
+8. **Authority:** add `application.interview`, `application.waitlist`, `application.reactivate` at `form_snapshot.target_scope`; add them to read-authority permission set.
+9. **Audit:** add action types and keep `application.transitioned` state change with `diff_json`.
+10. **Migration:** add column and extend state/action CHECK constraints; no new tables.
 
-- `services/api/app/tasks/notifications_deliver.py`
-- `services/api/app/services/notifications_delivery.py`
-- `services/api/app/repositories/notifications.py`
+### Open questions for proposal
 
-Handler:
+- Should `/reactivate` require the actor to be the old owner, or is `application.reactivate` authority sufficient? Research recommends authority-only because `new_owner_id` implies reassignment is allowed.
+- Should an interview request without `thread_id` be allowed to move to `interview`, or should the dedicated Discord/API contract require `thread_id` when the request surface is Discord? The request model says optional, but AC3 is only fully satisfied when Discord provides the ID.
+- Should application transition audit rows start carrying target scope for all actions? Current behavior leaves application transition audit scope null.
 
-```text
-@register_scheduler_handler("notifications.deliver")
-def deliver_notifications(job: ScheduledJobRead) -> NotificationDeliveryBatchRead
-```
+### Test implications
 
-Service flow:
+API tests should cover:
 
-1. Claim pending/stale envelopes with `delivery_status IN ('pending','claimed')`, `FOR UPDATE SKIP LOCKED`.
-2. For each envelope, call a delivery port with `NotificationDeliveryCommand`.
-3. On success, update only that envelope: `delivery_status='delivered'`, clear claim fields, set `discord_message_id`, `delivered_at`.
-4. On delivery failure, update only that envelope: increment attempts, set `last_error_json`, requeue or mark `failed`.
-5. Never update `notification_rules` during delivery failure handling.
+- Existing SLICE-012 transitions still pass.
+- `in_review -> interview`, `in_review -> waitlisted`, `interview -> waitlisted`, `interview -> approved|denied`, and `waitlisted -> claimed`.
+- Invalid `waitlisted -> approve|deny|withdraw|waitlist` returns 409.
+- Interview stores thread ID and returns it in `ApplicationRead`.
+- Repeating interview with the same thread ID returns success without a duplicate review row or version advance.
+- Repeating interview with a different thread ID returns 409.
+- Waitlist requires owner and nonblank reason.
+- Reactivate with no `new_owner_id` preserves prior owner; with `new_owner_id` assigns the new owner.
+- Stale `If-Match` returns 412 for all three endpoints.
+- Audit rows contain the new action types and `application.transitioned` state diffs.
 
-This mirrors `deferred_effect_worker_tick()` and the scheduler mark functions, which claim rows, dispatch, and mark completed/failed without changing source configuration (`services/api/app/services/deferred_effects.py:136`, `services/api/app/repositories/deferred_effects.py:173`).
+Discord tests should cover:
 
-## 6. Discord Adapter Design
+- Interview handler GETs first, reuses existing `interview_thread_id`, and does not call thread creation.
+- Interview handler creates a thread only when no stored thread exists, then POSTs `/interview` with `If-Match`.
+- Interview API 409/412 does not post a success outcome.
+- Waitlist handler posts applicant-facing status only after a 2xx API response.
+- Waitlist handler does not post applicant-facing status on 409/412/API errors.
+- Command registry includes the new interview and waitlist commands.
 
-Files:
+### Recommended magnitude
 
-- `services/discord/app/contracts/notifications.py`
-- `services/discord/app/handlers/notifications.py`
-- `services/discord/tests/test_notifications.py`
-
-Contract:
-
-```text
-NotificationDeliveryCommand(envelope: NotificationEnvelopeRead)
-NotificationDeliveryResult(envelope_id, delivered_at, discord_message_id)
-```
-
-Handler responsibilities:
-
-- Accept one materialized envelope.
-- Use `envelope.id` as the idempotency key.
-- For Discord Create Message, pass `nonce=<envelope_id-derived <=25 char token>` and `enforce_nonce=True`. Discord supports `nonce` up to 25 characters and `enforce_nonce` dedupes recent duplicate sends by the same author (https://docs.discord.com/developers/resources/message#create-message, lines 930-944).
-- Preserve `actionable` exactly: actionable envelopes include configured components/buttons; informational envelopes do not.
-- Return `discord_message_id` and `delivered_at`.
-- On Discord exceptions, raise a typed delivery error. Do not call rule APIs.
-
-Envelope IDs are UUIDs, which are 36 characters. Because Discord nonce is limited to 25 characters, use a deterministic short token such as base32/base36 of the UUID integer or a 20-byte digest prefix. Store the actual `envelope_id` in the envelope row and in embed/footer/custom_id metadata as needed; use the short nonce only for Discord dedupe.
-
-## 7. Open Questions
-
-1. **Recurring trigger:** The scheduler is currently one-shot. Should notification workers be self-rescheduling jobs, always-run scheduler tick workers, or should SLICE-015 expand the scheduler substrate with recurrence?
-2. **Recipient authority resolution:** Are user `authority_grants.grantee_id` values guaranteed to be Discord user IDs? If not, materialization needs a mapping from grantee to member/Discord user.
-3. **Rule-history semantics:** If a rule changes after an event is created but before replay, should replay use current rule state or the rule version active at first materialization? The recommended M scope uses current rules plus envelope uniqueness and rule-version snapshot.
-4. **Template language:** Inline JSONB is enough for Phase 2, but the proposal must define the minimal supported placeholders and validation failures. Recommended placeholders: `event.*`, `payload.*`, `correlation_id`, `scope_id`, `rule.id`.
-5. **Thread delivery:** For `channel='thread'`, does the envelope target an existing thread ID from payload, or should Discord create a thread? Creating threads is a visible Discord write and may broaden WU-029C. Recommended Phase 2 behavior: deliver only to an existing thread/channel ID supplied by the event payload or rule.
-6. **Event producer ownership:** Existing services do not emit notification events for real actions. SLICE-015 can test against seeded `notification_events`; later value slices must add producer calls where they need notifications.
-
-## 8. Recommended Magnitude
-
-**Confirm M-L, leaning M if scope is held to rules + event materialization + envelope delivery + Discord adapter.**
-
-Keep it M by:
-
-- Using inline JSONB templates, not a template registry.
-- Evaluating only persisted `notification_events`, not retrofitting every `activity_actions` producer.
-- Supporting exact/prefix event-type triggers and simple scope matching only.
-- Resolving recipients at materialization time with explicit `discord_users` plus one authority-recipient strategy.
-- Implementing delivery idempotency with envelope uniqueness plus Discord `nonce`/`enforce_nonce`.
-
-It becomes L if SLICE-015 also adds recurring scheduler primitives, full audit-stream subscription, recursive causation walking, rich template language, thread creation, notification analytics, digests, or broad backfill of notification producers across existing slices.
+The ticket's **M** sizing is still credible. The API work is a compact lifecycle extension, but correctness depends on careful updates across contracts, database CHECK constraints, repository column lists, owner checks, audit allowlists, and Discord idempotency tests. The main risk is not volume; it is accidentally treating interview repeat as a real transition or posting applicant-facing waitlist messages before the API mutation has safely committed.
