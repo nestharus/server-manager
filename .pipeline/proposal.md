@@ -1,1236 +1,1277 @@
-# SLICE-017 Proposal: Cross-Subsystem Operational Views
+# SLICE-020 Phase 3 Proposal: Temporary Permission Management
 
-This proposal is binding for the SLICE-017 implementation and is derived
-directly from `.pipeline/synthesis.md` D1–D15. Nothing here widens scope
-beyond a single `operational_overview` cursor row plus a read-only
-`GET /api/v1/operations/overview` endpoint. When this document refers
-to a decision as "per D<N>" it is binding — the synthesis is the
-authoritative source of truth and this document only describes the
-mechanics inside those boundaries.
+## Binding sources
 
-The ticket (`product-strategy/tickets/SLICE-017.md`) decomposes the
-work into two work units:
+- `.pipeline/synthesis.md` — D1–D15 (binding).
+- `.pipeline/research.md` — evidence base (informational).
+- `product-strategy/tickets/SLICE-020.md` — AC1–AC4, Work Units WU-038A / WU-038B, Code Boundary.
+- `AGENTS.md` — Live Server Principle (no rollback), Test/Code Agent Separation, migration discipline, No Backwards Compatibility.
 
-| WU | Scope |
-|---|---|
-| WU-031 | Audit projection read-model pipeline: migration, cursor table, projector service+worker, scheduler wiring, service-actor seed. |
-| WU-032 | Operational views API: read-only `GET /operations/overview` endpoint, scope validation, authority check, stale signaling. |
-
-Migration chain is `wu_028b_perm_reconciliation_runs → wu_031_read_models`
-per D13.
-
-Acceptance criteria (AC1–AC4 from `product-strategy/tickets/SLICE-017.md:51-54`)
-are referenced inline per §1.
+All mechanics below stay inside the boundaries set by D1–D15. Anything not listed here is explicitly out of scope per §10.
 
 ---
 
-## §1 — AC Mapping
+## §1 — AC mapping
 
-Each step below names a concrete file path and a single unit of work.
-Step numbers are stable and referenced from tests (§8) and §9.
+Each AC is listed with the numbered implementation steps and file paths that realize it. Every step cites the binding decision from synthesis.
 
-### AC1 — Projector consumes audit events in causal order and resumes from the last persisted cursor on restart
+### AC1 — Renewing a temporary intent with the current version updates `expires_at`; stale renewal → 412 (`SLICE-020.md:52`)
 
-1. **Cursor schema + seed (D2).** Add `read_model_cursors` with the
-   exact shape in §2, including the seed of
-   `('operational_overview', 0, NULL, 0)` via idempotent
-   `ON CONFLICT DO NOTHING`.
-   - File: `migrations/versions/wu-031_read_models.py`.
-2. **Cursor contract (D4).** Define `ReadModelCursorRead` per §3.
-   - File: `services/api/app/contracts/read_models.py`.
-3. **Cursor repository (D6).** Implement
-   `load_cursor`, `advance_cursor`, `max_event_id_settled` per §4.
-   All three queries are the only ones allowed to touch
-   `read_model_cursors` and `activity_state_changes.id`.
-   - File: `services/api/app/repositories/read_models.py`.
-4. **Projector service (D1 + D6).** Implement
-   `advance_operational_overview_cursor(db, *, now, min_age_seconds)`
-   per §5 step 1, using `WHERE id > :cursor AND recorded_at <= :fence`
-   ordered by `id ASC`, with `fence = now − min_age_seconds`. The
-   cursor row is selected `FOR UPDATE` so concurrent tick attempts
-   block rather than race.
-   - File: `services/api/app/services/read_models.py`.
-5. **Projector worker tick (D6).** Thin wrapper
-   `read_model_worker_tick()` that reads the module-configured
-   `PostgresDatabase` and calls the service. Shape exactly matches
-   `ticket_sla_worker_tick` (`services/api/app/tasks/ticket_sla.py:22-23`).
-   - File: `services/api/app/tasks/read_models.py`.
-6. **Scheduler wiring (D6).** Register the worker in
-   `configure_task_runtime()` and add
-   `_run_read_model_projector_if_due(now)` to `SchedulerLoop._tick`
-   mirroring `_run_ticket_sla_if_due`
-   (`services/api/app/services/scheduler.py:212-229`).
-   Interval constant `READ_MODEL_PROJECTOR_INTERVAL_SECONDS = 10`.
-   - Files: `services/api/app/tasks/__init__.py`,
-     `services/api/app/services/scheduler.py`.
-7. **Service actor seed (D10).** Seed an `authority_grants` row for
-   `read-model-projector` with `["read_model.write"]` at global scope,
-   guarded by the exact `@>` / `<@` containment pattern from
-   `migrations/versions/wu-028b_permission_reconciliation_runs.py:150-161`.
-   - File: `migrations/versions/wu-031_read_models.py`.
+1. **[D10]** Add `PermissionIntentRenewalRequest` to `services/api/app/contracts/permissions.py` (see §3).
+2. **[D10]** Add `expired_at: datetime | None = None` to `_PermissionIntentBase` + companion cross-field validator (see §3).
+3. **[D1]** Migration `migrations/versions/wu-038_permission_intent_expiry.py` adds `expired_at TIMESTAMPTZ NULL` + `permission_intents_expired_at_valid` CHECK (see §2).
+4. **[D10]** Repository `services/api/app/repositories/permissions.py::fetch_permission_intent` / `insert_permission_intent` / `list_permission_intents` / `update_permission_intent_row` round-trip `expired_at` (see §4).
+5. **[D2][D3][D12]** Add `renew_permission_intent()` to `services/api/app/services/permissions.py` with: authority check on `permission_intent.write` at the intent's scope, temporary + active guards, service-layer future-check on `request.expires_at` raising `RenewalExpiresAtInPastError` (R5), and `mutate_entity` with `action_type=INTENT_ACTION_TYPE["renew"]` / `change_type=INTENT_CHANGE_TYPE["renewed"]` and `INTENT_RENEW_PAYLOAD_ALLOWLIST` (see §5).
+6. **[D2]** Add `POST /api/v1/permission-intents/{intent_id}/renew` in a new file `services/api/app/api/v1/endpoints/permissions/temporary.py` (see §7). Reuse `parse_if_match_strong()` for 412 mapping; reuse `set_etag()` to emit new version on 200.
+7. **[D2]** Register `temporary_router` in `services/api/app/api/v1/endpoints/permissions/__init__.py`.
+8. **[D14]** `services/api/tests/test_permission_temporary_api.py` covers success, 412 on stale If-Match, 428 on missing If-Match (mapped by `parse_if_match_strong`), and `expired_at=None` in the renewed response (see §8).
 
-### AC2 — Read-model lag or worker downtime does not block authoritative write-path operations
+### AC2 — Renewal rejected for non-temporary intents (`SLICE-020.md:53`)
 
-1. **No write coupling (D10 + D14).** The projector only updates
-   `read_model_cursors`. It never calls `mutate_entity`,
-   `mutate_projection`, `append_state_change`, or
-   `advance_aggregate_head`. This is enforced by review — §5
-   names the only DB primitives the projector may call.
-2. **Scheduler resilience (D6).** `_run_read_model_projector_if_due`
-   wraps the worker in `try/except logger.exception`, exactly like
-   `_run_ticket_sla_if_due` and `_run_chapter_archive_if_due`. A
-   crashing tick does not halt the scheduler, does not touch other
-   worker paths, and does not raise into the loop
-   (`services/api/app/services/scheduler.py:212-229`).
-3. **No audit emission for cursor advances (D10).** The worker
-   uses a plain `UPDATE read_model_cursors ...` inside its
-   transaction. `activity_actions` and `activity_state_changes`
-   are read-only to the projector.
+1. **[D2][D10]** Add `NonTemporaryIntentRenewalError(Exception)`, `ExpiredIntentRenewalError(Exception)`, and `RenewalExpiresAtInPastError(Exception)` to `services/api/app/contracts/permissions.py` (see §3).
+2. **[D2]** `renew_permission_intent()` raises `NonTemporaryIntentRenewalError` when `current.temporary is False`.
+3. **[D2]** `renew_permission_intent()` raises `ExpiredIntentRenewalError` when `current.expired_at is not None` **or** `current.expires_at <= now`.
+4. **[D2][R5]** `renew_permission_intent()` raises `RenewalExpiresAtInPastError` when `request.expires_at <= now` — evaluated against the same service-layer `now` used for the active-expired guard, so the two checks are time-consistent.
+5. **[D2]** Extend `raise_known_permission_error()` in `services/api/app/api/v1/endpoints/permissions/_shared.py` to map all three errors → `422` with codes `non_temporary_intent`, `expired_intent`, and `renewal_expires_at_in_past` (see §5).
+6. **[D14]** `test_permission_temporary_api.py` asserts each 422 code path (see §8).
 
-### AC3 — Operational overview reads only from projection tables and deferred-effect summaries
+### AC3 — Expiry worker creates drift entries and remains idempotent (`SLICE-020.md:54`)
 
-1. **SELECT-only whitelist (D8).** The overview endpoint is read-only.
-   The repository in §4 is the only place SQL is issued, and the only
-   tables/columns it may touch are the six listed in D8:
-   `applications`, `tickets`, `deferred_effects`, `permission_drift`,
-   `read_model_cursors`, and `activity_state_changes` (MAX(id) only).
-2. **Count predicates (D4).** The four counts
-   (`open_applications_count`, `open_tickets_count`,
-   `pending_deferred_effects_count`, `permission_drift_count`)
-   follow the exact predicates in §3 and §4, matching the current
-   lifecycle after WU-035 (applications) and WU-025b (`terminal_at`).
-3. **Scope filtering (D4 + D15).** Global scope applies no filter.
-   Chapter scope filters `applications.target_scope_kind/scope_id`,
-   `tickets.category_snapshot#>>{routing_scope,scope_kind/scope_id}`,
-   and `permission_drift.scope_kind/scope_id`. Chapter-scoped
-   `pending_deferred_effects_count` is hard-wired to `0` per D15
-   (deferred effects have no first-class scope column; research §4).
+1. **[D1]** Migration adds `expired_at`; it is the idempotency key (partial filter `expired_at IS NULL` in the candidate SELECT).
+2. **[D4]** `services/api/app/services/permissions.py::expire_temporary_permission_intents(db, *, actor, now, batch_size)` loads candidates via `FOR UPDATE SKIP LOCKED`, processes each inside a per-intent transaction: stamps `expired_at` then writes the drift row.
+3. **[D4][D6]** `services/api/app/tasks/permission_expiry.py` exposes `configure_permission_expiry()`, `get_permission_expiry_db()`, and `permission_expiry_worker_tick(*, now=None, batch_size=None)`; the tick delegates to the service function with `actor=ActorIdentity("service", PERMISSION_EXPIRER_ACTOR_ID)` (see §6).
+4. **[D7]** Migration seeds `permission-expirer` service actor grant with `permission_intent.write` + `permission_drift.write` at `global` scope.
+5. **[D8]** `services/api/app/services/scheduler.py` gains `PERMISSION_EXPIRY_INTERVAL_SECONDS = 60`, `_last_permission_expiry_tick_at: datetime | None = None`, and `_run_permission_expiry_if_due(now)` invoked from `_tick()` (see §6).
+6. **[D6]** `services/api/app/tasks/permission_expiry.py::PERMISSION_EXPIRY_BATCH_SIZE = 50`.
+7. **[D14]** `services/api/tests/test_permission_temporary_worker.py` asserts: one expiry stamp + one drift row per expired intent, idempotent rerun (counts unchanged), non-temporary skipped, future-expiry skipped, already-expired skipped, batching across multiple ticks (see §8).
 
-### AC4 — Missing projections surface stale-data signals, unauthorized callers receive 403
+### AC4 — Expired intents flow through stable reconciliation path, not inline Discord mutation (`SLICE-020.md:55`)
 
-1. **Authority gate (D7 + D9).** The endpoint calls
-   `require_scoped(actor, db, scope_kind, scope_id, "operational_overview.read")`
-   from `services/api/app/api/v1/endpoints/permissions/_shared.py:71-89`.
-   On denial, `_shared.raise_known_permission_error` maps
-   `PermissionError` to HTTP 403
-   (`.../permissions/_shared.py:135-139`). We wrap the service
-   call in the same try/except shape as `list_drift_endpoint`
-   (`.../permissions/drift.py:63-78`).
-2. **Scope shape validation (D9).** `scope_kind='chapter'` without
-   `scope_id` → 422. `scope_kind='global'` with `scope_id` → 422.
-   Messages match the drift endpoint wording
-   (`.../permissions/drift.py:47-62`).
-3. **Staleness signaling (D5 + D14).** The service computes
-   `lag_events = max(0, visible_head_id − cursor.last_processed_id)`
-   where `visible_head_id = COALESCE(MAX(id), 0)`, then derives
-   `is_stale`, `stale_projections`, and `stale_since` per D5. The
-   counts themselves are always current (sourced from synchronous
-   projections) — `is_stale` signals projector liveness, not count
-   invalidity. The module docstring of `services/read_models.py`
-   states this contract in one line per D14.
+1. **[D4][D9]** Worker never calls any Discord adapter; only writes `permission_intents.expired_at` and inserts a `permission_drift` row.
+2. **[D9]** Drift row carries `permission_intent_id` + `intent_version` from the expired intent, `reconciliation_run_id = NULL`, `status = 'detected'`, `intended_bits`/`intended_allow_bits`/`intended_deny_bits` mirror intent, `actual_bits`/`actual_allow_bits`/`actual_deny_bits` are **NULL** (semantic: "Discord state unknown; operator must reconcile").
+3. **[D9]** Drift creation routes through a new service helper `services/api/app/services/permissions.py::_create_expiry_drift()` which emits `mutate_entity(aggregate_type="permission_drift", action_type=DRIFT_ACTION_TYPE["detect_expired"], change_type=DRIFT_CHANGE_TYPE["detected_expired"], …)` with `EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST`. It does **not** perform a per-intent `_require_scoped_authority` check (R3) — the sweep's top-level `permission_intent.write` gate at global scope is the authority boundary, matching SLICE-014's `_record_drift_created` precedent. It runs inside the caller's transaction via `connection=connection` (R1) so the expire-stamp and drift-insert are atomic.
+4. **[D9]** The drift is resolvable via the existing `POST /api/v1/permission-drift/{id}/resolve` flows (acknowledge / reconcile / accept) — no new resolution surface is introduced.
+5. **[D14]** `test_permission_temporary_worker.py` asserts the drift row is returned by `GET /api/v1/permission-drift?scope_kind=…` alongside reconciliation drift, and that `resolve` transitions continue to work on the expiry drift (see §8).
 
 ---
 
-## §2 — Migration Plan
+## §2 — Migration plan (`wu_038_permission_intent_expiry`)
 
-### 2.1 — `migrations/versions/wu-031_read_models.py`
-
-Alembic revision metadata (D13):
+File: `migrations/versions/wu-038_permission_intent_expiry.py`.
 
 ```python
-revision = "wu_031_read_models"
-down_revision = "wu_028b_perm_reconciliation_runs"
+"""WU-038 add permission_intents.expired_at; seed permission-expirer actor."""
+
+from __future__ import annotations
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+
+revision = "wu_038_permission_intent_expiry"
+down_revision = "wu_031_read_models"
 branch_labels = None
 depends_on = None
+
+
+_EXPIRER_PERMISSIONS = (
+    '["permission_intent.write",'
+    '"permission_drift.write"]'
+)
+
+
+def upgrade() -> None:
+    op.add_column(
+        "permission_intents",
+        sa.Column("expired_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_check_constraint(
+        "permission_intents_expired_at_valid",
+        "permission_intents",
+        "expired_at IS NULL OR expired_at >= expires_at",
+    )
+
+    op.execute(
+        f"""
+        INSERT INTO authority_grants (
+            id,
+            grantee_id,
+            scope_kind,
+            scope_id,
+            permissions,
+            expires_at,
+            revoked_at,
+            revoked_by,
+            revocation_reason,
+            predecessor_grant_id
+        )
+        SELECT
+            gen_random_uuid(),
+            'permission-expirer',
+            'global',
+            NULL,
+            '{_EXPIRER_PERMISSIONS}'::jsonb,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL
+        WHERE NOT EXISTS (
+            SELECT 1 FROM authority_grants
+             WHERE grantee_id = 'permission-expirer'
+               AND scope_kind = 'global'
+               AND scope_id IS NULL
+               AND permissions @> '{_EXPIRER_PERMISSIONS}'::jsonb
+               AND permissions <@ '{_EXPIRER_PERMISSIONS}'::jsonb
+               AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+        );
+        """
+    )
+
+
+def downgrade() -> None:
+    # No-op per AGENTS.md Live Server Principle.
+    pass
 ```
 
-`upgrade()`:
+**Chain.** `wu_031_read_models → wu_038_permission_intent_expiry`. Current head confirmed at `migrations/versions/wu-031_read_models.py:11` ([D13]).
 
-1. `CREATE TABLE read_model_cursors` per D2:
+**Seed rationale.** Mirrors `wu-028b_permission_reconciliation_runs.py:127-163` `@>` AND `<@` containment + `expires_at IS NULL` + `revoked_at IS NULL` guard, idempotent via `WHERE NOT EXISTS` ([D7]).
 
-   ```sql
-   CREATE TABLE read_model_cursors (
-       projection_name   TEXT        PRIMARY KEY,
-       last_processed_id BIGINT      NOT NULL DEFAULT 0,
-       last_processed_at TIMESTAMPTZ NULL,
-       version           BIGINT      NOT NULL DEFAULT 0,
-       CHECK (last_processed_id >= 0),
-       CHECK (version >= 0)
-   );
-   ```
+**Index.** No new index is created. The existing `ix_permission_intents__temporary_expires` partial index (`WHERE temporary IS TRUE` — `wu-006a:80`) already narrows candidate rows efficiently; the `expired_at IS NULL` filter sits inside the same partition ([D1] binding implications).
 
-   No secondary index (single-row-per-projection access pattern).
+**Constraint rationale.** `expired_at IS NULL OR expired_at >= expires_at` prevents a row from claiming an expiration stamp that predates its own scheduled expiration — keeps the contract-layer `validate_expired_shape` validator and the DB constraint in lockstep ([D1], [D10]).
 
-2. Seed the `operational_overview` cursor row (D2):
-
-   ```sql
-   INSERT INTO read_model_cursors (projection_name)
-   VALUES ('operational_overview')
-   ON CONFLICT (projection_name) DO NOTHING;
-   ```
-
-3. Seed the `read-model-projector` service-actor grant (D10),
-   reusing the `@>` / `<@` containment guard proven in
-   `migrations/versions/wu-028b_permission_reconciliation_runs.py:127-163`.
-   A module-level constant mirrors the reconciler pattern:
-
-   ```python
-   _PROJECTOR_PERMISSIONS = '["read_model.write"]'
-   ```
-
-   followed by:
-
-   ```sql
-   INSERT INTO authority_grants (
-       id, grantee_id, scope_kind, scope_id, permissions,
-       expires_at, revoked_at, revoked_by, revocation_reason,
-       predecessor_grant_id
-   )
-   SELECT gen_random_uuid(),
-          'read-model-projector',
-          'global',
-          NULL,
-          '["read_model.write"]'::jsonb,
-          NULL, NULL, NULL, NULL, NULL
-   WHERE NOT EXISTS (
-       SELECT 1 FROM authority_grants
-        WHERE grantee_id = 'read-model-projector'
-          AND scope_kind = 'global'
-          AND scope_id IS NULL
-          AND permissions @> '["read_model.write"]'::jsonb
-          AND permissions <@ '["read_model.write"]'::jsonb
-          AND revoked_at IS NULL
-          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-   );
-   ```
-
-   The `@>` AND `<@` pair ensures both set-containment directions —
-   i.e. the existing grant's `permissions` equals
-   `["read_model.write"]` exactly — preventing both duplicate insertion
-   on re-run and accidental matching against a superset grant.
-
-`downgrade()` — `pass` per D13 and the Live Server Principle
-(`AGENTS.md:20-32`).
-
-### 2.2 — No other migrations
-
-WU-032 adds zero migrations per D13. No data backfill. No snapshot
-table (D15).
+**Downgrade.** No-op per the Live Server Principle (every recent migration uses a no-op downgrade). The inline comment ties the discipline to AGENTS.md.
 
 ---
 
-## §3 — Contracts
+## §3 — Contracts (`services/api/app/contracts/permissions.py`)
 
-### 3.1 — `services/api/app/contracts/read_models.py` (new file)
+All additions strictly extend the module; nothing existing is renamed, widened, or deleted ([D10], [D15]).
 
-```python
-from __future__ import annotations
-
-from datetime import datetime, timedelta
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict
-
-
-class ReadModelCursorRead(BaseModel):
-    projection_name: str
-    last_processed_id: int
-    last_processed_at: datetime | None
-    version: int
-
-    model_config = ConfigDict(frozen=True)
-
-
-class OperationalOverviewRead(BaseModel):
-    scope_kind: Literal["global", "chapter"]
-    scope_id: str | None
-    open_applications_count: int
-    open_tickets_count: int
-    pending_deferred_effects_count: int
-    permission_drift_count: int
-    stale_projections: list[str]
-    stale_since: datetime | None
-    is_stale: bool
-
-    model_config = ConfigDict(frozen=True)
-```
-
-Field names bind verbatim to D4. `frozen=True` matches the project-wide
-read-model convention (contracts are immutable snapshots).
-
-Rationale for the shape relative to the prompt's sketch: D4 is the
-binding contract; it names
-`open_applications_count`, `open_tickets_count`,
-`pending_deferred_effects_count`, `permission_drift_count`,
-`stale_projections`, and `stale_since`. The prompt's field set
-(`open_applications`, `open_tickets`, `pending_deferred_effects`,
-`active_drift`, `cursor_lag_events`) is superseded by D4 where they
-disagree (D4 is binding per synthesis §Binding Decisions). Specifically,
-no `cursor_lag_events` field is added (D4 Non-goals).
-
-### 3.2 — Constants module
-
-Constants live in `services/api/app/services/read_models.py` (D11) —
-not the contracts module — so they are importable by both production
-code and tests without pulling the service layer into the contracts
-module. Contracts imports constants only if needed for a `Literal`.
+### 3.1 `expired_at` on `_PermissionIntentBase`
 
 ```python
-# services/api/app/services/read_models.py (module level)
+class _PermissionIntentBase(_PermissionModel):
+    id: UUID
+    scope_kind: PermissionIntentScopeKind
+    scope_id: str | None = None
+    role_id: str = Field(min_length=1)
+    reason: str | None = None
+    temporary: bool
+    expires_at: datetime | None = None
+    expired_at: datetime | None = None   # NEW
 
-from datetime import timedelta
+    # ...existing validators unchanged...
 
-OPERATIONAL_OVERVIEW_PROJECTION_NAME: str = "operational_overview"
-PROJECTION_NAMES: frozenset[str] = frozenset({OPERATIONAL_OVERVIEW_PROJECTION_NAME})
-
-MIN_AGE_SECONDS: int = 5
-
-STALE_EVENT_THRESHOLD: int = 100
-STALE_TIME_THRESHOLD: timedelta = timedelta(minutes=5)
-
-OPEN_APPLICATION_STATES: tuple[str, ...] = (
-    "submitted", "queued", "claimed", "in_review", "interview", "waitlisted",
-)
-PENDING_DEFERRED_EFFECT_STATUSES: tuple[str, ...] = (
-    "queued", "claimed", "failed",
-)
-UNRESOLVED_DRIFT_STATUSES: tuple[str, ...] = ("detected", "acknowledged")
+    @model_validator(mode="after")
+    def validate_expired_shape(self) -> "_PermissionIntentBase":
+        if self.expired_at is not None and self.expires_at is None:
+            raise ValueError("expired_at requires expires_at")
+        if (
+            self.expired_at is not None
+            and self.expires_at is not None
+            and self.expired_at < self.expires_at
+        ):
+            raise ValueError("expired_at cannot precede expires_at")
+        return self
 ```
 
-Notes on naming relative to the prompt:
-- `OPEN_APPLICATION_STATES` (not `OPEN_APPLICATION_STATUSES`) —
-  the `applications` column is literally named `state`
-  (`services/api/app/repositories/applications.py:20`,
-  `services/api/app/contracts/applications.py:33-43`). Using the
-  DB column name avoids mismatch between the constant and the query.
-- `OPEN_TICKET_STATUSES` is **not** a constant. Tickets are
-  category-defined (research §3); there is no fixed status set. The
-  open predicate is `tickets.terminal_at IS NULL` per D4, which
-  needs no list. Diverges from the prompt's sketch intentionally —
-  D4 binds on `terminal_at IS NULL`.
-- `STALE_TIME_THRESHOLD` is a `timedelta` (D5), not an int seconds
-  value. Tests read the same constant rather than a shadow.
+Propagates to `GuildRolePermissionIntent` / `ChannelRolePermissionIntent` (both inherit). `PermissionIntentCreate` and `PermissionIntentUpdate` are **not** widened: only the expiry service path writes `expired_at` ([D10] non-goals).
 
-All query sites reference these constants; no magic strings per D11.
+### 3.2 `PermissionIntentRenewalRequest`
+
+```python
+from pydantic import AwareDatetime  # already the pattern in contracts/trust.py
+
+class PermissionIntentRenewalRequest(_PermissionModel):
+    expires_at: AwareDatetime
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def reject_blank_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("reason must be non-blank")
+        return value
+```
+
+Mirrors `PermissionDriftResolutionRequest.reject_blank_reason` ([D2] rationale). `AwareDatetime` is the repo pattern for timezone-aware datetimes (`services/api/app/contracts/trust.py:7`).
+
+**Future-check is NOT at contract layer.** "Future" is defined against the service's `now` (see §5.1). A Pydantic validator using `datetime.now()` uses wall-clock time at parse time, which drifts from the service's `now` and cannot be exercised by tests that inject `now` at service entry. The check is raised as `RenewalExpiresAtInPastError` inside `renew_permission_intent` (see §3.4, §5.1).
+
+### 3.3 `PermissionExpirySweepResult`
+
+```python
+class PermissionExpirySweepResult(_PermissionModel):
+    expired_intent_ids: list[UUID] = Field(default_factory=list)
+    drift_ids: list[UUID] = Field(default_factory=list)
+    inspected_count: int = Field(ge=0)
+    expired_count: int = Field(ge=0)
+    errored_count: int = Field(ge=0)
+```
+
+No `originating_actor_*` fields on the request. The manual trigger endpoint takes **no body**; the actor is always the session caller ([D5] spoof-proof).
+
+### 3.4 Renewal error classes
+
+```python
+class NonTemporaryIntentRenewalError(Exception):
+    def __init__(self, intent_id: UUID) -> None:
+        self.intent_id = intent_id
+        super().__init__(
+            f"permission intent {intent_id} is not temporary and cannot be renewed"
+        )
+
+
+class ExpiredIntentRenewalError(Exception):
+    def __init__(self, intent_id: UUID) -> None:
+        self.intent_id = intent_id
+        super().__init__(
+            f"permission intent {intent_id} is already expired and cannot be renewed"
+        )
+
+
+class RenewalExpiresAtInPastError(Exception):
+    def __init__(self, intent_id: UUID) -> None:
+        self.intent_id = intent_id
+        super().__init__(
+            f"permission intent {intent_id} renewal requires expires_at in the future"
+        )
+```
+
+All three map to HTTP 422 via `raise_known_permission_error` with codes `non_temporary_intent`, `expired_intent`, and `renewal_expires_at_in_past` respectively ([D2]).
+
+### 3.5 `__all__` additions
+
+Append to `__all__`: `"PermissionIntentRenewalRequest"`, `"PermissionExpirySweepResult"`, `"NonTemporaryIntentRenewalError"`, `"ExpiredIntentRenewalError"`, `"RenewalExpiresAtInPastError"`.
 
 ---
 
-## §4 — Repository Layer
+## §4 — Repository (`services/api/app/repositories/permissions.py`)
 
-### 4.1 — `services/api/app/repositories/read_models.py` (new file)
+All changes stay in this file; no schema surface other than `expired_at` is touched ([D1], [D10]).
 
-One function per read; no class. All functions accept a `Connection`
-(or `PostgresDatabase` via `with db.connection()` at the service
-layer, matching `ticket_sla.py` style).
+### 4.1 Round-trip `expired_at`
+
+- `insert_permission_intent()` — append `expired_at` to the `INSERT` column list and `VALUES` tuple (always `NULL` on create — `PermissionIntentCreate` does not expose the field).
+- `fetch_permission_intent()` — add `expired_at` to the SELECT list.
+- `list_permission_intents()` — add `expired_at` to the SELECT list. Current active-only filter (`expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP`) is unchanged; `expired_at` is orthogonal to active/expired filtering as seen by operators ([D11]).
+- `update_permission_intent_row()` — does **not** write `expired_at`. That column is written only through `mark_intent_expired_row` below.
+- `_normalize_permission_intent_row()` — include `expired_at` in the normalized dict.
+
+### 4.2 New repository helpers (for expiry worker)
 
 ```python
-def load_cursor(
-    connection, projection_name: str
-) -> ReadModelCursorRead | None:
-    # SELECT projection_name, last_processed_id, last_processed_at, version
-    # FROM read_model_cursors
-    # WHERE projection_name = %s
-    # FOR UPDATE                # held only when called from the projector path
-    #
-    # Returns None when the row is absent (seed missing). Callers in the
-    # service layer decide how to react — either raise
-    # ``CursorNotSeededError`` (normal path) or let the diagnostic
-    # surface through the scheduler wrapper. No auto-seed here.
-    ...
-
-def advance_cursor(
-    connection,
+def select_expirable_intents(
+    connection: Connection[Any],
     *,
-    projection_name: str,
-    last_processed_id: int,
-    last_processed_at: datetime,
+    now: datetime,
+    batch_size: int,
+) -> list[dict[str, Any]]:
+    with connection.cursor(row_factory=dict_row) as cursor:
+        rows = cursor.execute(
+            """
+            SELECT id, kind, scope_kind, scope_id, role_id, channel_id,
+                   permission_bits, allow_bits, deny_bits, reason,
+                   temporary, expires_at, expired_at
+            FROM permission_intents
+            WHERE temporary = TRUE
+              AND expires_at <= %s
+              AND expired_at IS NULL
+            ORDER BY expires_at ASC, id ASC
+            LIMIT %s
+            FOR UPDATE SKIP LOCKED
+            """,
+            (now, batch_size),
+        ).fetchall()
+    return [_normalize_permission_intent_row(row) for row in rows]
+
+
+def mark_intent_expired_row(
+    connection: Connection[Any],
+    *,
+    intent_id: UUID,
+    expired_at: datetime,
+) -> int:
+    cursor = connection.execute(
+        """
+        UPDATE permission_intents
+           SET expired_at = %s
+         WHERE id = %s
+           AND expired_at IS NULL
+        """,
+        (expired_at, intent_id),
+    )
+    return cursor.rowcount
+```
+
+`FOR UPDATE SKIP LOCKED` provides non-blocking job-queue claim semantics ([D4], [D6]). The `expired_at IS NULL` predicate inside `mark_intent_expired_row` is a defense-in-depth guard against duplicate marking if two sweeps race past the SELECT.
+
+---
+
+## §5 — Service layer (`services/api/app/services/permissions.py`)
+
+### 5.1 Renewal — `renew_permission_intent()`
+
+```python
+def renew_permission_intent(
+    db: PostgresDatabase,
+    intent_id: UUID,
+    *,
     expected_version: int,
-) -> dict[str, Any]:
-    # UPDATE read_model_cursors
-    #    SET last_processed_id = %s,
-    #        last_processed_at = %s,
-    #        version           = version + 1
-    #  WHERE projection_name = %s
-    #    AND version         = %s
-    # RETURNING projection_name, last_processed_id, last_processed_at, version
-    # Raises CursorVersionConflictError on zero rows (OCC).
-    ...
+    request: PermissionIntentRenewalRequest,
+    actor: ActorIdentity,
+) -> tuple[Any, MutationResult]:
+    with db.connection() as connection:
+        current_row = permission_repo.fetch_permission_intent(connection, intent_id)
+    if current_row is None:
+        raise PermissionIntentNotFoundError(intent_id)
+    current = PermissionIntentRead.model_validate(current_row)
 
-def max_event_id_settled(
-    connection, *, min_age_seconds: int, after_id: int
-) -> int:
-    # SELECT COALESCE(MAX(id), %s) FROM activity_state_changes
-    #  WHERE id > %s
-    #    AND recorded_at <= CURRENT_TIMESTAMP - make_interval(secs => %s)
-    # Returns after_id when no events are past the fence (no advance).
-    ...
+    _require_scoped_authority(
+        "permission_intent.write",
+        scope_kind=current.scope_kind,
+        scope_id=current.scope_id,
+        actor=actor,
+        db=db,
+    )
 
-def count_open_applications(
-    connection, *, scope_kind: str, scope_id: str | None
-) -> int:
-    # SELECT count(*) FROM applications
-    #  WHERE state IN %s
-    #  [AND target_scope_kind = 'chapter' AND target_scope_id = %s]
-    ...
+    if not current.temporary:
+        raise NonTemporaryIntentRenewalError(intent_id)
+    now = datetime.now(tz=UTC)
+    if current.expired_at is not None or (
+        current.expires_at is not None and current.expires_at <= now
+    ):
+        raise ExpiredIntentRenewalError(intent_id)
+    if request.expires_at <= now:
+        raise RenewalExpiresAtInPastError(intent_id)
 
-def count_open_tickets(
-    connection, *, scope_kind: str, scope_id: str | None
-) -> int:
-    # SELECT count(*) FROM tickets
-    #  WHERE terminal_at IS NULL
-    #  [AND category_snapshot #>> '{routing_scope,scope_kind}' = 'chapter'
-    #   AND category_snapshot #>> '{routing_scope,scope_id}' = %s]
-    ...
+    validated_patch = {"expires_at": request.expires_at}
+    updated = validated_update(current, validated_patch)
+    aggregate_id = build_permission_intent_aggregate_id(
+        scope_kind=current.scope_kind,
+        scope_id=current.scope_id,
+        role_id=current.role_id,
+        channel_id=getattr(current, "channel_id", None),
+    )
 
-def count_pending_deferred_effects(connection) -> int:
-    # Callers for chapter scope skip this function (D15);
-    # no scope filter here.
-    # SELECT count(*) FROM deferred_effects
-    #  WHERE status IN %s    # PENDING_DEFERRED_EFFECT_STATUSES
-    ...
+    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+        row = _to_permission_intent_row(updated)
+        updated_count = permission_repo.update_permission_intent_row(
+            connection, intent_id=intent_id, row=row,
+        )
+        if updated_count != 1:
+            raise PermissionIntentNotFoundError(intent_id)
+        return StateChangeDraft(
+            change_type=INTENT_CHANGE_TYPE["renewed"],
+            payload_json=updated.model_dump(mode="json"),
+        )
 
-def count_active_drift(
-    connection, *, scope_kind: str, scope_id: str | None
-) -> int:
-    # SELECT count(*) FROM permission_drift
-    #  WHERE status IN %s    # UNRESOLVED_DRIFT_STATUSES
-    #  [AND scope_kind = 'chapter' AND scope_id = %s]
-    ...
+    result = mutate_entity(
+        db=db,
+        aggregate_type="permission_intent",
+        aggregate_id=aggregate_id,
+        request=_make_request(
+            expected_version=expected_version,
+            actor=actor,
+            request_surface=f"api:/api/v1/permission-intents/{intent_id}/renew",
+            reason_text=request.reason,
+        ),
+        action_type=INTENT_ACTION_TYPE["renew"],
+        action_payload={
+            "new_expires_at": request.expires_at.isoformat(),
+            "reason": request.reason,
+        },
+        payload_allowlist=INTENT_RENEW_PAYLOAD_ALLOWLIST,
+        mutate_projection=mutate_projection,
+        scope_kind=current.scope_kind,
+        scope_id=current.scope_id,
+    )
+    return read_permission_intent(db, intent_id), result
 ```
 
-Notes:
+Checks in order: (1) authority at the intent's scope, (2) temporary-only, (3) not already expired (either `expired_at` stamped or `expires_at` in the past relative to service `now`), (4) the new `request.expires_at` must itself be in the future relative to the same `now` — raising `RenewalExpiresAtInPastError` keeps the check time-consistent with the existing-expiry guard and does not depend on wall-clock at contract-parse time (R5). OCC is enforced by `mutate_entity`'s `expected_version` → `StaleMutationError` (already mapped to 412 by `raise_known_permission_error`). No new mapping code needed for AC1's 412 path.
 
-- `CursorVersionConflictError`: a module-level exception raised by
-  `advance_cursor` when the OCC `UPDATE ... WHERE version = :expected`
-  returns zero rows. The service layer catches this and treats the
-  tick as a no-op (`logger.exception` in the scheduler wrapper),
-  relying on the next tick to advance. The `FOR UPDATE` in
-  `load_cursor` makes cross-tick contention rare; the OCC guard is
-  defense-in-depth.
-- `max_event_id_settled` returns `after_id` when the filtered set is
-  empty so callers can compare `new_id == cursor.last_processed_id`
-  for the no-op branch (D6 step 3).
-- All status/state IN-lists use the §3.2 constants via psycopg tuple
-  adaptation (`%s` with a tuple argument, as in
-  `archive_queries.py:66-68`).
+### 5.2 Expiry — `expire_temporary_permission_intents()` + `_create_expiry_drift()`
+
+```python
+def expire_temporary_permission_intents(
+    db: PostgresDatabase,
+    *,
+    actor: ActorIdentity,
+    now: datetime,
+    batch_size: int,
+    source: str = "worker_sweep",
+) -> PermissionExpirySweepResult:
+    _require_scoped_authority(
+        "permission_intent.write",
+        scope_kind="global",
+        scope_id=None,
+        actor=actor,
+        db=db,
+    )
+
+    with db.connection() as connection:
+        candidates = permission_repo.select_expirable_intents(
+            connection, now=now, batch_size=batch_size,
+        )
+
+    inspected = len(candidates)
+    expired_ids: list[UUID] = []
+    drift_ids: list[UUID] = []
+    errored = 0
+
+    for row in candidates:
+        intent = PermissionIntentRead.model_validate(row)
+        try:
+            expired_intent, drift = _expire_single_intent(
+                db, intent=intent, actor=actor, now=now, source=source,
+            )
+        except StaleMutationError:
+            # R6: expected control-flow race — another mutation advanced the
+            # head between candidate SELECT and our `mutate_entity`. Next
+            # tick re-selects because `expired_at` is still NULL.
+            logger.debug(
+                "permission expiry: OCC conflict on intent %s; retry next tick",
+                intent.id,
+            )
+            continue
+        except Exception:
+            logger.exception(
+                "permission-expiry failed for intent %s", intent.id,
+            )
+            errored += 1
+            continue
+        expired_ids.append(expired_intent.id)
+        drift_ids.append(drift.id)
+
+    return PermissionExpirySweepResult(
+        expired_intent_ids=expired_ids,
+        drift_ids=drift_ids,
+        inspected_count=inspected,
+        expired_count=len(expired_ids),
+        errored_count=errored,
+    )
+
+
+def _expire_single_intent(
+    db: PostgresDatabase,
+    *,
+    intent: Any,
+    actor: ActorIdentity,
+    now: datetime,
+    source: str,
+) -> tuple[Any, PermissionDriftRead]:
+    aggregate_id = build_permission_intent_aggregate_id(
+        scope_kind=intent.scope_kind,
+        scope_id=intent.scope_id,
+        role_id=intent.role_id,
+        channel_id=getattr(intent, "channel_id", None),
+    )
+
+    # R1: single transaction spanning BOTH mutate_entity calls. If the drift
+    # mutation fails for any reason, the expired_at stamp rolls back with it
+    # and the candidate is re-selected on the next tick. Pattern mirrors
+    # `submit_reconciliation_snapshot` in permission_reconciliation.py:674-694.
+    with db.transaction() as connection:
+        expected_version = _read_intent_head_version(
+            connection, aggregate_id=aggregate_id, intent_id=intent.id,
+        )
+
+        def mutate_projection_expire(active: Connection[Any]) -> StateChangeDraft:
+            updated_count = permission_repo.mark_intent_expired_row(
+                active, intent_id=intent.id, expired_at=now,
+            )
+            if updated_count != 1:
+                raise PermissionIntentNotFoundError(intent.id)
+            updated = intent.model_copy(update={"expired_at": now})
+            return StateChangeDraft(
+                change_type=INTENT_CHANGE_TYPE["expired"],
+                payload_json=updated.model_dump(mode="json"),
+            )
+
+        expire_result = mutate_entity(
+            db=db,
+            aggregate_type="permission_intent",
+            aggregate_id=aggregate_id,
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface="worker:permission_expiry",
+            ),
+            action_type=INTENT_ACTION_TYPE["expire"],
+            action_payload={
+                "expired_at": now.isoformat(),
+                "source": source,
+            },
+            payload_allowlist=INTENT_EXPIRE_PAYLOAD_ALLOWLIST,
+            mutate_projection=mutate_projection_expire,
+            scope_kind=intent.scope_kind,
+            scope_id=intent.scope_id,
+            connection=connection,
+        )
+
+        drift = _create_expiry_drift(
+            db,
+            connection=connection,
+            intent=intent,
+            intent_version_after_expire=expire_result.version,
+            actor=actor,
+            now=now,
+        )
+    # Commit happens on `with` exit. Reading back the intent + drift is a
+    # read-only op outside the tx.
+    expired_intent = read_permission_intent(db, intent.id)
+    return expired_intent, drift
+
+
+def _create_expiry_drift(
+    db: PostgresDatabase,
+    *,
+    connection: Connection[Any],
+    intent: Any,
+    intent_version_after_expire: int,
+    actor: ActorIdentity,
+    now: datetime,
+) -> PermissionDriftRead:
+    # R3: NO per-intent `_require_scoped_authority` here. The sweep's
+    # top-level authority check already gates the operation at global scope,
+    # matching SLICE-014's `_record_drift_created` precedent
+    # (permission_reconciliation.py:581-639) which performs no per-scope
+    # authority check either. A chapter-scoped check here would fail because
+    # the `permission-expirer` service actor only holds a global grant; the
+    # authority model is flat (authority.py:238 requires exact scope_kind
+    # match).
+    drift = PermissionDriftRead.model_validate({
+        "id": uuid4(),
+        "permission_intent_id": intent.id,
+        "intent_version": intent_version_after_expire,
+        "scope_kind": intent.scope_kind,
+        "scope_id": intent.scope_id,
+        "role_id": intent.role_id,
+        "channel_id": getattr(intent, "channel_id", None),
+        "kind": intent.kind,
+        "reconciliation_run_id": None,
+        "intended_bits": getattr(intent, "permission_bits", None),
+        "intended_allow_bits": getattr(intent, "allow_bits", None),
+        "intended_deny_bits": getattr(intent, "deny_bits", None),
+        "actual_bits": None,
+        "actual_allow_bits": None,
+        "actual_deny_bits": None,
+        "status": "detected",
+        "detected_at": now,
+    })
+
+    # R8 lean action_payload: only the identifying + scope keys, no bit masks.
+    # Mirrors `_record_drift_created`'s split between action_payload (lean)
+    # and payload_json (full).
+    action_payload = {
+        "drift_id": str(drift.id),
+        "permission_intent_id": str(intent.id),
+        "intent_version": intent_version_after_expire,
+        "scope_kind": intent.scope_kind,
+        "scope_id": intent.scope_id,
+        "role_id": intent.role_id,
+        "channel_id": getattr(intent, "channel_id", None),
+        "kind": intent.kind,
+        "status": "detected",
+    }
+
+    def mutate_projection_drift(active: Connection[Any]) -> StateChangeDraft:
+        permission_repo.insert_permission_drift(
+            active, row=_to_permission_drift_row(drift),
+        )
+        return StateChangeDraft(
+            change_type=DRIFT_CHANGE_TYPE["detected_expired"],
+            payload_json=drift.model_dump(mode="json"),
+        )
+
+    mutate_entity(
+        db=db,
+        aggregate_type="permission_drift",
+        aggregate_id=str(drift.id),
+        request=_make_request(
+            expected_version=0,
+            actor=actor,
+            request_surface="worker:permission_expiry",
+        ),
+        action_type=DRIFT_ACTION_TYPE["detect_expired"],
+        action_payload=action_payload,
+        payload_allowlist=EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST,
+        mutate_projection=mutate_projection_drift,
+        scope_kind=intent.scope_kind,
+        scope_id=intent.scope_id,
+        connection=connection,
+    )
+    return drift
+
+
+def _read_intent_head_version(
+    connection: Connection[Any],
+    *,
+    aggregate_id: str,
+    intent_id: UUID,
+) -> int:
+    """R4: Load the head version for a `permission_intent` aggregate from
+    `aggregate_heads`. Uses the composite `aggregate_id` built by
+    `build_permission_intent_aggregate_id` — NOT the raw intent UUID (which
+    is the row id, not the aggregate id). Runs inside the caller's
+    transaction so the read is consistent with the subsequent
+    `mutate_entity` call."""
+    row = connection.execute(
+        """
+        SELECT current_seq
+          FROM aggregate_heads
+         WHERE aggregate_type = 'permission_intent'
+           AND aggregate_id = %s
+        """,
+        (aggregate_id,),
+    ).fetchone()
+    if row is None:
+        raise PermissionIntentNotFoundError(intent_id)
+    return int(row[0])
+```
+
+**Per-intent transaction boundary (R1).** `_expire_single_intent` opens a **single** `db.transaction()` and threads that connection into both `mutate_entity` calls via `connection=connection`. Both audit rows (`permission_intent.expire` action + `permission_drift.detect_expired` action), both state-change rows (`permission_intent.expired`, `permission_drift.detected_expired`), and both projection writes (`mark_intent_expired_row`, `insert_permission_drift`) either commit together or roll back together. Partial failure is impossible — the previous two-transaction design left an intent stamped expired with no drift row, which the `expired_at IS NULL` candidate filter then permanently skipped.
+
+This is a deliberate departure from `evaluate_ticket_sla`'s single-batch-tx shape (`services/api/app/services/ticket_sla.py:516-558` wraps the entire for-loop in one tx). Per-intent tx here is justified by (a) R1 atomicity between expire-stamp and drift-insert for a single intent, and (b) preventing one poison-pill intent from rolling back the whole batch. Precedent for the shared-connection threading: `permission_reconciliation.py::submit_reconciliation_snapshot` at lines 674-694 and `_record_drift_created` at line 638.
+
+**Concurrency guarantees after R1.** Single-expiry is guaranteed by **OCC on `aggregate_heads`** (first worker's `mutate_entity` bumps `current_seq`; second worker's expected_version read plus `get_head_for_update` inside `mutate_entity` detects the mismatch and raises `StaleMutationError`, caught at debug per R6) **plus** the `expired_at IS NULL` predicate in `mark_intent_expired_row` (defense-in-depth if anything bypasses OCC). `FOR UPDATE SKIP LOCKED` in `select_expirable_intents` is a minor latency-contention optimization — the row locks release when the candidate-SELECT connection returns to the pool — not a primary idempotency layer.
+
+### 5.3 Error mapping (`services/api/app/api/v1/endpoints/permissions/_shared.py`)
+
+Extend `raise_known_permission_error`:
+
+```python
+from app.contracts.permissions import (
+    ExpiredIntentRenewalError,
+    NonTemporaryIntentRenewalError,
+    RenewalExpiresAtInPastError,
+    # ...existing imports...
+)
+
+if isinstance(error, NonTemporaryIntentRenewalError):
+    raise HTTPException(
+        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "non_temporary_intent",
+            "message": str(error),
+            "intent_id": str(error.intent_id),
+        },
+    ) from error
+if isinstance(error, ExpiredIntentRenewalError):
+    raise HTTPException(
+        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "expired_intent",
+            "message": str(error),
+            "intent_id": str(error.intent_id),
+        },
+    ) from error
+if isinstance(error, RenewalExpiresAtInPastError):
+    raise HTTPException(
+        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "renewal_expires_at_in_past",
+            "message": str(error),
+            "intent_id": str(error.intent_id),
+        },
+    ) from error
+```
+
+Placed **before** the generic `PermissionError` / `InvalidPermissionIntentError` fallbacks so the specific codes win.
+
+### 5.4 Logger
+
+Add `logger = logging.getLogger(__name__)` to `services/api/app/services/permissions.py` if not already present (used by the per-intent `logger.exception` in §5.2).
 
 ---
 
-## §5 — Service Layer
+## §6 — Worker + scheduler integration
 
-### 5.1 — `services/api/app/services/read_models.py` (new file)
-
-Module docstring (one line per D14):
-
-```python
-"""Read-model pipeline — counts are always fresh from synchronous
-projections; ``is_stale`` signals projector liveness only."""
-```
-
-Constants per §3.2. Exceptions declared at module scope:
-
-```python
-class CursorVersionConflictError(RuntimeError): ...
-
-
-class CursorNotSeededError(RuntimeError):
-    """Raised when ``read_model_cursors`` is missing the seed row for a
-    projection. Migration seeds the row, so this indicates infra
-    misconfiguration (migration skipped, row manually deleted, etc.).
-    Never auto-seed from runtime — diagnose and re-migrate instead."""
-
-
-class InvalidScopeError(ValueError):
-    """Raised when ``scope_kind`` and ``scope_id`` disagree — e.g.,
-    ``scope_kind='chapter'`` with no ``scope_id`` or ``scope_kind='global'``
-    with a non-None ``scope_id``. Enforced at the service layer so
-    non-HTTP callers (CLI, future Discord surface) hit the same gate."""
-```
-
-#### 5.1.1 — `advance_operational_overview_cursor`
-
-```python
-def advance_operational_overview_cursor(
-    db: PostgresDatabase,
-    *,
-    now: datetime,
-    min_age_seconds: int = MIN_AGE_SECONDS,
-) -> ReadModelCursorRead:
-    with db.connection() as connection:
-        with connection.transaction():
-            cursor = load_cursor(
-                connection,
-                projection_name=OPERATIONAL_OVERVIEW_PROJECTION_NAME,
-            )
-            # The migration seeds the row; a None here signals infra
-            # misconfiguration (migration skipped or row deleted).
-            # Raise explicitly rather than silently auto-seeding.
-            if cursor is None:
-                raise CursorNotSeededError(
-                    f"read_model_cursors missing seed for "
-                    f"{OPERATIONAL_OVERVIEW_PROJECTION_NAME!r}"
-                )
-            new_id = max_event_id_settled(
-                connection,
-                min_age_seconds=min_age_seconds,
-                after_id=cursor.last_processed_id,
-            )
-            if new_id == cursor.last_processed_id:
-                return cursor  # No-op tick (D6 step 3).
-            updated = advance_cursor(
-                connection,
-                projection_name=OPERATIONAL_OVERVIEW_PROJECTION_NAME,
-                last_processed_id=new_id,
-                last_processed_at=now,
-                expected_version=cursor.version,
-            )
-            return _cursor_row_to_read(updated)
-```
-
-- `load_cursor` issues `SELECT ... FOR UPDATE` so concurrent ticks
-  block (D6 step 1).
-- OCC via `expected_version` is defense-in-depth per D6 "Binding
-  implications" — `FOR UPDATE` alone is sufficient in the current
-  single-worker scheduler, but the OCC check keeps the contract
-  correct under future multi-worker scenarios.
-- `now` is required (not defaulted) so tests inject a deterministic
-  timestamp.
-- Return type is `ReadModelCursorRead` per D6 so tests assert
-  without re-querying.
-
-#### 5.1.2 — `read_operational_overview`
-
-```python
-def read_operational_overview(
-    db: PostgresDatabase,
-    *,
-    scope_kind: Literal["global", "chapter"],
-    scope_id: str | None,
-    actor: ActorIdentity,
-    now: datetime,
-) -> OperationalOverviewRead:
-    # R1 — scope shape validation at the service layer (F8, shortcut
-    # risk pin P2). Non-HTTP callers hit the same gate as the endpoint.
-    if scope_kind == "global" and scope_id is not None:
-        raise InvalidScopeError(
-            "scope_id must be None for scope_kind='global'"
-        )
-    if scope_kind == "chapter" and not scope_id:
-        raise InvalidScopeError(
-            "scope_id is required for scope_kind='chapter'"
-        )
-    _require_overview_authority(db, actor, scope_kind, scope_id)
-    with db.connection() as connection:
-        open_applications = count_open_applications(
-            connection, scope_kind=scope_kind, scope_id=scope_id,
-        )
-        open_tickets = count_open_tickets(
-            connection, scope_kind=scope_kind, scope_id=scope_id,
-        )
-        pending_effects = (
-            0 if scope_kind == "chapter"
-            else count_pending_deferred_effects(connection)
-        )
-        active_drift = count_active_drift(
-            connection, scope_kind=scope_kind, scope_id=scope_id,
-        )
-        visible_head_id = max_event_id_settled(
-            connection, min_age_seconds=0, after_id=0,
-        )
-        cursor = load_cursor(
-            connection,
-            projection_name=OPERATIONAL_OVERVIEW_PROJECTION_NAME,
-        )
-    # R2 — explicit diagnostic surface if the migration seed is missing
-    # (F12, shortcut risk pin P3). Never auto-seed outside the migration.
-    if cursor is None:
-        raise CursorNotSeededError(
-            f"read_model_cursors missing seed for "
-            f"{OPERATIONAL_OVERVIEW_PROJECTION_NAME!r}"
-        )
-    stale = _compute_staleness(
-        cursor=cursor,
-        visible_head_id=visible_head_id,
-        now=now,
-    )
-    return OperationalOverviewRead(
-        scope_kind=scope_kind,
-        scope_id=scope_id,
-        open_applications_count=open_applications,
-        open_tickets_count=open_tickets,
-        pending_deferred_effects_count=pending_effects,
-        permission_drift_count=active_drift,
-        stale_projections=stale.projections,
-        stale_since=stale.since,
-        is_stale=stale.is_stale,
-    )
-```
-
-- `_require_overview_authority` centralises the authority check
-  (next subsection) and raises `PermissionError` on denial; the
-  endpoint layer converts that to HTTP 403 via
-  `raise_known_permission_error` (D7 + §7).
-- `InvalidScopeError` is raised **before** the authority check so
-  malformed scope inputs do not touch the authority tables. Endpoint
-  maps to HTTP 422 (§7.1).
-- `CursorNotSeededError` is raised **after** reads return — the
-  service has already committed to the whitelisted SELECTs; the
-  cursor absence is purely a staleness/initialization diagnostic.
-  Endpoint maps to HTTP 503 (§7.1) since it indicates the projector
-  has never been wired up for this DB.
-- The read path never opens a writable transaction; no `mutate_*`
-  symbol is imported into this module (D8 guardrail).
-- For global scope, `count_pending_deferred_effects` runs
-  unconditionally; for chapter scope it is hard-wired to `0`
-  (D15). No fallback query with partial payload-key filtering.
-- Inside the `with db.connection()` block we issue reads in a single
-  logical snapshot. The final `_compute_staleness` runs outside the
-  connection because it does not need the DB.
-- `load_cursor` here does **not** use `FOR UPDATE`. The same
-  repository function is reused; `FOR UPDATE` is applied only from
-  the projector path by wrapping the call inside
-  `connection.transaction()`. See note at the end of §4.1 on an
-  optional `lock: bool` kwarg if reviewers prefer it explicit.
-
-#### 5.1.3 — `_require_overview_authority`
-
-```python
-_OVERVIEW_PERMISSION: str = "operational_overview.read"
-
-def _require_overview_authority(
-    db: PostgresDatabase,
-    actor: ActorIdentity,
-    scope_kind: str,
-    scope_id: str | None,
-) -> None:
-    require_scoped(actor, db, scope_kind, scope_id, _OVERVIEW_PERMISSION)
-```
-
-- The import is
-  `from app.api.v1.endpoints.permissions._shared import require_scoped`.
-  Using the shared helper avoids duplicating the authority evaluation
-  logic. If a future refactor moves `require_scoped` out of the
-  endpoints package, this is the only call site in the service layer
-  to update.
-- Per D7, this is the single permission string for the endpoint.
-
-#### 5.1.4 — `_compute_staleness`
-
-```python
-@dataclass(frozen=True, slots=True)
-class _Stale:
-    projections: list[str]
-    since: datetime | None
-    is_stale: bool
-
-def _compute_staleness(
-    *,
-    cursor: ReadModelCursorRead,
-    visible_head_id: int,
-    now: datetime,
-) -> _Stale:
-    lag_events = max(0, visible_head_id - cursor.last_processed_id)
-    by_events = lag_events > STALE_EVENT_THRESHOLD
-    by_time = (
-        cursor.last_processed_at is not None
-        and (now - cursor.last_processed_at) > STALE_TIME_THRESHOLD
-    )
-    is_stale = by_events or by_time
-    projections = (
-        [cursor.projection_name] if is_stale else []
-    )
-    since = (
-        cursor.last_processed_at
-        if is_stale and cursor.last_processed_at is not None
-        else None
-    )
-    return _Stale(projections=projections, since=since, is_stale=is_stale)
-```
-
-- Encodes D5 exactly. The "never advanced + empty stream" case
-  (`last_processed_id == 0` and `visible_head_id == 0`) yields
-  `lag_events = 0` → `by_events = False`; `last_processed_at is None`
-  → `by_time = False`; so `is_stale = False` with
-  `stale_since = None`, per D5 "never advanced, stream empty".
-- Tests monkeypatch module constants to exercise both thresholds
-  (D12).
-
-### 5.2 — Worker-tick wrapper
-
-`services/api/app/tasks/read_models.py` (new file):
+### 6.1 `services/api/app/tasks/permission_expiry.py` (new file)
 
 ```python
 from __future__ import annotations
 
+import logging
+from contextlib import nullcontext
 from datetime import UTC, datetime
+from uuid import uuid4
 
-from app.contracts.read_models import ReadModelCursorRead
+from app.contracts.actor import ActorIdentity
+from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
+from app.contracts.permissions import PermissionExpirySweepResult
+from app.core.context import get_current_audit_context, use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.read_models import advance_operational_overview_cursor
+from app.services.mutations import StaleMutationError
+from app.services.permissions import (
+    PERMISSION_EXPIRER_ACTOR_ID,
+    expire_temporary_permission_intents,
+)
+
+
+logger = logging.getLogger(__name__)
+
+PERMISSION_EXPIRY_BATCH_SIZE: int = 50
 
 _DB: PostgresDatabase | None = None
 
-def configure_read_models(*, db: PostgresDatabase) -> None:
+
+def configure_permission_expiry(*, db: PostgresDatabase) -> None:
     global _DB
     _DB = db
 
-def _get_db() -> PostgresDatabase:
+
+def get_permission_expiry_db() -> PostgresDatabase:
     global _DB
     if _DB is None:
         _DB = PostgresDatabase()
     return _DB
 
-def read_model_worker_tick() -> ReadModelCursorRead:
-    return advance_operational_overview_cursor(
-        _get_db(), now=datetime.now(tz=UTC),
+
+def _expirer_service_actor() -> ActorIdentity:
+    return ActorIdentity(actor_kind="service", actor_id=PERMISSION_EXPIRER_ACTOR_ID)
+
+
+def _root_audit_context() -> AuditContextRead:
+    """R2: Scheduler-thread root audit context. Mirrors
+    `services/api/app/services/ticket_sla.py::_root_audit_context` verbatim.
+    Without this, `mutate_entity` raises `MissingCorrelationContextError`
+    because `contextvars` do not propagate into the `asyncio.to_thread`
+    worker that invokes this tick."""
+    correlation_id = uuid4()
+    return AuditContextRead(
+        correlation_id=correlation_id,
+        causation_id=None,
+        headers=CorrelationHeadersRead(
+            x_correlation_id=correlation_id,
+            x_causation_id=None,
+        ),
     )
+
+
+def permission_expiry_worker_tick(
+    *,
+    now: datetime | None = None,
+    batch_size: int | None = None,
+) -> PermissionExpirySweepResult | None:
+    """R2 + R6. Install root audit context when none exists (scheduler
+    thread path); reuse the ambient one if present (test / manual-trigger
+    paths). Surface `StaleMutationError` at debug — it is expected control
+    flow (SLICE-017 MAJOR 4 precedent). Log everything else via
+    `logger.exception`."""
+    existing_ctx = get_current_audit_context()
+    ambient = (
+        use_audit_context(_root_audit_context())
+        if existing_ctx is None
+        else nullcontext()
+    )
+    with ambient:
+        try:
+            return expire_temporary_permission_intents(
+                get_permission_expiry_db(),
+                actor=_expirer_service_actor(),
+                now=now or datetime.now(tz=UTC),
+                batch_size=batch_size or PERMISSION_EXPIRY_BATCH_SIZE,
+                source="worker_sweep",
+            )
+        except StaleMutationError:
+            logger.debug("permission expiry: OCC conflict, retry next tick")
+            return None
+        except Exception:
+            logger.exception("permission expiry worker tick failed")
+            return None
 ```
 
-- Shape mirrors `services/api/app/tasks/ticket_sla.py:1-23` exactly.
-- The wrapper never catches exceptions; the scheduler's
-  `try/except logger.exception` is the resilience contract (D6).
+Shape matches `services/api/app/tasks/ticket_sla.py` ([D4] binding implications), with the audit-context install moved here from the service layer because the scheduler's `asyncio.to_thread` hand-off (§6.3 line 706) breaks `contextvars` propagation; the manual endpoint path (§7.1) is unaffected because FastAPI's `CorrelationMiddleware` already installed a context per request.
 
-### 5.3 — Scheduler wiring
+### 6.2 `services/api/app/tasks/__init__.py`
 
-`services/api/app/services/scheduler.py`:
-
-1. Add module constant adjacent to the existing interval constants
-   (`scheduler.py:27-32`):
-
-   ```python
-   READ_MODEL_PROJECTOR_INTERVAL_SECONDS = 10
-   ```
-
-2. Add instance state in `SchedulerLoop.__init__` beside
-   `_last_ticket_sla_tick_at` / `_last_archive_tick_at`
-   (`scheduler.py:143-146`):
-
-   ```python
-   self._last_read_model_tick_at: datetime | None = None
-   ```
-
-3. Add `_run_read_model_projector_if_due(now)` mirroring
-   `_run_ticket_sla_if_due` (`scheduler.py:212-229`):
-
-   ```python
-   async def _run_read_model_projector_if_due(self, now: datetime) -> None:
-       if (
-           self._last_read_model_tick_at is not None
-           and (now - self._last_read_model_tick_at).total_seconds()
-           < READ_MODEL_PROJECTOR_INTERVAL_SECONDS
-       ):
-           return
-
-       from app.tasks.read_models import read_model_worker_tick
-
-       self._last_read_model_tick_at = now
-       try:
-           await asyncio.to_thread(read_model_worker_tick)
-       except Exception:
-           logger.exception(
-               "read-model projector tick failed for worker %s",
-               self._worker_id,
-           )
-   ```
-
-4. Invoke it from `_tick` after `_run_ticket_sla_if_due`
-   (`scheduler.py:191`). The projector runs last so no other worker's
-   run is delayed by it. The scheduler's `except Exception:
-   logger.exception(...)` wrapper also catches `CursorNotSeededError`
-   (R2 / F12); the worker never auto-seeds, and the next tick logs the
-   same exception again until an operator re-runs the migration.
-
-5. Export the new constant from `scheduler.py` `__all__`
-   (`scheduler.py:293-308`).
-
-### 5.4 — Task runtime wiring
-
-`services/api/app/tasks/__init__.py`:
+Wire into `configure_task_runtime`:
 
 ```python
-from app.tasks.read_models import configure_read_models
-
-def configure_task_runtime(
-    *,
-    db: PostgresDatabase,
-    delivery_port_factory: Callable[[], NotificationDeliveryPort] | None = None,
-) -> None:
-    configure_archive_worker(db=db)
-    configure_notifications_materialize(db=db)
-    configure_notifications_deliver(
-        db=db,
-        delivery_port_factory=delivery_port_factory,
-    )
+from app.tasks.permission_expiry import configure_permission_expiry
+# ...
+def configure_task_runtime(...):
+    # ...existing wiring...
     configure_ticket_sla(db=db)
-    configure_read_models(db=db)
+    configure_permission_expiry(db=db)   # NEW
 ```
 
-No other registration is required; the projector is invoked directly
-by `SchedulerLoop`, not via the `register_scheduler_handler` registry.
+### 6.3 `services/api/app/services/scheduler.py`
+
+Module-level constant:
+
+```python
+PERMISSION_EXPIRY_INTERVAL_SECONDS = 60
+```
+
+`SchedulerLoop.__init__` gains `self._last_permission_expiry_tick_at: datetime | None = None`.
+
+New method, mirroring `_run_ticket_sla_if_due`:
+
+```python
+async def _run_permission_expiry_if_due(self, now: datetime) -> None:
+    if (
+        self._last_permission_expiry_tick_at is not None
+        and (now - self._last_permission_expiry_tick_at).total_seconds()
+        < PERMISSION_EXPIRY_INTERVAL_SECONDS
+    ):
+        return
+
+    from app.tasks.permission_expiry import permission_expiry_worker_tick
+
+    self._last_permission_expiry_tick_at = now
+    try:
+        await asyncio.to_thread(permission_expiry_worker_tick, now=now)
+    except Exception:
+        logger.exception(
+            "permission-expiry worker tick failed for worker %s",
+            self._worker_id,
+        )
+```
+
+Invoked from `_tick()` after `_run_read_model_tick_if_due(now)`:
+
+```python
+await self._run_permission_expiry_if_due(now)
+```
+
+Add `"PERMISSION_EXPIRY_INTERVAL_SECONDS"` to the module `__all__` ([D8]).
 
 ---
 
-## §6 — Worker
+## §7 — Endpoints
 
-Summary of the worker surface introduced above, consolidated:
-
-- `services/api/app/tasks/read_models.py::read_model_worker_tick()`
-  is the scheduler entry point. Thin; no exception handling; no
-  logging. Returns `ReadModelCursorRead` so tests can assert
-  directly.
-- `services/api/app/services/read_models.py::advance_operational_overview_cursor`
-  is the business logic, with `now` and `min_age_seconds` keyword
-  parameters for test injection (D1 + D6).
-- Scheduler wrapper `_run_read_model_projector_if_due` gates on the
-  10-second interval, records `_last_read_model_tick_at`, and
-  swallows exceptions via `logger.exception`. Crashes never propagate
-  to the outer loop (AC2, D6).
-- No batch size, retry policy, or backpressure (D6 Non-goals). The
-  next tick retries automatically.
-
----
-
-## §7 — Endpoint
-
-### 7.1 — `services/api/app/api/v1/endpoints/operations.py` (new file)
+### 7.1 New file: `services/api/app/api/v1/endpoints/permissions/temporary.py`
 
 ```python
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from http import HTTPStatus
-from typing import Literal
+from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Request, Response
+from pydantic import Field
 
-from app.api.v1.endpoints.permissions._shared import (
-    get_db,
-    raise_known_permission_error,
-)
 from app.contracts.actor import ActorIdentity
-from app.contracts.read_models import OperationalOverviewRead
+from app.contracts.permissions import (
+    ChannelRolePermissionIntent,
+    GuildRolePermissionIntent,
+    PermissionExpirySweepResult,
+    PermissionIntentRenewalRequest,
+)
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
-from app.services.read_models import (
-    CursorNotSeededError,
-    InvalidScopeError,
-    read_operational_overview,
+from app.services.permissions import (
+    PERMISSION_EXPIRY_MANUAL_DEFAULT_BATCH_SIZE,
+    expire_temporary_permission_intents,
+    renew_permission_intent,
 )
 
-router = APIRouter(prefix="/api/v1/operations")
+from ._shared import (
+    get_db,
+    parse_if_match_strong,
+    raise_known_permission_error,
+    require_scoped,
+    set_etag,
+)
 
 
-@router.get("/overview", response_model=OperationalOverviewRead)
-def get_operational_overview_endpoint(
-    scope_kind: Literal["global", "chapter"] = Query(...),
-    scope_id: str | None = Query(default=None),
+PermissionIntentReadResponse = Annotated[
+    GuildRolePermissionIntent | ChannelRolePermissionIntent,
+    Field(discriminator="kind"),
+]
+
+
+router = APIRouter(prefix="/api/v1/permission-intents")
+
+
+@router.post("/{intent_id}/renew", response_model=PermissionIntentReadResponse)
+def renew_intent_endpoint(
+    intent_id: UUID,
+    body: PermissionIntentRenewalRequest,
+    request: Request,
+    response: Response,
     db: PostgresDatabase = Depends(get_db),
     actor: ActorIdentity = Depends(get_current_actor),
-) -> OperationalOverviewRead:
-    if scope_kind == "chapter" and scope_id is None:
-        raise HTTPException(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "validation_error",
-                "message": "scope_id is required when scope_kind='chapter'",
-            },
-        )
-    if scope_kind == "global" and scope_id is not None:
-        raise HTTPException(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "validation_error",
-                "message": "scope_id must be omitted when scope_kind='global'",
-            },
-        )
+) -> Any:
+    expected_version = parse_if_match_strong(request)
     try:
-        return read_operational_overview(
+        read, result = renew_permission_intent(
             db,
-            scope_kind=scope_kind,
-            scope_id=scope_id,
+            intent_id,
+            expected_version=expected_version,
+            request=body,
+            actor=actor,
+        )
+    except Exception as error:
+        raise_known_permission_error(error)
+    set_etag(response, result.etag)
+    return read
+
+
+@router.post("/expire/run", response_model=PermissionExpirySweepResult)
+def run_permission_expiry_endpoint(
+    db: PostgresDatabase = Depends(get_db),
+    actor: ActorIdentity = Depends(get_current_actor),
+) -> PermissionExpirySweepResult:
+    try:
+        require_scoped(
+            actor, db, "global", None, "permission_intent.write",
+        )
+        return expire_temporary_permission_intents(
+            db,
             actor=actor,
             now=datetime.now(tz=UTC),
+            batch_size=PERMISSION_EXPIRY_MANUAL_DEFAULT_BATCH_SIZE,
+            source="manual_trigger",
         )
-    except InvalidScopeError as error:
-        # Defense-in-depth — the endpoint's pre-checks above should have
-        # caught this, but a service-layer raise still maps to 422.
-        raise HTTPException(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            detail={"code": "validation_error", "message": str(error)},
-        ) from error
-    except CursorNotSeededError as error:
-        # Projector seed row missing — infra misconfiguration, not a 404
-        # and not a client error. 503 semantically matches "projector
-        # not initialized" (shortcut risk pin P3 / F12).
-        raise HTTPException(
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-            detail={
-                "code": "projection_not_initialized",
-                "message": str(error),
-            },
-        ) from error
     except Exception as error:
         raise_known_permission_error(error)
 ```
 
-- Validator messages match `list_drift_endpoint`
-  (`.../permissions/drift.py:47-62`).
-- Authority enforced inside `read_operational_overview`; on denial
-  `PermissionError` → 403 via `raise_known_permission_error`
-  (`.../permissions/_shared.py:135-139`).
-- `InvalidScopeError` (service layer) → 422; `CursorNotSeededError`
-  (service layer) → 503. Both catches sit **before** the generic
-  `except Exception` so `raise_known_permission_error` only handles
-  `PermissionError` and unclassified failures.
-- `now` injected here so tests can override the endpoint signature
-  (FastAPI dependency overrides) for wall-clock-sensitive AC4 cases.
-  For tests that prefer not to mock FastAPI deps, the service-layer
-  entry point is also test-friendly.
-- No request body; no `If-Match` header (read-only, D8 Non-goals).
+Notes:
+- Endpoint-level `require_scoped(...)` on the manual trigger matches the belt-and-braces shape used by `intents.py` for write endpoints ([D5]).
+- Renewal endpoint does **not** call `require_scoped` at the endpoint — authority requires knowing the intent's scope, which is discovered inside `renew_permission_intent`. This mirrors the service-side check the `patch_intent_endpoint` already relies on after the scope read ([D3]).
+- No body on `POST /expire/run` — spoof-proof ([D5] binding implications).
 
-### 7.2 — Router registration
-
-`services/api/app/api/v1/router.py` — include after the existing
-subsystem routers (the current import block is alphabetical;
-`operations` slots between `notifications` and `permissions`):
+### 7.2 Router registration: `services/api/app/api/v1/endpoints/permissions/__init__.py`
 
 ```python
-from app.api.v1.endpoints import (
-    ...,
-    notifications,
-    operations,           # new
-    permissions,
-    ...,
-)
-
-router.include_router(operations.router, tags=["operations"])
+from .temporary import router as temporary_router
+# ...
+permissions_router = APIRouter()
+permissions_router.include_router(intents.router)
+permissions_router.include_router(drift.router)
+permissions_router.include_router(reconciliation.router)
+permissions_router.include_router(temporary_router)   # NEW
 ```
 
-No middleware changes (D9).
+### 7.3 Error mapping coverage
+
+All error paths are handled by `raise_known_permission_error`:
+
+| Failure | HTTP | Source |
+|---|---|---|
+| Intent not found | 404 | `PermissionIntentNotFoundError` |
+| Stale `If-Match` | 412 | `StaleMutationError` |
+| Missing/weak `If-Match` | 428 / 412 | `parse_if_match_strong` |
+| Renewal of non-temporary | 422 `non_temporary_intent` | `NonTemporaryIntentRenewalError` |
+| Renewal of expired | 422 `expired_intent` | `ExpiredIntentRenewalError` |
+| Renewal `expires_at` not in future | 422 `renewal_expires_at_in_past` | `RenewalExpiresAtInPastError` |
+| Blank reason | 422 (Pydantic) | FastAPI body validation |
+| Authority denied | 403 | `PermissionError` |
 
 ---
 
 ## §8 — Tests
 
-Per `AGENTS.md` §Implementation Workflow — Test/Code Agent Separation,
-tests are written by a separate agent from contracts only. Every test
-has a docstring naming the AC it binds to (D12).
+Per-test docstring format: first line is the AC tag (`AC1`, `AC2`, `AC3`, `AC4`) followed by a one-sentence description. The test agent writes from contracts + synthesis decisions only; the code agent implements ([AGENTS.md §Implementation Workflow]).
 
-### 8.1 — WU-031: `services/api/tests/test_read_models.py`
+### 8.1 `services/api/tests/test_permission_temporary_api.py` — WU-038A (AC1, AC2)
 
-Fixtures:
+```python
+def test_renew_temporary_intent_with_current_version_advances_expires_at(...):
+    """AC1: renew temporary intent with current version updates expires_at
+    and advances aggregate version."""
 
-- Reuse the existing pytest DB fixture (same pattern as
-  `services/api/tests/test_ticket_sla.py`). Each test starts with the
-  seed row `('operational_overview', 0, NULL, 0)` from the migration.
-- Helper `_append_state_change(connection, recorded_at=...)` inserts a
-  row into `activity_state_changes` with a parent `activity_actions`
-  row — exactly the shape used by existing audit tests. Tests inject
-  `recorded_at` so min-age behaviour is deterministic.
+def test_renew_with_stale_if_match_returns_412(...):
+    """AC1: renew with stale If-Match returns 412 Precondition Failed."""
 
-Tests (each with AC docstring):
+def test_renew_with_missing_if_match_returns_428(...):
+    """AC1: renew without If-Match returns 428 Precondition Required."""
 
-1. `test_projector_advances_cursor_from_seed` — AC1.
-   Seed three events with `recorded_at = now − 10s`. Call
-   `advance_operational_overview_cursor(db, now=now, min_age_seconds=5)`.
-   Assert `last_processed_id == MAX(id)`, `version == 1`,
-   `last_processed_at == now`.
+def test_renew_non_temporary_intent_returns_422_non_temporary(...):
+    """AC2: renewal rejected for non-temporary intent with code
+    'non_temporary_intent'."""
 
-2. `test_projector_resumes_from_persisted_cursor` — AC1.
-   Advance once, then call again with the same stream and
-   `min_age_seconds=0` — expect no change (idempotent). Append one
-   more aged event; call again — expect `last_processed_id` advances
-   to the new MAX and `version` becomes 2.
+def test_renew_already_expired_by_expires_at_returns_422_expired(...):
+    """AC1: renew intent whose expires_at has passed returns 422 with
+    code 'expired_intent'."""
 
-3. `test_projector_does_not_advance_past_min_age_fence` — AC1.
-   Insert one event with `recorded_at = now` (inside the fence).
-   Call with `min_age_seconds=5`. Assert cursor unchanged.
+def test_renew_already_expired_by_expired_at_returns_422_expired(...):
+    """AC1: renew intent whose expired_at is set returns 422 with code
+    'expired_intent'."""
 
-4. `test_projector_noop_tick_when_no_new_events` — AC1 / idempotency.
-   Seed cursor at MAX(id). Call twice. Assert `version` unchanged
-   after both calls (the `new_id == cursor.last_processed_id` branch
-   in §5 step 3).
+def test_renew_with_past_expires_at_body_returns_422_renewal_expires_at_in_past(...):
+    """AC1: renew request with past expires_at is rejected at the service
+    layer with code 'renewal_expires_at_in_past' (R5: future-check uses the
+    service's `now`, not wall-clock at Pydantic parse time)."""
 
-5. `test_projector_failure_does_not_halt_scheduler` — AC2.
-   Monkeypatch `advance_operational_overview_cursor` to raise
-   `RuntimeError`. Drive `SchedulerLoop._tick` once. Assert
-   `logger.exception` observed, no raise out of `_tick`, and the
-   next worker branch (e.g. `ticket_sla_worker_tick`) still runs.
-   Pattern mirrors existing ticket-SLA resilience tests.
+def test_renew_with_blank_reason_returns_422_validation(...):
+    """AC1: renew request with blank reason rejected at Pydantic layer."""
 
-6. `test_write_path_unblocked_when_projector_halted` — AC2.
-   Acquire a row lock on `read_model_cursors` (simulate a wedged
-   projector). In a separate connection, perform a domain write
-   (create an application via the public API or service). Assert
-   the write commits and the projection row is updated in the same
-   transaction. Proves domain writes have no dependency on
-   `read_model_cursors` (D14).
+def test_renew_without_permission_intent_write_returns_403(...):
+    """AC1: actor lacking permission_intent.write at intent scope gets 403."""
 
-7. `test_cursor_seed_present_after_migration` — AC1.
-   Query `read_model_cursors` after fixture setup. Assert exactly
-   one row with `projection_name='operational_overview'`,
-   `last_processed_id=0`, `last_processed_at IS NULL`, `version=0`.
+def test_renew_response_exposes_expired_at_null(...):
+    """AC1: renewed intent read response includes expired_at: null."""
 
-8. `test_projector_service_actor_grant_seeded` — D10.
-   Query `authority_grants` for `grantee_id='read-model-projector'`.
-   Assert a single active row at global scope with permissions
-   exactly `["read_model.write"]`.
+def test_renew_emits_renew_audit_verbs_with_allowlisted_payload(...):
+    """AC1: renewal emits permission_intent.renew action and
+    permission_intent.renewed change with payload limited to
+    INTENT_RENEW_PAYLOAD_ALLOWLIST."""
+```
 
-9. `test_projector_raises_cursor_not_seeded_when_row_missing` — R2 / F12.
-   `DELETE FROM read_model_cursors WHERE projection_name =
-   'operational_overview'`, then call
-   `advance_operational_overview_cursor(db, now=now)`. Assert
-   `CursorNotSeededError` is raised with the projection name in the
-   message. No row is (auto-)inserted as a side-effect.
+### 8.2 `services/api/tests/test_permission_temporary_worker.py` — WU-038B (AC3, AC4)
 
-10. `test_scheduler_logs_cursor_not_seeded_without_halting` — R2 / AC2.
-    Same setup as 9, but drive `SchedulerLoop._tick`. Assert
-    `logger.exception` observed, no raise out of `_tick`, and the
-    next scheduler branch still runs. Proves `CursorNotSeededError`
-    flows through the same resilience gate as any other tick
-    exception.
+```python
+def test_worker_marks_expired_intents_and_creates_drift_rows(...):
+    """AC3: worker stamps expired_at on temporary intents past expires_at
+    and creates one drift row per expired intent."""
 
-### 8.2 — WU-032: `services/api/tests/test_operational_views.py`
+def test_worker_is_idempotent_on_rerun(...):
+    """AC3: running worker a second time against the same candidates does
+    not write a second expired_at or create a second drift row."""
 
-Fixtures:
+def test_worker_skips_non_temporary_intents(...):
+    """AC3: non-temporary intents are never selected regardless of timing."""
 
-- `httpx.AsyncClient` against the FastAPI app with a real DB (same
-  pattern as `test_permission_drift.py`).
-- Helpers to seed actors with/without `operational_overview.read` at
-  global and chapter scopes, reusing existing authority fixtures.
-- Helpers to seed applications, tickets, permission-drift rows, and
-  deferred effects.
+def test_worker_skips_future_expires_at_intents(...):
+    """AC3: temporary intents with expires_at > now are not selected."""
 
-Tests (each with AC docstring):
+def test_worker_skips_already_expired_intents(...):
+    """AC3: intents with expired_at IS NOT NULL are not re-selected."""
 
-1. `test_global_overview_returns_counts_from_projections` — AC3.
-   Seed N applications in various states, M tickets with
-   `terminal_at IS NULL` and K with `terminal_at` set, deferred
-   effects across the full status set, and drift rows across the
-   full status set. Assert
-   `open_applications_count == count(state IN OPEN_APPLICATION_STATES)`,
-   `open_tickets_count == M`, `pending_deferred_effects_count ==
-   count(status IN PENDING_DEFERRED_EFFECT_STATUSES)`,
-   `permission_drift_count == count(status IN UNRESOLVED_DRIFT_STATUSES)`.
+def test_expiry_drift_row_shape_matches_d9(...):
+    """AC4: drift row has permission_intent_id set, intent_version set,
+    reconciliation_run_id NULL, actual_* NULL, intended_* mirrors intent,
+    status='detected'."""
 
-2. `test_chapter_overview_filters_counts_to_chapter` — AC3.
-   Seed rows for chapter A, chapter B, and global-scope where
-   applicable. GET with `scope_kind=chapter&scope_id=A`. Assert only
-   chapter A is counted for applications, tickets, and drift.
+def test_expiry_drift_is_listable_via_get_permission_drift(...):
+    """AC4: GET /api/v1/permission-drift?scope_kind=... returns expiry drift
+    alongside reconciliation drift."""
 
-3. `test_chapter_overview_deferred_effects_count_is_zero` — AC3 / D15.
-   Seed pending deferred effects. GET with
-   `scope_kind=chapter&scope_id=A`. Assert
-   `pending_deferred_effects_count == 0`.
+def test_expiry_drift_resolvable_via_existing_resolve_endpoint(...):
+    """AC4: POST /api/v1/permission-drift/{id}/resolve works on expiry drift
+    for acknowledge / reconcile / accept actions."""
 
-4. `test_overview_stale_when_lag_exceeds_event_threshold` — AC4.
-   Seed > `STALE_EVENT_THRESHOLD` events (monkeypatch the constant
-   down to make the test fast). Leave cursor at 0. GET. Assert
-   `is_stale=True`, `stale_projections=["operational_overview"]`,
-   `stale_since=None` (cursor never advanced).
+def test_worker_batch_size_bounds_per_tick_work(...):
+    """AC3: a candidate set larger than PERMISSION_EXPIRY_BATCH_SIZE drains
+    across multiple ticks with no candidate processed twice."""
 
-5. `test_overview_stale_when_last_processed_at_exceeds_time_threshold`
-   — AC4. Advance cursor with `last_processed_at = now − 10min`
-   (monkeypatch `STALE_TIME_THRESHOLD` to 5min). GET. Assert
-   `is_stale=True`, `stale_projections=["operational_overview"]`,
-   `stale_since == last_processed_at`.
+def test_concurrent_sweeps_do_not_duplicate_via_for_update_skip_locked(...):
+    """AC3: two concurrent expiry sweeps processing overlapping candidates
+    result in each intent expired exactly once."""
 
-6. `test_overview_fresh_stream_is_not_stale` — AC4.
-   Advance cursor with `last_processed_at = now`. Insert zero new
-   events. GET. Assert `is_stale=False`, `stale_projections=[]`,
-   `stale_since=None`.
+def test_per_intent_failure_does_not_abort_batch(...):
+    """AC3: a synthetic failure on one intent does not abort the batch;
+    remaining intents still expire; failed intent retried on next tick."""
 
-7. `test_overview_empty_stream_never_advanced_is_not_stale` — AC4 / D5.
-   Fresh DB. Cursor at 0, `last_processed_at IS NULL`. Stream empty.
-   GET. Assert `is_stale=False`, `stale_since=None`.
+def test_manual_trigger_returns_sweep_result_with_counts(...):
+    """AC3: POST /api/v1/permission-intents/expire/run returns
+    PermissionExpirySweepResult with accurate expired_count + drift_ids."""
 
-8. `test_overview_rejects_unauthorized_caller_with_403` — AC4.
-   Actor without `operational_overview.read`. GET with
-   `scope_kind=global`. Assert HTTP 403, body
-   `{"code":"authority_decision_denied", ...}`.
+def test_manual_trigger_requires_global_permission_intent_write(...):
+    """AC3: caller without permission_intent.write at global scope gets 403."""
 
-9. `test_overview_rejects_chapter_scope_without_scope_id_422` — D9.
-   GET `?scope_kind=chapter`. Assert HTTP 422,
-   `"scope_id is required when scope_kind='chapter'"`.
+def test_manual_trigger_accepts_no_body_so_actor_cannot_be_spoofed(...):
+    """AC3: manual trigger endpoint defines no body params; any posted
+    originating-actor override is ignored — audit rows show the session
+    caller."""
 
-10. `test_overview_rejects_global_scope_with_scope_id_422` — D9.
-    GET `?scope_kind=global&scope_id=X`. Assert HTTP 422,
-    `"scope_id must be omitted when scope_kind='global'"`.
+def test_worker_emits_expire_and_detect_expired_audit_verbs(...):
+    """AC3: each expired intent emits one permission_intent.expire action
+    with INTENT_EXPIRE_PAYLOAD_ALLOWLIST payload ({expired_at, source}),
+    one permission_intent.expired state change, one
+    permission_drift.detect_expired action with
+    EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST payload, and one
+    permission_drift.detected_expired state change — all four rows
+    committed under the same correlation_id in a single transaction (R1,
+    R2, R7, R9)."""
 
-11. `test_overview_response_shape_matches_contract` — D4.
-    Validate the response against `OperationalOverviewRead` fields
-    and types. Catches accidental renames or extra fields.
+def test_worker_installs_root_audit_context_when_invoked_from_scheduler_thread(...):
+    """AC3 (R2): invoking permission_expiry_worker_tick with no ambient
+    audit context does not raise MissingCorrelationContextError; produced
+    activity_actions rows all share one correlation_id per tick."""
 
-12. `test_service_rejects_chapter_scope_without_scope_id` — R1 / F8.
-    Call `read_operational_overview(db, scope_kind='chapter',
-    scope_id=None, actor=authorized_actor, now=now)` directly
-    (bypassing the endpoint). Assert `InvalidScopeError` is raised
-    **before** `_require_overview_authority` (authority tables are
-    not queried). Complements endpoint test 9 by proving non-HTTP
-    callers hit the same gate.
+def test_worker_expire_and_drift_are_atomic_on_failure(...):
+    """AC3 (R1): if the drift insert raises, the expired_at stamp rolls
+    back and the intent is re-selected on the next tick. No orphaned
+    expired_at rows."""
 
-13. `test_service_rejects_global_scope_with_scope_id` — R1 / F8.
-    Symmetric to 12 with `scope_kind='global', scope_id='chapter-A'`.
-    Assert `InvalidScopeError`.
+def test_worker_stale_mutation_collision_is_logged_at_debug_not_errored(...):
+    """AC3 (R6): a concurrent PATCH that advances the intent version
+    between candidate SELECT and mutate_entity produces a
+    StaleMutationError that is logged at debug, not exception, and does
+    NOT increment errored_count on the sweep result."""
 
-14. `test_overview_returns_503_when_cursor_not_seeded` — R2 / F12.
-    `DELETE FROM read_model_cursors WHERE projection_name =
-    'operational_overview'`. GET `/operations/overview?scope_kind=global`
-    as an authorized actor. Assert HTTP 503, body
-    `{"code":"projection_not_initialized", ...}`. Proves the endpoint
-    maps `CursorNotSeededError` to 503, not 500.
+def test_worker_expires_chapter_scoped_intent_without_authority_failure(...):
+    """AC3 (R3): a chapter-scoped temporary intent is expired by a
+    permission-expirer service actor holding only a global grant. No
+    per-drift scope authority check obstructs the sweep."""
+```
+
+**Test harness patterns**: `httpx.AsyncClient` + DB fixtures as in existing `test_permission_intents.py`; `now` injected at service entry points (no `time.sleep`); `PERMISSION_EXPIRY_BATCH_SIZE` monkey-patched via `monkeypatch.setattr(tasks.permission_expiry, ...)` to exercise multi-batch drains ([D14] binding implications).
+
+**Fixtures not required**: no Discord adapter fixtures — AC4 specifies the stable reconciliation path is the Discord surface, not this slice ([D14] non-goals).
 
 ---
 
-## §9 — Authority Permission
+## §9 — Constants
 
-Per D7, the permission name is `operational_overview.read`. The
-repo does not maintain a central permission registry — permissions
-are plain strings used at `require_scoped` call sites (D7 Binding
-implications).
+All literals that span service / repository / test / endpoint code are hoisted to named constants. No magic strings anywhere in the slice.
 
-Concretely:
+### 9.1 `services/api/app/services/permissions.py`
 
-1. **No enum or registry mutation.** A grep of the codebase confirms
-   permission strings like `permission_drift.read` and
-   `ticket.read` are used as literal arguments to `require_scoped`
-   and never declared in a central enum
-   (`.../permissions/drift.py:65`, `tickets/reads.py:27-74`).
-   Adding `operational_overview.read` only requires using it at the
-   one call site in §5.1.3.
+```python
+PERMISSION_EXPIRER_ACTOR_ID: str = "permission-expirer"
+PERMISSION_EXPIRY_MANUAL_DEFAULT_BATCH_SIZE: int = 50
 
-2. **No human-operator grant seeded by this migration.** Per the
-   SLICE-014 precedent, migrations only seed service-actor grants.
-   Human grants are issued at runtime via the authority API and are
-   an operator-policy concern outside this slice
-   (D7 Binding implications).
+# R7: audit verbs hoisted to constants-dict dispatch, matching the pattern of
+# SLICE-014's DRIFT_RESOLUTION_ACTION_TYPE / DRIFT_RESOLUTION_CHANGE_TYPE at
+# permissions.py:72-81. Every mutate_entity call site routes through these
+# dicts — no inline action_type / change_type strings in the slice.
+INTENT_ACTION_TYPE: dict[str, str] = {
+    "renew": "permission_intent.renew",
+    "expire": "permission_intent.expire",
+}
+INTENT_CHANGE_TYPE: dict[str, str] = {
+    "renewed": "permission_intent.renewed",
+    "expired": "permission_intent.expired",
+}
+# R9: distinct change_type for expiry-originated drift so operators can
+# filter audit rows by origin (reconciliation-driven drift still emits
+# `permission_drift.created`). Synthesis D12's "reused permission_drift.detected"
+# was factually incorrect — reconciliation's shipped change_type is
+# `permission_drift.created`, not `.detected`.
+DRIFT_ACTION_TYPE: dict[str, str] = {
+    "detect_expired": "permission_drift.detect_expired",
+}
+DRIFT_CHANGE_TYPE: dict[str, str] = {
+    "detected_expired": "permission_drift.detected_expired",
+}
 
-3. **Service-actor grant is scoped to `read_model.write`, not
-   `operational_overview.read`.** The projector updates the cursor
-   table; it does not read the overview. The two permission names
-   are intentionally distinct (D10 Binding implications).
+# R8: allowlists narrowed to field-specific keys. No wildcards; no mirroring
+# of the whole request. For `permission_intent` aggregates the aggregate_id
+# is the composite built by `build_permission_intent_aggregate_id`, so
+# `intent_id` / row UUID is not in the action_payload (and therefore not in
+# the allowlist). For `permission_drift`, the aggregate_id IS `drift_id`,
+# which is included in the action_payload for cross-reference.
+INTENT_RENEW_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "new_expires_at", "reason",
+})
+INTENT_EXPIRE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "expired_at", "source",  # source ∈ {"worker_sweep", "manual_trigger"}
+})
+EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "drift_id",
+    "permission_intent_id",
+    "intent_version",
+    "scope_kind",
+    "scope_id",
+    "role_id",
+    "channel_id",
+    "kind",
+    "status",
+})
+```
 
-4. **Tests cover the authority decision.** §8.2 test 8 asserts 403
-   for a caller without the permission; tests that exercise the
-   happy path seed the grant in the fixture.
+### 9.2 `services/api/app/tasks/permission_expiry.py`
+
+```python
+PERMISSION_EXPIRY_BATCH_SIZE: int = 50
+```
+
+### 9.3 `services/api/app/services/scheduler.py`
+
+```python
+PERMISSION_EXPIRY_INTERVAL_SECONDS: int = 60
+```
+
+### 9.4 Audit verbs (dispatched via the constants dicts in §9.1)
+
+| Dict lookup | Resolved string | Call site |
+|---|---|---|
+| `INTENT_ACTION_TYPE["renew"]` | `permission_intent.renew` | `renew_permission_intent` |
+| `INTENT_CHANGE_TYPE["renewed"]` | `permission_intent.renewed` | `renew_permission_intent` |
+| `INTENT_ACTION_TYPE["expire"]` | `permission_intent.expire` | `_expire_single_intent` |
+| `INTENT_CHANGE_TYPE["expired"]` | `permission_intent.expired` | `_expire_single_intent` |
+| `DRIFT_ACTION_TYPE["detect_expired"]` | `permission_drift.detect_expired` | `_create_expiry_drift` |
+| `DRIFT_CHANGE_TYPE["detected_expired"]` | `permission_drift.detected_expired` | `_create_expiry_drift` |
+
+R7: every `mutate_entity` call site dereferences one of these dicts — no inline strings, no f-string generation. R9: the expiry-drift `change_type` is distinct from reconciliation's `permission_drift.created`, so audit readers can filter expiry-origin drift without joining to `permission_intent_id` IS NOT NULL. The **payload allowlists** (§9.1) ensure these verbs emit stable, audit-legible payloads ([D12]).
 
 ---
 
-## §10 — Constants
+## §10 — Out of scope (explicit)
 
-All constants required by this slice are collected in one location —
-`services/api/app/services/read_models.py` — except for interval
-(in `scheduler.py` per D11) and the contract-layer `Literal` values.
+Per synthesis **D15**, the following MUST NOT be added in this slice. Any risk / hookpoint / implementation phase flagging these is treated as scope creep:
 
-No magic strings at query sites, no magic strings at test sites.
-Tests import the same constants as production code (D11 Binding
-implications).
-
-Listing per D11 (reproduced for completeness):
-
-- `OPERATIONAL_OVERVIEW_PROJECTION_NAME: str = "operational_overview"`
-- `PROJECTION_NAMES: frozenset[str] = frozenset({OPERATIONAL_OVERVIEW_PROJECTION_NAME})`
-- `MIN_AGE_SECONDS: int = 5`
-- `STALE_EVENT_THRESHOLD: int = 100`
-- `STALE_TIME_THRESHOLD: timedelta = timedelta(minutes=5)`
-- `OPEN_APPLICATION_STATES: tuple[str, ...] = ("submitted", "queued", "claimed", "in_review", "interview", "waitlisted")`
-- `PENDING_DEFERRED_EFFECT_STATUSES: tuple[str, ...] = ("queued", "claimed", "failed")`
-- `UNRESOLVED_DRIFT_STATUSES: tuple[str, ...] = ("detected", "acknowledged")`
-- `scheduler.READ_MODEL_PROJECTOR_INTERVAL_SECONDS: int = 10`
-
-Permission name literal lives at the one call site in §5.1.3 as a
-module-level constant:
-
-- `services/api/app/services/read_models.py::_OVERVIEW_PERMISSION: str = "operational_overview.read"`
-
----
-
-## §11 — Out of Scope (Explicit)
-
-Per D15, the following are explicitly out of scope for WU-031 and
-WU-032 and must **not** be added:
-
-- `operational_overview_snapshot` or any other materialized
-  cross-subsystem projection table.
-- Additional projection cursors beyond `operational_overview`.
-  The substrate supports adding rows to `read_model_cursors` in
-  future slices; none are seeded here.
-- Chapter-scoped `pending_deferred_effects_count`.
-  `deferred_effects` has no first-class scope column; chapter
-  responses return `0` for this field. A future slice that adds
-  `deferred_effects.scope_kind` / `scope_id` may replace the zero.
-- `member` scope on the overview. No AC requires it, and none of
-  the requested counts are member-centric.
-- Historical / time-series views of the overview.
-- Cursor-lag integer as a first-class response field. Operators get
-  `is_stale` + `stale_since`; debugging can hit the
-  `read_model_cursors` table directly.
-- Audit emission for cursor advances
-  (`activity_actions` / `activity_state_changes` rows authored by
-  `read-model-projector`). Cursor advancement is infrastructure
-  bookkeeping, not a domain transition (D10).
-- Retry policy / backpressure / circuit breaker for the projector
-  beyond `try/except logger.exception`.
-- Any write / mutation endpoint under `/operations/**`.
-- Discord-side surface for the overview
-  (`SLICE-017.md:29-30`: "none in this slice").
-- UI / frontend consumers. Contract-only surface this slice.
-- Operator alerting / paging when `is_stale=True`.
-- Pagination, ETag, caching on the overview endpoint (D8 Non-goals).
+1. Auto-reconciliation of expired intents against Discord (operators continue to trigger reconciliation via existing flow).
+2. Expiry notifications / alerts via SLICE-015 consumer hooks.
+3. Time-travel or historical "was-expired-when" views.
+4. Bulk renewal endpoint.
+5. Scope-filtered expiry (worker remains global).
+6. Chapter-scoped authority on `POST /expire/run` (stays global).
+7. Backpressure / circuit-breaker around the worker beyond per-intent `try/except logger.exception`.
+8. `permission_intent.status` column or FSM.
+9. Widening `PermissionIntentUpdate` with `expired_at`.
+10. Reconciliation-run-scoped dedupe for expiry drift (expiry drift carries `reconciliation_run_id = NULL` by contract).
+11. UI / frontend consumers — contract-only surface.
+12. New permission namespace (`permission_intent.renew` / `permission_intent.expire` as **permissions**; authority remains `permission_intent.write` + `permission_drift.write`).
+13. Any new index on `permission_intents.expired_at`.
+14. Any changes to reconciliation drift shapes or `_build_drift_rows` in `permission_reconciliation.py`.
 
 ---
 
 ## Guardrails
 
-- **D1–D15 bound.** Every mechanic above cites the binding decision
-  it implements. Scope expansion requires amending the synthesis,
-  not the proposal.
-- **Read-only endpoint.** `GET /api/v1/operations/overview` issues
-  only `SELECT` statements; the service and repository modules do
-  not import `mutate_entity`, `mutate_projection`,
-  `append_state_change`, or `advance_aggregate_head` (D8).
-- **No audit emission for cursor advances.** The projector uses a
-  plain `UPDATE read_model_cursors ...` (D10).
-- **Migration downgrade no-op.** Per Live Server Principle (D13).
-- **Per-test AC docstring.** Every test in §8 states which AC it
-  binds to (D12).
-- **No backwards-compatibility shims.** No feature flags, no dual
-  paths, no transitional aliases (`AGENTS.md:564-575`).
-- **No deferred stubs.** Everything described here is implemented
-  in this slice; nothing is left as `TODO`
-  (`AGENTS.md:579-583`).
+- **SLICE-014 patterns.** Service-layer authority (`_require_scoped_authority`), constants dispatch (allowlists), `@>` AND `<@` containment in seed, spoof-proof originating actor (`POST /expire/run` takes no body).
+- **Migration.** Single migration `wu_038_permission_intent_expiry`; downgrade is no-op per Live Server Principle; seed is idempotent via `WHERE NOT EXISTS` + containment.
+- **No magic strings.** Every audit verb, allowlist, actor id, batch size, interval is a named constant at module level.
+- **Per-test AC docstring.** Each test begins with `"""ACn: ...` — binding for the test agent.
+- **Concurrent worker safety.** Primary guard is **OCC on `aggregate_heads`** (any concurrent mutation that bumps the intent's `current_seq` causes the second worker's `mutate_entity` to raise `StaleMutationError`, caught at `debug` per R6 and retried next tick) plus the **`expired_at IS NULL` predicate in `mark_intent_expired_row`** (defense-in-depth). `FOR UPDATE SKIP LOCKED` in `select_expirable_intents` is a contention-latency optimization; the row locks release when the candidate-SELECT connection returns to the pool, so it is not an idempotency layer on its own.
+- **Per-intent atomicity (R1).** Expire stamp + drift insert + both audit rows + both state-change rows commit inside a single `db.transaction()` per intent. Partial failure rolls back the expire stamp, and the candidate is re-selected on the next tick. No "expired_at with no drift row" failure mode.
+- **Worker audit context (R2).** `permission_expiry_worker_tick` installs `use_audit_context(_root_audit_context())` when no ambient context exists, so the scheduler's `asyncio.to_thread` hand-off does not break `mutate_entity`'s `MissingCorrelationContextError` guard. Every audit row emitted in one tick shares one `correlation_id`.
+- **No new abstractions.** No registries, no generic "lifecycle engine", no refactor of `update_permission_intent`. Only what AC1–AC4 demand.
+- **Test/Code agent separation.** Test files are written from contracts + this proposal; code files from contracts + tests (AGENTS.md §Implementation Workflow).
+- **No backwards-compatibility shims.** New columns, new endpoints, new audit verbs. Existing callers unchanged.
 
 ---
 
-## AC Traceability
+## 5-bullet summary
 
-- **AC1** — §1 AC1 steps 1–6; §2.1 migration; §4 `load_cursor`,
-  `advance_cursor`, `max_event_id_settled`; §5.1.1
-  `advance_operational_overview_cursor`; §8.1 tests 1–4, 7, 9.
-- **AC2** — §1 AC2 steps 1–3; §5.3 scheduler `try/except`; §8.1
-  tests 5–6, 10; §11 (no retry policy beyond the scheduler).
-- **AC3** — §1 AC3 steps 1–3; §4 count functions; §5.1.2
-  `read_operational_overview`; §8.2 tests 1–3, 11.
-- **AC4** — §1 AC4 steps 1–3; §5.1.3 authority gate; §5.1.4
-  `_compute_staleness`; §7 endpoint with scope validation; §8.2
-  tests 4–10, 12–14.
+- **Migration `wu_038_permission_intent_expiry`** adds `permission_intents.expired_at TIMESTAMPTZ NULL` + `permission_intents_expired_at_valid` CHECK + idempotent seed of `permission-expirer` service actor with `permission_intent.write` + `permission_drift.write` at global scope; downgrade is no-op.
+- **Renewal (WU-038A)** ships as `POST /api/v1/permission-intents/{intent_id}/renew` via a new `temporary.py` endpoint + `renew_permission_intent()` service function that enforces authority, temporary-only, active-only, service-layer future-check on `request.expires_at` (R5), non-blank `reason`, and `If-Match` OCC; emits audit verbs routed through `INTENT_ACTION_TYPE["renew"]` / `INTENT_CHANGE_TYPE["renewed"]` (R7) with the narrow `INTENT_RENEW_PAYLOAD_ALLOWLIST = {"new_expires_at", "reason"}` (R8).
+- **Expiry worker (WU-038B)** ships as `services/api/app/tasks/permission_expiry.py` + `expire_temporary_permission_intents()` service, wired into `SchedulerLoop` at 60-second intervals with 50-row batches. `permission_expiry_worker_tick` installs a root audit context when none exists (R2) and catches `StaleMutationError` at `debug` (R6). `_expire_single_intent` opens **one** `db.transaction()` per candidate and threads its `connection` into both `mutate_entity` calls (R1) so the expire-stamp and drift-insert are atomic. The drift helper does **not** perform a per-intent authority check (R3); the sweep's top-level `permission_intent.write` at global scope is the sole authority gate. The head-version read uses `_read_intent_head_version(aggregate_id, …)` against `aggregate_heads` with the composite aggregate id built by `build_permission_intent_aggregate_id` (R4). Discord is never called.
+- **Expiry drift shape (D9)** carries `permission_intent_id`, `intent_version`, intended_* mirroring intent, `actual_* = NULL`, `reconciliation_run_id = NULL`, `status = 'detected'`, emitted via new verbs `DRIFT_ACTION_TYPE["detect_expired"]` → `DRIFT_CHANGE_TYPE["detected_expired"]` (R9 distinguishes expiry-origin drift from reconciliation's `permission_drift.created`). Action-payload uses the lean `EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST` (R8: 9 keys, no bit masks); bit masks live only in `StateChangeDraft.payload_json`, matching `_record_drift_created`'s split. Resolves through the existing `POST /permission-drift/{id}/resolve` flows, satisfying AC4's "stable reconciliation path" requirement.
+- **Tests split along WU boundaries**: `test_permission_temporary_api.py` covers AC1/AC2 (success, 412, 428, 422 non_temporary/expired/renewal_expires_at_in_past/validation, 403, audit payload); `test_permission_temporary_worker.py` covers AC3/AC4 (expire + drift create atomicity (R1), root audit context install (R2), chapter-scoped intent without per-drift authority obstruction (R3), OCC collision at debug (R6), idempotency, filters, batching, concurrency, per-intent resilience, manual trigger authority + spoof-proofing, audit emission with narrow allowlists). All `now` injected at service entry; no sleeps; `PERMISSION_EXPIRY_BATCH_SIZE` monkey-patched for drain tests.
 
 ---
 
-## Revision Log
+## Revision log — Revision 1
 
-### Revision 1 — 2026-04-21
+Revisions applied to close blocking findings in `plans/risk/slice-020-shortcut.md`
+(HIGH: F1, F2; MEDIUM: F3, F4, F5) and `plans/risk/slice-020-audit.md`
+(MEDIUM 1, MEDIUM 2; LOW 3, LOW 4, LOW 7). `plans/risk/slice-020-scope.md`
+verdict was LOW with no required action.
 
-Applied MEDIUM pins from `plans/risk/slice-017-shortcut.md` (F8, F12).
-No scope expansion; both changes sit inside existing D4/D6/D9
-boundaries.
+| Revision | Binding risk | Sections touched |
+|---|---|---|
+| **R1** — Expire + drift commit in ONE transaction via shared `connection=` kwarg threaded into both `mutate_entity` calls; rollback on drift failure reverts the expire stamp and re-qualifies the candidate on the next tick. | shortcut F1 (HIGH), audit MEDIUM 2 | §1 AC4 step 3; §5.2 (`_expire_single_intent` rewritten, `_create_expiry_drift` accepts `connection=`); Guardrails (atomicity bullet); 5-bullet summary (worker bullet) |
+| **R2** — `permission_expiry_worker_tick` installs `use_audit_context(_root_audit_context())` when no ambient context exists (mirrors `evaluate_ticket_sla` at `services/api/app/services/ticket_sla.py:508-513`), fixing `MissingCorrelationContextError` on the scheduler's `asyncio.to_thread` path. | audit MEDIUM 1 | §6.1 (tick rewritten + new `_root_audit_context` helper); Guardrails (worker-audit-context bullet); 5-bullet summary (worker bullet); new test `test_worker_installs_root_audit_context_when_invoked_from_scheduler_thread` in §8.2 |
+| **R3** — Dropped per-intent `_require_scoped_authority("permission_drift.write", intent.scope_kind, …)` inside `_create_expiry_drift`. Chapter-scoped intents no longer fail on the flat authority model (`authority.py:238` requires exact `scope_kind` match). Precedent: SLICE-014's `_record_drift_created` also has no per-scope check. Top-level `permission_intent.write` at global scope remains the authority gate. | shortcut F2 (HIGH) | §1 AC4 step 3; §5.2 (`_create_expiry_drift` body + explanatory comment); new test `test_worker_expires_chapter_scoped_intent_without_authority_failure` in §8.2 |
+| **R4** — Deleted the stubbed `_current_intent_version(db, intent.id)` which passed the raw row UUID. Replaced with `_read_intent_head_version(connection, *, aggregate_id, intent_id)` that queries `aggregate_heads` with the **composite** aggregate id built by `build_permission_intent_aggregate_id`. The read runs inside the same transaction as the `mutate_entity` call, so it is consistent with the head-for-update check. | shortcut F3 (MEDIUM) | §5.2 (`_read_intent_head_version` added; `_expire_single_intent` uses it inside the tx) |
+| **R5** — Removed the `@field_validator("expires_at")` future-check from `PermissionIntentRenewalRequest` and added a service-layer `if request.expires_at <= now: raise RenewalExpiresAtInPastError(...)` in `renew_permission_intent` using the same `now` as the active-expired guard. Added `RenewalExpiresAtInPastError` to contracts and a 422 code `renewal_expires_at_in_past` in `_shared.raise_known_permission_error`. | shortcut F4 (MEDIUM) | §1 AC1 step 5; §1 AC2 step 4 + renumbered; §3.2 (validator removed + rationale); §3.4 (new error class); §3.5 (`__all__`); §5.1 (service check + constant dispatch); §5.3 (mapping); §7.3 (error table); §8.1 (test renamed) |
+| **R6** — `StaleMutationError` classified as expected control flow. Per-intent loop in `expire_temporary_permission_intents` catches it at `debug` and does NOT increment `errored_count`; task tick also catches it at `debug` returning `None`. Only unexpected exceptions go to `logger.exception`. | shortcut F5 (MEDIUM), audit LOW 3 | §5.2 (loop exception split); §6.1 (tick exception split); Guardrails concurrency bullet; new test `test_worker_stale_mutation_collision_is_logged_at_debug_not_errored` in §8.2 |
+| **R7** — Hoisted action/change-type strings into module-level dicts `INTENT_ACTION_TYPE`, `INTENT_CHANGE_TYPE`, `DRIFT_ACTION_TYPE`, `DRIFT_CHANGE_TYPE` matching SLICE-014's `DRIFT_RESOLUTION_ACTION_TYPE` / `DRIFT_RESOLUTION_CHANGE_TYPE` pattern. Every `mutate_entity` call site dereferences these dicts — no inline strings. | shortcut F9 (LOW, policy-bound) | §1 AC1 step 5; §1 AC4 step 3; §5.1 (`action_type=INTENT_ACTION_TYPE["renew"]`, `change_type=INTENT_CHANGE_TYPE["renewed"]`); §5.2 (expire + drift call sites use dict dispatch); §9.1 (dicts added); §9.4 (table rewritten in dict-lookup form) |
+| **R8** — Payload allowlists tightened: `INTENT_RENEW_PAYLOAD_ALLOWLIST = {"new_expires_at", "reason"}`; `INTENT_EXPIRE_PAYLOAD_ALLOWLIST = {"expired_at", "source"}` with `source ∈ {"worker_sweep", "manual_trigger"}` threaded via a new `source` parameter on `expire_temporary_permission_intents`; `EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST` narrowed from 17 keys to 9 (drift_id + permission_intent_id + intent_version + scope + target + status — no bit masks, no `actual_*` NULLs, no `reconciliation_run_id` NULL). `_create_expiry_drift` now builds a lean `action_payload` dict mirroring `_record_drift_created`'s split between action_payload and payload_json. | audit LOW 4, audit LOW 5 | §5.2 (`_create_expiry_drift` constructs lean action_payload; `expire_temporary_permission_intents` + `_expire_single_intent` accept and thread `source`); §7.1 (manual endpoint passes `source="manual_trigger"`); §9.1 (allowlists replaced; `EXPIRY_DRIFT_DETECT_PAYLOAD_ALLOWLIST` renamed to `EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST`); 5-bullet summary |
+| **R9** — Expiry drift `change_type` distinguished from reconciliation's. Reconciliation emits `permission_drift.created`; expiry emits the new `permission_drift.detected_expired`. Synthesis D12's claim of reuse (originally `permission_drift.detected`) was factually incorrect and is superseded. Operators can now filter audit rows by origin without joining to `permission_intent_id IS NOT NULL`. | audit LOW 7 | §1 AC4 step 3; §5.2 (`_create_expiry_drift` uses `DRIFT_CHANGE_TYPE["detected_expired"]`); §9.1 + §9.4; 5-bullet summary |
 
-| # | Pin | Change | Sections touched |
-|---|-----|--------|------------------|
-| R1 | F8 (shortcut risk pin P2) | Add service-layer `InvalidScopeError` raised at the top of `read_operational_overview` for `scope_kind='global' with scope_id` and `scope_kind='chapter' without scope_id`. Endpoint maps to 422 (defense-in-depth alongside the existing endpoint-layer pre-check). | §5.1 exceptions, §5.1.2 service body + notes, §7.1 endpoint imports + exception mapping, §8.2 tests 12–13. |
-| R2 | F12 (shortcut risk pin P3) | `load_cursor` now returns `ReadModelCursorRead \| None`; `advance_operational_overview_cursor` and `read_operational_overview` raise `CursorNotSeededError` when the seed row is missing. Scheduler resilience wrapper catches + logs (next tick retries until the migration is re-run). Endpoint maps to 503 (`projection_not_initialized`). No auto-seed outside migration. | §4.1 `load_cursor` signature, §5.1 exceptions, §5.1.1 projector, §5.1.2 read path + notes, §5.3 scheduler note, §7.1 endpoint imports + exception mapping, §8.1 tests 9–10, §8.2 test 14, AC Traceability (AC1/AC2/AC4). |
+**Not-blocking findings acknowledged but not revised** (rationale-only, already consistent with revised text):
 
-Scope finding F1 (from `plans/risk/slice-017-scope.md`) and audit
-findings 1–3 (from `plans/risk/slice-017-audit.md`) are LOW and
-require no proposal revision — they are all inherited conventions
-expressly sanctioned by synthesis D6 / D9 / D10.
+- **shortcut F6 (MEDIUM)** — SKIP LOCKED framed as optimization, not idempotency layer. Addressed by rewriting Guardrails' "Concurrent worker safety" bullet to name OCC on `aggregate_heads` + `mark_intent_expired_row`'s predicate as the primary guards.
+- **shortcut F7 (LOW)** — Claim that per-intent tx "matches ticket_sla" removed; §5.2 now frames per-intent tx as a deliberate departure from `ticket_sla`'s single-batch-tx shape, citing `submit_reconciliation_snapshot` as the shared-connection precedent.
+- **shortcut F8 (LOW)** — `mark_intent_expired_row` rowcount=0 still raises `PermissionIntentNotFoundError`. Under R1's shared-tx, rowcount=0 only happens under a genuine data inconsistency (the row truly vanished) because OCC races surface as `StaleMutationError` before the projection runs. The F8 concern (benign concurrency dedupe misreported as error) is subsumed by R6's StaleMutationError split.
+- **shortcut F10 (LOW)** — Drift `uuid4()` generated outside the tx is safe because the whole `with db.transaction()` block is atomic under R1; on rollback, neither the audit row, the state-change row, nor the projection exist, and the `drift_ids` list is only appended after `with` exits. Noted in §5.2 narrative.
+- **audit LOW 6** — `request_surface` hardcoded. Not revised in this iteration; the actor disambiguates worker vs. operator and scope R7's "no inline strings" intent does not yet cover `request_surface`. Deferred to future hygiene pass.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
