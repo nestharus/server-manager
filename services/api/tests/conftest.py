@@ -47,6 +47,7 @@ GOVERNANCE_TABLES = (
     "tickets",
     "ticket_categories",
     "permission_drift",
+    "permission_reconciliation_runs",
     "permission_intents",
     "scheduled_jobs",
     "deferred_effects",
