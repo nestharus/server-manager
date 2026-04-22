@@ -90,6 +90,41 @@ def grant_permission(
         )
 
 
+LIFECYCLE_PERMISSIONS = frozenset(
+    {
+        "authority_grant.create",
+        "authority_grant.read",
+        "authority_grant.revoke",
+    }
+)
+
+
+def seed_lifecycle_permissions(
+    db: PostgresDatabase,
+    *,
+    actor_id: str,
+    scope_kinds: tuple[str, ...] = ("chapter", "global"),
+) -> None:
+    """Seed authority_grant.* permissions at the listed scope kinds.
+
+    Each grant covers every scope_id (scope_id is ``NULL``) and carries all
+    lifecycle permissions so the actor can drive create/list/revoke flows in
+    tests without per-scope permission plumbing.
+    """
+    with use_audit_context(audit_context()):
+        for scope_kind in scope_kinds:
+            grant_authority(
+                db=db,
+                grantee_id=actor_id,
+                scope_kind=scope_kind,
+                scope_id=None,
+                permissions=LIFECYCLE_PERMISSIONS,
+                expires_at=None,
+                predecessor_grant_id=None,
+                actor=("user", "admin"),
+            )
+
+
 def ensure_chapter(db: PostgresDatabase, *, chapter_id: str) -> None:
     with db.connection() as connection:
         existing = connection.execute(

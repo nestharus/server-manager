@@ -9,7 +9,7 @@ from app.contracts.actor import ActorIdentity
 from app.contracts.authority import AuthorityGrantRead, AuthorityGrantTransferRequest
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
-from app.services.authority import get_authority_grant, transfer_authority_grant
+from app.services.authority import transfer_authority_grant
 
 from ._shared import get_db, parse_if_match_strong, raise_known_authority_error, set_etag
 
@@ -28,16 +28,15 @@ def transfer_authority_grant_endpoint(
 ) -> AuthorityGrantRead:
     expected_version = parse_if_match_strong(request)
     try:
-        read, created = transfer_authority_grant(
+        read, result, created = transfer_authority_grant(
             db,
             grant_id=grant_id,
             expected_version=expected_version,
             request=body,
             actor=actor,
         )
-        _fresh, etag = get_authority_grant(db, grant_id=read.id)
     except Exception as error:
         raise_known_authority_error(error)
     response.status_code = HTTPStatus.CREATED if created else HTTPStatus.OK
-    set_etag(response, etag)
+    set_etag(response, result.etag)
     return read

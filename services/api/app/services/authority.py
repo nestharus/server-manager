@@ -384,6 +384,26 @@ def evaluate(
     )
 
 
+def _collect_actor_grant_aliases(
+    connection: Connection[Any],
+    actor_id: str,
+) -> list[str]:
+    """Return every grantee_id alias an actor's grants could be stored under.
+
+    Actors authenticate with either a member UUID, a Discord numeric ID, or a
+    service/admin handle that does not correspond to a member row. Grants may
+    have been written under any alias, so we merge all of them before
+    evaluating permissions.
+    """
+    try:
+        text_aliases, _ = _collect_member_aliases(connection, [actor_id])
+    except InvalidHolderIdError:
+        return [actor_id]
+    if actor_id in text_aliases:
+        return list(text_aliases)
+    return [actor_id, *text_aliases]
+
+
 def _require_scoped_authority(
     permission: str,
     *,
@@ -392,7 +412,22 @@ def _require_scoped_authority(
     actor: ActorIdentity,
     db: PostgresDatabase,
 ) -> None:
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
+    with db.connection() as connection:
+        aliases = _collect_actor_grant_aliases(connection, actor.actor_id)
+        seen_ids: set[UUID] = set()
+        grants: list[AuthorityGrantRead] = []
+        for alias in aliases:
+            for row in list_grants(
+                connection,
+                grantee_id=alias,
+                include_revoked=True,
+                limit=None,
+                after_id=None,
+            ):
+                if row["id"] in seen_ids:
+                    continue
+                seen_ids.add(row["id"])
+                grants.append(_row_to_read(row))
     decision = evaluate(
         requirement=AuthorityRequirement(
             scope_kind=scope_kind,  # type: ignore[arg-type]
@@ -546,8 +581,8 @@ def transfer_authority_grant(
     expected_version: int,
     request: AuthorityGrantTransferRequest,
     actor: ActorIdentity,
-) -> tuple[AuthorityGrantRead, bool]:
-    successor_id = _normalize_nonblank_text(
+) -> tuple[AuthorityGrantRead, MutationResult, bool]:
+    successor_id = _normalize_holder_id(
         request.successor_id,
         field_name="successor_id",
     )
@@ -576,7 +611,18 @@ def transfer_authority_grant(
         )
         if existing_successor is not None:
             if existing_successor["grantee_id"] == successor_id:
-                return _row_to_read(existing_successor), False
+                successor_row = _fetch_grant_row(
+                    connection, existing_successor["id"]
+                )
+                successor_version = int(successor_row["current_seq"])
+                return (
+                    _row_to_read(successor_row),
+                    MutationResult(
+                        version=successor_version,
+                        etag=_format_etag(successor_version),
+                    ),
+                    False,
+                )
             raise GrantAlreadyTransferredError(existing_successor["id"])
         if predecessor["revoked_at"] is not None:
             raise GrantAlreadyRevokedError(grant_id)
@@ -601,7 +647,16 @@ def transfer_authority_grant(
             expected_version=expected_version,
             connection=connection,
         )
-        return successor, True
+        successor_row = _fetch_grant_row(connection, successor.id)
+        successor_version = int(successor_row["current_seq"])
+        return (
+            successor,
+            MutationResult(
+                version=successor_version,
+                etag=_format_etag(successor_version),
+            ),
+            True,
+        )
 
 
 def list_grants_for_grantee(

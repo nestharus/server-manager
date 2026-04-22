@@ -15,6 +15,8 @@ from app.contracts.authority import (
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
 from app.services.authority import (
+    _collect_actor_grant_aliases,
+    _require_scoped_authority,
     get_authority_grant,
     grant_authority,
     list_authority_grants,
@@ -35,6 +37,13 @@ def create_authority_grant(
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> AuthorityGrantRead:
     try:
+        _require_scoped_authority(
+            "authority_grant.create",
+            scope_kind=body.scope_kind,
+            scope_id=body.scope_id,
+            actor=actor,
+            db=db,
+        )
         created = grant_authority(
             db=db,
             grantee_id=body.grantee_id,
@@ -61,17 +70,32 @@ def list_authority_grants_endpoint(
     limit: int = 50,
     after_id: UUID | None = None,
     db: PostgresDatabase = Depends(get_db),
-    actor: ActorIdentity = Depends(get_current_actor),  # noqa: ARG001
+    actor: ActorIdentity = Depends(get_current_actor),
 ) -> AuthorityGrantListRead:
-    return list_authority_grants(
-        db,
-        grantee_id=grantee_id,
-        scope_kind=scope_kind,
-        scope_id=scope_id,
-        include_revoked=include_revoked,
-        limit=limit,
-        after_id=after_id,
-    )
+    try:
+        with db.connection() as connection:
+            actor_aliases = set(
+                _collect_actor_grant_aliases(connection, actor.actor_id)
+            )
+        if grantee_id not in actor_aliases:
+            _require_scoped_authority(
+                "authority_grant.read",
+                scope_kind=scope_kind if scope_kind is not None else "global",
+                scope_id=scope_id,
+                actor=actor,
+                db=db,
+            )
+        return list_authority_grants(
+            db,
+            grantee_id=grantee_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            include_revoked=include_revoked,
+            limit=limit,
+            after_id=after_id,
+        )
+    except Exception as error:
+        raise_known_authority_error(error)
 
 
 @router.post("/{grant_id}/revoke", response_model=AuthorityGrantRead)
@@ -85,6 +109,14 @@ def revoke_authority_grant(
 ) -> AuthorityGrantRead:
     expected_version = parse_if_match_strong(request)
     try:
+        grant, _etag = get_authority_grant(db, grant_id=grant_id)
+        _require_scoped_authority(
+            "authority_grant.revoke",
+            scope_kind=grant.scope_kind,
+            scope_id=grant.scope_id,
+            actor=actor,
+            db=db,
+        )
         revoked = revoke_authority(
             db=db,
             grant_id=grant_id,
