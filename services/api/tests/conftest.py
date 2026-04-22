@@ -49,6 +49,7 @@ GOVERNANCE_TABLES = (
     "permission_drift",
     "permission_reconciliation_runs",
     "permission_intents",
+    "read_model_cursors",
     "scheduled_jobs",
     "deferred_effects",
 )
@@ -78,6 +79,14 @@ def reset_governance_state(database_url: str) -> None:
             + ", ".join(existing)
             + " RESTART IDENTITY CASCADE"
         )
+        if "read_model_cursors" in existing:
+            conn.execute(
+                """
+                INSERT INTO read_model_cursors (projection_name)
+                VALUES ('operational_overview')
+                ON CONFLICT (projection_name) DO NOTHING
+                """
+            )
 
 
 @pytest.fixture(scope="session")
