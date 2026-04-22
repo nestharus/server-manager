@@ -26,7 +26,11 @@ from app.contracts.compliance import (
     EvaluationResult,
 )
 from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
-from app.contracts.roster import InvalidRosterStatusTransitionError, RosterEntryTransitionRequest
+from app.contracts.roster import (
+    InvalidRosterStatusTransitionError,
+    RosterEntryNotFoundError,
+    RosterEntryTransitionRequest,
+)
 from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
 from app.services.authority import _require_scoped_authority
@@ -637,12 +641,21 @@ def _evaluate_member_rule(
             rule=rule,
             result=result,
         )
-        if (
-            consequence_applied == "under_review_applied"
-            and member["status"] not in _ROSTER_AUTO_APPLY_STATUSES
-        ):
-            consequence_applied = "none"
-            review_status = "not_required"
+
+        roster_entry = None
+        if consequence_applied == "under_review_applied":
+            try:
+                roster_entry, _etag = roster_service.get_roster_entry(
+                    db,
+                    member["id"],
+                    connection=connection,
+                )
+            except RosterEntryNotFoundError:
+                roster_entry = None
+            if roster_entry is None or roster_entry.status not in _ROSTER_AUTO_APPLY_STATUSES:
+                consequence_applied = "none"
+                review_status = "not_required"
+                roster_entry = None
 
         inserted_row = _insert_evaluation_row(
             connection,
@@ -659,15 +672,10 @@ def _evaluate_member_rule(
         if inserted_row is None:
             return None
 
-        if consequence_applied == "under_review_applied":
-            roster_entry, _etag = roster_service.get_roster_entry(
-                db,
-                member["id"],
-                connection=connection,
-            )
+        if consequence_applied == "under_review_applied" and roster_entry is not None:
             roster_service.transition_roster_entry(
                 db,
-                member["id"],
+                roster_entry.id,
                 RosterEntryTransitionRequest(
                     to_status="under_review",
                     reason="compliance_violation",

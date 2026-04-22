@@ -239,6 +239,52 @@ def test_worker_evaluates_evidence_in_shared_transaction(
     assert observed["read"] is observed["insert"]
 
 
+def test_worker_reloads_roster_status_in_tx(
+    client: TestClient,
+    app: FastAPI,
+    governance_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC4: roster status is re-read inside the per-member tx so a concurrent transition suppresses auto-apply."""
+    import app.repositories.compliance as compliance_repo
+
+    db: PostgresDatabase = app.state.db
+    seeded = _seed_member_rule(
+        client,
+        app,
+        consequence_kind="under_review",
+        consequence_params={"auto_apply": True},
+    )
+    evidence = seed_evidence(db, rule_id=seeded["rule"].id)
+    _mark_evidence_completed(db, evidence_id=evidence.id, extracted_fields={"attendance": False})
+
+    original_list = compliance_repo.list_current_roster_members_by_chapter
+
+    def mutating_list(connection, **kwargs):
+        rows = original_list(connection, **kwargs)
+        with db.connection() as mutation_connection:
+            mutation_connection.execute(
+                "UPDATE roster_entries SET status = 'under_review', updated_at = NOW() WHERE member_id = %s",
+                ("member-1",),
+            )
+        return rows
+
+    monkeypatch.setattr(
+        compliance_repo,
+        "list_current_roster_members_by_chapter",
+        mutating_list,
+    )
+
+    result = compliance_evaluation_worker_tick(db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
+    roster = fetch_one(governance_dsn, "SELECT status FROM roster_entries WHERE member_id = %s", ("member-1",))
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].consequence_applied == "none"
+    assert result[0].review_status == "not_required"
+    assert roster["status"] == "under_review"
+
+
 def test_correction_merges_with_ocr_fields(
     client: TestClient,
     app: FastAPI,
