@@ -52,6 +52,9 @@ GOVERNANCE_TABLES = (
     "read_model_cursors",
     "scheduled_jobs",
     "deferred_effects",
+    "compliance_evaluations",
+    "evidence_submissions",
+    "compliance_rules",
 )
 
 
@@ -103,6 +106,28 @@ def reset_governance_state(database_url: str) -> None:
                       AND scope_kind = 'global'
                       AND permissions @> '["read_model.write"]'::jsonb
                       AND permissions <@ '["read_model.write"]'::jsonb
+                      AND revoked_at IS NULL
+                      AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO authority_grants (
+                    id, grantee_id, scope_kind, scope_id, permissions,
+                    expires_at, revoked_at, revoked_by, revocation_reason,
+                    predecessor_grant_id
+                )
+                SELECT gen_random_uuid(), 'compliance-evaluator', 'global', NULL,
+                       '["compliance_rule.read","compliance_evaluation.write","roster.transition"]'::jsonb,
+                       NULL, NULL, NULL, NULL, NULL
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM authority_grants
+                    WHERE grantee_id = 'compliance-evaluator'
+                      AND scope_kind = 'global'
+                      AND scope_id IS NULL
+                      AND permissions @> '["compliance_rule.read","compliance_evaluation.write","roster.transition"]'::jsonb
+                      AND permissions <@ '["compliance_rule.read","compliance_evaluation.write","roster.transition"]'::jsonb
                       AND revoked_at IS NULL
                       AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
                 )

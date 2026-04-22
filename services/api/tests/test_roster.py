@@ -11,10 +11,14 @@ from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
+from app.contracts.roster import RosterEntryTransitionRequest
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from app.services.authority import grant_authority
+from app.services.roster import get_roster_entry as get_roster_entry_service
+from app.services.roster import transition_roster_entry
 
 
 ROSTER_URL = "/api/v1/roster-entries"
@@ -549,6 +553,49 @@ def test_get_roster_entry_returns_version_and_etag(
     assert response.status_code == HTTPStatus.OK
     assert response.json()["version"] == 1
     assert response.headers["etag"] == '"1"'
+
+
+def test_transition_roster_entry_accepts_shared_connection(
+    client: TestClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """AC1: roster transitions can participate in a caller-owned transaction and roll back atomically."""
+    roles = _seed_chapter_and_roles(governance_db)
+    _seed_grant(governance_db)
+    entry, _ = _create_entry(client, roles["member"])
+    entry_id = UUID(entry["id"])
+
+    with pytest.raises(RuntimeError, match="force rollback"):
+        with use_audit_context(_audit_context()):
+            with governance_db.transaction() as connection:
+                current, _etag = get_roster_entry_service(
+                    governance_db,
+                    entry_id,
+                    connection=connection,
+                )
+                transition_roster_entry(
+                    governance_db,
+                    entry_id,
+                    RosterEntryTransitionRequest(
+                        to_status="under_review",
+                        reason="shared tx",
+                        originating_actor_kind="user",
+                        originating_actor_id="operator",
+                    ),
+                    ActorIdentity(actor_kind="user", actor_id="operator"),
+                    current.version,
+                    connection=connection,
+                )
+                row = connection.execute(
+                    "SELECT status FROM roster_entries WHERE id = %s",
+                    (entry_id,),
+                ).fetchone()
+                assert row is not None
+                assert row[0] == "under_review"
+                raise RuntimeError("force rollback")
+
+    rolled_back, _rolled_back_etag = get_roster_entry_service(governance_db, entry_id)
+    assert rolled_back.status == "active"
 
 
 def test_sync_failure_enqueues_deferred_effect_atomically(
