@@ -17,6 +17,7 @@ from app.api.v1.endpoints import (
     health,
     members,
     notifications,
+    operations,
     permissions,
     policies,
     ready,
@@ -35,6 +36,7 @@ router.include_router(chapters.router, tags=["chapters"])
 router.include_router(health.router, tags=["health"])
 router.include_router(members.router, tags=["members"])
 router.include_router(notifications.router, tags=["notification-rules"])
+router.include_router(operations.router, tags=["operations"])
 router.include_router(permissions.router)
 router.include_router(policies.router, tags=["policies"])
 router.include_router(ready.router, tags=["ready"])

@@ -54,6 +54,7 @@ def _fetch_grants(database_url: str) -> list[dict[str, Any]]:
             SELECT id, grantee_id, scope_kind, scope_id, permissions,
                    expires_at, revoked_at, predecessor_grant_id, created_at
             FROM authority_grants
+            WHERE grantee_id = 'u1'
             ORDER BY created_at, id
             """
         ).fetchall()

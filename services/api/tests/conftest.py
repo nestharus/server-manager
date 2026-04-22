@@ -49,6 +49,7 @@ GOVERNANCE_TABLES = (
     "permission_drift",
     "permission_reconciliation_runs",
     "permission_intents",
+    "read_model_cursors",
     "scheduled_jobs",
     "deferred_effects",
 )
@@ -78,6 +79,35 @@ def reset_governance_state(database_url: str) -> None:
             + ", ".join(existing)
             + " RESTART IDENTITY CASCADE"
         )
+        if "read_model_cursors" in existing:
+            conn.execute(
+                """
+                INSERT INTO read_model_cursors (projection_name)
+                VALUES ('operational_overview')
+                ON CONFLICT (projection_name) DO NOTHING
+                """
+            )
+        if "authority_grants" in existing:
+            conn.execute(
+                """
+                INSERT INTO authority_grants (
+                    id, grantee_id, scope_kind, scope_id, permissions,
+                    expires_at, revoked_at, revoked_by, revocation_reason,
+                    predecessor_grant_id
+                )
+                SELECT gen_random_uuid(), 'read-model-projector', 'global', NULL,
+                       '["read_model.write"]'::jsonb, NULL, NULL, NULL, NULL, NULL
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM authority_grants
+                    WHERE grantee_id = 'read-model-projector'
+                      AND scope_kind = 'global'
+                      AND permissions @> '["read_model.write"]'::jsonb
+                      AND permissions <@ '["read_model.write"]'::jsonb
+                      AND revoked_at IS NULL
+                      AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                )
+                """
+            )
 
 
 @pytest.fixture(scope="session")
