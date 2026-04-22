@@ -162,13 +162,12 @@ def _duplicate_rule_error(error: errors.UniqueViolation, *, chapter_id: str, nam
 
 
 def _merged_extracted_fields(evidence_row: dict[str, Any]) -> dict[str, Any]:
+    extracted = evidence_row.get("extracted_fields")
+    merged: dict[str, Any] = {} if extracted is None else dict(extracted)
     corrected = evidence_row.get("extracted_fields_corrected")
     if corrected is not None:
-        return dict(corrected)
-    extracted = evidence_row.get("extracted_fields")
-    if extracted is None:
-        return {}
-    return dict(extracted)
+        merged.update(dict(corrected))
+    return merged
 
 
 def _field_is_compliant(value: Any) -> bool:
