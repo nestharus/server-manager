@@ -622,3 +622,56 @@ async def test_resolve_drift_accept_emits_correct_change_type(
     # Shortcut F1 regression guard: the accept action must not write
     # 'permission_drift.acceptd' (f-string typo) in any branch.
     assert "permission_drift.acceptd" not in change_types
+
+
+@pytest.mark.asyncio
+async def test_resolve_drift_rejects_whitespace_only_reason(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """CodeRabbit MAJOR 1: whitespace-only reason returns 422 before the write."""
+    _grant(
+        governance_db,
+        actor_id="operator",
+        permissions=frozenset(
+            {"permission_drift.read", "permission_drift.write"}
+        ),
+    )
+    drift_id = _seed_drift(governance_db)
+
+    response = await migrated_async_client.post(
+        f"{DRIFT_URL}/{drift_id}/resolve",
+        json={"action": "acknowledge", "reason": "   "},
+        headers=_headers("operator", **{"If-Match": '"1"'}),
+    )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+
+
+@pytest.mark.asyncio
+async def test_resolve_drift_rejects_blank_resolved_by_id(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """CodeRabbit MAJOR 3: whitespace-only resolved_by_id returns 422."""
+    _grant(
+        governance_db,
+        actor_id="reconciler",
+        permissions=frozenset(
+            {"permission_drift.read", "permission_drift.write"}
+        ),
+    )
+    drift_id = _seed_drift(governance_db)
+
+    response = await migrated_async_client.post(
+        f"{DRIFT_URL}/{drift_id}/resolve",
+        json={
+            "action": "reconcile",
+            "reason": "bot reconciled",
+            "resolved_by_kind": "user",
+            "resolved_by_id": "   ",
+        },
+        headers=_headers(
+            "reconciler", kind="service", **{"If-Match": '"1"'}
+        ),
+    )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text

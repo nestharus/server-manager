@@ -600,3 +600,51 @@ async def test_submit_snapshot_diff_algorithm_handles_both_directions(
     assert orphan[1] is False
     assert int(orphan[2]) == 32
     assert orphan[3] is None
+
+
+@pytest.mark.asyncio
+async def test_create_run_rejects_blank_originating_actor_kind(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """CodeRabbit MAJOR 4: whitespace-only originating_actor_kind returns 422."""
+    _grant(
+        governance_db,
+        actor_id="operator",
+        permissions=frozenset({"permission_reconciliation_run.write"}),
+    )
+    response = await migrated_async_client.post(
+        RUNS_URL,
+        json={
+            "scope_kind": "global",
+            "scope_id": None,
+            "originating_actor_kind": "   ",
+            "originating_actor_id": "some-bot",
+        },
+        headers=_headers("operator"),
+    )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+
+
+@pytest.mark.asyncio
+async def test_create_run_rejects_mismatched_originating_actor_pair(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """CodeRabbit MAJOR 4: originating_actor_{kind,id} must be both-or-neither."""
+    _grant(
+        governance_db,
+        actor_id="operator",
+        permissions=frozenset({"permission_reconciliation_run.write"}),
+    )
+    response = await migrated_async_client.post(
+        RUNS_URL,
+        json={
+            "scope_kind": "global",
+            "scope_id": None,
+            "originating_actor_kind": "service",
+            "originating_actor_id": None,
+        },
+        headers=_headers("operator"),
+    )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text

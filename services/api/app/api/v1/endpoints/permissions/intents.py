@@ -9,7 +9,9 @@ from pydantic import Field
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.permissions import (
+    ChannelRolePermissionIntent,
     ChannelRolePermissionIntentCreate,
+    GuildRolePermissionIntent,
     GuildRolePermissionIntentCreate,
     PermissionIntentKind,
     PermissionIntentScopeKind,
@@ -38,11 +40,20 @@ PermissionIntentCreateBody = Annotated[
     Field(discriminator="kind"),
 ]
 
+PermissionIntentReadResponse = Annotated[
+    GuildRolePermissionIntent | ChannelRolePermissionIntent,
+    Field(discriminator="kind"),
+]
+
 
 router = APIRouter(prefix="/api/v1/permission-intents")
 
 
-@router.post("", status_code=HTTPStatus.CREATED)
+@router.post(
+    "",
+    status_code=HTTPStatus.CREATED,
+    response_model=PermissionIntentReadResponse,
+)
 def create_intent_endpoint(
     body: PermissionIntentCreateBody,
     response: Response,
@@ -61,7 +72,7 @@ def create_intent_endpoint(
     return read
 
 
-@router.patch("/{intent_id}")
+@router.patch("/{intent_id}", response_model=PermissionIntentReadResponse)
 def patch_intent_endpoint(
     intent_id: UUID,
     body: PermissionIntentUpdate,
@@ -90,7 +101,7 @@ def patch_intent_endpoint(
     return read
 
 
-@router.get("")
+@router.get("", response_model=list[PermissionIntentReadResponse])
 def list_intents_endpoint(
     scope_kind: PermissionIntentScopeKind,
     scope_id: str | None = Query(default=None),

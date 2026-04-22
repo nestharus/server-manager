@@ -147,7 +147,7 @@ def upgrade() -> None:
         "AND resolved_by_id IS NOT NULL "
         "AND resolved_at IS NOT NULL "
         "AND resolution_reason IS NOT NULL "
-        "AND resolution_reason <> ''"
+        "AND btrim(resolution_reason) <> ''"
         ")",
     )
 

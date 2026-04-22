@@ -261,6 +261,13 @@ class PermissionDriftResolutionRequest(_PermissionModel):
             raise ValueError("reason must be non-blank")
         return value
 
+    @field_validator("resolved_by_kind", "resolved_by_id")
+    @classmethod
+    def reject_blank_resolved_by(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("resolved_by fields must be non-blank")
+        return value
+
     @model_validator(mode="after")
     def validate_resolved_by_pair(self) -> "PermissionDriftResolutionRequest":
         if (self.resolved_by_kind is None) != (self.resolved_by_id is None):
@@ -277,12 +284,30 @@ class PermissionReconciliationRunCreate(_PermissionModel):
     originating_actor_kind: str | None = None
     originating_actor_id: str | None = None
 
+    @field_validator("originating_actor_kind", "originating_actor_id")
+    @classmethod
+    def reject_blank_originating_actor(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("originating_actor fields must be non-blank")
+        return value
+
     @model_validator(mode="after")
     def validate_scope_shape(self) -> "PermissionReconciliationRunCreate":
         if self.scope_kind == "global" and self.scope_id is not None:
             raise ValueError("global scope forbids scope_id")
         if self.scope_kind == "chapter" and self.scope_id is None:
             raise ValueError("chapter scope requires scope_id")
+        return self
+
+    @model_validator(mode="after")
+    def validate_originating_actor_pair(self) -> "PermissionReconciliationRunCreate":
+        if (self.originating_actor_kind is None) != (
+            self.originating_actor_id is None
+        ):
+            raise ValueError(
+                "originating_actor_kind and originating_actor_id must be supplied "
+                "together or omitted together"
+            )
         return self
 
 
