@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import (
     AfterValidator,
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -63,6 +64,7 @@ class _PermissionIntentBase(_PermissionModel):
     reason: str | None = None
     temporary: bool
     expires_at: datetime | None = None
+    expired_at: datetime | None = None
 
     @model_validator(mode="after")
     def validate_scope_shape(self) -> "_PermissionIntentBase":
@@ -78,6 +80,18 @@ class _PermissionIntentBase(_PermissionModel):
             raise ValueError("temporary permission intents require expires_at")
         if not self.temporary and self.expires_at is not None:
             raise ValueError("non-temporary permission intents forbid expires_at")
+        return self
+
+    @model_validator(mode="after")
+    def validate_expired_shape(self) -> "_PermissionIntentBase":
+        if self.expired_at is not None and self.expires_at is None:
+            raise ValueError("expired_at requires expires_at")
+        if (
+            self.expired_at is not None
+            and self.expires_at is not None
+            and self.expired_at < self.expires_at
+        ):
+            raise ValueError("expired_at cannot precede expires_at")
         return self
 
 
@@ -170,6 +184,18 @@ class PermissionIntentUpdate(_PermissionModel):
     permission_bits: DecimalBitString | None = None
     allow_bits: DecimalBitString | None = None
     deny_bits: DecimalBitString | None = None
+
+
+class PermissionIntentRenewalRequest(_PermissionModel):
+    expires_at: AwareDatetime
+    reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def reject_blank_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("reason must be non-blank")
+        return value
 
 
 class PermissionDriftRead(_PermissionModel):
@@ -326,6 +352,14 @@ class PermissionReconciliationRunRead(_PermissionModel):
     drift_ids: list[UUID] = Field(default_factory=list)
 
 
+class PermissionExpirySweepResult(_PermissionModel):
+    expired_intent_ids: list[UUID] = Field(default_factory=list)
+    drift_ids: list[UUID] = Field(default_factory=list)
+    inspected_count: int = Field(ge=0)
+    expired_count: int = Field(ge=0)
+    errored_count: int = Field(ge=0)
+
+
 class _PermissionSnapshotBase(_PermissionModel):
     role_id: str = Field(min_length=1)
 
@@ -384,6 +418,30 @@ class PermissionDriftNotFoundError(LookupError):
         super().__init__(f"permission drift {drift_id} was not found")
 
 
+class NonTemporaryIntentRenewalError(Exception):
+    def __init__(self, intent_id: UUID) -> None:
+        self.intent_id = intent_id
+        super().__init__(
+            f"permission intent {intent_id} is not temporary and cannot be renewed"
+        )
+
+
+class ExpiredIntentRenewalError(Exception):
+    def __init__(self, intent_id: UUID) -> None:
+        self.intent_id = intent_id
+        super().__init__(
+            f"permission intent {intent_id} is already expired and cannot be renewed"
+        )
+
+
+class RenewalExpiresAtInPastError(Exception):
+    def __init__(self, intent_id: UUID) -> None:
+        self.intent_id = intent_id
+        super().__init__(
+            f"permission intent {intent_id} renewal requires expires_at in the future"
+        )
+
+
 __all__ = [
     "ChannelRolePermissionIntent",
     "ChannelRolePermissionIntentCreate",
@@ -394,14 +452,18 @@ __all__ = [
     "GuildRolePermissionIntentCreate",
     "GuildRolePermissionSnapshotEntry",
     "InvalidPermissionIntentError",
+    "ExpiredIntentRenewalError",
+    "NonTemporaryIntentRenewalError",
     "PermissionDriftNotFoundError",
     "PermissionDriftRead",
     "PermissionDriftResolutionRequest",
     "PermissionDriftStatus",
+    "PermissionExpirySweepResult",
     "PermissionIntentCreate",
     "PermissionIntentKind",
     "PermissionIntentNotFoundError",
     "PermissionIntentRead",
+    "PermissionIntentRenewalRequest",
     "PermissionIntentScopeKind",
     "PermissionIntentUpdate",
     "PermissionReconciliationRunCreate",
@@ -409,6 +471,7 @@ __all__ = [
     "PermissionReconciliationRunStatus",
     "PermissionSnapshotEntry",
     "ReconciliationSnapshotRequest",
+    "RenewalExpiresAtInPastError",
     "_PermissionIntentBase",
     "_validate_decimal_bit_string",
 ]

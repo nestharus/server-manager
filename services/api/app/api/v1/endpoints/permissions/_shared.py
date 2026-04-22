@@ -9,9 +9,12 @@ from app.contracts.actor import ActorIdentity
 from app.contracts.authority import AuthorityRequirement
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
 from app.contracts.permissions import (
+    ExpiredIntentRenewalError,
     InvalidPermissionIntentError,
+    NonTemporaryIntentRenewalError,
     PermissionDriftNotFoundError,
     PermissionIntentNotFoundError,
+    RenewalExpiresAtInPastError,
 )
 from app.repositories.db import PostgresDatabase
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
@@ -130,6 +133,33 @@ def raise_known_permission_error(error: Exception) -> NoReturn:
                 "code": "reconciliation_run_conflict",
                 "message": str(error),
                 "status": error.status,
+            },
+        ) from error
+    if isinstance(error, NonTemporaryIntentRenewalError):
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "non_temporary_intent",
+                "message": str(error),
+                "intent_id": str(error.intent_id),
+            },
+        ) from error
+    if isinstance(error, ExpiredIntentRenewalError):
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "expired_intent",
+                "message": str(error),
+                "intent_id": str(error.intent_id),
+            },
+        ) from error
+    if isinstance(error, RenewalExpiresAtInPastError):
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "renewal_expires_at_in_past",
+                "message": str(error),
+                "intent_id": str(error.intent_id),
             },
         ) from error
     if isinstance(error, PermissionError):

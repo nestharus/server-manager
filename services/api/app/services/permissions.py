@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -9,21 +10,56 @@ from psycopg import Connection
 from app.contracts.actor import ActorIdentity
 from app.contracts.authority import AuthorityRequirement
 from app.contracts.base import AGGREGATE_SCOPE_MISSING, validated_update
-from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
+from app.contracts.mutations import (
+    MutationRequest,
+    MutationResult,
+    StaleMutationError,
+    StateChangeDraft,
+)
 from app.contracts.permissions import (
+    ExpiredIntentRenewalError,
+    NonTemporaryIntentRenewalError,
     PermissionDriftNotFoundError,
     PermissionDriftRead,
     PermissionDriftResolutionRequest,
+    PermissionExpirySweepResult,
     PermissionIntentCreate,
     PermissionIntentNotFoundError,
     PermissionIntentRead,
+    PermissionIntentRenewalRequest,
     PermissionIntentUpdate,
+    RenewalExpiresAtInPastError,
 )
-from app.repositories.db import PostgresDatabase
 from app.repositories import permissions as permission_repo
+from app.repositories.db import PostgresDatabase
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
 from app.services.mutations import mutate_entity
 
+logger = logging.getLogger(__name__)
+
+PERMISSION_EXPIRER_ACTOR_ID = "permission-expirer"
+PERMISSION_EXPIRY_DEFAULT_BATCH_SIZE = 50
+
+INTENT_ACTION_TYPE: dict[str, str] = {
+    "create": "permission_intent.create",
+    "update": "permission_intent.update",
+    "renew": "permission_intent.renew",
+    "expire": "permission_intent.expire",
+}
+INTENT_CHANGE_TYPE: dict[str, str] = {
+    "created": "permission_intent.created",
+    "updated": "permission_intent.updated",
+    "renewed": "permission_intent.renewed",
+    "expired": "permission_intent.expired",
+}
+DRIFT_ACTION_TYPE: dict[str, str] = {
+    "create": "permission_drift.create",
+    "detect_expired": "permission_drift.detect_expired",
+}
+DRIFT_CHANGE_TYPE: dict[str, str] = {
+    "created": "permission_drift.created",
+    "detected_expired": "permission_drift.detected_expired",
+}
 
 INTENT_CREATE_PAYLOAD_ALLOWLIST: set[str] = {
     "kind",
@@ -46,6 +82,8 @@ INTENT_UPDATE_PAYLOAD_ALLOWLIST: set[str] = {
     "allow_bits",
     "deny_bits",
 }
+INTENT_RENEW_PAYLOAD_ALLOWLIST = frozenset({"new_expires_at", "reason"})
+INTENT_EXPIRE_PAYLOAD_ALLOWLIST = frozenset({"expired_at", "source"})
 
 DRIFT_RESOLUTION_TARGET_STATUS: dict[str, str] = {
     "acknowledge": "acknowledged",
@@ -79,6 +117,19 @@ DRIFT_RESOLUTION_CHANGE_TYPE: dict[str, str] = {
     "reconcile": "permission_drift.reconciled",
     "accept": "permission_drift.accepted",
 }
+EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST = frozenset(
+    {
+        "drift_id",
+        "permission_intent_id",
+        "intent_version",
+        "scope_kind",
+        "scope_id",
+        "role_id",
+        "channel_id",
+        "kind",
+        "status",
+    }
+)
 
 
 class InvalidDriftTransitionError(Exception):
@@ -206,7 +257,7 @@ def create_permission_intent(
             {"id": intent_id, **request.model_dump(mode="python")}
         ).model_dump(mode="json")
         return StateChangeDraft(
-            change_type="permission_intent.created",
+            change_type=INTENT_CHANGE_TYPE["created"],
             payload_json=payload,
         )
 
@@ -219,7 +270,7 @@ def create_permission_intent(
             actor=actor,
             request_surface="api:/api/v1/permission-intents",
         ),
-        action_type="permission_intent.create",
+        action_type=INTENT_ACTION_TYPE["create"],
         action_payload=request_payload,
         payload_allowlist=INTENT_CREATE_PAYLOAD_ALLOWLIST,
         mutate_projection=mutate_projection,
@@ -273,7 +324,7 @@ def update_permission_intent(
         if updated_count != 1:
             raise PermissionIntentNotFoundError(intent_id)
         return StateChangeDraft(
-            change_type="permission_intent.updated",
+            change_type=INTENT_CHANGE_TYPE["updated"],
             payload_json=updated.model_dump(mode="json"),
         )
 
@@ -286,9 +337,85 @@ def update_permission_intent(
             actor=actor,
             request_surface=f"api:/api/v1/permission-intents/{intent_id}",
         ),
-        action_type="permission_intent.update",
+        action_type=INTENT_ACTION_TYPE["update"],
         action_payload=validated_patch,
         payload_allowlist=INTENT_UPDATE_PAYLOAD_ALLOWLIST,
+        mutate_projection=mutate_projection,
+        scope_kind=current.scope_kind,
+        scope_id=current.scope_id,
+    )
+    return read_permission_intent(db, intent_id), result
+
+
+def renew_permission_intent(
+    db: PostgresDatabase,
+    intent_id: UUID,
+    *,
+    expected_version: int,
+    request: PermissionIntentRenewalRequest,
+    actor: ActorIdentity,
+) -> tuple[Any, MutationResult]:
+    current = read_permission_intent(db, intent_id)
+
+    _require_scoped_authority(
+        "permission_intent.write",
+        scope_kind=current.scope_kind,
+        scope_id=current.scope_id,
+        actor=actor,
+        db=db,
+    )
+
+    now = datetime.now(UTC)
+    if not current.temporary:
+        raise NonTemporaryIntentRenewalError(intent_id)
+    if current.expired_at is not None or (
+        current.expires_at is not None and current.expires_at <= now
+    ):
+        raise ExpiredIntentRenewalError(intent_id)
+    if request.expires_at <= now:
+        raise RenewalExpiresAtInPastError(intent_id)
+
+    updated = validated_update(
+        current,
+        {"expires_at": request.expires_at},
+    )
+    aggregate_id = build_permission_intent_aggregate_id(
+        scope_kind=current.scope_kind,
+        scope_id=current.scope_id,
+        role_id=current.role_id,
+        channel_id=getattr(current, "channel_id", None),
+    )
+
+    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+        row = _to_permission_intent_row(updated)
+        updated_count = permission_repo.update_permission_intent_row(
+            connection,
+            intent_id=intent_id,
+            row=row,
+        )
+        if updated_count != 1:
+            raise PermissionIntentNotFoundError(intent_id)
+        return StateChangeDraft(
+            change_type=INTENT_CHANGE_TYPE["renewed"],
+            payload_json=updated.model_dump(mode="json"),
+        )
+
+    result = mutate_entity(
+        db=db,
+        aggregate_type="permission_intent",
+        aggregate_id=aggregate_id,
+        request=_make_request(
+            expected_version=expected_version,
+            actor=actor,
+            request_surface=f"api:/api/v1/permission-intents/{intent_id}/renew",
+            reason_text=request.reason,
+        ),
+        action_type=INTENT_ACTION_TYPE["renew"],
+        action_payload={
+            "new_expires_at": request.expires_at.isoformat(),
+            "reason": request.reason,
+        },
+        payload_allowlist=INTENT_RENEW_PAYLOAD_ALLOWLIST,
         mutate_projection=mutate_projection,
         scope_kind=current.scope_kind,
         scope_id=current.scope_id,
@@ -340,6 +467,68 @@ def list_permission_intents(
     return [PermissionIntentRead.model_validate(row) for row in rows]
 
 
+def expire_temporary_permission_intents(
+    db: PostgresDatabase,
+    *,
+    actor: ActorIdentity,
+    now: datetime | None = None,
+    batch_size: int | None = None,
+    source: str = "worker_sweep",
+) -> PermissionExpirySweepResult:
+    _require_scoped_authority(
+        "permission_intent.write",
+        scope_kind="global",
+        scope_id=None,
+        actor=actor,
+        db=db,
+    )
+
+    resolved_now = now or datetime.now(UTC)
+    resolved_batch_size = batch_size or PERMISSION_EXPIRY_DEFAULT_BATCH_SIZE
+    with db.connection() as connection:
+        rows = permission_repo.select_expirable_intents(
+            connection,
+            now=resolved_now,
+            batch_size=resolved_batch_size,
+        )
+
+    expired_intent_ids: list[UUID] = []
+    drift_ids: list[UUID] = []
+    errored = 0
+    inspected = 0
+    for row in rows:
+        inspected += 1
+        intent = PermissionIntentRead.model_validate(row)
+        try:
+            expired_intent, drift = _expire_single_intent(
+                db,
+                intent=intent,
+                actor=actor,
+                now=resolved_now,
+                source=source,
+            )
+        except StaleMutationError:
+            logger.debug(
+                "permission-expiry skipped stale intent %s",
+                intent.id,
+            )
+            continue
+        except Exception:
+            logger.exception("permission-expiry failed for intent %s", intent.id)
+            errored += 1
+            continue
+        expired_intent_ids.append(expired_intent.id)
+        drift_ids.append(drift.id)
+
+    return PermissionExpirySweepResult(
+        expired_intent_ids=expired_intent_ids,
+        drift_ids=drift_ids,
+        inspected_count=inspected,
+        expired_count=len(expired_intent_ids),
+        errored_count=errored,
+    )
+
+
 def read_permission_drift(
     db: PostgresDatabase,
     drift_id: UUID,
@@ -380,6 +569,166 @@ def list_permission_drift(
             has_intent=has_intent,
         )
     return [PermissionDriftRead.model_validate(row) for row in rows]
+
+
+def _expire_single_intent(
+    db: PostgresDatabase,
+    *,
+    intent: Any,
+    actor: ActorIdentity,
+    now: datetime,
+    source: str,
+) -> tuple[Any, PermissionDriftRead]:
+    aggregate_id = build_permission_intent_aggregate_id(
+        scope_kind=intent.scope_kind,
+        scope_id=intent.scope_id,
+        role_id=intent.role_id,
+        channel_id=getattr(intent, "channel_id", None),
+    )
+
+    with db.transaction() as connection:
+        expected_version = _read_intent_head_version(
+            connection,
+            aggregate_id=aggregate_id,
+            intent_id=intent.id,
+        )
+
+        def mutate_projection_expire(active: Connection[Any]) -> StateChangeDraft:
+            updated_count = permission_repo.mark_intent_expired_row(
+                active,
+                intent_id=intent.id,
+                expired_at=now,
+            )
+            if updated_count != 1:
+                raise PermissionIntentNotFoundError(intent.id)
+            updated = intent.model_copy(update={"expired_at": now})
+            return StateChangeDraft(
+                change_type=INTENT_CHANGE_TYPE["expired"],
+                payload_json=updated.model_dump(mode="json"),
+            )
+
+        expire_result = mutate_entity(
+            db=db,
+            aggregate_type="permission_intent",
+            aggregate_id=aggregate_id,
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface="worker:permission_expiry",
+            ),
+            action_type=INTENT_ACTION_TYPE["expire"],
+            action_payload={
+                "expired_at": now.isoformat(),
+                "source": source,
+            },
+            payload_allowlist=INTENT_EXPIRE_PAYLOAD_ALLOWLIST,
+            mutate_projection=mutate_projection_expire,
+            scope_kind=intent.scope_kind,
+            scope_id=intent.scope_id,
+            connection=connection,
+        )
+        drift = _create_expiry_drift(
+            db,
+            connection=connection,
+            intent=intent,
+            intent_version_after_expire=expire_result.version,
+            actor=actor,
+            now=now,
+        )
+    expired_intent = read_permission_intent(db, intent.id)
+    return expired_intent, drift
+
+
+def _create_expiry_drift(
+    db: PostgresDatabase,
+    *,
+    connection: Connection[Any],
+    intent: Any,
+    intent_version_after_expire: int,
+    actor: ActorIdentity,
+    now: datetime,
+) -> PermissionDriftRead:
+    drift = PermissionDriftRead.model_validate(
+        {
+            "id": uuid4(),
+            "permission_intent_id": intent.id,
+            "intent_version": intent_version_after_expire,
+            "scope_kind": intent.scope_kind,
+            "scope_id": intent.scope_id,
+            "role_id": intent.role_id,
+            "channel_id": getattr(intent, "channel_id", None),
+            "kind": intent.kind,
+            "reconciliation_run_id": None,
+            "intended_bits": getattr(intent, "permission_bits", None),
+            "intended_allow_bits": getattr(intent, "allow_bits", None),
+            "intended_deny_bits": getattr(intent, "deny_bits", None),
+            "actual_bits": None,
+            "actual_allow_bits": None,
+            "actual_deny_bits": None,
+            "status": "detected",
+            "detected_at": now,
+        }
+    )
+    action_payload = {
+        "drift_id": str(drift.id),
+        "permission_intent_id": str(intent.id),
+        "intent_version": intent_version_after_expire,
+        "scope_kind": intent.scope_kind,
+        "scope_id": intent.scope_id,
+        "role_id": intent.role_id,
+        "channel_id": getattr(intent, "channel_id", None),
+        "kind": intent.kind,
+        "status": "detected",
+    }
+
+    def mutate_projection_drift(active: Connection[Any]) -> StateChangeDraft:
+        permission_repo.insert_permission_drift(
+            active,
+            row=_to_permission_drift_row(drift),
+        )
+        return StateChangeDraft(
+            change_type=DRIFT_CHANGE_TYPE["detected_expired"],
+            payload_json=drift.model_dump(mode="json"),
+        )
+
+    mutate_entity(
+        db=db,
+        aggregate_type="permission_drift",
+        aggregate_id=str(drift.id),
+        request=_make_request(
+            expected_version=0,
+            actor=actor,
+            request_surface="worker:permission_expiry",
+        ),
+        action_type=DRIFT_ACTION_TYPE["detect_expired"],
+        action_payload=action_payload,
+        payload_allowlist=EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST,
+        mutate_projection=mutate_projection_drift,
+        scope_kind=intent.scope_kind,
+        scope_id=intent.scope_id,
+        connection=connection,
+    )
+    return drift
+
+
+def _read_intent_head_version(
+    connection: Connection[Any],
+    *,
+    aggregate_id: str,
+    intent_id: UUID,
+) -> int:
+    row = connection.execute(
+        """
+        SELECT current_seq
+          FROM aggregate_heads
+         WHERE aggregate_type = 'permission_intent'
+           AND aggregate_id = %s
+        """,
+        (aggregate_id,),
+    ).fetchone()
+    if row is None:
+        raise PermissionIntentNotFoundError(intent_id)
+    return int(row[0])
 
 
 def _drift_originating_actor(
@@ -508,7 +857,7 @@ def create_permission_drift(
             connection, row=_to_permission_drift_row(request)
         )
         return StateChangeDraft(
-            change_type="permission_drift.created",
+            change_type=DRIFT_CHANGE_TYPE["created"],
             payload_json=request.model_dump(mode="json"),
         )
 
@@ -521,7 +870,7 @@ def create_permission_drift(
             actor=actor,
             request_surface="service:permissions.create_permission_drift",
         ),
-        action_type="permission_drift.create",
+        action_type=DRIFT_ACTION_TYPE["create"],
         action_payload=request.model_dump(mode="json"),
         payload_allowlist=set(request.model_dump().keys()),
         mutate_projection=mutate_projection,

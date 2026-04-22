@@ -67,9 +67,10 @@ def insert_permission_intent(
             deny_bits,
             reason,
             temporary,
-            expires_at
+            expires_at,
+            expired_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             row["id"],
@@ -84,6 +85,7 @@ def insert_permission_intent(
             row.get("reason"),
             row["temporary"],
             row.get("expires_at"),
+            row.get("expired_at"),
         ),
     )
 
@@ -97,7 +99,7 @@ def fetch_permission_intent(
             """
             SELECT id, kind, scope_kind, scope_id, role_id, channel_id,
                    permission_bits, allow_bits, deny_bits, reason,
-                   temporary, expires_at
+                   temporary, expires_at, expired_at
             FROM permission_intents
             WHERE id = %s
             """,
@@ -146,7 +148,7 @@ def list_permission_intents(
             f"""
             SELECT id, kind, scope_kind, scope_id, role_id, channel_id,
                    permission_bits, allow_bits, deny_bits, reason,
-                   temporary, expires_at
+                   temporary, expires_at, expired_at
             FROM permission_intents
             WHERE {where}
             ORDER BY role_id, channel_id NULLS FIRST, id
@@ -182,6 +184,49 @@ def update_permission_intent_row(
             row.get("deny_bits"),
             intent_id,
         ),
+    )
+    return cursor.rowcount
+
+
+def select_expirable_intents(
+    connection: Connection[Any],
+    *,
+    now: datetime,
+    batch_size: int,
+) -> list[dict[str, Any]]:
+    with connection.cursor(row_factory=dict_row) as cursor:
+        rows = cursor.execute(
+            """
+            SELECT id, kind, scope_kind, scope_id, role_id, channel_id,
+                   permission_bits, allow_bits, deny_bits, reason,
+                   temporary, expires_at, expired_at
+            FROM permission_intents
+            WHERE temporary = TRUE
+              AND expires_at <= %s
+              AND expired_at IS NULL
+            ORDER BY expires_at ASC, id ASC
+            LIMIT %s
+            FOR UPDATE SKIP LOCKED
+            """,
+            (now, batch_size),
+        ).fetchall()
+    return [_normalize_permission_intent_row(row) for row in rows]
+
+
+def mark_intent_expired_row(
+    connection: Connection[Any],
+    *,
+    intent_id: UUID,
+    expired_at: datetime,
+) -> int:
+    cursor = connection.execute(
+        """
+        UPDATE permission_intents
+        SET expired_at = %s
+        WHERE id = %s
+          AND expired_at IS NULL
+        """,
+        (expired_at, intent_id),
     )
     return cursor.rowcount
 

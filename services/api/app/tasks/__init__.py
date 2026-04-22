@@ -6,6 +6,7 @@ from app.services.scheduler import register_scheduler_handler
 from app.tasks.archive import configure_archive_worker
 from app.tasks.notifications_deliver import configure_notifications_deliver
 from app.tasks.notifications_materialize import configure_notifications_materialize
+from app.tasks.permission_expiry import configure_permission_expiry
 from app.tasks.read_models import configure_read_models
 from app.tasks.ticket_sla import configure_ticket_sla
 
@@ -23,6 +24,7 @@ def configure_task_runtime(
     )
     configure_read_models(db=db)
     configure_ticket_sla(db=db)
+    configure_permission_expiry(db=db)
 
 
 __all__ = ["NotificationDeliveryPort", "configure_task_runtime", "register_scheduler_handler"]

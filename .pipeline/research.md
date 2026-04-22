@@ -1,327 +1,85 @@
-# SLICE-017 Research: Cross-Subsystem Operational Views
-
-## 1. Audit event stream shape + ordering
-
-### `activity_state_changes` shape
-
-`activity_state_changes` is the accepted-state-change stream created by WU-002. Its columns are:
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `BIGINT IDENTITY` | Global surrogate key, primary key. |
-| `action_id` | `BIGINT` | FK to `activity_actions.id`. |
-| `aggregate_type` | `TEXT` | Aggregate namespace. |
-| `aggregate_id` | `TEXT` in live schema terms | Aggregate identifier; migration was widened to text in WU-003a. |
-| `aggregate_seq` | `BIGINT` | Per-aggregate causal sequence. |
-| `change_type` | `TEXT` | Business transition label. |
-| `payload_json` | `JSONB` | Authoritative accepted fact. |
-| `diff_json` | `JSONB NULL` | Optional ergonomic diff. |
-| `recorded_at` | `TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP` | Write timestamp, but not a safe unique ordering key. |
-
-Sources: `migrations/versions/wu-002_activity_substrate.py:69-112`, `migrations/versions/wu-003a_widen_aggregate_id.py:19-40`, `services/api/app/contracts/mutations.py:13-17`, `services/api/app/contracts/mutations.py:55-67`.
-
-Important: correlation and scope do **not** live on `activity_state_changes`; they live on `activity_actions` (`correlation_id`, `causation_id`, `scope_kind`, `scope_id`). Any projector that needs causal-chain or scope metadata must join through `action_id`. Sources: `migrations/versions/wu-003b_audit_context_columns.py:16-49`, `services/api/app/repositories/mutations.py:46-99`, `services/api/app/repositories/mutations.py:109-148`.
-
-### Ordering guarantees that exist today
-
-- Per-aggregate causal order is explicit and strong. `activity_state_changes` has a unique constraint on `(aggregate_type, aggregate_id, aggregate_seq)`, and `mutate_entity()` locks the aggregate head, writes the projection, inserts the state change with `new_version = current_seq + 1`, then advances `aggregate_heads.current_seq` inside one transaction. Sources: `migrations/versions/wu-002_activity_substrate.py:99-105`, `services/api/app/services/mutations.py:112-185`.
-- Cross-aggregate there is only a **candidate** global order: `activity_state_changes.id`. It is a `BIGINT IDENTITY` primary key, so values increase globally, but the codebase does not add any stronger commit-order fence. Source: `migrations/versions/wu-002_activity_substrate.py:69-92`.
-- `recorded_at` is weaker than `id` for cursoring. Audit queries already need `ORDER BY recorded_at ASC, id ASC` to stabilize correlation reads, which is a sign that `recorded_at` alone is not unique. Source: `services/api/app/repositories/audit.py:39-69`.
-
-### Ordering risk for WU-031
-
-The current schema does **not** prove that `activity_state_changes.id` is a safe restart cursor under concurrency. Sequence-backed IDs are monotonic, but they are not guaranteed to match commit visibility order. A projector that persists `last_processed_id = 11` after seeing row `11` can, in principle, miss a later-committing row `10` from another transaction.
-
-That means:
-
-- Per-aggregate causal order is confirmed.
-- A single global `id` cursor is the best available ordering primitive in the schema today.
-- But using `WHERE id > last_processed_id` as the only resume rule is a design risk that needs an explicit synthesis decision.
-
-## 2. Projection pipeline design (cursor, batching, idempotency)
-
-### Existing read-side pattern in the codebase
-
-The repo already treats subsystem tables as projection tables. The write path mutates the domain table inside a `mutate_projection()` callback, then appends the immutable state change, then advances `aggregate_heads`; reads join back to `aggregate_heads` to recover version state. Sources:
-
-- Generic primitive: `services/api/app/services/mutations.py:94-185`
-- Applications: `services/api/app/repositories/applications.py:11-38`
-- Tickets: `services/api/app/repositories/tickets.py:11-31`
-- Chapters: `services/api/app/repositories/chapters.py:10-17`
-- Authority grants: `services/api/app/repositories/authority.py:48-66`
-- Trust profiles: `services/api/app/repositories/trust.py:12-24`
-
-This matters for AC3: reading from `applications`, `tickets`, `permission_drift`, and similar tables is still reading from projection tables, not bypassing the write model.
-
-### Recommended cursor table
-
-WU-031 should introduce a single cursor row per named projection:
-
-| Column | Recommendation | Why |
-|---|---|---|
-| `projection_name` | `TEXT PRIMARY KEY` | Independent progress per projection. |
-| `last_processed_id` | `BIGINT NOT NULL DEFAULT 0` | Simplest global cursor shape for current schema. |
-| `last_processed_at` | `TIMESTAMPTZ NULL` | Freshness/stale-since anchor. |
-| `version` | `BIGINT NOT NULL DEFAULT 0` | Lets the cursor row itself use optimistic updates if needed. |
-
-This matches the ticket’s proposed contract surface and supports multiple independent projectors. Source: `product-strategy/tickets/SLICE-017.md:21-27`, `product-strategy/tickets/SLICE-017.md:38-41`.
-
-### Resume and batching semantics
-
-Recommended worker loop:
-
-1. Load cursor row for projection `P`.
-2. Read a batch of events ordered by `id ASC` with `id > last_processed_id`.
-3. Apply projection writes for the batch.
-4. Update `read_model_cursors.last_processed_id` to the highest successfully applied event in the same transaction.
-5. Commit.
-
-That gives at-least-once delivery with transactional cursor advancement. If the batch fails, the cursor does not advance.
-
-### Idempotency
-
-Two idempotency strategies are available:
-
-- For WU-031’s minimal pipeline, idempotency is trivial if the worker only updates cursor state. Re-reading an already-applied batch is harmless as long as cursor advancement and any side writes are committed together.
-- For future materialized views, use deterministic upserts keyed by the projection’s natural identity. The repo already uses that pattern elsewhere, for example trust profile recompute uses `INSERT ... ON CONFLICT DO UPDATE`. Source: `services/api/app/repositories/trust.py:68-103`.
-
-### Scheduler integration
-
-A periodic worker tick is the best fit, not a per-event deferred effect:
-
-- `SchedulerLoop` already runs internal recurring workers directly for archive and ticket SLA, while also running the deferred-effect queue every loop. Sources: `services/api/app/services/scheduler.py:178-191`, `services/api/app/services/scheduler.py:193-229`.
-- Task runtime wiring is centralized in `app.tasks.configure_task_runtime()`. Source: `services/api/app/tasks/__init__.py:12-24`.
-- Proposal text classifies read model updates as low-consequence effects that can lag and auto-retry without blocking writes. Source: `product-strategy/proposal.md:879-900`.
-
-Recommendation: add `read_model_worker_tick()` and invoke it from the scheduler loop with a small interval gate, following the `ticket_sla_worker_tick()` pattern. Sources: `services/api/app/tasks/ticket_sla.py:10-23`, `services/api/app/services/scheduler.py:212-229`.
-
-### Why not a deferred effect per audit event?
-
-The closest async materialization path today is notifications: emit an event, then enqueue a safe deferred effect to materialize envelopes. Source: `services/api/app/services/notification_events.py:46-67`.
-
-That pattern is **not** a good fit here because the audit substrate does not currently enqueue projector work on every write. Retrofitting every mutation site to emit a read-model deferred effect would be much more invasive than a periodic scanner over `activity_state_changes`.
-
-## 3. Operational overview data sources + computation
-
-### Recommended data sources
-
-Use existing subsystem projection tables plus deferred-effect summaries/direct backlog queries:
-
-| Field | Recommended source | Notes |
-|---|---|---|
-| `open_applications_count` | `applications` | Count non-terminal application states. |
-| `open_tickets_count` | `tickets` | Count `terminal_at IS NULL`. |
-| `pending_deferred_effects_count` | `deferred_effects` or a tightened summary query | Count unresolved backlog, not completed rows. |
-| `permission_drift_count` | `permission_drift` | Count unresolved drift rows. |
-| `stale_projections` | `read_model_cursors` + `MAX(activity_state_changes.id)` | Lag signal only. |
-
-This stays within AC3 because the domain tables are already the official projection/read side of the evented write path. Sources: `product-strategy/tickets/SLICE-017.md:51-54`, `services/api/app/services/mutations.py:94-185`, `services/api/app/repositories/applications.py:11-38`, `services/api/app/repositories/tickets.py:11-31`.
-
-### `open_applications_count`
-
-The authoritative application lifecycle states are:
-
-`submitted`, `queued`, `claimed`, `in_review`, `interview`, `waitlisted`, `approved`, `denied`, `withdrawn`.
-
-Sources: `migrations/versions/wu-035_application_interview.py:15-41`, `services/api/app/contracts/applications.py:33-43`.
-
-For an operational overview, the non-terminal set is:
-
-- `submitted`
-- `queued`
-- `claimed`
-- `in_review`
-- `interview`
-- `waitlisted`
-
-Important mismatch: the chapter archive helper still counts only `submitted|queued|claimed|in_review`, which predates WU-035 and would undercount open work if copied unchanged. Source: `services/api/app/repositories/archive_queries.py:37-55`, `services/api/app/repositories/archive_queries.py:157-176`.
-
-### `open_tickets_count`
-
-Tickets do not use a fixed global enum for “open.” Ticket states are category-defined, and the service derives terminality from the category state machine, setting `terminal_at` when a transition enters a terminal state. Sources: `services/api/app/contracts/ticket_categories.py:32-53`, `services/api/app/services/tickets.py:152-205`.
-
-So the correct count predicate is:
-
-- `tickets.terminal_at IS NULL`
-
-That is also what current chapter archive queries use. Source: `services/api/app/repositories/archive_queries.py:58-76`, `services/api/app/repositories/archive_queries.py:179-199`.
-
-### `pending_deferred_effects_count`
-
-Current deferred effect statuses are `queued`, `claimed`, `completed`, `failed`, `skipped`. Source: `migrations/versions/wu-008b_deferred_effect_foundation.py:17-67`, `services/api/app/contracts/scheduler.py:11-13`.
-
-There are two existing “backlog” interpretations:
-
-- `query_degraded_state_summary()` counts all `status <> 'completed'`, which includes `skipped`. Source: `services/api/app/repositories/deferred_effects.py:345-416`.
-- Chapter archive helpers treat unresolved work as `queued|claimed|failed`. Source: `services/api/app/repositories/archive_queries.py:101-118`, `services/api/app/repositories/archive_queries.py:224-241`.
-
-Recommendation: use `queued|claimed|failed` for `pending_deferred_effects_count`. `skipped` is no longer pending retry and will otherwise inflate the backlog signal.
-
-### `permission_drift_count`
-
-Drift statuses are `detected`, `acknowledged`, `reconciled`, `accepted`. Sources: `migrations/versions/wu-006b_permission_drift_foundation.py:49-52`, `services/api/app/contracts/permissions.py:175-248`.
-
-The unresolved operational set is:
-
-- `detected`
-- `acknowledged`
-
-The service transition graph confirms `acknowledged` is still non-terminal and can still become `reconciled` or `accepted`. Source: `services/api/app/services/permissions.py:396-494`.
-
-### `stale_projections`
-
-The straightforward lag signal is:
-
-- `visible_head_id = MAX(activity_state_changes.id)`
-- `lag = visible_head_id - read_model_cursors.last_processed_id`
-
-If `lag > threshold`, include that projection in `stale_projections`. The ticket explicitly calls for this comparison. Source: `product-strategy/tickets/SLICE-017.md:49-54`.
-
-Because the current endpoint can read live counts from subsystem projections directly, the stale signal is mainly a projection-health signal, not a reason to zero out the overview.
-
-### Snapshot table vs direct reads
-
-Recommendation: **do not** introduce `operational_overview_snapshot` in this slice.
-
-Reasoning:
-
-- The current overview fields are aggregate counts already available from first-class subsystem projections.
-- A second denormalized snapshot would duplicate synchronous state, add lag, and create another stale surface without adding meaning.
-- The ticket’s own contract surface only names cursor state plus the overview response; it does not require a materialized overview table. Source: `product-strategy/tickets/SLICE-017.md:21-27`, `product-strategy/tickets/SLICE-017.md:38-41`.
-
-## 4. Scope + authority model
-
-### Scope that exists in current data
-
-- Applications carry first-class scope in `target_scope_kind` and `target_scope_id`, and the form snapshot also carries `target_scope`. Sources: `migrations/versions/wu-022_applications.py:26-38`, `services/api/app/contracts/applications.py:319-339`, `services/api/app/services/applications.py:293-310`.
-- Tickets carry scope in `category_snapshot.routing_scope`. Sources: `services/api/app/contracts/ticket_categories.py:18-30`, `services/api/app/services/tickets.py:117-127`.
-- Permission drift carries first-class `scope_kind` and `scope_id`. Sources: `migrations/versions/wu-028a_permission_drift_widening.py:34-68`, `services/api/app/contracts/permissions.py:175-248`.
-- Deferred effects do **not** have first-class scope columns. Chapter-specific queries only work today where payload conventions happen to include `chapter_id`. Source: `migrations/versions/wu-008b_deferred_effect_foundation.py:17-67`, `services/api/app/repositories/archive_queries.py:101-118`.
-
-### Recommended scope surface
-
-The proposal explicitly calls for scope-filtered read models, including per-chapter views. Source: `product-strategy/proposal.md:851-857`.
-
-Recommendation:
-
-- Support `global` and `chapter` overview scope in WU-032.
-- Do not add `member` scope in this slice; none of the requested overview counters are member-centric.
-
-### Authority recommendation
-
-Existing permission names follow a `noun.read` / `noun.write` pattern (`chapter.read`, `ticket.read`, `notification.read`, `permission_drift.read`). Sources: `services/api/app/api/v1/endpoints/chapters/base.py:139-154`, `services/api/app/api/v1/endpoints/tickets/reads.py:27-74`, `services/api/app/api/v1/endpoints/permissions/drift.py:36-78`, `migrations/versions/wu-029a_notifications.py:243-264`.
-
-Recommendation:
-
-- Use `operational_overview.read`, not `operations.view`.
-
-Why:
-
-- It matches the repo’s existing naming convention.
-- It isolates overview visibility from application/ticket/drift write permissions.
-- It cleanly supports both `global` and `chapter` scope checks.
-
-Implementation pattern:
-
-- If scope comes from query params, follow the `require_scoped()` pattern used by permission-drift endpoints. Source: `services/api/app/api/v1/endpoints/permissions/_shared.py:71-90`, `services/api/app/api/v1/endpoints/permissions/drift.py:36-78`.
-- If a future route encodes scope in the path, `RequireAuthority()` is the existing fixed-scope dependency pattern. Source: `services/api/app/core/dependencies.py:56-138`.
-
-## 5. Graceful degradation semantics (stale signal)
-
-The product requirement is clear: read model lag must not block writes, and stale/unavailable projections must surface explicit degradation rather than silent empties. Sources: `product-strategy/tickets/SLICE-017.md:49-54`, `product-strategy/proposal.md:879-900`.
-
-Recommended behavior:
-
-- Authoritative writes continue exactly as they do now through synchronous `mutate_entity()` projection updates. Sources: `services/api/app/services/mutations.py:94-185`.
-- The overview endpoint returns live counts from existing subsystem projection tables.
-- The endpoint also returns stale metadata derived from `read_model_cursors`.
-- If a projection is missing or behind threshold, return it in `stale_projections`; do **not** synthesize zero counts.
-
-Recommended `stale_since` semantics:
-
-- If a cursor exists, `stale_since = last_processed_at` for the stalest affected projection.
-- If no cursor row exists yet and audit rows exist, synthesis must decide whether `stale_since` should be `NULL` or the oldest unprocessed event timestamp. The current schema supports either computation, but this needs one explicit rule.
-
-This approach preserves graceful degradation: operators may lose freshness/convenience, but they do not lose data integrity or write-path availability. Source: `product-strategy/proposal.md:851-857`, `product-strategy/proposal.md:883-900`.
-
-## 6. Schema proposals (WU-031 / WU-032)
-
-### `migrations/versions/wu-031_read_models.py`
-
-Recommended new table:
-
-```sql
-read_model_cursors (
-    projection_name   text primary key,
-    last_processed_id bigint not null default 0,
-    last_processed_at timestamptz null,
-    version           bigint not null default 0
-)
-```
-
-Recommended indexes:
-
-- Primary key on `projection_name` only.
-- No separate index on `last_processed_id` is needed for the current access pattern.
-
-### No snapshot table in this slice
-
-Recommended: no `operational_overview_snapshot` table yet.
-
-If future slices need true asynchronous cross-subsystem materialization, add dedicated projection tables then. For SLICE-017’s current field set, direct reads from existing projection tables are lower risk and more consistent with AC3.
-
-### `services/api/app/contracts/read_models.py`
-
-Recommended contracts:
-
-- `ReadModelCursorRead`
-  - `projection_name: str`
-  - `last_processed_id: int`
-  - `last_processed_at: datetime | None`
-  - `version: int`
-
-- `OperationalOverviewRead`
-  - `scope_kind: Literal["global", "chapter"]`
-  - `scope_id: str | None`
-  - `open_applications_count: int`
-  - `open_tickets_count: int`
-  - `pending_deferred_effects_count: int`
-  - `permission_drift_count: int`
-  - `stale_projections: list[str]`
-  - `stale_since: datetime | None`
-
-## 7. Service actor for projector
-
-Existing worker slices seed dedicated authority-grant rows for service actors such as:
-
-- `notification-dispatcher` with `notification.read` / `notification.deliver` (`migrations/versions/wu-029a_notifications.py:243-264`)
-- `permission-reconciler` with reconciliation/drift permissions (`migrations/versions/wu-028b_permission_reconciliation_runs.py:16-21`, `migrations/versions/wu-028b_permission_reconciliation_runs.py:127-163`)
-- `sla-worker` with ticket/notification permissions (`migrations/versions/wu-037_ticket_sla_triggers.py:16-17`, `migrations/versions/wu-037_ticket_sla_triggers.py:96-133`)
-- `chapter-archiver` with chapter-scoped worker permissions (`migrations/versions/wu-042_chapter_governance.py:165-202`)
-
-Runtime worker code uses `ActorIdentity(actor_kind="service", actor_id=...)` for these flows. Sources: `services/api/app/tasks/archive.py:43-49`, `services/api/app/services/ticket_sla.py:500-558`.
-
-Recommendation for WU-031:
-
-- Service actor ID: `read-model-projector`
-- Scope: `global`
-- Permission set: `["read_model.write"]`
-
-That keeps the worker aligned with existing seeded-actor conventions without giving it unrelated subsystem powers.
+# SLICE-020 Research: Temporary Permission Management
+
+## 1. Temporary intent shape inventory (existing)
+
+- The `permission_intents` table already has the temporary lifecycle foundation: `temporary BOOLEAN NOT NULL`, `expires_at TIMESTAMPTZ NULL`, the `permission_intents_temporary_shape_valid` check, and the partial `expires_at` index for temporary rows only ([wu-006a:29](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006a_permission_intents_foundation.py:29), [wu-006a:30](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006a_permission_intents_foundation.py:30), [wu-006a:46](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006a_permission_intents_foundation.py:46), [wu-006a:80](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006a_permission_intents_foundation.py:80)).
+- The contract layer mirrors that shape on read and create models: temporary intents require `expires_at`, and non-temporary intents forbid it ([contracts/permissions.py:64](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:64), [contracts/permissions.py:77](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:77), [contracts/permissions.py:124](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:124), [contracts/permissions.py:137](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:137)).
+- Update shape is partial at the request model, but the service merges the patch back into the current read model and re-validates the full intent through `validated_update()` before persisting ([contracts/permissions.py:166](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:166), [contracts/base.py:17](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/base.py:17), [services/permissions.py:254](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:254), [services/permissions.py:258](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:258)).
+- Repository and service plumbing already round-trip `temporary` and `expires_at` on insert, fetch, list, and update; list operations exclude expired intents by default with `(expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)`, but direct reads by `id` do not ([repositories/permissions.py:58](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:58), [repositories/permissions.py:98](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:98), [repositories/permissions.py:141](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:141), [repositories/permissions.py:167](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:167), [services/permissions.py:175](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:175), [services/permissions.py:232](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:232), [services/permissions.py:299](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:299)).
+- There is no dedicated temporary-intent endpoint or worker yet. The permissions API currently exposes only intents, drift, and reconciliation routers ([permissions/__init__.py:5](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/__init__.py:5), [permissions/__init__.py:11](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/__init__.py:11)).
+- In the current permission tests, the only explicit `temporary=True` cases are the expired-vs-future listing assertions. I did not find shipped permission tests for renewal or for create/update rejection around temporary shape beyond the shared contract validators ([test_permission_intents.py:307](/home/nes/projects/server-manager/worktrees/slice-020/services/api/tests/test_permission_intents.py:307), [test_permission_intents.py:322](/home/nes/projects/server-manager/worktrees/slice-020/services/api/tests/test_permission_intents.py:322), [test_permission_intents.py:325](/home/nes/projects/server-manager/worktrees/slice-020/services/api/tests/test_permission_intents.py:325)).
+
+## 2. Renewal API design
+
+- The ticket adds a dedicated renewal surface: `POST /api/v1/permission-intents/{intent_id}/renew`, with stale writes returning `412`, while the proposal frames expired temporary overrides as lifecycle-managed intent rather than optional metadata ([SLICE-020.md:26](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/tickets/SLICE-020.md:26), [SLICE-020.md:52](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/tickets/SLICE-020.md:52), [proposal.md:523](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/proposal.md:523), [proposal.md:530](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/proposal.md:530)).
+- The existing optimistic-concurrency pattern is already the right substrate: write endpoints require a strong `If-Match`, map stale aggregate versions to `412 Precondition Failed`, and return the new ETag from the mutation result ([permissions/_shared.py:32](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/_shared.py:32), [permissions/_shared.py:106](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/_shared.py:106), [endpoints/intents.py:75](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/intents.py:75), [endpoints/intents.py:100](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/intents.py:100), [test_permission_intents.py:166](/home/nes/projects/server-manager/worktrees/slice-020/services/api/tests/test_permission_intents.py:166)).
+- Reusing `permission_intent.write` matches the current create/update authority model; there is no separate renewal permission in the existing permission service ([services/permissions.py:181](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:181), [services/permissions.py:246](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:246), [endpoints/intents.py:64](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/intents.py:64), [endpoints/intents.py:87](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/intents.py:87)).
+- `422` is the existing mapping for intent-domain validation errors. A renewal-specific "not temporary" or "already expired" rejection can fit that path by raising `InvalidPermissionIntentError` or a new error that is mapped the same way ([contracts/permissions.py:370](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:370), [permissions/_shared.py:140](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/permissions/_shared.py:140)).
+- Important hookpoint constraint: `update_permission_intent()` is hard-coded to emit `permission_intent.update` and `permission_intent.updated`. If the slice requires distinct `permission_intent.renew` and `permission_intent.renewed` audit events, renewal cannot just be a thin alias over the existing update helper ([services/permissions.py:275](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:275), [services/permissions.py:289](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:289)).
+- Current behavior does not block renewal of already expired intents. The service reads by `id` without applying active-only filters, and the update path has no `expires_at <= now()` or `expired_at` guard. "Renew active only" is therefore a new policy decision, not something already enforced in code ([repositories/permissions.py:91](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:91), [services/permissions.py:240](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:240), [services/permissions.py:280](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:280)).
+- The proposed request shape `expires_at + reason` would be stricter than current permission update semantics. Existing permission models use plain `datetime`; the closest in-repo pattern for "timezone-aware and future-constrained" timestamps is the trust contract's `AwareDatetime` plus explicit validator ([contracts/permissions.py:3](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:3), [contracts/trust.py:7](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/trust.py:7), [contracts/trust.py:65](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/trust.py:65), [contracts/trust.py:77](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/trust.py:77)).
+
+## 3. Expiry worker design (including idempotency strategy)
+
+- The product requirement is explicit: expired temporary intents should surface as drift rather than be silently forgotten or mutated inline ([SLICE-020.md:10](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/tickets/SLICE-020.md:10), [SLICE-020.md:31](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/tickets/SLICE-020.md:31), [problem.md:79](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/problem.md:79), [problem.md:83](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/problem.md:83), [proposal.md:746](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/proposal.md:746)).
+- The scheduler already runs several internal periodic workers directly from `SchedulerLoop`, with minute-resolution gates for chapter archive and ticket SLA and a shorter gate for read models. A permission-expiry worker fits that same pattern better than the deferred-effect queue ([scheduler.py:31](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:31), [scheduler.py:33](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:33), [scheduler.py:186](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:186), [scheduler.py:215](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:215), [scheduler.py:234](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:234)).
+- Task wiring precedent is also established: `ticket_sla.py` and `read_models.py` expose `configure_*`, `get_*_db`, and `*_worker_tick()` wrappers, and `configure_task_runtime()` registers them centrally ([tasks/ticket_sla.py:10](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/ticket_sla.py:10), [tasks/ticket_sla.py:22](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/ticket_sla.py:22), [tasks/read_models.py:20](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/read_models.py:20), [tasks/read_models.py:32](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/read_models.py:32), [tasks/__init__.py:13](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/__init__.py:13), [tasks/__init__.py:24](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/__init__.py:24)).
+- Current reconciliation does not already cover this case. `_build_drift_rows()` fetches intents with `include_expired=False`, so expired temporary intents are intentionally excluded from normal reconciliation sweeps today ([permission_reconciliation.py:460](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permission_reconciliation.py:460), [permission_reconciliation.py:466](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permission_reconciliation.py:466), [repositories/permissions.py:120](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:120), [repositories/permissions.py:141](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:141)).
+- Existing idempotency for drift creation is run-scoped, not intent-scoped. WU-028B adds unique indexes on `(reconciliation_run_id, target...)` only when `reconciliation_run_id IS NOT NULL`, and batch insertion relies on `ON CONFLICT DO NOTHING` against those keys ([wu-028b:112](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-028b_permission_reconciliation_runs.py:112), [wu-028b:120](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-028b_permission_reconciliation_runs.py:120), [repositories/permissions.py:317](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:317), [repositories/permissions.py:341](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:341)).
+- That means standalone expiry drift with `reconciliation_run_id = NULL` has no built-in dedupe key today. Using drift rows themselves as the idempotency key would also be brittle because the schema has no explicit drift reason/type column for "expired temporary intent" ([wu-006b:20](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006b_permission_drift_foundation.py:20), [wu-006b:36](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006b_permission_drift_foundation.py:36), [wu-028a:56](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-028a_permission_drift_widening.py:56)).
+- Research conclusion: if the design keeps expiry drift as standalone drift rows, a new `permission_intents.expired_at` marker is the cleanest idempotency fit because current code has no other durable "already processed by expiry worker" field. This is a fit-to-substrate conclusion, not already shipped behavior.
+- One subtle current hookpoint: `create_permission_drift()` itself does not perform an authority check; it just records the mutation. Service-actor grants become important if the worker also stamps the intent row, uses a checked service method, or if the manual trigger endpoint delegates through audited service paths ([services/permissions.py:497](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:497)).
+
+## 4. Drift row shape for expired intents
+
+- The current drift substrate can already represent a linked standalone finding: `permission_intent_id`, `intent_version`, scope, target, nullable `reconciliation_run_id`, actual/intended masks, `status`, and `detected_at` ([contracts/permissions.py:175](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:175), [contracts/permissions.py:185](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:185), [contracts/permissions.py:194](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:194), [wu-028a:56](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-028a_permission_drift_widening.py:56), [wu-006b:20](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006b_permission_drift_foundation.py:20)).
+- Existing reconciliation already uses three data shapes:
+  mismatched linked drift with both sides populated,
+  intent-only drift with actual cleared to zero,
+  and orphan drift with intended side null ([permission_reconciliation.py:493](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permission_reconciliation.py:493), [permission_reconciliation.py:521](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permission_reconciliation.py:521), [permission_reconciliation.py:547](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permission_reconciliation.py:547), [permission_reconciliation.py:401](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permission_reconciliation.py:401)).
+- Inference from that model: if expiry means "the system no longer intends this permission to remain in Discord," the most legible standalone drift encoding is:
+  `permission_intent_id = expired intent id`,
+  `reconciliation_run_id = NULL`,
+  `status = detected`,
+  `actual_* = former intent mask`,
+  `intended_* = cleared mask`.
+  That reads as "Discord still has access that the system now expects to be removed." This is an inference from current drift semantics, not something implemented today.
+- If the design instead wants expiry to live inside synthetic reconciliation runs, the existing run substrate can hold it, but each sweep would create a fresh dedupe domain because run uniqueness is keyed by `reconciliation_run_id` rather than `permission_intent_id` ([permission_reconciliation.py:642](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permission_reconciliation.py:642), [wu-028b:112](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-028b_permission_reconciliation_runs.py:112)).
+
+## 5. Schema additions + migration plan
+
+- Adding `permission_intents.expired_at TIMESTAMPTZ NULL` is a direct delta against the current table definition; the existing foundation has no such column and no related index or check ([wu-006a:17](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006a_permission_intents_foundation.py:17), [wu-006a:46](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006a_permission_intents_foundation.py:46)).
+- The current temporal-shape check only constrains `temporary` relative to `expires_at`. An orthogonal `expired_at` column would not require changing that check unless the design wants to encode stronger lifecycle rules at the database layer ([wu-006a:45](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-006a_permission_intents_foundation.py:45)).
+- Contract and repository plumbing would need follow-through because current read models and SQL selects only surface `temporary` and `expires_at` ([contracts/permissions.py:58](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:58), [contracts/permissions.py:119](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:119), [repositories/permissions.py:98](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:98), [repositories/permissions.py:147](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:147), [services/permissions.py:299](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:299)).
+- Migration-side service-actor seeding already has strong precedent in the codebase. Reconciliation runs, read-model projection, and SLA triggers all seed grants inside their migrations rather than relying on runtime bootstrap ([wu-028b:127](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-028b_permission_reconciliation_runs.py:127), [wu-031:49](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-031_read_models.py:49), [wu-037:96](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-037_ticket_sla_triggers.py:96)).
+
+## 6. Service actor grants
+
+- Existing periodic workers use fixed service IDs in code and matching migration-seeded grants. `evaluate_ticket_sla()` runs as `ActorIdentity(actor_kind="service", actor_id="sla-worker")`, and the archive task uses `chapter-archiver` the same way ([ticket_sla.py:32](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/ticket_sla.py:32), [ticket_sla.py:507](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/ticket_sla.py:507), [archive.py:43](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/archive.py:43), [archive.py:44](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/archive.py:44)).
+- A `permission-expirer` service actor is consistent with that pattern. Minimum grants depend on the chosen implementation path:
+  `permission_intent.write` if the worker stamps `expired_at` through a checked service path,
+  `permission_drift.write` if expiry drift creation is routed through an authority-checked path,
+  and `permission_reconciliation_run.write` only if expiry uses synthetic runs rather than standalone drift.
+- Current code does not force `permission_intent.read` if the worker queries repositories directly, but it would if the implementation chooses the existing service-layer `list_permission_intents()` helper, which enforces `permission_intent.read` ([services/permissions.py:310](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:310), [services/permissions.py:322](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:322)).
+
+## 7. Scheduler integration
+
+- The existing periodic-worker precedent is exactly what SLICE-020 needs: add a new interval constant beside the others, track last-run time in `SchedulerLoop`, and invoke a `permission_expiry_worker_tick()` from `_tick()` the same way SLA and read models are invoked now ([scheduler.py:31](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:31), [scheduler.py:148](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:148), [scheduler.py:193](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:193), [scheduler.py:223](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:223), [scheduler.py:242](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/scheduler.py:242)).
+- Runtime configuration should also follow the current task module pattern: `configure_task_runtime()` is where worker DB handles are wired in today ([tasks/__init__.py:13](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/__init__.py:13), [tasks/__init__.py:18](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/__init__.py:18), [tasks/__init__.py:24](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/__init__.py:24), [tasks/__init__.py:25](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/tasks/__init__.py:25)).
+- There is no current manual permission-expiry endpoint. The closest "run now and return result" API precedent is trust recompute: a POST route, scoped authority check, service call, and direct read response ([trust/recompute.py:17](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/trust/recompute.py:17), [trust/recompute.py:20](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/trust/recompute.py:20), [trust/recompute.py:31](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/trust/recompute.py:31), [trust/recompute.py:39](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/api/v1/endpoints/trust/recompute.py:39)).
 
 ## 8. Open questions for synthesis
 
-1. Is `activity_state_changes.id` acceptable as the sole resume cursor despite the commit-order race described above, or does WU-031 need a stronger watermark strategy?
-2. Should chapter-scoped `pending_deferred_effects_count` be in scope now? Current `deferred_effects` rows lack first-class scope columns, so generic chapter filtering is not available.
-3. Should `open_applications_count` include `interview` and `waitlisted`? The current lifecycle says yes, but the existing chapter archive helper still excludes them.
-4. Should the endpoint permission be `operational_overview.read` at `global` / `chapter` scope, as recommended here, or is a different permission taxonomy already intended elsewhere?
-5. How should `stale_since` behave for a projection that has never processed any event but the audit stream is already non-empty?
-6. Should `pending_deferred_effects_count` exclude `skipped` by definition? The current degraded-state summary includes it, while archive backlog queries do not.
+- Should renewal be allowed after `expires_at <= now()`? Current code would allow it if the caller has the intent ID and current ETag, so "active-only renewal" is a policy choice that must be added deliberately ([repositories/permissions.py:91](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/repositories/permissions.py:91), [services/permissions.py:240](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:240), [services/permissions.py:280](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:280)).
+- Does the slice want standalone expiry drift or synthetic reconciliation runs? Standalone drift is the simpler fit to the ticket surface, but synthetic runs are the only place current dedupe/traceability is already formalized ([SLICE-020.md:27](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/tickets/SLICE-020.md:27), [SLICE-020.md:28](/home/nes/projects/server-manager/worktrees/slice-020/product-strategy/tickets/SLICE-020.md:28), [wu-028b:112](/home/nes/projects/server-manager/worktrees/slice-020/migrations/versions/wu-028b_permission_reconciliation_runs.py:112)).
+- What exact mask mapping should represent expiry drift? The current schema has no separate drift reason/type field, so the chosen actual/intended encoding becomes the only machine-readable semantics for "expired override" ([contracts/permissions.py:187](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:187), [contracts/permissions.py:190](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:190), [permission_reconciliation.py:401](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permission_reconciliation.py:401)).
+- Does the design require distinct `permission_intent.renew*` audit verbs, or is `permission_intent.update*` acceptable? The current helper only knows about update verbs ([services/permissions.py:275](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:275), [services/permissions.py:289](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/services/permissions.py:289)).
+- Should the renewal request adopt `AwareDatetime` future validation even though existing permission contracts still use plain `datetime`? The repo has precedent for the stricter pattern, but not yet in permissions ([contracts/permissions.py:3](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/permissions.py:3), [contracts/trust.py:7](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/trust.py:7), [contracts/trust.py:65](/home/nes/projects/server-manager/worktrees/slice-020/services/api/app/contracts/trust.py:65)).
 
-## Final Summary
+## Final summary
 
-- The existing event substrate gives strong per-aggregate causal order through `aggregate_seq`, but only a risky global cursor candidate through `activity_state_changes.id`; that risk is the key synthesis issue for WU-031.
-- The codebase already uses synchronous subsystem projection tables plus `aggregate_heads` as its read side, so AC3 is satisfied by reading `applications`, `tickets`, `permission_drift`, and deferred-effect backlog data directly.
-- `open_tickets_count` should be `terminal_at IS NULL`, and `open_applications_count` should include `interview` and `waitlisted`; copying older archive predicates would undercount work.
-- A periodic scheduler tick is the least invasive projector runtime pattern; a per-event deferred effect would require much broader write-path changes.
-- The lowest-risk slice shape is: add `read_model_cursors`, add a `read-model-projector` worker actor, compute overview counts from existing projection tables, and use cursor lag only for explicit stale signaling.
+- The temporary-intent substrate is already shipped in schema, contracts, repositories, and list filtering; SLICE-020 is about lifecycle behavior on top of that substrate, not about introducing temporary intents from scratch.
+- There is no dedicated renewal path today. Without new code, renewal would fall through generic intent update semantics, generic `permission_intent.write` authority, and generic `permission_intent.update` audit events.
+- Current reconciliation does not surface expired temporary intents because it explicitly ignores expired intents when building drift batches.
+- Standalone expiry drift has no built-in idempotency key in the current schema. If the design avoids synthetic reconciliation runs, a new `permission_intents.expired_at` marker is the cleanest fit to the existing substrate.
+- Scheduler, task-wrapper, and service-actor precedents already exist in SLA, archive, and read-model code, so a minute-resolution expiry worker plus optional manual POST trigger fits the current architecture cleanly.
