@@ -126,3 +126,55 @@ def test_get_evidence_returns_current_version_etag(
     assert response.status_code == HTTPStatus.OK, response.text
     assert response.json()["id"] == evidence["id"]
     assert response.headers["etag"] == '"1"'
+
+
+def test_staff_can_submit_evidence_on_behalf_of_member(
+    client: TestClient,
+    app: FastAPI,
+) -> None:
+    """Service actors may attribute a submission to a different member (staff-on-behalf)."""
+    db: PostgresDatabase = app.state.db
+    grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
+    grant(db, grantee_id="bot-ingester", permissions=frozenset({"compliance_evidence.submit"}))
+
+    rule, _etag = create_rule_http(client)
+    response = client.post(
+        EVIDENCE_URL,
+        json={
+            "rule_id": rule["id"],
+            "member_id": "member-1",
+            "chapter_id": "ch-1",
+            "attachment_ref": "s3://bucket/evidence.png",
+            "submitted_by_member_id": "member-1",
+        },
+        headers={"X-Actor-Kind": "service", "X-Actor-Id": "bot-ingester"},
+    )
+
+    assert response.status_code == HTTPStatus.CREATED, response.text
+    assert response.json()["submitted_by_member_id"] == "member-1"
+
+
+def test_user_cannot_spoof_submitted_by_member_id(
+    client: TestClient,
+    app: FastAPI,
+) -> None:
+    """User actors cannot attribute submissions to a different member."""
+    db: PostgresDatabase = app.state.db
+    grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
+    grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit"}))
+
+    rule, _etag = create_rule_http(client)
+    response = client.post(
+        EVIDENCE_URL,
+        json={
+            "rule_id": rule["id"],
+            "member_id": "member-1",
+            "chapter_id": "ch-1",
+            "attachment_ref": "s3://bucket/evidence.png",
+            "submitted_by_member_id": "someone-else",
+        },
+        headers={"X-Actor-Kind": "user", "X-Actor-Id": "operator"},
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.json()["code"] == "submitted_by_mismatch"

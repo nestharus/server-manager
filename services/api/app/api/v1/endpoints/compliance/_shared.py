@@ -13,6 +13,7 @@ from app.contracts.compliance import (
     EvaluationReviewNotPermittedError,
     EvidenceChapterMismatchError,
     EvidenceSubmissionNotFoundError,
+    SubmittedByMismatchError,
 )
 from app.contracts.compliance_corrections import CorrectionNotPermittedStatusError
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
@@ -116,6 +117,14 @@ def raise_known_compliance_error(error: Exception) -> NoReturn:
                 "rule_id": str(error.rule_id),
                 "rule_chapter_id": error.rule_chapter_id,
                 "request_chapter_id": error.request_chapter_id,
+            },
+        ) from error
+    if isinstance(error, SubmittedByMismatchError):
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "submitted_by_mismatch",
+                "message": str(error),
             },
         ) from error
     if isinstance(error, ComplianceRulePatchEmptyError):

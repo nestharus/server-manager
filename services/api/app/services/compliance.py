@@ -24,6 +24,7 @@ from app.contracts.compliance import (
     EvidenceSubmissionNotFoundError,
     EvidenceSubmissionRead,
     EvaluationResult,
+    SubmittedByMismatchError,
 )
 from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
 from app.contracts.roster import (
@@ -33,7 +34,8 @@ from app.contracts.roster import (
 )
 from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
-from app.services.authority import _require_scoped_authority
+from app.contracts.authority import InvalidHolderIdError
+from app.services.authority import _collect_member_aliases, _require_scoped_authority
 from app.services.mutations import mutate_entity
 from app.services import roster as roster_service
 
@@ -480,6 +482,30 @@ def list_rules(
     return [_rule_from_row(row) for row in rows]
 
 
+def _resolve_submitted_by(
+    db: PostgresDatabase,
+    *,
+    request: EvidenceSubmissionCreate,
+    actor: ActorIdentity,
+) -> str:
+    requested = request.submitted_by_member_id
+    if actor.actor_kind == "service":
+        return requested if requested is not None else actor.actor_id
+    if requested is None or requested == actor.actor_id:
+        return actor.actor_id
+    with db.connection() as connection:
+        try:
+            actor_text_aliases, _ = _collect_member_aliases(connection, [actor.actor_id])
+        except InvalidHolderIdError:
+            actor_text_aliases = [actor.actor_id]
+    if requested not in actor_text_aliases:
+        raise SubmittedByMismatchError(
+            actor_id=actor.actor_id,
+            submitted_by_member_id=requested,
+        )
+    return requested
+
+
 def submit_evidence(
     db: PostgresDatabase,
     request: EvidenceSubmissionCreate,
@@ -505,8 +531,13 @@ def submit_evidence(
         db=db,
     )
 
+    submitted_by_member_id = _resolve_submitted_by(db, request=request, actor=actor)
+
     evidence_id = uuid4()
-    request_payload = request.model_dump(mode="json")
+    request_payload = {
+        **request.model_dump(mode="json"),
+        "submitted_by_member_id": submitted_by_member_id,
+    }
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
         compliance_repo.insert_evidence(
@@ -523,7 +554,7 @@ def submit_evidence(
                 "extraction_status": "pending",
                 "extraction_confidence": None,
                 "extraction_error": None,
-                "submitted_by_member_id": actor.actor_id,
+                "submitted_by_member_id": submitted_by_member_id,
                 "corrected_by_member_id": None,
                 "corrected_at": None,
                 "correction_reason": None,
@@ -535,7 +566,6 @@ def submit_evidence(
                 **request_payload,
                 "evidence_id": str(evidence_id),
                 "chapter_id": rule_row["chapter_id"],
-                "submitted_by_member_id": actor.actor_id,
                 "extraction_status": "pending",
             },
         )
@@ -553,7 +583,6 @@ def submit_evidence(
         action_payload={
             **request_payload,
             "chapter_id": rule_row["chapter_id"],
-            "submitted_by_member_id": actor.actor_id,
         },
         payload_allowlist=set(EVIDENCE_SUBMIT_PAYLOAD_ALLOWLIST),
         mutate_projection=mutate_projection,

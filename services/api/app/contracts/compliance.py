@@ -94,6 +94,7 @@ class EvidenceSubmissionCreate(_ComplianceModel):
     member_id: str = Field(min_length=1)
     chapter_id: str = Field(min_length=1)
     attachment_ref: str = Field(min_length=1)
+    submitted_by_member_id: str | None = Field(default=None, min_length=1)
 
     @field_validator("member_id", "chapter_id", "attachment_ref")
     @classmethod
@@ -101,6 +102,16 @@ class EvidenceSubmissionCreate(_ComplianceModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("value must be non-blank")
+        return stripped
+
+    @field_validator("submitted_by_member_id")
+    @classmethod
+    def _validate_optional_submitted_by(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("submitted_by_member_id must be non-blank")
         return stripped
 
 
@@ -203,6 +214,15 @@ class EvidenceChapterMismatchError(Exception):
         )
 
 
+class SubmittedByMismatchError(Exception):
+    def __init__(self, *, actor_id: str, submitted_by_member_id: str) -> None:
+        self.actor_id = actor_id
+        self.submitted_by_member_id = submitted_by_member_id
+        super().__init__(
+            "submitted_by_member_id must match the authenticated user actor"
+        )
+
+
 class ComplianceEvaluationNotFoundError(Exception):
     def __init__(self, evaluation_id: UUID) -> None:
         self.evaluation_id = evaluation_id
@@ -241,4 +261,5 @@ __all__ = [
     "EvidenceSubmissionRead",
     "ExtractionStatus",
     "ReviewStatus",
+    "SubmittedByMismatchError",
 ]
