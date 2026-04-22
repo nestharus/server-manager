@@ -15,6 +15,10 @@ DenialReason = Literal[
     "grant_expired",
     "grant_revoked",
 ]
+DepartureSignal = Literal["active", "roster_removed"]
+HandoffFailureReason = Literal["occ_conflict", "unauthorized", "invalid_state"]
+
+SUCCESSION_TRANSFER_REVOCATION_REASON = "succession_transfer"
 
 
 class AuthorityGrantRead(BaseModel):
@@ -43,9 +47,60 @@ class AuthorityGrantRevoke(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class AuthorityGrantTransferRequest(BaseModel):
+    successor_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
 class AuthorityGrantListRead(BaseModel):
     items: list[AuthorityGrantRead]
     next_cursor: UUID | None = None
+
+
+class DepartingRoleEntry(BaseModel):
+    role_id: UUID
+    holder_member_id: str | None = None
+    triggers_succession: bool
+    departure_signal: DepartureSignal
+
+
+class PendingApplicationRef(BaseModel):
+    application_id: UUID
+    owner_id: str
+    state: str
+
+
+class PendingTicketRef(BaseModel):
+    ticket_id: UUID
+    owner_id: str
+    state: str
+
+
+class SuccessionPlanRead(BaseModel):
+    chapter_id: str
+    generated_at: datetime
+    departing_roles: list[DepartingRoleEntry]
+    affected_grants: list[AuthorityGrantRead]
+    pending_applications: list[PendingApplicationRef]
+    pending_tickets: list[PendingTicketRef]
+    successor_designated: bool
+    successor_member_id: str | None = None
+
+
+class LeadershipHandoffRequest(BaseModel):
+    successor_member_id: str = Field(min_length=1)
+
+
+class HandoffFailure(BaseModel):
+    item_id: UUID
+    reason: HandoffFailureReason
+    detail: str
+
+
+class HandoffResult(BaseModel):
+    transferred: list[UUID]
+    already_owned: list[UUID]
+    failed: list[HandoffFailure]
 
 
 class AuthorityRequirement(BaseModel):
@@ -67,9 +122,12 @@ class AuthorityErrorBody(BaseModel):
         "actor_identity_missing",
         "grant_not_found",
         "grant_already_revoked",
+        "grant_already_transferred",
         "duplicate_active_grant",
         "stale_grant_version",
         "invalid_override_reason",
+        "invalid_holder_id",
+        "projection_not_initialized",
     ]
     message: str
     decision: AuthorityDecisionRead | None = None
@@ -88,6 +146,18 @@ class GrantAlreadyRevokedError(Exception):
         super().__init__(f"authority grant {grant_id} is already revoked")
 
 
+class GrantAlreadyTransferredError(Exception):
+    def __init__(self, existing_grant_id: UUID) -> None:
+        self.existing_grant_id = existing_grant_id
+        super().__init__(
+            f"authority grant already transferred to successor {existing_grant_id}"
+        )
+
+
+class InvalidHolderIdError(ValueError):
+    pass
+
+
 __all__ = [
     "AuthorityDecisionRead",
     "AuthorityErrorBody",
@@ -95,8 +165,20 @@ __all__ = [
     "AuthorityGrantListRead",
     "AuthorityGrantRead",
     "AuthorityGrantRevoke",
+    "AuthorityGrantTransferRequest",
     "AuthorityRequirement",
+    "DepartingRoleEntry",
     "DenialReason",
     "DuplicateActiveGrantError",
+    "GrantAlreadyTransferredError",
     "GrantAlreadyRevokedError",
+    "HandoffFailure",
+    "HandoffFailureReason",
+    "HandoffResult",
+    "InvalidHolderIdError",
+    "LeadershipHandoffRequest",
+    "PendingApplicationRef",
+    "PendingTicketRef",
+    "SUCCESSION_TRANSFER_REVOCATION_REASON",
+    "SuccessionPlanRead",
 ]

@@ -202,3 +202,44 @@ def insert_review_row(connection: Connection[Any], *, row: dict[str, Any]) -> di
                 row.get("decision_reason"),
             ),
         ).fetchone()
+
+
+def list_open_applications_for_owner_ids(
+    connection: Connection[Any],
+    *,
+    owner_ids: list[UUID],
+    states: list[str],
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if not owner_ids:
+        return []
+
+    predicates = [
+        "a.owner_id = ANY(%s)",
+        "a.state = ANY(%s)",
+    ]
+    params: list[Any] = [owner_ids, states]
+    if scope_kind is not None:
+        predicates.append("a.target_scope_kind = %s")
+        params.append(scope_kind)
+    if scope_id is not None:
+        predicates.append("a.target_scope_id = %s")
+        params.append(scope_id)
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            f"""
+            SELECT a.id,
+                   a.owner_id,
+                   a.state,
+                   h.current_seq AS version
+            FROM applications AS a
+            JOIN aggregate_heads AS h
+              ON h.aggregate_type = 'application'
+             AND h.aggregate_id = a.id::text
+            WHERE {' AND '.join(predicates)}
+            ORDER BY a.created_at ASC, a.id ASC
+            """,
+            params,
+        ).fetchall()

@@ -115,6 +115,43 @@ def list_grants(
         return cursor.execute(query, params).fetchall()
 
 
+def list_active_grants_for_grantee_ids(
+    connection: Connection[Any],
+    *,
+    grantee_ids: list[str],
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if not grantee_ids:
+        return []
+
+    predicates = [
+        "grantee_id = ANY(%s)",
+        "revoked_at IS NULL",
+        "(expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)",
+    ]
+    params: list[object] = [grantee_ids]
+    if scope_kind is not None:
+        predicates.append("scope_kind = %s")
+        params.append(scope_kind)
+    if scope_id is not None:
+        predicates.append("scope_id = %s")
+        params.append(scope_id)
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            f"""
+            SELECT id, grantee_id, scope_kind, scope_id, permissions,
+                   expires_at, revoked_at, revoked_by, revocation_reason,
+                   predecessor_grant_id, created_at
+            FROM authority_grants
+            WHERE {' AND '.join(predicates)}
+            ORDER BY created_at ASC, id ASC
+            """,
+            params,
+        ).fetchall()
+
+
 def find_active_duplicate_grant_for_update(
     connection: Connection[Any],
     *,
@@ -142,6 +179,47 @@ def find_active_duplicate_grant_for_update(
             """,
             (grantee_id, scope_kind, scope_id, Jsonb(sorted(permissions)), at),
         ).fetchone()
+
+
+def find_successor_grant(
+    connection: Connection[Any],
+    *,
+    predecessor_grant_id: UUID,
+) -> dict[str, Any] | None:
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            """
+            SELECT id, grantee_id, scope_kind, scope_id, permissions,
+                   expires_at, revoked_at, revoked_by, revocation_reason,
+                   predecessor_grant_id, created_at
+            FROM authority_grants
+            WHERE predecessor_grant_id = %s
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (predecessor_grant_id,),
+        ).fetchone()
+
+
+def fetch_grants_by_ids(
+    connection: Connection[Any],
+    *,
+    grant_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    if not grant_ids:
+        return []
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            """
+            SELECT id, grantee_id, scope_kind, scope_id, permissions,
+                   expires_at, revoked_at, revoked_by, revocation_reason,
+                   predecessor_grant_id, created_at
+            FROM authority_grants
+            WHERE id = ANY(%s)
+            ORDER BY created_at ASC, id ASC
+            """,
+            (grant_ids,),
+        ).fetchall()
 
 
 def update_revoked_with_reason(
