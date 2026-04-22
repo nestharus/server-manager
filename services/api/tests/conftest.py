@@ -52,6 +52,9 @@ GOVERNANCE_TABLES = (
     "read_model_cursors",
     "scheduled_jobs",
     "deferred_effects",
+    "compliance_evaluations",
+    "evidence_submissions",
+    "compliance_rules",
 )
 
 

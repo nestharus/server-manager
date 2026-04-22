@@ -19,6 +19,7 @@ from app.api.v1.router import router as v1_router
 from app.core.actor import ActorMiddleware
 from app.core.context import CorrelationMiddleware
 from app.core.settings import Settings, load_settings
+from app.infrastructure.ocr import StubOcrProvider
 from app.repositories.db import PostgresDatabase
 from app.services.scheduler import build_scheduler_loop
 from app.tasks import configure_task_runtime
@@ -72,6 +73,7 @@ def create_api_app(
 
     app.state.settings = resolved_settings
     app.state.db = resolved_db
+    app.state.ocr_provider = StubOcrProvider()
     app.state.scheduler_loop = scheduler_loop
 
     app.include_router(v1_router)

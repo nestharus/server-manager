@@ -177,8 +177,13 @@ def create_roster_entry(
 def get_roster_entry(
     db: PostgresDatabase,
     entry_id: UUID,
+    *,
+    connection: Connection[Any] | None = None,
 ) -> tuple[RosterEntryRead, str]:
-    with db.connection() as connection:
+    if connection is None:
+        with db.connection() as active_connection:
+            read = _entry_from_row(_fetch_entry_row(active_connection, entry_id))
+    else:
         read = _entry_from_row(_fetch_entry_row(connection, entry_id))
     return read, f'"{read.version}"'
 
@@ -189,9 +194,14 @@ def transition_roster_entry(
     request: RosterEntryTransitionRequest,
     actor: ActorIdentity,
     expected_version: int,
+    *,
+    connection: Connection[Any] | None = None,
 ) -> tuple[RosterEntryRead, MutationResult]:
     transition_id = uuid4()
-    with db.connection() as connection:
+    if connection is None:
+        with db.connection() as read_connection:
+            current = _fetch_entry_row(read_connection, entry_id)
+    else:
         current = _fetch_entry_row(connection, entry_id)
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
@@ -264,6 +274,7 @@ def transition_roster_entry(
 
     result = mutate_entity(
         db=db,
+        connection=connection,
         aggregate_type="roster_entry",
         aggregate_id=str(entry_id),
         request=_make_request(
@@ -279,7 +290,10 @@ def transition_roster_entry(
         scope_kind="chapter",
         scope_id=current["chapter_id"],
     )
-    with db.connection() as connection:
+    if connection is None:
+        with db.connection() as read_connection:
+            read = _entry_from_row(_fetch_entry_row(read_connection, entry_id))
+    else:
         read = _entry_from_row(_fetch_entry_row(connection, entry_id))
     return read, result
 

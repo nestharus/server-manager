@@ -14,6 +14,7 @@ from app.api.v1.endpoints import (
     authority,
     chapter_templates,
     chapters,
+    compliance,
     health,
     members,
     notifications,
@@ -33,6 +34,7 @@ router.include_router(audit.router, tags=["audit"])
 router.include_router(authority.router, tags=["authority"])
 router.include_router(chapter_templates.router, tags=["chapter-templates"])
 router.include_router(chapters.router, tags=["chapters"])
+router.include_router(compliance.router)
 router.include_router(health.router, tags=["health"])
 router.include_router(members.router, tags=["members"])
 router.include_router(notifications.router, tags=["notification-rules"])
