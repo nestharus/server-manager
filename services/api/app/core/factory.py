@@ -19,6 +19,7 @@ from app.api.v1.router import router as v1_router
 from app.core.actor import ActorMiddleware
 from app.core.context import CorrelationMiddleware
 from app.core.settings import Settings, load_settings
+from app.infrastructure.ocr import OcrProvider, StubOcrProvider
 from app.repositories.db import PostgresDatabase
 from app.services.scheduler import build_scheduler_loop
 from app.tasks import configure_task_runtime
@@ -28,11 +29,13 @@ def create_api_app(
     settings: Settings | None = None,
     *,
     db: PostgresDatabase | None = None,
+    ocr_provider: OcrProvider | None = None,
 ) -> FastAPI:
     resolved_settings = settings if settings is not None else load_settings()
     resolved_db = (
         db if db is not None else PostgresDatabase(resolved_settings.supabase_db_url)
     )
+    resolved_ocr_provider = ocr_provider if ocr_provider is not None else StubOcrProvider()
     configure_task_runtime(db=resolved_db)
     scheduler_loop = build_scheduler_loop(resolved_db, worker_id="api:primary")
 
@@ -72,6 +75,7 @@ def create_api_app(
 
     app.state.settings = resolved_settings
     app.state.db = resolved_db
+    app.state.ocr_provider = resolved_ocr_provider
     app.state.scheduler_loop = scheduler_loop
 
     app.include_router(v1_router)
