@@ -1,309 +1,548 @@
-# SLICE-021 Research: Application Interview and Waitlist Handling
+# SLICE-014 Research: Permission Intent And Drift Detection
+
+## 1. Domain Model
+
+### Existing permission foundations in the repo today
+
+#### `permission_intents`
+
+Source of truth: `migrations/versions/wu-006a_permission_intents_foundation.py:16-85`.
+
+- Columns
+  - `id UUID PRIMARY KEY`
+  - `kind TEXT NOT NULL`
+  - `scope_kind TEXT NOT NULL`
+  - `scope_id TEXT NULL`
+  - `role_id TEXT NOT NULL`
+  - `channel_id TEXT NULL`
+  - `permission_bits NUMERIC(39,0) NULL`
+  - `allow_bits NUMERIC(39,0) NULL`
+  - `deny_bits NUMERIC(39,0) NULL`
+  - `reason TEXT NULL`
+  - `temporary BOOLEAN NOT NULL`
+  - `expires_at TIMESTAMPTZ NULL`
+  - `created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
+- Constraints
+  - `permission_intents_kind_valid`: `kind IN ('guild_role', 'channel_role')`
+  - `permission_intents_scope_kind_valid`: `scope_kind IN ('global', 'chapter', 'member')`
+  - `permission_intents_temporary_shape_valid`: temporary rows require `expires_at`; non-temporary rows forbid it
+  - `permission_intents_variant_shape_valid`: `guild_role` rows require `permission_bits` and forbid channel overwrite fields; `channel_role` rows require `channel_id`, `allow_bits`, and `deny_bits`, and forbid `permission_bits`
+- Indexes
+  - `ix_permission_intents__scope_kind (scope_kind, scope_id)`
+  - `ix_permission_intents__role_id (role_id)`
+  - `ix_permission_intents__expires_at (expires_at) WHERE temporary`
 
-## 1. Prototyping Assessment
+Current contract/service shape:
 
-**NO - production design can proceed without a disposable prototype.**
+- Pydantic models split intents into `GuildRolePermissionIntent` and `ChannelRolePermissionIntent`, with decimal-string masks rather than integers: `services/api/app/contracts/permissions.py:20-172`.
+- Repository normalization converts Postgres `NUMERIC` to canonical decimal strings on read: `services/api/app/repositories/permissions.py:11-32`.
+- The service does not store a physical `version` column on `permission_intents`; OCC version lives in `aggregate_heads`, keyed by a compound aggregate id derived from `(scope_kind, scope_id, role_id, channel_id)`: `services/api/app/services/permissions.py:29-41`, `services/api/tests/test_permission_intent_foundation.py:359-399`.
 
-The unknowns in SLICE-021 are lifecycle semantics and integration points, not external API mechanics:
+Important mismatch with the ticket:
 
-- SLICE-012 already shipped the application aggregate, optimistic locking, state transition table, reviewer ownership checks, form snapshot pinning, and Discord review command pattern in commit `dc62122`.
-- The current application mutation path already serializes each aggregate through `mutate_entity()`, strong ETags, `aggregate_heads.current_seq`, and `SELECT ... FOR UPDATE` on the application projection.
-- Discord thread creation and reuse can be represented as normal adapter behavior around a nullable stored `interview_thread_id`. No Discord-visible mutation should be executed during this research phase.
-- SLICE-015 already provides configurable notification rules/envelopes and a Discord delivery adapter, but its current recipient resolver only supports explicit Discord recipients. It does not yet support "recipient is the application applicant" as a dynamic recipient selector.
+- The foundation is already more specific than the ticket summary. It does not model one generic `permission_bits` field for all intents; it models `guild_role` vs `channel_role` variants.
+- The foundation also allows `scope_kind='member'`, but the proposal’s PermissionIntent table describes scope as `global` or chapter FK only: `product-strategy/proposal.md:515-528`.
 
-The proposal phase must pin two choices that are semantic rather than exploratory:
+#### `permission_drift`
 
-- Whether `/reactivate` preserves the previous owner by default or defaults to the acting reviewer.
-- Whether applicant-facing waitlist notification is direct Discord handler behavior for this slice or a small extension to SLICE-015 dynamic recipient resolution.
+Source of truth: `migrations/versions/wu-006b_permission_drift_foundation.py:16-79`.
 
-## 2. Local Baseline
+- Columns
+  - `id UUID PRIMARY KEY`
+  - `permission_intent_id UUID NULL`
+  - `intent_version BIGINT NULL`
+  - `actual_bits NUMERIC(39,0) NULL`
+  - `actual_allow_bits NUMERIC(39,0) NULL`
+  - `actual_deny_bits NUMERIC(39,0) NULL`
+  - `intended_bits NUMERIC(39,0) NULL`
+  - `intended_allow_bits NUMERIC(39,0) NULL`
+  - `intended_deny_bits NUMERIC(39,0) NULL`
+  - `status TEXT NOT NULL`
+  - `detected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP`
+- Constraints
+  - FK `fk_permission_drift__permission_intent_id__permission_intents` to `permission_intents.id` with `ON DELETE RESTRICT`
+  - `permission_drift_status_valid`: `status IN ('detected', 'acknowledged', 'reconciled', 'accepted')`
+  - `permission_drift_intent_anchor_valid`: `permission_intent_id` and `intent_version` must be both set or both null
+- Indexes
+  - `ix_permission_drift__permission_intent_id (permission_intent_id)`
+  - `ix_permission_drift__status (status)`
+  - `ix_permission_drift__detected_at (detected_at)`
 
-### Application aggregate
+Current contract/service shape:
 
-Current application states are `submitted`, `queued`, `claimed`, `in_review`, `approved`, `denied`, and `withdrawn` in `ApplicationState` (`services/api/app/contracts/applications.py:33`). Current transition actions are `route`, `claim`, `review`, `approve`, `deny`, and `withdraw` (`services/api/app/contracts/applications.py:43`).
+- The contract mirrors the table exactly and enforces the intent-anchor invariant: `services/api/app/contracts/permissions.py:153-172`.
+- The service writes drift rows as their own aggregates keyed by drift UUID, not by permission target: `services/api/app/services/permissions.py:216-243`.
+- Status updates go through `mutate_entity()`, but the service only re-validates the enum; it does not enforce a lifecycle graph or store resolution metadata: `services/api/app/services/permissions.py:246-290`.
 
-The transition table in `services/api/app/services/applications.py` currently allows:
+Major gap relative to SLICE-014:
 
-- `submitted --route--> queued`
-- `queued --claim--> claimed`
-- `claimed --review--> in_review`
-- `in_review --approve|deny--> approved|denied`
-- `submitted|queued|claimed|in_review --withdraw--> withdrawn`
+- The table has no target locator for orphaned drift. If `permission_intent_id` is null, the row has no `scope_kind`, `scope_id`, `role_id`, `channel_id`, or `kind`, so unmanaged live Discord state is not identifiable from the row alone.
+- The table also has no `resolved_by`, `resolved_at`, or reconciliation-run anchor, even though the proposal’s drift object includes resolution metadata: `product-strategy/proposal.md:536-550`.
 
-Those edges are encoded in `VALID_TRANSITIONS` (`services/api/app/services/applications.py:42`) and enforced by `validate_transition()` (`services/api/app/services/applications.py:332`). SLICE-021 must add new edges without removing or changing these existing SLICE-012 edges.
+#### `chapter_templates.default_permission_intents`
 
-`transition_application()` is the only public service-level transition entry point today. It:
+Permission-adjacent schema from the same foundation path:
 
-- Rejects public `route` calls (`services/api/app/services/applications.py:652`).
-- Fetches the application and checks authority at `form_snapshot["target_scope"]` (`services/api/app/services/applications.py:659`).
-- Builds an action payload and delegates to `_transition_application_locked()` (`services/api/app/services/applications.py:668`).
-- Converts stale claim races into `ApplicationAlreadyClaimedError` only for `claim` (`services/api/app/services/applications.py:687`).
+- Foundation table includes `default_permission_intents JSONB NOT NULL`: `migrations/versions/wu-007a_chapter_templates_foundation.py:16-48`.
+- The current table has later-added `template_family_id` and `version` columns from `wu-018`: `migrations/versions/wu-018_chapter_templates.py:16-47`.
+- Current contract shape for default intents is separate from runtime PermissionIntent rows and already mirrors `guild_role` vs `channel_role` plus temporary expiry semantics: `services/api/app/contracts/chapter_templates.py:31-67`.
 
-`_transition_application_locked()` locks the application row, validates the transition, checks owner-only behavior for `review`, `approve`, and `deny`, updates projection timestamps, inserts `application_reviews`, and records `application.transitioned` with `diff_json` (`services/api/app/services/applications.py:548`).
+#### Versioning substrate used by permission aggregates
 
-### Persistence constraints
+Source of truth: `migrations/versions/wu-002_activity_substrate.py:69-135`, `migrations/versions/wu-003a_widen_aggregate_id.py:19-40`.
 
-The `applications` table currently has no interview thread column. Its state CHECK only allows the seven SLICE-012 states (`migrations/versions/wu-022_applications.py:70`).
+- `aggregate_heads`
+  - `aggregate_type TEXT`
+  - `aggregate_id TEXT`
+  - `current_seq BIGINT NOT NULL DEFAULT 0`
+  - `latest_change_id BIGINT NULL`
+- `activity_actions`
+  - mutable-action audit rows with `aggregate_type`, `aggregate_id`, `actor_kind`, `actor_id`, request surface, request JSON, status
+  - correlation/scope columns added later in `wu-003b`: `migrations/versions/wu-003b_audit_context_columns.py:16-49`
+- `activity_state_changes`
+  - immutable accepted changes keyed by `(aggregate_type, aggregate_id, aggregate_seq)`
 
-The `application_reviews` table also constrains actions to the six SLICE-012 actions (`migrations/versions/wu-022_applications.py:156`) and requires `reviewer_id` only for `claim`, `review`, `approve`, and `deny` (`migrations/versions/wu-022_applications.py:160`). Any new `interview`, `waitlist`, or `reactivate` action that inserts a review row must extend this CHECK too.
+`mutate_entity()` is the shared OCC + audit writer for all of this: `services/api/app/services/mutations.py:58-225`.
 
-Repository reads and writes enumerate application columns explicitly. `_APPLICATION_SELECT` must include any new `interview_thread_id`, `insert_application()` must initialize it, and `update_application()` must persist it (`services/api/app/repositories/applications.py:11`, `services/api/app/repositories/applications.py:40`, `services/api/app/repositories/applications.py:130`).
+### `authority_grants` versus declared permission intent
 
-`ApplicationRead` currently exposes no `interview_thread_id` field, so Discord cannot discover/reuse an existing interview thread from the GET response until the contract is extended (`services/api/app/contracts/applications.py:232`).
+These are different concepts.
 
-### Discord baseline
+- `authority_grants` are API capability grants for actors. They answer “may actor X perform operation Y in scope Z?” and carry a JSONB permission set such as `chapter.read` or `roster.write`: `migrations/versions/wu-004_authority_foundation.py:16-74`, `services/api/app/contracts/authority.py:20-77`, `services/api/app/services/authority.py:224-301`.
+- `PermissionIntent` is declared desired Discord resource state for a role or role-channel tuple. It answers “what permission configuration should exist in Discord?”: `product-strategy/proposal.md:511-528`.
 
-The Discord application review handler already follows the desired GET-then-POST optimistic locking shape:
+Operationally, they are orthogonal:
 
-- Resolve Discord user to member UUID via `/api/v1/members/by-discord/{discord_user_id}`.
-- GET `/api/v1/applications/{id}` to obtain the current ETag.
-- POST a mutation with `If-Match`.
-- Post an outcome summary only after API success.
+- `authority_grants` gate control-plane mutations inside our API.
+- `permission_intents` declare target state in Discord and are themselves subject to authority checks.
 
-This pattern is in `services/discord/app/handlers/application_review.py:51`. The current command contract only supports `claim`, `approve`, and `deny` (`services/discord/app/contracts/application_review.py:12`), and command registration only exposes those three commands (`services/discord/app/commands/application_review.py:10`).
+The current permission foundation accidentally blurs none of this in schema, but the current permission service is still only a foundation helper: it hardcodes `actor_kind='system'` / `actor_id='permissions-service'` and has no authority enforcement or user/service actor input yet: `services/api/app/services/permissions.py:44-55`.
 
-Member lookup by internal UUID is available through `GET /api/v1/members/{member_id}` with global `member.read` authority (`services/api/app/api/v1/endpoints/members.py:130`). That is enough for a Discord handler to resolve `ApplicationRead.applicant_id` into a Discord user ID for direct applicant messaging, if the service actor has `member.read`.
+### What “PermissionIntent” means versus `authority_grants`
 
-### Notification baseline
+The proposal is explicit:
 
-SLICE-015 created:
+- PermissionIntent is “the declarative model of what permissions should exist” and is operator-facing intended state: `product-strategy/proposal.md:528-530`.
+- AuthorityGrant is scoped operational authority and later write surfaces deny on missing grant: `product-strategy/proposal.md:556-579`, `product-strategy/proposal.md:774-786`.
 
-- `notification_events`, with `emit()` enqueueing a `notifications_materialize` deferred effect in the same transaction (`services/api/app/services/notification_events.py:32`).
-- `notification_rules` and `notification_envelopes`, including `dm`, `thread`, and `designated_channel` as schema-valid channels (`migrations/versions/wu-029a_notifications.py:62`, `migrations/versions/wu-029a_notifications.py:169`).
-- Unique envelope indexes for per-event and per-root-cause idempotency (`migrations/versions/wu-029a_notifications.py:190`).
-- Discord delivery for DM and designated-channel messages with deterministic nonce; thread delivery is explicitly rejected as out of scope for SLICE-015 (`services/discord/app/handlers/notifications.py:45`, `services/discord/app/handlers/notifications.py:63`, `services/discord/app/handlers/notifications.py:78`).
+The shipped code agrees with that split:
 
-The current materializer only resolves explicit `discord_user` and `discord_users` recipient selectors. It cannot derive the applicant recipient from an application event payload without extension (`services/api/app/services/notifications_materialize.py:77`).
+- authority enforcement is implemented by `evaluate()` and `RequireAuthority(...)`: `services/api/app/services/authority.py:224-276`, `services/api/app/core/dependencies.py:56-138`
+- nothing in the authority substrate models Discord overwrite state
 
-## 3. State Machine and Persistence Findings
+### Valid scope kinds for intents
 
-### Required state extensions
+Current code:
 
-Add `interview` and `waitlisted` to `ApplicationState`. Preserve all existing SLICE-012 states and edges.
+- `ScopeKind = Literal["global", "chapter", "member"]`: `services/api/app/contracts/scope.py:1-5`
+- both permission contract and migration reuse that wider set: `services/api/app/contracts/permissions.py:52-80`, `migrations/versions/wu-006a_permission_intents_foundation.py:41-44`
 
-The additional transition edges required by the ticket are:
+Proposal/problem intent:
 
-- `in_review --interview--> interview`
-- `in_review --waitlist--> waitlisted`
-- `interview --waitlist--> waitlisted`
-- `interview --approve|deny--> approved|denied`
-- `waitlisted --reactivate--> claimed`
+- the PermissionIntent table in the proposal says scope is `global` or chapter FK only: `product-strategy/proposal.md:517-528`
+- the problem statement discusses server-wide and chapter/governance complexity, not member-scoped permission intent: `product-strategy/problem.md:77-87`
 
-Do not add new withdrawal edges unless the proposal intentionally expands scope. The ticket says "waitlisted state; no state changes until reactivate," so `waitlisted --withdraw--> withdrawn` should be treated as out of scope unless the user explicitly changes the lifecycle contract.
+Research conclusion:
 
-### Interview thread linkage
+- The current foundation allows `member`, but the product docs for PermissionIntent point to `global` and `chapter` only.
+- This is an explicit synthesis question, not a settled fact.
 
-Add nullable `applications.interview_thread_id TEXT`. It should be part of:
+## 2. State Machines
 
-- Database migration column list.
-- Repository SELECT/INSERT/UPDATE.
-- `ApplicationRead`.
-- `_row_to_read()`.
-- `_transition_diff()` so audit diff captures first linkage and any attempted linkage mutations that are accepted.
+### PermissionIntent
 
-The column should stay nullable because `ApplicationInterviewRequest.thread_id` is optional. For Discord commands, the normal successful path should provide a non-null thread ID after creating or rediscovering the thread.
+There is no explicit lifecycle state in the shipped foundation.
 
-AC3 implies the stored thread ID is immutable once set:
+- Current behavior is create/update only, with temporal shape validation (`temporary` + `expires_at`): `services/api/app/contracts/permissions.py:52-151`
+- OCC is already required for update through `mutate_entity()`: `services/api/app/services/permissions.py:149-202`, `services/api/tests/test_permission_intent_foundation.py:402-423`
 
-- If `interview_thread_id` is null and request has `thread_id`, store it.
-- If `interview_thread_id` already equals the request `thread_id`, return success without creating a second thread or second state transition.
-- If `interview_thread_id` is set and request has a different `thread_id`, reject with 409 Conflict.
-- If request omits `thread_id` and the stored value is already set, return the current stored linkage in `ApplicationRead`.
+### PermissionDrift lifecycle
 
-This idempotent repeat should be implemented outside the formal `VALID_TRANSITIONS` graph, not as an `interview -> interview` edge. Otherwise the state machine would claim a real lifecycle transition occurred when the desired behavior is "reuse the recorded thread."
+Ticket/proposal lifecycle:
 
-### Waitlist semantics
+- `detected -> acknowledged -> reconciled | accepted`: `product-strategy/tickets/SLICE-014.md:39-41`, `product-strategy/proposal.md:543-550`
 
-`waitlisted` should be a parking state. While in `waitlisted`, normal decision actions should be invalid. The only ticketed exit is `reactivate` to `claimed`.
+Operational meaning from the proposal:
 
-The minimal schema does not add a dedicated waitlist reason column. Therefore `ApplicationWaitlistRequest.reason` must be persisted through existing review/audit surfaces:
+- `detected`: reconciliation found divergence
+- `acknowledged`: operator marked the drift known and deferred
+- `reconciled`: system applied intent to Discord
+- `accepted`: operator decided reality is correct and the intended state should be updated to match
 
-- `application_reviews.notes` can carry the human reason.
-- `activity_actions.request_json` for `application.waitlist` should include `reason`.
-- `activity_state_changes.payload_json` should include the reason.
-- `diff_json` can include notes/reason the same way current `_transition_diff()` includes notes.
+Current code gap:
 
-For reactivation ownership, the cleanest reading of `ApplicationReactivateRequest(new_owner_id: UUID | None)` is:
+- the shipped service accepts any enum value transition and does not enforce `detected`-first or terminal resolution semantics: `services/api/app/services/permissions.py:246-290`
+- there are no resolution fields yet
 
-- If `new_owner_id` is omitted, preserve the prior `owner_id`.
-- If `new_owner_id` is supplied, set `owner_id` to that member UUID.
-- If the prior owner is null and no `new_owner_id` is supplied, reject as an application data invariant conflict.
+### PermissionReconciliationRun lifecycle
 
-This matches the optional field name and avoids silently assigning ownership to the acting reviewer when the request did not say to do that. The review row's `reviewer_id` should still mean "actor who performed the reactivation," not necessarily the new owner.
+Ticket lifecycle:
 
-### Migration shape
+- `requested -> snapshot_submitted -> reconciled | failed`: `product-strategy/tickets/SLICE-014.md:23-24`, `product-strategy/tickets/SLICE-014.md:39-41`
 
-The migration is mechanically small but touches three constraints:
+Interpretation against current architecture:
 
-- Add `applications.interview_thread_id TEXT NULL`.
-- Replace `applications_state_valid` with one that includes `interview` and `waitlisted`.
-- Replace `application_reviews_action_valid` with one that includes `interview`, `waitlist`, and `reactivate`.
-- Replace `application_reviews_reviewer_required` so user-reviewer actions include the new actions. `route` remains system/service-capable; `withdraw` keeps current behavior unless proposal changes it.
+- `requested`: API has created a run aggregate for a scope and returned a run id
+- `snapshot_submitted`: the Discord adapter has POSTed a typed live-state snapshot for that run id
+- `reconciled`: the API has diffed snapshot vs intents and materialized the drift set
+- `failed`: snapshot processing failed and the run has an error terminal state
 
-No new table is required for this slice.
+There is no existing schema, contract, service, or endpoint for runs in the current tree.
 
-## 4. API Contracts, Authority, and Audit Findings
+### OCC requirements
 
-### Request contracts
+Confirmed today:
 
-The ticketed request contracts fit in `services/api/app/contracts/applications.py`:
+- Intent OCC already exists and is routed through `mutate_entity()`: `services/api/app/services/permissions.py:132-146`, `services/api/app/services/permissions.py:188-202`, `services/api/tests/test_permission_intent_foundation.py:402-423`
+- Drift OCC technically exists in the service because drift status updates use `mutate_entity()`: `services/api/app/services/permissions.py:278-290`
 
-- `ApplicationInterviewRequest(thread_id: str | None = None)`
-- `ApplicationWaitlistRequest(reason: str)`
-- `ApplicationReactivateRequest(new_owner_id: UUID | None = None)`
+Important caveat:
 
-Validation should reject blank strings for `thread_id` and `reason`. Discord snowflakes are strings elsewhere in this repo, so `thread_id` should remain `str`, not `int`.
+- Drift OCC is optional in the current service. If `expected_version` is omitted, the service reads the current head and uses it implicitly: `services/api/app/services/permissions.py:251-264`
+- SLICE-014 AC2 requires stale resolution to return HTTP 412, so the eventual drift-resolution endpoint must require `If-Match` and must not rely on that fallback
 
-Even though dedicated endpoint bodies do not need an `action` field, `ApplicationTransitionAction` or a separate review-action type must include `interview`, `waitlist`, and `reactivate` because `ApplicationReviewRead.action` and the database review row action constraint currently use that vocabulary.
+## 3. Reconciliation Algorithm
 
-### Endpoint shape
+No reconciliation implementation exists yet. The algorithm below is a ticket/proposal binding, not a description of shipped code.
 
-Add the three dedicated endpoints under the existing `/api/v1/applications` router:
+### Normalized comparison key
 
-- `POST /api/v1/applications/{application_id}/interview`
-- `POST /api/v1/applications/{application_id}/waitlist`
-- `POST /api/v1/applications/{application_id}/reactivate`
+Given the shipped foundation, the natural normalized key is:
 
-All three should require `If-Match` using the existing strong ETag parser (`services/api/app/api/v1/endpoints/applications/_shared.py:30`) and return `ApplicationRead` with a fresh ETag after mutation.
+- `kind`
+- `role_id`
+- `channel_id` where `None` means guild-level
 
-Dedicated endpoints are preferable to overloading `/transitions` because the request contracts have action-specific fields and idempotency rules. The existing `/transitions` endpoint should continue to serve SLICE-012 actions so existing edges do not break.
+For deterministic ordering inside one scope, sort by:
 
-### Ownership checks
+1. `role_id`
+2. `channel_id or ""`
 
-The ticket explicitly requires ownership checks for interview and waitlist: the reviewer must match `current.owner_id`.
+That ordering is stable and matches the aggregate-id helper’s distinction between null and non-null channel targets: `services/api/app/services/permissions.py:29-41`, `services/api/tests/test_permission_intent_foundation.py:438-470`.
 
-Current code checks owner only for `review`, `approve`, and `deny` (`services/api/app/services/applications.py:563`). SLICE-021 needs that owner check to include at least `interview` and `waitlist`. It should not accidentally require ownership for `claim` or `route`.
+### Pseudocode
 
-For `reactivate`, the ticket names authority but does not explicitly require current-owner matching. Because `reactivate` may assign `new_owner_id`, requiring the actor to be the old owner would make reassignment by another authorized officer impossible. The research conclusion is that the proposal should treat `application.reactivate` authority as the gate, and should only add owner matching for reactivation if the user wants old-owner-only reactivation.
+```text
+load intents for requested scope
+normalize each intent to key -> intended mask payload
 
-### Authority
+load actual Discord snapshot for requested scope
+normalize each snapshot entry to key -> actual mask payload
 
-Current transition authority maps each action to `application.{action}` at `form_snapshot.target_scope` (`services/api/app/services/applications.py:189`). This directly supports:
+for key in sorted(union(intent_keys, actual_keys), key=(role_id, channel_id or "")):
+    intended = intents.get(key)
+    actual = snapshot.get(key)
 
-- `application.interview`
-- `application.waitlist`
-- `application.reactivate`
+    if intended and actual and masks_equal(intended, actual):
+        continue
 
-`require_application_read_authority()` currently lets applicants read their own application, or any reviewer with one of `application.claim`, `application.review`, `application.approve`, `application.deny`, or `application.withdraw` read it (`services/api/app/services/applications.py:206`). Add the three new permissions to that reviewer read set, otherwise an officer with only waitlist/interview/reactivate authority could mutate through dedicated endpoints only if the endpoint does its own pre-read internally, but could not GET the application for Discord reuse.
+    if intended and actual and not masks_equal(intended, actual):
+        emit drift:
+          permission_intent_id = intended.id
+          intent_version = intended.version
+          intended_* = intended masks
+          actual_* = actual masks
+          status = detected
 
-### Audit
+    elif intended and not actual:
+        emit drift:
+          permission_intent_id = intended.id
+          intent_version = intended.version
+          intended_* = intended masks
+          actual_* = cleared-state sentinel
+          status = detected
 
-The existing mutation substrate already records:
+    elif actual and not intended:
+        emit drift:
+          permission_intent_id = NULL
+          intent_version = NULL
+          intended_* = NULL
+          actual_* = actual masks
+          status = detected
+```
 
-- `activity_actions.action_type`
-- redacted `request_json`
-- accepted/rejected/failed status
-- `activity_state_changes.change_type`
-- `payload_json`
-- `diff_json`
-- aggregate version advancement
+### Edge cases that matter here
 
-SLICE-021 should add action types:
+- Guild-role versus channel-role rows must stay separate. The shipped foundation already treats them as different shapes, so reconciliation cannot collapse them into one generic mask.
+- “Actual missing” should be represented as a cleared-state value, not absence of the drift row. For the shipped variant model that means:
+  - guild-role: `actual_bits = "0"`
+  - channel-role: `actual_allow_bits = "0"` and `actual_deny_bits = "0"`
+- Orphaned/unmanaged actual state requires a target locator in the drift payload or related run snapshot rows. The current `permission_drift` table cannot represent that yet.
+- Expired temporary intents are explicitly part of the same workflow in the proposal: `product-strategy/proposal.md:530`, `product-strategy/proposal.md:746`
 
-- `application.interview`
-- `application.waitlist`
-- `application.reactivate`
+### Idempotency on run re-submission
 
-State changes should continue to use `application.transitioned` with `diff_json`, matching current non-route transitions (`services/api/app/services/applications.py:609`). The diff should include `state`, `owner_id`, `interview_thread_id`, timestamp changes, and notes/reason where applicable.
+Ticket requirement:
 
-Current application transitions pass `scope_kind=None` and `scope_id=None` into `mutate_entity()` even though authority is evaluated at target scope (`services/api/app/services/applications.py:626`). For this slice, either keep that behavior uniformly or explicitly change all application transition audit rows to carry target scope. Do not scope only the new actions differently from existing application actions.
+- same `run_id` retry must not duplicate drift rows; the Discord adapter reuses the API run id as idempotency key: `product-strategy/tickets/SLICE-014.md:63`
 
-## 5. Discord Flow and Notification Findings
+Relevant existing precedent:
 
-### Interview command flow
+- deferred effects use `INSERT ... ON CONFLICT (idempotency_key) DO NOTHING` then load the existing row: `services/api/app/repositories/deferred_effects.py:31-104`
 
-The Discord interview command should follow the existing review handler shape:
+Research conclusion:
 
-1. Defer the interaction if `ack_deferred` exists.
-2. Resolve the Discord actor to a member UUID using existing `resolve_member_id()`.
-3. GET the application with user actor headers.
-4. If `interview_thread_id` is already present, reuse that thread and do not create a duplicate.
-5. If it is absent, create the Discord thread.
-6. POST `/api/v1/applications/{id}/interview` with `If-Match` and the created thread ID.
-7. Only after API success should the command return/post a success result.
+- A reconciliation run should be the idempotency boundary.
+- Today there is no run table and no way to attach drift rows to a run, so idempotent “same run id returns same drift set” behavior is not currently representable.
 
-The ordering matters. Creating the Discord thread before the API call means a 409/412 can leave an unused Discord thread. Creating it after the API call means the API cannot atomically record the thread ID created by Discord. The ticket explicitly says "Discord command creates thread (if not exists), POSTs /interview with thread_id," so the proposal must include the recovery path: on retry, GET the application first and reuse `interview_thread_id` if the previous API call succeeded; if Discord creation succeeded but API failed before storing the ID, the handler must rediscover by deterministic name or report failure without creating another API state.
+## 4. Discord Adapter Shape + Rate-Limit Plan
 
-No current Discord helper abstracts thread creation for applications. The closest reusable pattern is ticket thread discovery/creation in `services/discord/app/handlers/tickets.py`, but application interview should be its own handler and contract, not folded into ticket state.
+### What exists today
 
-### Waitlist command flow
+There is no permission-specific Discord adapter in the current tree:
 
-The waitlist command should:
+- no `services/discord/app/contracts/permissions.py`
+- no `services/discord/app/handlers/permissions.py`
+- no `services/discord/app/infrastructure/permission_client.py`
 
-1. Defer the interaction.
-2. Resolve actor member UUID.
-3. GET application to obtain ETag.
-4. POST `/api/v1/applications/{id}/waitlist` with `reason` and `If-Match`.
-5. On success only, post one applicant-facing status message.
-6. On 409/412/API error, return an operator-facing failure and do not post applicant-facing status.
+The existing Discord runtime patterns are:
 
-This preserves AC4: API conflicts or validation failures do not duplicate Discord status messages or create divergent thread-local state.
+- API-backed service actor calls with explicit headers: `services/discord/app/handlers/chapters.py:12-16`, `services/discord/app/handlers/roster.py:16-19`
+- correlation propagation through the Discord interaction registry and API client: `services/discord/app/commands/registry.py:28-33`, `services/discord/app/infrastructure/api_client.py:25-65`
+- read-through against guild cache first, then fetch fallback only when needed:
+  - roster member resolution checks `guild.members`, `guild.get_member`, then `fetch_member`: `services/discord/app/handlers/roster.py:53-78`
+  - role/channel provisioning uses `guild.roles`, `guild.categories`, and `guild.channels`: `services/discord/app/handlers/chapters.py:200-247`
 
-Applicant-facing status can be implemented two ways:
+### What the snapshot adapter will need to fetch
 
-- Direct Discord handler message after API success. This is the smallest fit for WU-036b because `ApplicationRead.applicant_id` plus `GET /api/v1/members/{member_id}` can resolve the applicant Discord user ID. It requires `member.read` for the service actor.
-- SLICE-015 notification event. This is durable and configurable, but current notification materialization cannot dynamically select "the applicant from this application event" as recipient; it only supports explicit `discord_user` or `discord_users` recipients.
+Inference from the shipped runtime shell and the permission model:
 
-The research conclusion is that SLICE-015 is useful for future applicant notification durability, but using it for WU-036b would require a recipient-resolution extension beyond this ticket's stated scope. The lower-risk SLICE-021 path is direct Discord posting after API success, with tests proving no post on conflict.
+- one guild-level role pass
+- one channel pass that inspects per-channel overwrite data for roles
 
-### Command registration
+The expensive shape is not “N_roles x N_channels API calls” if the adapter walks the in-memory guild/channel objects once and serializes their overwrite maps. That is also consistent with the roadmap note that VS-008 needs “Discord permission readers” and “rate-limit-aware reads” rather than Discord write-path fanout: `product-strategy/engineering-roadmap-revision-cycle3.md:76-80`, `product-strategy/engineering-roadmap-revision-cycle8.md:22-25`.
 
-Add separate command modules and handlers for WU-036a and WU-036b:
+### Snapshot payload shape for `POST /snapshots`
 
-- `services/discord/app/contracts/application_interview.py`
-- `services/discord/app/handlers/application_interview.py`
-- `services/discord/app/commands/application_interview.py`
-- `services/discord/app/contracts/application_waitlist.py`
-- `services/discord/app/handlers/application_waitlist.py`
-- `services/discord/app/commands/application_waitlist.py`
+No contract exists yet. Minimum shape implied by the current intent foundation is:
 
-Then register those commands in `services/discord/app/commands/__init__.py` and in `build_bot_with_registry()`, following the current review command registration pattern (`services/discord/app/commands/application_review.py:15`).
+```text
+PermissionSnapshotSubmit
+  snapshot_entries: list[PermissionSnapshotEntry]
 
-## 6. Open Questions, Risks, and Test Evidence
+PermissionSnapshotEntry
+  kind: Literal["guild_role", "channel_role"]
+  role_id: str
+  channel_id: str | None
+  permission_bits: DecimalBitString | None
+  allow_bits: DecimalBitString | None
+  deny_bits: DecimalBitString | None
+```
 
-### Direct answers
+Reasoning:
 
-1. **State machine extension:** add only the ticketed edges. Preserve SLICE-012 edges exactly.
-2. **Interview thread linkage:** nullable `interview_thread_id TEXT`; immutable once set; repeat with same ID is no-op success; different ID is 409.
-3. **Waitlist semantics:** `waitlisted` has no exits except `reactivate`. Reactivation should preserve prior owner unless `new_owner_id` is supplied.
-4. **Request contracts:** add the three dedicated request models; validate nonblank `reason` and nonblank optional `thread_id`.
-5. **Endpoints:** add three dedicated POST endpoints with `If-Match`; owner checks for interview/waitlist; authority check for all three.
-6. **Discord flow:** interview GETs and reuses stored thread ID; waitlist posts applicant-facing status only after API success.
-7. **Idempotency:** interview uses stored thread immutability; waitlist relies on state-machine rejection of second waitlist.
-8. **Authority:** add `application.interview`, `application.waitlist`, `application.reactivate` at `form_snapshot.target_scope`; add them to read-authority permission set.
-9. **Audit:** add action types and keep `application.transitioned` state change with `diff_json`.
-10. **Migration:** add column and extend state/action CHECK constraints; no new tables.
+- current intent/drift schemas are already variant-shaped around `guild_role` vs `channel_role`: `services/api/app/contracts/permissions.py:70-80`, `migrations/versions/wu-006a_permission_intents_foundation.py:50-65`
+- decimal-string masks are the current contract boundary, not raw Python ints: `services/api/app/contracts/permissions.py:20-30`
 
-### Open questions for proposal
+### Rate-limit handling
 
-- Should `/reactivate` require the actor to be the old owner, or is `application.reactivate` authority sufficient? Research recommends authority-only because `new_owner_id` implies reassignment is allowed.
-- Should an interview request without `thread_id` be allowed to move to `interview`, or should the dedicated Discord/API contract require `thread_id` when the request surface is Discord? The request model says optional, but AC3 is only fully satisfied when Discord provides the ID.
-- Should application transition audit rows start carrying target scope for all actions? Current behavior leaves application transition audit scope null.
+Current architecture gives two existing patterns:
 
-### Test implications
+- inline Discord handlers for bounded work: chapter provisioning and roster sync
+- background/scheduled worker substrate for retryable or larger units of work: `services/api/app/services/deferred_effects.py:161-223`
 
-API tests should cover:
+Research conclusion:
 
-- Existing SLICE-012 transitions still pass.
-- `in_review -> interview`, `in_review -> waitlisted`, `interview -> waitlisted`, `interview -> approved|denied`, and `waitlisted -> claimed`.
-- Invalid `waitlisted -> approve|deny|withdraw|waitlist` returns 409.
-- Interview stores thread ID and returns it in `ApplicationRead`.
-- Repeating interview with the same thread ID returns success without a duplicate review row or version advance.
-- Repeating interview with a different thread ID returns 409.
-- Waitlist requires owner and nonblank reason.
-- Reactivate with no `new_owner_id` preserves prior owner; with `new_owner_id` assigns the new owner.
-- Stale `If-Match` returns 412 for all three endpoints.
-- Audit rows contain the new action types and `application.transitioned` state diffs.
+- small manual chapter-scoped snapshots could run inline from the Discord daemon
+- scheduled or wide-scope reconciliation is a better fit for background execution because the codebase already has worker/retry discipline and the roadmap explicitly calls out rate-limit-aware reads
 
-Discord tests should cover:
+## 5. Contract Surfaces
 
-- Interview handler GETs first, reuses existing `interview_thread_id`, and does not call thread creation.
-- Interview handler creates a thread only when no stored thread exists, then POSTs `/interview` with `If-Match`.
-- Interview API 409/412 does not post a success outcome.
-- Waitlist handler posts applicant-facing status only after a 2xx API response.
-- Waitlist handler does not post applicant-facing status on 409/412/API errors.
-- Command registry includes the new interview and waitlist commands.
+There are no shipped permission API routes yet. `services/api/app/api/v1/router.py:11-42` includes no permissions router.
 
-### Recommended magnitude
+The ticket names eight concrete surfaces, not nine: seven HTTP endpoints plus one Discord handler. A dedicated run-read endpoint is not currently specified in the ticket.
 
-The ticket's **M** sizing is still credible. The API work is a compact lifecycle extension, but correctness depends on careful updates across contracts, database CHECK constraints, repository column lists, owner checks, audit allowlists, and Discord idempotency tests. The main risk is not volume; it is accidentally treating interview repeat as a real transition or posting applicant-facing waitlist messages before the API mutation has safely committed.
+### Existing shipped permission contracts
+
+- `PermissionIntentCreate`
+- `PermissionIntentUpdate`
+- `PermissionIntentRead`
+- `PermissionDriftRead`
+
+Sources: `services/api/app/contracts/permissions.py:101-188`.
+
+### Ticket-bound HTTP surfaces
+
+#### 1. `POST /api/v1/permission-intents -> PermissionIntentRead`
+
+- Request body can reuse the existing discriminated `PermissionIntentCreate`: `services/api/app/contracts/permissions.py:105-142`
+- Response should be `PermissionIntentRead`
+- Should return strong `ETag` like other mutation endpoints: `services/api/app/contracts/mutations.py:44-52`, `services/api/app/api/v1/endpoints/roster.py:56-57`
+
+#### 2. `PATCH /api/v1/permission-intents/{intent_id} -> PermissionIntentRead`
+
+- Request body can reuse `PermissionIntentUpdate`: `services/api/app/contracts/permissions.py:144-150`
+- Must require `If-Match` and translate stale writes to 412, following the shared mutation contract: `services/api/app/contracts/mutations.py:28-52`
+
+#### 3. `GET /api/v1/permission-intents?scope_kind={kind}&scope_id={id} -> list[PermissionIntentRead]`
+
+- Query surface is in the ticket: `product-strategy/tickets/SLICE-014.md:27-34`
+- No repository/service list helper exists yet. Current repo only supports fetch-by-id: `services/api/app/repositories/permissions.py:89-106`, `services/api/app/services/permissions.py:205-213`
+
+#### 4. `GET /api/v1/permission-drift -> list[PermissionDriftRead]`
+
+- Current contract exists, but it is too narrow for orphaned drift because it has no target locator: `services/api/app/contracts/permissions.py:153-172`
+- Filters are unspecified in the ticket and remain an open question
+
+#### 5. `POST /api/v1/permission-drift/{drift_id}/resolve -> PermissionDriftRead`
+
+- No request model exists yet
+- Minimum body implied by the proposal is a resolution action selecting one of `acknowledged | reconciled | accepted`: `product-strategy/proposal.md:547-550`
+- Must require `If-Match` per AC2: `product-strategy/tickets/SLICE-014.md:60-63`
+
+#### 6. `POST /api/v1/permission-reconciliation/runs -> PermissionReconciliationRunRead`
+
+- No run contracts exist yet
+- Minimum request shape implied by the ticket:
+  - `scope_kind`
+  - `scope_id`
+  - possibly requester metadata only if service-authenticated manual triggers need attribution
+
+#### 7. `POST /api/v1/permission-reconciliation/runs/{run_id}/snapshots -> PermissionReconciliationRunRead`
+
+- No snapshot submission contract exists yet
+- This is the idempotent adapter callback surface bound to `run_id`
+
+### Discord handler surface
+
+#### 8. `submit_permission_snapshot(command: ReconciliationRunCommand) -> PermissionReconciliationSubmissionRead`
+
+There is no current contract or handler file for this. Existing Discord command-handler shape is:
+
+- `InteractionEnvelope` input
+- `InteractionResult` output
+- per-command handler functions registered in the interaction registry: `services/discord/app/contracts/interactions.py:10-37`, `services/discord/app/commands/registry.py:14-33`
+
+Research conclusion:
+
+- the ticket’s named handler is a not-yet-shipped application-level contract, not an existing runtime interface
+- if it follows current patterns, it will authenticate to the API as a service actor and preserve the originating Discord user in the request body when the trigger is manual
+
+## 6. Migration Chain + Aggregate Types
+
+### Migration chain head
+
+- `migrations/versions/wu-035_application_interview.py:9-12` defines the current latest revision as `wu_035_application_interview`
+
+### What new migrations actually need to do
+
+The repo already has phase-0 permission tables from `wu-006a` and `wu-006b`. New SLICE-014 migrations therefore need to alter existing tables and add the missing run table; they do not create permission foundations from scratch.
+
+Likely work implied by the current gaps:
+
+- `wu-027_permission_intents.py`
+  - constrain or clarify scope handling if `member` is no longer valid
+  - possibly add uniqueness/index support if the API needs stronger read/query guarantees than the current aggregate-id-only discipline
+- `wu-028a_permission_drift_api.py`
+  - widen `permission_drift` so orphaned/unmanaged state can be located and resolution metadata can be stored
+  - likely add run linkage
+- `wu-028b_permission_reconciliation_runs.py`
+  - add the run aggregate table because nothing like it exists today
+
+The ticket’s “or consolidated” note is accurate. Given the current schema gaps, drift widening and run creation are tightly coupled.
+
+### Aggregate type values
+
+`aggregate_heads.aggregate_type` is plain `TEXT`; there is no enum or registry table: `migrations/versions/wu-002_activity_substrate.py:113-135`.
+
+So:
+
+- no schema migration is needed to “register” aggregate types
+- current code already uses:
+  - `permission_intent`
+  - `permission_drift`
+  - `authority_grant`
+  - other slice-specific values
+- only `permission_reconciliation_run` is truly new at the aggregate-head level
+
+## 7. Service-Actor Pattern For The Reconciler
+
+### Existing service-actor precedent
+
+Discord/API service actors are already a normal pattern.
+
+- Provisioning handler authenticates as `discord-provisioner`: `services/discord/app/handlers/chapters.py:12-16`
+- Roster sync authenticates as `roster-syncer`: `services/discord/app/handlers/roster.py:16-19`
+- Service actors are granted authority in migrations:
+  - `discord-provisioner`: `migrations/versions/wu-019_chapter_lifecycle.py:107-142`
+  - `roster-syncer`: `migrations/versions/wu-033_roster.py:134-169`
+  - `sla-worker`: `migrations/versions/wu-037_ticket_sla_triggers.py:96-133`
+  - `chapter-archiver`: `migrations/versions/wu-042_chapter_governance.py:165-202`
+
+### Originating-user attribution precedent
+
+This pattern already exists.
+
+- Chapter service writes `originating_user_discord_id` only when the originating actor in the request body is a user: `services/api/app/services/chapters.py:197-213`, `services/api/app/services/chapters.py:420-430`
+- Application contracts explicitly say body `originating_*` fields are only honored for service-authenticated callers; user callers are normalized to the authenticated actor: `services/api/app/contracts/applications.py:223-227`, `services/api/app/services/applications.py:189-195`
+
+Research conclusion:
+
+- A permission reconciler should follow the same pattern:
+  - API authentication by a seeded service actor
+  - optional `originating_actor_kind/id` in body for manual Discord-triggered runs
+  - API ignores/spoof-proofs those fields for non-service callers
+
+### What grants exist today for permissions
+
+None.
+
+- There are no existing authority permission names for permission intents/drift/runs in the tree: only foundation action/change names like `permission_intent.create` exist in the internal mutation log: `services/api/app/services/permissions.py:128-141`, `services/api/app/services/permissions.py:227-240`
+
+So a seeded reconciler actor is very likely needed, but the exact permission namespace is not yet established in code. The user’s suggested names such as `permission_intent.read` / `permission_drift.write` are consistent with current naming style, but they are still inference rather than shipped fact.
+
+## 8. Prototyping Questions
+
+Ticket says prototyping is required: `product-strategy/tickets/SLICE-014.md:67-70`.
+
+### 1. Orphaned drift data model
+
+Problem:
+
+- current `permission_drift` rows cannot identify unmanaged actual Discord state because there is no target locator when `permission_intent_id` is null
+
+Spike:
+
+- prove whether orphaned drift should remain its own aggregate with added target columns, or whether drift findings should instead be run-scoped rows attached to `permission_reconciliation_run`
+
+### 2. Run-idempotency versus per-drift aggregates
+
+Problem:
+
+- same `run_id` retry must return the same drift rows
+- current drift writes create one aggregate head per drift UUID
+
+Spike:
+
+- compare:
+  - distinct `permission_drift` aggregates with stable per-run/per-target uniqueness
+  - run-scoped finding rows materialized under the run aggregate only
+- measure the aggregate-head write amplification and the ergonomics of subsequent resolution APIs
+
+### 3. Discord snapshot serialization path
+
+Problem:
+
+- the old candidate question about `BIGINT` is partly stale because the shipped foundation already chose decimal-string contracts plus `NUMERIC(39,0)`: `migrations/versions/wu-006a_permission_intents_foundation.py:25-27`, `services/api/app/contracts/permissions.py:20-30`, `services/api/tests/test_permission_intent_foundation.py:324-330`
+
+Spike:
+
+- validate one full read-through of guild roles plus channel overwrites into the existing decimal-string mask format
+- confirm the adapter can avoid per-role/per-channel fetch fanout and can round-trip overwrite masks into the intended API payload shape
+
+## 9. Open Questions For Synthesis
+
+1. Should PermissionIntent scope be narrowed from the shipped `global|chapter|member` foundation to `global|chapter` only?
+2. How should orphaned drift be represented durably: widened `permission_drift` rows, or run-scoped findings attached to `permission_reconciliation_run`?
+3. What is the intended behavior of `accepted` for orphaned drift with `permission_intent_id = NULL`? Does it create a new intent, or only mark the finding resolved?
+4. Should reconciliation runs be chapter-scoped only at first, or also support `global` snapshots in phase 1?
+5. Does the ticket need an explicit `GET /api/v1/permission-reconciliation/runs/{run_id}` read surface for adapter retry/poll ergonomics, or is the create+submit flow sufficient?
+6. What exact authority permission names will gate operator reads/writes and the seeded reconciler service actor, given that no permission-management namespace exists yet?
+
+## Final Summary
+
+- The shipped foundation already includes `permission_intents` and `permission_drift`, but only as phase-0 storage/helpers; there are still no permission API routes or Discord permission adapter files in the repo.
+- `authority_grants` and declared permission intent are orthogonal systems: one governs actor capabilities inside the API, the other declares desired Discord state.
+- The current drift schema is too narrow for SLICE-014’s operator workflow. It cannot identify orphaned/unmanaged live Discord state and does not store resolution metadata or reconciliation-run linkage.
+- Intent OCC is already in place through `mutate_entity()`. Drift OCC exists at the service layer too, but the future API must require `If-Match` explicitly to satisfy AC2.
+- The most important prototype question is the data model boundary: whether drift remains a standalone aggregate per target or becomes a run-scoped finding set attached to a reconciliation-run aggregate.
