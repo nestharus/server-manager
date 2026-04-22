@@ -37,7 +37,6 @@ from app.services import roster as roster_service
 logger = logging.getLogger(__name__)
 
 COMPLIANCE_EVALUATOR_ACTOR_ID = "compliance-evaluator"
-COMPLIANCE_EVALUATION_DEFAULT_BATCH_SIZE = 500
 
 AUDIT_ACTION_TYPE: dict[str, str] = {
     "rule_create": "compliance_rule.create",
@@ -625,29 +624,27 @@ def _evaluate_member_rule(
     actor: ActorIdentity,
     originating_actor: ActorIdentity,
 ) -> ComplianceEvaluationRead | None:
-    with db.connection() as read_connection:
+    evaluation_id = uuid4()
+    with db.transaction() as connection:
         evidence_rows = compliance_repo.list_evidence_for_rule_period(
-            read_connection,
+            connection,
             rule_id=rule["id"],
             member_id=member["member_id"],
             period_start=period_start,
             period_end=period_end,
         )
+        result, evidence_ids = _compute_rule_result(rule=rule, evidence_rows=evidence_rows)
+        consequence_applied, review_status = _compute_consequence_shape(
+            rule=rule,
+            result=result,
+        )
+        if (
+            consequence_applied == "under_review_applied"
+            and member["status"] not in _ROSTER_AUTO_APPLY_STATUSES
+        ):
+            consequence_applied = "none"
+            review_status = "not_required"
 
-    result, evidence_ids = _compute_rule_result(rule=rule, evidence_rows=evidence_rows)
-    consequence_applied, review_status = _compute_consequence_shape(
-        rule=rule,
-        result=result,
-    )
-    if (
-        consequence_applied == "under_review_applied"
-        and member["status"] not in _ROSTER_AUTO_APPLY_STATUSES
-    ):
-        consequence_applied = "none"
-        review_status = "not_required"
-
-    evaluation_id = uuid4()
-    with db.transaction() as connection:
         inserted_row = _insert_evaluation_row(
             connection,
             evaluation_id=evaluation_id,
@@ -738,7 +735,6 @@ def run_scheduled_compliance_evaluations(
     *,
     now: datetime,
     actor: ActorIdentity,
-    batch_size: int = COMPLIANCE_EVALUATION_DEFAULT_BATCH_SIZE,
     originating_actor: ActorIdentity | None = None,
     source: str = "worker_sweep",
 ) -> list[ComplianceEvaluationRead]:
@@ -760,7 +756,7 @@ def run_scheduled_compliance_evaluations(
                 members = compliance_repo.list_current_roster_members_by_chapter(
                     connection,
                     chapter_id=rule["chapter_id"],
-                    limit=batch_size,
+                    limit=None,
                 )
         except Exception:
             logger.exception(
@@ -807,7 +803,6 @@ __all__ = [
     "AUDIT_ACTION_TYPE",
     "AUDIT_CHANGE_TYPE",
     "COMPLIANCE_EVALUATOR_ACTOR_ID",
-    "COMPLIANCE_EVALUATION_DEFAULT_BATCH_SIZE",
     "compliance_evaluator_actor",
     "create_rule",
     "get_evidence_submission",

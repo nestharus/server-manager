@@ -8,9 +8,10 @@ from app.contracts.actor import ActorIdentity
 from app.contracts.compliance import ComplianceEvaluationRead
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
+from app.services.authority import _require_scoped_authority
 from app.services.compliance import compliance_evaluator_actor, run_scheduled_compliance_evaluations
 
-from ._shared import get_db, raise_known_compliance_error, require_scoped
+from ._shared import get_db, raise_known_compliance_error
 
 
 router = APIRouter(prefix="/api/v1/compliance/evaluations")
@@ -22,12 +23,12 @@ def run_compliance_evaluations_endpoint(
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> list[ComplianceEvaluationRead]:
     try:
-        require_scoped(
-            actor,
-            db,
-            permission="compliance_evaluation.review",
+        _require_scoped_authority(
+            "compliance_evaluation.review",
             scope_kind="global",
             scope_id=None,
+            actor=actor,
+            db=db,
         )
         return run_scheduled_compliance_evaluations(
             db,

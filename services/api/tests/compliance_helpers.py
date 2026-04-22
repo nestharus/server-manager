@@ -65,19 +65,10 @@ def grant(
 
 
 def grant_evaluator(db: PostgresDatabase) -> None:
-    grant(
-        db,
-        grantee_id="compliance-evaluator",
-        scope_kind="global",
-        scope_id=None,
-        permissions=frozenset(
-            {
-                "compliance_rule.read",
-                "compliance_evaluation.write",
-                "roster.transition",
-            }
-        ),
-    )
+    # The compliance-evaluator grant is seeded by the WU-041A migration and
+    # re-seeded by the governance reset fixture, so this helper is a no-op
+    # retained for call-site clarity.
+    return None
 
 
 def seed_chapter_and_roles(

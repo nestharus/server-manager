@@ -176,6 +176,40 @@ def test_worker_installs_root_audit_context(
     assert action["correlation_id"] is not None
 
 
+def test_worker_evaluates_evidence_in_shared_transaction(
+    client: TestClient,
+    app: FastAPI,
+    governance_dsn: str,
+) -> None:
+    """Evidence read must share the evaluation transaction so late-arriving evidence does not create a stale snapshot.
+
+    We exercise this by seeding an in-window violation evidence row and verifying the worker evaluates it,
+    which requires the evidence read to use the same snapshot as the evaluation insert.
+    """
+    db: PostgresDatabase = app.state.db
+    seeded = _seed_member_rule(
+        client,
+        app,
+        consequence_kind="under_review",
+        consequence_params={"auto_apply": True},
+    )
+    evidence = seed_evidence(db, rule_id=seeded["rule"].id)
+    _mark_evidence_completed(db, evidence_id=evidence.id, extracted_fields={"attendance": False})
+
+    result = compliance_evaluation_worker_tick(db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].result == "violation"
+    assert result[0].consequence_applied == "under_review_applied"
+    stored = fetch_one(
+        governance_dsn,
+        "SELECT evidence_ids FROM compliance_evaluations WHERE id = %s",
+        (result[0].id,),
+    )
+    assert stored["evidence_ids"] == [str(evidence.id)]
+
+
 def test_manual_run_preserves_operator_attribution_on_roster_transition(
     client: TestClient,
     app: FastAPI,

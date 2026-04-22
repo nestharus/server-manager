@@ -56,9 +56,9 @@ def test_extract_failure_marks_failed_status(
     client: TestClient,
     app: FastAPI,
 ) -> None:
-    """AC2: provider failures persist a failed extraction state with the error message."""
+    """AC2: provider failures persist a failed extraction state with a sanitized error message."""
     evidence = _seed_pending_evidence(client, app)
-    set_ocr_provider(app, FailingOcrProvider("ocr blew up"))
+    set_ocr_provider(app, FailingOcrProvider("ocr blew up with secret=hunter2"))
 
     response = client.post(
         f"{EVIDENCE_URL}/{evidence['id']}/extract",
@@ -67,7 +67,8 @@ def test_extract_failure_marks_failed_status(
 
     assert response.status_code == HTTPStatus.OK, response.text
     assert response.json()["extraction_status"] == "failed"
-    assert response.json()["extraction_error"] == "ocr blew up"
+    assert response.json()["extraction_error"] == "OCR extraction failed"
+    assert "secret" not in response.json()["extraction_error"]
 
 
 def test_extract_with_stub_provider_returns_503(

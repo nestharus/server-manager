@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -14,6 +15,10 @@ from app.repositories.db import PostgresDatabase
 from app.services.authority import _require_scoped_authority
 from app.services.mutations import mutate_entity
 
+
+logger = logging.getLogger(__name__)
+
+GENERIC_EXTRACTION_ERROR_MESSAGE = "OCR extraction failed"
 
 AUDIT_ACTION_TYPE: dict[str, str] = {
     "evidence_extract": "evidence_submission.extract",
@@ -81,6 +86,12 @@ def trigger_extraction(
     except OcrProviderNotConfiguredError:
         raise
     except Exception as error:
+        logger.exception(
+            "OCR extraction failed evidence=%s chapter=%s provider_error=%s",
+            evidence_id,
+            current_row["chapter_id"],
+            error,
+        )
         result = _persist_extraction_failure(
             db,
             evidence_id=evidence_id,
@@ -89,7 +100,10 @@ def trigger_extraction(
             chapter_id=current_row["chapter_id"],
             attachment_ref=current_row["attachment_ref"],
             rule_hint=rule_row["name"],
-            error_message=str(error),
+            error_message=GENERIC_EXTRACTION_ERROR_MESSAGE,
+            preserved_raw_text=current_row["raw_text"],
+            preserved_extracted_fields=current_row["extracted_fields"],
+            preserved_extraction_confidence=current_row["extraction_confidence"],
         )
         with db.connection() as connection:
             failed_row = compliance_repo.get_evidence(connection, evidence_id)
@@ -187,22 +201,25 @@ def _persist_extraction_failure(
     attachment_ref: str,
     rule_hint: str,
     error_message: str,
+    preserved_raw_text: str | None,
+    preserved_extracted_fields: dict[str, Any] | None,
+    preserved_extraction_confidence,
 ) -> MutationResult:
     action_payload = {
         "attachment_ref": attachment_ref,
         "rule_hint": rule_hint,
         "extraction_status": "failed",
-        "raw_text_present": False,
+        "raw_text_present": preserved_raw_text is not None,
     }
 
     def mutate_projection(connection) -> StateChangeDraft:
         updated_count = compliance_repo.update_evidence_after_extraction(
             connection,
             evidence_id=evidence_id,
-            raw_text=None,
-            extracted_fields=None,
+            raw_text=preserved_raw_text,
+            extracted_fields=preserved_extracted_fields,
             extraction_status="failed",
-            extraction_confidence=None,
+            extraction_confidence=preserved_extraction_confidence,
             extraction_error=error_message,
         )
         if updated_count != 1:

@@ -52,6 +52,10 @@ def _make_request(
     )
 
 
+def _officer_correction_from_row(row: dict[str, Any]) -> OfficerCorrectionRead:
+    return OfficerCorrectionRead.model_validate(row)
+
+
 def correct_evidence(
     db: PostgresDatabase,
     evidence_id: UUID,
@@ -142,7 +146,7 @@ def correct_evidence(
         updated_row = compliance_repo.get_evidence(connection, evidence_id)
     if updated_row is None:
         raise EvidenceSubmissionNotFoundError(evidence_id)
-    return OfficerCorrectionRead.model_validate(updated_row), result
+    return _officer_correction_from_row(updated_row), result
 
 
 __all__ = ["correct_evidence"]

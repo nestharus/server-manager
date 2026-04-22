@@ -67,6 +67,21 @@ def _make_request(
     )
 
 
+def _resolved_review_consequence(
+    *,
+    rule: dict[str, Any],
+    result: str,
+    current_consequence_applied: str,
+) -> str:
+    if (
+        result == "violation"
+        and rule["consequence_kind"] == "under_review"
+        and current_consequence_applied == "none"
+    ):
+        return "under_review_applied"
+    return current_consequence_applied
+
+
 def get_evaluation(
     db: PostgresDatabase,
     evaluation_id: UUID,
@@ -137,11 +152,12 @@ def review_evaluation(
     reviewed_at = datetime.now(tz=UTC)
     if request.action == "approve":
         next_result = current_row["result"]
-        next_consequence_applied = current_row["consequence_applied"]
+        base_consequence_applied = current_row["consequence_applied"]
         next_review_status = "approved"
         action_type = AUDIT_ACTION_TYPE["review"]
         change_type = AUDIT_CHANGE_TYPE["reviewed"]
         payload_allowlist = COMPLIANCE_EVALUATION_REVIEW_PAYLOAD_ALLOWLIST
+        transition_reason = "compliance_approved_violation"
         action_payload = {
             "evaluation_id": str(evaluation_id),
             "reviewer_reason": request.reviewer_reason,
@@ -149,7 +165,7 @@ def review_evaluation(
         }
     else:
         next_result = request.override_result
-        next_consequence_applied, _ignored_review_status = _compute_consequence_shape(
+        base_consequence_applied, _ignored_review_status = _compute_consequence_shape(
             rule=rule_row,
             result=next_result,
         )
@@ -157,11 +173,18 @@ def review_evaluation(
         action_type = AUDIT_ACTION_TYPE["override"]
         change_type = AUDIT_CHANGE_TYPE["overridden"]
         payload_allowlist = COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST
+        transition_reason = "compliance_override_violation"
         action_payload = {
             "evaluation_id": str(evaluation_id),
             "override_result": next_result,
             "reviewer_reason": request.reviewer_reason,
         }
+
+    next_consequence_applied = _resolved_review_consequence(
+        rule=rule_row,
+        result=str(next_result),
+        current_consequence_applied=str(base_consequence_applied),
+    )
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
         row = compliance_repo.get_evaluation_for_update(connection, evaluation_id)
@@ -175,7 +198,7 @@ def review_evaluation(
             )
 
         resolved_consequence_applied = str(next_consequence_applied)
-        if request.action == "override" and resolved_consequence_applied == "under_review_applied":
+        if resolved_consequence_applied == "under_review_applied":
             roster_members = compliance_repo.list_current_roster_members_by_chapter(
                 connection,
                 chapter_id=row["chapter_id"],
@@ -197,7 +220,7 @@ def review_evaluation(
                         roster_member["id"],
                         RosterEntryTransitionRequest(
                             to_status="under_review",
-                            reason="compliance_override_violation",
+                            reason=transition_reason,
                             originating_actor_kind=actor.actor_kind,
                             originating_actor_id=actor.actor_id,
                         ),

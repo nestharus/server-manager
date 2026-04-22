@@ -72,7 +72,11 @@ def upgrade() -> None:
             name="evidence_submissions_failed_requires_error",
         ),
         sa.CheckConstraint(
-            "extraction_status <> 'corrected' OR (extracted_fields_corrected IS NOT NULL AND corrected_by_member_id IS NOT NULL AND correction_reason IS NOT NULL)",
+            "extraction_status <> 'corrected' OR ("
+            "extracted_fields_corrected IS NOT NULL "
+            "AND corrected_by_member_id IS NOT NULL "
+            "AND corrected_at IS NOT NULL "
+            "AND correction_reason IS NOT NULL)",
             name="evidence_submissions_corrected_requires_overlay",
         ),
     )

@@ -5,7 +5,6 @@ from typing import NoReturn
 
 from fastapi import HTTPException, Request, Response
 
-from app.contracts.actor import ActorIdentity
 from app.contracts.compliance import (
     ComplianceEvaluationNotFoundError,
     ComplianceRuleNotFoundError,
@@ -19,8 +18,6 @@ from app.contracts.compliance_corrections import CorrectionNotPermittedStatusErr
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
 from app.infrastructure.ocr import OcrProvider, OcrProviderNotConfiguredError, StubOcrProvider
 from app.repositories.db import PostgresDatabase
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
-from app.contracts.authority import AuthorityRequirement
 
 
 MIN_STRONG_ETAG_LENGTH = 3
@@ -31,11 +28,7 @@ def get_db(request: Request) -> PostgresDatabase:
 
 
 def get_ocr_provider(request: Request) -> OcrProvider:
-    provider = getattr(request.app.state, "ocr_provider", None)
-    if provider is None:
-        provider = StubOcrProvider()
-        request.app.state.ocr_provider = provider
-    return provider
+    return request.app.state.ocr_provider
 
 
 def parse_if_match_strong(request: Request) -> int:
@@ -68,48 +61,37 @@ def set_etag(response: Response, etag: str) -> None:
     response.headers["etag"] = etag
 
 
-def require_scoped(
-    actor: ActorIdentity,
-    db: PostgresDatabase,
-    *,
-    permission: str,
-    scope_kind: str,
-    scope_id: str | None,
-) -> None:
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
-    decision = evaluate(
-        requirement=AuthorityRequirement(
-            scope_kind=scope_kind,  # type: ignore[arg-type]
-            scope_id=scope_id,
-            permission=permission,
-        ),
-        grants=grants,
-        at=current_time(),
-    )
-    if not decision.allowed:
-        raise PermissionError("authority requirement denied")
+_MISSING_AGGREGATE_CODE_MAP = {
+    "compliance_rule": "compliance_rule_not_found",
+    "evidence_submission": "evidence_submission_not_found",
+    "compliance_evaluation": "compliance_evaluation_not_found",
+}
 
 
 def raise_known_compliance_error(error: Exception) -> NoReturn:
-    if isinstance(
-        error,
-        (
-            ComplianceRuleNotFoundError,
-            EvidenceSubmissionNotFoundError,
-            ComplianceEvaluationNotFoundError,
-            MissingAggregateError,
-        ),
-    ):
-        if isinstance(error, ComplianceRuleNotFoundError):
-            code = "compliance_rule_not_found"
-        elif isinstance(error, EvidenceSubmissionNotFoundError):
-            code = "evidence_submission_not_found"
-        else:
-            code = "compliance_evaluation_not_found"
+    if isinstance(error, ComplianceRuleNotFoundError):
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
-            detail={"code": code, "message": str(error)},
+            detail={"code": "compliance_rule_not_found", "message": str(error)},
         ) from error
+    if isinstance(error, EvidenceSubmissionNotFoundError):
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail={"code": "evidence_submission_not_found", "message": str(error)},
+        ) from error
+    if isinstance(error, ComplianceEvaluationNotFoundError):
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail={"code": "compliance_evaluation_not_found", "message": str(error)},
+        ) from error
+    if isinstance(error, MissingAggregateError):
+        code = _MISSING_AGGREGATE_CODE_MAP.get(error.aggregate_type)
+        if code is not None:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail={"code": code, "message": str(error)},
+            ) from error
+        raise error
     if isinstance(error, DuplicateActiveComplianceRuleError):
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
