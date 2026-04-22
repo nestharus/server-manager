@@ -571,7 +571,7 @@ def get_evidence_submission(
     if row is None:
         raise EvidenceSubmissionNotFoundError(evidence_id)
     _require_scoped_authority(
-        "compliance_rule.read",
+        "compliance_evidence.read",
         scope_kind="chapter",
         scope_id=row["chapter_id"],
         actor=actor,

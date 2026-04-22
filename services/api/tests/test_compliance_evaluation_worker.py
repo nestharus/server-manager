@@ -230,7 +230,7 @@ def test_manual_run_preserves_operator_attribution_on_roster_transition(
         grantee_id="operator",
         scope_kind="global",
         scope_id=None,
-        permissions=frozenset({"compliance_evaluation.review"}),
+        permissions=frozenset({"compliance_evaluation.write"}),
     )
 
     response = client.post(

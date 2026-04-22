@@ -48,13 +48,13 @@ def parse_if_match_strong(request: Request) -> int:
             status_code=HTTPStatus.PRECONDITION_FAILED,
             detail={"code": "invalid_if_match", "message": "If-Match must be a strong ETag"},
         )
-    try:
-        return int(if_match[1:-1])
-    except ValueError as error:
+    token = if_match[1:-1]
+    if not token.isdigit():
         raise HTTPException(
             status_code=HTTPStatus.PRECONDITION_FAILED,
             detail={"code": "invalid_if_match", "message": "If-Match must be a strong ETag"},
-        ) from error
+        )
+    return int(token)
 
 
 def set_etag(response: Response, etag: str) -> None:

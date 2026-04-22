@@ -24,7 +24,7 @@ def run_compliance_evaluations_endpoint(
 ) -> list[ComplianceEvaluationRead]:
     try:
         _require_scoped_authority(
-            "compliance_evaluation.review",
+            "compliance_evaluation.write",
             scope_kind="global",
             scope_id=None,
             actor=actor,

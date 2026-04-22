@@ -113,7 +113,7 @@ def test_get_evidence_returns_current_version_etag(
 ) -> None:
     """AC2: reading evidence returns the current version as a strong ETag."""
     db: PostgresDatabase = app.state.db
-    grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write", "compliance_rule.read"}))
+    grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write", "compliance_evidence.read"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit"}))
 
     rule, _etag = create_rule_http(client)
