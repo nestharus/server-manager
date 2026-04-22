@@ -78,7 +78,8 @@ def _compute_staleness(
 ) -> _Staleness:
     stale_by_lag = cursor_lag_events > STALE_EVENT_THRESHOLD
     stale_by_time = (
-        last_processed_at is not None
+        cursor_lag_events > 0
+        and last_processed_at is not None
         and (now - last_processed_at) > STALE_TIME_THRESHOLD
     )
     is_stale = stale_by_lag or stale_by_time
@@ -171,7 +172,9 @@ def read_operational_overview(
             scope_kind=scope_kind,
             scope_id=scope_id,
         )
-        visible_head_id = max_event_id_settled(connection, min_age_seconds=0)
+        visible_head_id = max_event_id_settled(
+            connection, min_age_seconds=MIN_AGE_SECONDS
+        )
         cursor = load_cursor(
             connection,
             projection_name=OPERATIONAL_OVERVIEW_PROJECTION_NAME,

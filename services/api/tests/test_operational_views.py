@@ -635,13 +635,14 @@ async def test_overview_stale_when_last_processed_at_exceeds_time_threshold(
     governance_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC4: overview is stale when the cursor timestamp is older than the time threshold."""
+    """AC4: overview is stale when the cursor timestamp is old AND settled events remain unprocessed."""
     monkeypatch.setattr("app.services.read_models.STALE_TIME_THRESHOLD", timedelta(minutes=5))
     _grant(
         governance_db,
         actor_id="operator",
         permissions=frozenset({"operational_overview.read"}),
     )
+    _append_state_change(governance_dsn, recorded_at=datetime.now(tz=UTC) - timedelta(seconds=30))
     last_processed_at = datetime.now(tz=UTC) - timedelta(minutes=10)
     _set_cursor(
         governance_dsn,
@@ -661,6 +662,75 @@ async def test_overview_stale_when_last_processed_at_exceeds_time_threshold(
     assert body["is_stale"] is True
     assert body["stale_projections"] == [OPERATIONAL_OVERVIEW_PROJECTION_NAME]
     assert datetime.fromisoformat(body["stale_since"].replace("Z", "+00:00")) == last_processed_at
+
+
+@pytest.mark.asyncio
+async def test_cursor_caught_up_not_stale_despite_idle_time(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    """AC4 (regression): a fully caught-up cursor stays fresh even when last_processed_at is old."""
+    _grant(
+        governance_db,
+        actor_id="operator",
+        permissions=frozenset({"operational_overview.read"}),
+    )
+    idle_last_processed_at = datetime.now(tz=UTC) - timedelta(minutes=10)
+    _set_cursor(
+        governance_dsn,
+        last_processed_id=0,
+        last_processed_at=idle_last_processed_at,
+        version=1,
+    )
+
+    response = await migrated_async_client.get(
+        OVERVIEW_URL,
+        params={"scope_kind": "global"},
+        headers=_headers("operator"),
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    body = response.json()
+    assert body["is_stale"] is False
+    assert body["stale_projections"] == []
+    assert body["stale_since"] is None
+
+
+@pytest.mark.asyncio
+async def test_stale_signal_does_not_flag_healthy_projector_under_load(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    """AC4 (regression): reader uses the same MIN_AGE_SECONDS fence as the worker so within-fence writes don't look like lag."""
+    _grant(
+        governance_db,
+        actor_id="operator",
+        permissions=frozenset({"operational_overview.read"}),
+    )
+    now_ts = datetime.now(tz=UTC)
+    _append_state_change(governance_dsn, recorded_at=now_ts)
+    _append_state_change(governance_dsn, recorded_at=now_ts)
+    last_processed_at = now_ts - timedelta(minutes=10)
+    _set_cursor(
+        governance_dsn,
+        last_processed_id=0,
+        last_processed_at=last_processed_at,
+        version=1,
+    )
+
+    response = await migrated_async_client.get(
+        OVERVIEW_URL,
+        params={"scope_kind": "global"},
+        headers=_headers("operator"),
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    body = response.json()
+    assert body["is_stale"] is False
+    assert body["stale_projections"] == []
+    assert body["stale_since"] is None
 
 
 @pytest.mark.asyncio
