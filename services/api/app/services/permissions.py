@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 from psycopg import Connection
 
 from app.contracts.actor import ActorIdentity
-from app.contracts.authority import AuthorityRequirement
 from app.contracts.base import AGGREGATE_SCOPE_MISSING, validated_update
 from app.contracts.mutations import (
     MutationRequest,
@@ -32,7 +31,7 @@ from app.contracts.permissions import (
 )
 from app.repositories import permissions as permission_repo
 from app.repositories.db import PostgresDatabase
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import _require_scoped_authority
 from app.services.mutations import mutate_entity
 
 logger = logging.getLogger(__name__)
@@ -171,28 +170,6 @@ def _make_request(
         reason_text=reason_text,
         request_surface=request_surface,
     )
-
-
-def _require_scoped_authority(
-    permission: str,
-    *,
-    scope_kind: str,
-    scope_id: str | None,
-    actor: ActorIdentity,
-    db: PostgresDatabase,
-) -> None:
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
-    decision = evaluate(
-        requirement=AuthorityRequirement(
-            scope_kind=scope_kind,  # type: ignore[arg-type]
-            scope_id=scope_id,
-            permission=permission,
-        ),
-        grants=grants,
-        at=current_time(),
-    )
-    if not decision.allowed:
-        raise PermissionError("authority requirement denied")
 
 
 def _to_permission_intent_row(model: Any) -> dict[str, Any]:

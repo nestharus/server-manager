@@ -16,6 +16,9 @@ from app.contracts.ticket_categories import (
 from app.contracts.ticket_messages import TicketMessageAppendRequest, TicketMessageRead
 
 TicketPriority = Literal["low", "normal", "high", "urgent"]
+TICKET_REASSIGN_ACTION_TYPE = "ticket.reassign"
+TICKET_REASSIGN_CHANGE_TYPE = "ticket.reassigned"
+TICKET_REASSIGN_PAYLOAD_ALLOWLIST = frozenset({"new_owner_id"})
 
 
 class _TicketModel(BaseModel):
@@ -58,6 +61,7 @@ class TicketTransitionRequest(_TicketModel):
     reason: str | None = None
     resolution: str | None = None
     owner_id: str | None = None
+    new_owner_id: str | None = None
     priority: TicketPriority | None = None
     originating_actor_kind: Literal["user", "service"]
     originating_actor_id: str = Field(min_length=1)
@@ -66,6 +70,10 @@ class TicketTransitionRequest(_TicketModel):
     def validate_originating_actor_id(self) -> "TicketTransitionRequest":
         if not self.originating_actor_id.strip():
             raise ValueError("originating_actor_id must not be blank")
+        if self.owner_id is not None and not self.owner_id.strip():
+            raise ValueError("owner_id must not be blank")
+        if self.new_owner_id is not None and not self.new_owner_id.strip():
+            raise ValueError("new_owner_id must not be blank")
         return self
 
 
@@ -186,6 +194,9 @@ class TicketTransitionPriorityChangeForbiddenError(Exception):
 
 
 __all__ = [
+    "TICKET_REASSIGN_ACTION_TYPE",
+    "TICKET_REASSIGN_CHANGE_TYPE",
+    "TICKET_REASSIGN_PAYLOAD_ALLOWLIST",
     "DuplicateTicketCreateError",
     "InvalidTicketTransitionError",
     "SlaThresholdRead",

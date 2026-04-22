@@ -175,3 +175,42 @@ def insert_ticket_transition(connection: Connection[Any], *, row: dict[str, Any]
         ),
     )
 
+
+def list_open_tickets_for_owner_ids(
+    connection: Connection[Any],
+    *,
+    owner_ids: list[str],
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if not owner_ids:
+        return []
+
+    predicates = [
+        "t.terminal_at IS NULL",
+        "t.owner_id = ANY(%s)",
+    ]
+    params: list[Any] = [owner_ids]
+    if scope_kind is not None:
+        predicates.append("t.category_snapshot #>> '{routing_scope,scope_kind}' = %s")
+        params.append(scope_kind)
+    if scope_id is not None:
+        predicates.append("t.category_snapshot #>> '{routing_scope,scope_id}' = %s")
+        params.append(scope_id)
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            f"""
+            SELECT t.id,
+                   t.owner_id,
+                   t.state,
+                   h.current_seq AS version
+            FROM tickets AS t
+            JOIN aggregate_heads AS h
+              ON h.aggregate_type = 'ticket'
+             AND h.aggregate_id = t.id::text
+            WHERE {' AND '.join(predicates)}
+            ORDER BY t.created_at ASC, t.id ASC
+            """,
+            params,
+        ).fetchall()

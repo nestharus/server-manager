@@ -12,6 +12,9 @@ from app.contracts.scope import ScopeKind
 
 
 FIELD_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+APPLICATION_REASSIGN_ACTION_TYPE = "application.reassign"
+APPLICATION_REASSIGN_CHANGE_TYPE = "application.reassigned"
+APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST = frozenset({"new_owner_id"})
 
 
 class _ApplicationModel(BaseModel):
@@ -48,6 +51,7 @@ class ApplicationTransitionAction(str, Enum):
     review = "review"
     request_interview = "request_interview"
     waitlist = "waitlist"
+    reassign = "reassign"
     reactivate = "reactivate"
     approve = "approve"
     deny = "deny"
@@ -423,6 +427,9 @@ class InvalidApplicationResponseError(ValueError):
 
 
 __all__ = [
+    "APPLICATION_REASSIGN_ACTION_TYPE",
+    "APPLICATION_REASSIGN_CHANGE_TYPE",
+    "APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST",
     "ApplicationAlreadyClaimedError",
     "ApplicationCreate",
     "ApplicationDecisionReasonRequiredError",
