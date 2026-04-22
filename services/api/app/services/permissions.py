@@ -425,13 +425,9 @@ def resolve_permission_drift(
             action=request.action,
         )
 
-    is_terminal = next_status in DRIFT_TERMINAL_STATUSES
-    if is_terminal:
-        resolved_kind, resolved_id = _drift_originating_actor(request, actor)
-        resolved_at: datetime | None = datetime.now(UTC)
-    else:
-        resolved_kind, resolved_id, resolved_at = None, None, None
-    resolution_reason = request.reason if is_terminal else None
+    resolved_kind, resolved_id = _drift_originating_actor(request, actor)
+    resolved_at = datetime.now(UTC)
+    resolution_reason = request.reason
 
     aggregate_id = str(drift_id)
     action_payload = {
@@ -463,7 +459,7 @@ def resolve_permission_drift(
                 "status": next_status,
                 "resolved_by_kind": resolved_kind,
                 "resolved_by_id": resolved_id,
-                "resolved_at": None if resolved_at is None else resolved_at.isoformat(),
+                "resolved_at": resolved_at.isoformat(),
                 "resolution_reason": resolution_reason,
             },
             diff_json={"from": from_state, "to": next_status},

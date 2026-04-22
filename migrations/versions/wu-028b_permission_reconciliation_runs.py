@@ -78,6 +78,7 @@ def upgrade() -> None:
             "AND failure_reason IS NULL"
             ") OR ("
             "status = 'failed' "
+            "AND snapshot_submitted_at IS NOT NULL "
             "AND failed_at IS NOT NULL "
             "AND failure_reason IS NOT NULL "
             "AND reconciled_at IS NULL"

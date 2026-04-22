@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, Query, Request, Response
+from pydantic import Field
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.permissions import (
-    PermissionIntentCreate,
+    ChannelRolePermissionIntentCreate,
+    GuildRolePermissionIntentCreate,
     PermissionIntentKind,
     PermissionIntentScopeKind,
     PermissionIntentUpdate,
@@ -32,24 +33,22 @@ from ._shared import (
 )
 
 
+PermissionIntentCreateBody = Annotated[
+    GuildRolePermissionIntentCreate | ChannelRolePermissionIntentCreate,
+    Field(discriminator="kind"),
+]
+
+
 router = APIRouter(prefix="/api/v1/permission-intents")
 
 
 @router.post("", status_code=HTTPStatus.CREATED)
-async def create_intent_endpoint(
-    request: Request,
+def create_intent_endpoint(
+    body: PermissionIntentCreateBody,
     response: Response,
     db: PostgresDatabase = Depends(get_db),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> Any:
-    raw = await request.json()
-    try:
-        body = PermissionIntentCreate.model_validate(raw)
-    except ValidationError as error:
-        raise HTTPException(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            detail={"code": "validation_error", "message": str(error)},
-        ) from error
     try:
         require_scoped(
             actor, db, body.scope_kind, body.scope_id,

@@ -381,12 +381,15 @@ async def test_submit_snapshot_failed_run_returns_409(
         ),
     )
     run = await _create_run(migrated_async_client)
-    # Manually mark the run failed at the projection layer.
+    # Manually mark the run failed at the projection layer. CodeRabbit
+    # MAJOR 2: the tightened CHECK requires snapshot_submitted_at on
+    # failed rows, so populate it alongside failed_at.
     with psycopg.connect(governance_dsn) as connection:
         connection.execute(
             """
             UPDATE permission_reconciliation_runs
                SET status = 'failed',
+                   snapshot_submitted_at = CURRENT_TIMESTAMP,
                    failed_at = CURRENT_TIMESTAMP,
                    failure_reason = 'simulated failure'
              WHERE id = %s

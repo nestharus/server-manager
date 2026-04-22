@@ -137,7 +137,7 @@ def raise_known_permission_error(error: Exception) -> NoReturn:
             status_code=HTTPStatus.FORBIDDEN,
             detail={"code": "authority_decision_denied", "message": str(error)},
         ) from error
-    if isinstance(error, (ValueError, InvalidPermissionIntentError)):
+    if isinstance(error, InvalidPermissionIntentError):
         raise HTTPException(
             status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
             detail={"code": "validation_error", "message": str(error)},

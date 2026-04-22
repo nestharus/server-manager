@@ -321,12 +321,16 @@ def _advance_run_failed(
     if prior_status not in ("requested", "snapshot_submitted"):
         return
     expected_version = _read_head_version(db, run_id)
+    snapshot_submitted_override = (
+        now if current.snapshot_submitted_at is None else None
+    )
 
     def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
         permission_repo.update_reconciliation_run_status(
             active_connection,
             run_id=run_id,
             status="failed",
+            snapshot_submitted_at=snapshot_submitted_override,
             failed_at=now,
             failure_reason=failure_reason,
         )

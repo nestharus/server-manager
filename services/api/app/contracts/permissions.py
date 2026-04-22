@@ -231,7 +231,7 @@ class PermissionDriftRead(_PermissionModel):
             or self.resolved_at is not None
             or self.resolution_reason is not None
         )
-        if self.status in ("reconciled", "accepted"):
+        if self.status in ("acknowledged", "reconciled", "accepted"):
             if not all(
                 (
                     self.resolved_by_kind,
@@ -240,9 +240,11 @@ class PermissionDriftRead(_PermissionModel):
                     self.resolution_reason,
                 )
             ):
-                raise ValueError("terminal drift requires full resolution metadata")
+                raise ValueError(
+                    "resolved drift requires full resolution metadata"
+                )
         elif resolution_present:
-            raise ValueError("non-terminal drift forbids resolution metadata")
+            raise ValueError("detected drift forbids resolution metadata")
         return self
 
 

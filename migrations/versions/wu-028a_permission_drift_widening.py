@@ -120,21 +120,34 @@ def upgrade() -> None:
         "(kind = 'guild_role' AND channel_id IS NULL) "
         "OR (kind = 'channel_role' AND channel_id IS NOT NULL)",
     )
+    op.execute(
+        """
+        UPDATE permission_drift
+           SET resolved_by_kind = 'system',
+               resolved_by_id = 'legacy-migration',
+               resolved_at = COALESCE(resolved_at, detected_at, CURRENT_TIMESTAMP),
+               resolution_reason = 'Pre-SLICE-014 legacy row, backfilled by migration'
+         WHERE status IN ('acknowledged', 'reconciled', 'accepted')
+           AND resolved_by_kind IS NULL;
+        """
+    )
+
     op.create_check_constraint(
         "permission_drift_resolution_shape_valid",
         "permission_drift",
         "("
-        "status IN ('reconciled','accepted') "
-        "AND resolved_by_kind IS NOT NULL "
-        "AND resolved_by_id IS NOT NULL "
-        "AND resolved_at IS NOT NULL "
-        "AND resolution_reason IS NOT NULL"
-        ") OR ("
-        "status IN ('detected','acknowledged') "
+        "status = 'detected' "
         "AND resolved_by_kind IS NULL "
         "AND resolved_by_id IS NULL "
         "AND resolved_at IS NULL "
         "AND resolution_reason IS NULL"
+        ") OR ("
+        "status IN ('acknowledged','reconciled','accepted') "
+        "AND resolved_by_kind IS NOT NULL "
+        "AND resolved_by_id IS NOT NULL "
+        "AND resolved_at IS NOT NULL "
+        "AND resolution_reason IS NOT NULL "
+        "AND resolution_reason <> ''"
         ")",
     )
 

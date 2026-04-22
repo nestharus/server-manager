@@ -217,6 +217,47 @@ async def test_list_drift_returns_intent_linked_and_orphaned_rows(
 
 
 @pytest.mark.asyncio
+async def test_list_drift_requires_scope_kind_param(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """CodeRabbit CRITICAL 2: scope_kind is required — omitting it must
+    return 422 so a caller with only global read cannot implicitly
+    enumerate chapter drift."""
+    _grant(
+        governance_db,
+        actor_id="operator",
+        permissions=frozenset({"permission_drift.read"}),
+    )
+
+    response = await migrated_async_client.get(
+        DRIFT_URL,
+        headers=_headers("operator"),
+    )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+
+
+@pytest.mark.asyncio
+async def test_list_drift_chapter_scope_requires_scope_id(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """CodeRabbit CRITICAL 2: chapter scope must include scope_id."""
+    _grant(
+        governance_db,
+        actor_id="operator",
+        permissions=frozenset({"permission_drift.read"}),
+    )
+
+    response = await migrated_async_client.get(
+        DRIFT_URL,
+        params={"scope_kind": "chapter"},
+        headers=_headers("operator"),
+    )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+
+
+@pytest.mark.asyncio
 async def test_list_drift_has_intent_filter(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
@@ -263,7 +304,9 @@ async def test_resolve_drift_detected_to_acknowledged_with_if_match(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
 ) -> None:
-    """AC2 (D5): detected -> acknowledged advances version and leaves non-terminal fields null."""
+    """AC2 (D5): detected -> acknowledged advances version and records
+    the operator who acknowledged (CodeRabbit MAJOR 1: acknowledge is a
+    resolved state and carries full resolution metadata)."""
     _grant(
         governance_db,
         actor_id="operator",
@@ -281,10 +324,10 @@ async def test_resolve_drift_detected_to_acknowledged_with_if_match(
     assert response.status_code == HTTPStatus.OK, response.text
     body = response.json()
     assert body["status"] == "acknowledged"
-    assert body["resolved_by_kind"] is None
-    assert body["resolved_by_id"] is None
-    assert body["resolved_at"] is None
-    assert body["resolution_reason"] is None
+    assert body["resolved_by_kind"] == "user"
+    assert body["resolved_by_id"] == "operator"
+    assert body["resolved_at"] is not None
+    assert body["resolution_reason"] == "reviewing"
     assert response.headers["etag"] == '"2"'
 
 
