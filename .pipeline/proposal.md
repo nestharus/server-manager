@@ -1,1277 +1,1234 @@
-# SLICE-020 Phase 3 Proposal: Temporary Permission Management
+# SLICE-024 Phase 3 Proposal: Leadership Succession + Context Transfer
 
 ## Binding sources
 
 - `.pipeline/synthesis.md` — D1–D15 (binding).
-- `.pipeline/research.md` — evidence base (informational).
-- `product-strategy/tickets/SLICE-020.md` — AC1–AC4, Work Units WU-038A / WU-038B, Code Boundary.
-- `AGENTS.md` — Live Server Principle (no rollback), Test/Code Agent Separation, migration discipline, No Backwards Compatibility.
+- `.pipeline/research.md` — Phase 1 evidence.
+- `product-strategy/tickets/SLICE-024.md` — AC1–AC4, WU grid, Code Boundary.
+- `AGENTS.md` — Live Server Principle, No Backwards Compatibility, Test/Code Agent
+  separation, migration discipline.
 
-All mechanics below stay inside the boundaries set by D1–D15. Anything not listed here is explicitly out of scope per §10.
+This proposal is bound to D1–D15. Mechanics may vary inside those boundaries;
+scope and shape may not. No new Alembic file ships (D2). Migration head stays
+`wu_038`.
 
 ---
 
 ## §1 — AC mapping
 
-Each AC is listed with the numbered implementation steps and file paths that realize it. Every step cites the binding decision from synthesis.
+### AC1 — Queryable plan without successor; no automatic transfer
 
-### AC1 — Renewing a temporary intent with the current version updates `expires_at`; stale renewal → 412 (`SLICE-020.md:52`)
+1. **Contracts**
+   - `services/api/app/contracts/authority.py`:
+     `SuccessionPlanRead`, `DepartingRoleEntry`, `PendingApplicationRef`,
+     `PendingTicketRef` (shapes per §3).
+2. **Repository helpers**
+   (`services/api/app/repositories/authority.py`,
+    `services/api/app/repositories/chapter_roles.py`,
+    `services/api/app/repositories/roster.py`,
+    `services/api/app/repositories/applications.py`,
+    `services/api/app/repositories/tickets.py`):
+   - `list_succession_triggering_roles(conn, chapter_id)` — rows from
+     `chapter_roles` with `triggers_succession = TRUE`, ordered by `ordinal`.
+   - `list_role_holders(conn, chapter_id, role_ids)` — roster entries for
+     the triggering roles, returning `(role_id, member_id, status)`.
+   - `list_active_grants_for_members(conn, member_ids, *, scope_kind,
+     scope_id)` — grants with `revoked_at IS NULL` and
+     `(expires_at IS NULL OR expires_at > now)` narrowed to the chapter scope.
+   - `list_open_applications_for_owners_in_scope(conn, owner_ids,
+     *, scope_kind, scope_id)` — open state set
+     `{submitted, queued, claimed, in_review, interview, waitlisted}`
+     (operational-overview set — D5).
+   - `list_open_tickets_for_owners_in_scope(conn, owner_ids,
+     *, scope_kind, scope_id)` — `terminal_at IS NULL`.
+3. **Service**
+   (`services/api/app/services/authority.py`,
+    new function `compute_succession_plan`):
+   - Authority: `_require_scoped_authority("succession_plan.read",
+     scope_kind="chapter", scope_id=chapter_id, actor=actor, db=db)` — D4.
+   - Pure read; no `mutate_entity` call; no state writes.
+   - `successor_designated=False`, `successor_member_id=None` (D5).
+4. **Endpoint**
+   (`services/api/app/api/v1/endpoints/authority/succession_plan.py`):
+   `GET /api/v1/chapters/{chapter_id}/succession-plan → SuccessionPlanRead`.
+5. **Test**
+   (`services/api/tests/test_succession_plan.py`): AC1 is satisfied when the
+   plan returns with `successor_designated=False` and lists departing roles,
+   affected grants, and pending work with no writes occurring (assert no new
+   `activity_actions` rows are emitted by the request).
 
-1. **[D10]** Add `PermissionIntentRenewalRequest` to `services/api/app/contracts/permissions.py` (see §3).
-2. **[D10]** Add `expired_at: datetime | None = None` to `_PermissionIntentBase` + companion cross-field validator (see §3).
-3. **[D1]** Migration `migrations/versions/wu-038_permission_intent_expiry.py` adds `expired_at TIMESTAMPTZ NULL` + `permission_intents_expired_at_valid` CHECK (see §2).
-4. **[D10]** Repository `services/api/app/repositories/permissions.py::fetch_permission_intent` / `insert_permission_intent` / `list_permission_intents` / `update_permission_intent_row` round-trip `expired_at` (see §4).
-5. **[D2][D3][D12]** Add `renew_permission_intent()` to `services/api/app/services/permissions.py` with: authority check on `permission_intent.write` at the intent's scope, temporary + active guards, service-layer future-check on `request.expires_at` raising `RenewalExpiresAtInPastError` (R5), and `mutate_entity` with `action_type=INTENT_ACTION_TYPE["renew"]` / `change_type=INTENT_CHANGE_TYPE["renewed"]` and `INTENT_RENEW_PAYLOAD_ALLOWLIST` (see §5).
-6. **[D2]** Add `POST /api/v1/permission-intents/{intent_id}/renew` in a new file `services/api/app/api/v1/endpoints/permissions/temporary.py` (see §7). Reuse `parse_if_match_strong()` for 412 mapping; reuse `set_etag()` to emit new version on 200.
-7. **[D2]** Register `temporary_router` in `services/api/app/api/v1/endpoints/permissions/__init__.py`.
-8. **[D14]** `services/api/tests/test_permission_temporary_api.py` covers success, 412 on stale If-Match, 428 on missing If-Match (mapped by `parse_if_match_strong`), and `expired_at=None` in the renewed response (see §8).
+### AC2 — Transfer creates successor linked to predecessor; reuses grant lifecycle
 
-### AC2 — Renewal rejected for non-temporary intents (`SLICE-020.md:53`)
+1. **Contracts**:
+   - `AuthorityGrantTransferRequest(successor_id: str, reason: str)` — both
+     `min_length=1`.
+   - Response: existing `AuthorityGrantRead` (the new grant).
+   - New errors: `GrantAlreadyTransferredError(ValueError)`,
+     `NonBlankReasonRequiredError(ValueError)` (Pydantic handles the blank-reason
+     422 via `Field(min_length=1)`; the explicit error class is reserved for
+     service-level string-only paths and test symmetry).
+   - Constant: `SUCCESSION_TRANSFER_REVOCATION_REASON = "succession_transfer"`.
+2. **Repository**
+   (`services/api/app/repositories/authority.py`):
+   - `find_successor_grant(conn, predecessor_grant_id) -> AuthorityGrantRow | None`
+     — the single row where `predecessor_grant_id = :grant_id`. The lookup is
+     not filtered by `revoked_at` — if a successor was created and later
+     revoked, D3 still treats the predecessor as "already transferred" so the
+     chain stays intact.
+3. **Service**
+   (`services/api/app/services/authority.py`, new function
+   `transfer_authority_grant`):
+   - Authority: `_require_scoped_authority("authority_grant.transfer",
+     scope_kind=grant.scope_kind, scope_id=grant.scope_id, actor=actor, db=db)`.
+   - Load predecessor via `_fetch_grant_row`; 404 if missing; 409 if
+     `revoked_at IS NOT NULL`; check `find_successor_grant` — if present and
+     `grantee_id == successor_id`: return it as an idempotent replay (HTTP 200,
+     no new writes); if present with a different `grantee_id`: raise
+     `GrantAlreadyTransferredError(existing_grant_id=successor.id)`.
+   - Call the existing `grant_authority(...)` (with
+     `predecessor_grant_id=grant_id` and predecessor's `scope_kind`,
+     `scope_id`, `permissions`, `expires_at`), then `revoke_authority(...)`
+     on the predecessor with
+     `reason=SUCCESSION_TRANSFER_REVOCATION_REASON` and the caller-supplied
+     `expected_version`.
+   - Audit actions `authority.grant` + `authority.revoke` share the ambient
+     `correlation_id` (D9).
+4. **Endpoint**
+   (`services/api/app/api/v1/endpoints/authority/transfer.py`):
+   `POST /api/v1/authority-grants/{grant_id}/transfer → AuthorityGrantRead`.
+   HTTP mapping: 200 (idempotent replay), 201 (new successor), 404, 409
+   (already-revoked / already-transferred / duplicate-guard), 412 (stale OCC),
+   403 (authority gate), 422 (blank reason, empty successor_id).
+5. **Test**
+   (`services/api/tests/test_authority_transfer.py`): AC2 is satisfied when the
+   successor's `predecessor_grant_id` equals the predecessor id, both audit
+   actions are recorded, and no bypass path (direct INSERT/UPDATE on
+   `authority_grants`) is used.
 
-1. **[D2][D10]** Add `NonTemporaryIntentRenewalError(Exception)`, `ExpiredIntentRenewalError(Exception)`, and `RenewalExpiresAtInPastError(Exception)` to `services/api/app/contracts/permissions.py` (see §3).
-2. **[D2]** `renew_permission_intent()` raises `NonTemporaryIntentRenewalError` when `current.temporary is False`.
-3. **[D2]** `renew_permission_intent()` raises `ExpiredIntentRenewalError` when `current.expired_at is not None` **or** `current.expires_at <= now`.
-4. **[D2][R5]** `renew_permission_intent()` raises `RenewalExpiresAtInPastError` when `request.expires_at <= now` — evaluated against the same service-layer `now` used for the active-expired guard, so the two checks are time-consistent.
-5. **[D2]** Extend `raise_known_permission_error()` in `services/api/app/api/v1/endpoints/permissions/_shared.py` to map all three errors → `422` with codes `non_temporary_intent`, `expired_intent`, and `renewal_expires_at_in_past` (see §5).
-6. **[D14]** `test_permission_temporary_api.py` asserts each 422 code path (see §8).
+### AC3 — Idempotent handoff; causal chain linking transfer and handoffs
 
-### AC3 — Expiry worker creates drift entries and remains idempotent (`SLICE-020.md:54`)
+1. **Contracts**
+   (`services/api/app/contracts/applications.py`,
+    `services/api/app/contracts/tickets.py`,
+    `services/api/app/contracts/authority.py`):
+   - `ApplicationHandoffRequest(successor_member_id: str)` — `min_length=1`.
+   - `ApplicationHandoffResult(grant_id, successor_member_id,
+     application_ids_transferred, application_ids_already_owned)`.
+   - `TicketHandoffRequest(successor_member_id: str)` and
+     `TicketHandoffResult` mirroring.
+   - `APPLICATION_REASSIGN_ACTION_TYPE = "application.reassign"`,
+     `APPLICATION_REASSIGN_CHANGE_TYPE = "application.reassigned"`.
+   - `TICKET_REASSIGN_ACTION_TYPE = "ticket.reassign"`,
+     `TICKET_REASSIGN_CHANGE_TYPE = "ticket.reassigned"`.
+2. **Lifecycle extensions**
+   (`services/api/app/services/applications.py`,
+    `services/api/app/services/tickets.py`):
+   - Applications: register a new `reassign` action in the action registry.
+     Add an entry to `VALID_TRANSITIONS` for each open state (D5) where the
+     source state equals the destination state. The payload allowlist is
+     `{"new_owner_id"}`; the service function writes the `owner_id` column and
+     emits one `application_reviews` row per item with
+     `reviewer_id=actor.actor_id`, `action="reassign"`,
+     `from_state == to_state`. The branch for owner-only mutations lives
+     beside the existing claim/reactivate owner mutations.
+   - Tickets: register a new `reassign` action that bypasses
+     `category_state_machine` edge validation. It updates `owner_id`, leaves
+     `state` unchanged, and writes a `ticket_transitions` row with
+     `from_owner_id`/`to_owner_id` populated and `from_state == to_state`.
+     The payload allowlist is `{"new_owner_id"}`.
+   - Both actions emit through `mutate_entity` with the constants above.
+3. **Handoff services**
+   (new modules per ticket Code Boundary):
+   - `services/api/app/services/leadership_handoff_applications.py`:
+     `execute_handoff(db, *, grant_id, successor_member_id, actor)`.
+     Authority: `_require_scoped_authority("leadership_handoff.execute",
+     scope_kind=grant.scope_kind, scope_id=grant.scope_id, ...)`. Loads
+     grant, derives predecessor `= grant.grantee_id`, queries open
+     applications owned by predecessor in grant's scope (D5 state set;
+     scope via `form_snapshot.target_scope`), partitions
+     `already_owned`/`to_transfer`, and invokes
+     `transition_application(action="reassign",
+     payload={"new_owner_id": successor_member_id}, ...)` per item. Returns
+     `ApplicationHandoffResult`.
+   - `services/api/app/services/leadership_handoff_tickets.py`: same pattern
+     with `transition_ticket(action="reassign", ...)`, scope via
+     `category_snapshot.routing_scope`, open predicate
+     `terminal_at IS NULL`.
+   - Idempotency: items already owned by `successor_member_id` are skipped;
+     the item is reported in `*_already_owned`. Re-invoking the same call is
+     therefore a no-op on previously transferred items (AC3).
+4. **Endpoints**
+   (`services/api/app/api/v1/endpoints/authority/handoff_applications.py`,
+    `.../handoff_tickets.py`):
+   - `POST /api/v1/authority-grants/{grant_id}/handoff/applications
+     → ApplicationHandoffResult`.
+   - `POST /api/v1/authority-grants/{grant_id}/handoff/tickets
+     → TicketHandoffResult`.
+   - Error mapping: 404 grant not found, 403 missing authority, 422 blank
+     `successor_member_id`, 409 on per-item OCC collision (per-item sub-op,
+     see §7 error model).
+5. **Tests**
+   (`services/api/tests/test_leadership_handoff_applications.py`,
+    `services/api/tests/test_leadership_handoff_tickets.py`):
+   AC3 is satisfied when a batch transfers the expected items, re-invocation
+   yields only `already_owned` ids with no further writes, terminal-state and
+   out-of-scope items are excluded, and the audit trail for the batch shares
+   one `correlation_id` across all per-item reassign actions (D9).
 
-1. **[D1]** Migration adds `expired_at`; it is the idempotency key (partial filter `expired_at IS NULL` in the candidate SELECT).
-2. **[D4]** `services/api/app/services/permissions.py::expire_temporary_permission_intents(db, *, actor, now, batch_size)` loads candidates via `FOR UPDATE SKIP LOCKED`, processes each inside a per-intent transaction: stamps `expired_at` then writes the drift row.
-3. **[D4][D6]** `services/api/app/tasks/permission_expiry.py` exposes `configure_permission_expiry()`, `get_permission_expiry_db()`, and `permission_expiry_worker_tick(*, now=None, batch_size=None)`; the tick delegates to the service function with `actor=ActorIdentity("service", PERMISSION_EXPIRER_ACTOR_ID)` (see §6).
-4. **[D7]** Migration seeds `permission-expirer` service actor grant with `permission_intent.write` + `permission_drift.write` at `global` scope.
-5. **[D8]** `services/api/app/services/scheduler.py` gains `PERMISSION_EXPIRY_INTERVAL_SECONDS = 60`, `_last_permission_expiry_tick_at: datetime | None = None`, and `_run_permission_expiry_if_due(now)` invoked from `_tick()` (see §6).
-6. **[D6]** `services/api/app/tasks/permission_expiry.py::PERMISSION_EXPIRY_BATCH_SIZE = 50`.
-7. **[D14]** `services/api/tests/test_permission_temporary_worker.py` asserts: one expiry stamp + one drift row per expired intent, idempotent rerun (counts unchanged), non-temporary skipped, future-expiry skipped, already-expired skipped, batching across multiple ticks (see §8).
+### AC4 — Leadership context view with explicit domain stale-context signal
 
-### AC4 — Expired intents flow through stable reconciliation path, not inline Discord mutation (`SLICE-020.md:55`)
-
-1. **[D4][D9]** Worker never calls any Discord adapter; only writes `permission_intents.expired_at` and inserts a `permission_drift` row.
-2. **[D9]** Drift row carries `permission_intent_id` + `intent_version` from the expired intent, `reconciliation_run_id = NULL`, `status = 'detected'`, `intended_bits`/`intended_allow_bits`/`intended_deny_bits` mirror intent, `actual_bits`/`actual_allow_bits`/`actual_deny_bits` are **NULL** (semantic: "Discord state unknown; operator must reconcile").
-3. **[D9]** Drift creation routes through a new service helper `services/api/app/services/permissions.py::_create_expiry_drift()` which emits `mutate_entity(aggregate_type="permission_drift", action_type=DRIFT_ACTION_TYPE["detect_expired"], change_type=DRIFT_CHANGE_TYPE["detected_expired"], …)` with `EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST`. It does **not** perform a per-intent `_require_scoped_authority` check (R3) — the sweep's top-level `permission_intent.write` gate at global scope is the authority boundary, matching SLICE-014's `_record_drift_created` precedent. It runs inside the caller's transaction via `connection=connection` (R1) so the expire-stamp and drift-insert are atomic.
-4. **[D9]** The drift is resolvable via the existing `POST /api/v1/permission-drift/{id}/resolve` flows (acknowledge / reconcile / accept) — no new resolution surface is introduced.
-5. **[D14]** `test_permission_temporary_worker.py` asserts the drift row is returned by `GET /api/v1/permission-drift?scope_kind=…` alongside reconciliation drift, and that `resolve` transitions continue to work on the expiry drift (see §8).
+1. **Contracts**
+   (`services/api/app/contracts/read_models.py`):
+   - `InheritedFromEntry(predecessor_grant_id, predecessor_member_id,
+     scope_kind, scope_id, revoked_at)`.
+   - `StaleHandoffEntry(predecessor_grant_id, predecessor_member_id,
+     pending_application_ids, pending_ticket_ids)`.
+   - `LeadershipContextRead(member_id, active_grants, inherited_from,
+     current_applications, current_tickets, stale_handoff, is_stale,
+     projector_is_stale, generated_at)`.
+2. **Repository**
+   (`services/api/app/repositories/read_models.py` or reuse/D5/D7/D8):
+   - `list_active_grants_for_member(conn, member_id)` — grants where
+     `grantee_id = :member_id` and active predicate.
+   - `fetch_predecessor_grants(conn, grant_ids)` — single-join fetch of the
+     immediate predecessor for a set of grants (one hop only — D10 non-goal).
+   - Reuse `list_open_applications_for_owners_in_scope` /
+     `list_open_tickets_for_owners_in_scope` (narrow `owner_ids`/`scope` per
+     inherited grant).
+3. **Service**
+   (`services/api/app/services/read_models.py`, new function
+   `read_leadership_context`):
+   - Authority: `_require_scoped_authority("leadership_context.read",
+     scope_kind="global", scope_id=None, ...)` — D4.
+   - Aggregate active grants for `member_id`. For each active grant with
+     `predecessor_grant_id` set, join to fetch predecessor info and its
+     still-open work within that scope. Populate `stale_handoff`.
+   - `is_stale = len(stale_handoff) > 0` (domain staleness — D11).
+   - `projector_is_stale` is reported from `read_model_cursors` lag for the
+     `operational_overview` projector (the existing cursor), matching the
+     SLICE-017 pattern.
+4. **Endpoint**
+   (`services/api/app/api/v1/endpoints/authority/leadership_context.py`):
+   `GET /api/v1/members/{member_id}/leadership-context →
+   LeadershipContextRead`.
+5. **Test**
+   (`services/api/tests/test_leadership_context.py`):
+   AC4 is satisfied when the response is populated (never empty) even for
+   members with no inherited authority, the `is_stale` flag flips True→False
+   after a clean application+ticket handoff, and `inherited_from` reflects
+   the immediate predecessor grant's holder and scope.
 
 ---
 
-## §2 — Migration plan (`wu_038_permission_intent_expiry`)
+## §2 — Schema (no migration)
 
-File: `migrations/versions/wu-038_permission_intent_expiry.py`.
+Per D2, SLICE-024 ships **zero** Alembic migrations. Confirmed preconditions:
 
-```python
-"""WU-038 add permission_intents.expired_at; seed permission-expirer actor."""
+- `authority_grants.predecessor_grant_id` is present since WU-004.
+- `authority_grants.revoked_at`, `.revoked_by`, `.revocation_reason` are
+  present since WU-014.
+- `chapter_roles.triggers_succession` is present since WU-007B.
+- `authority_grants.grantee_id` is `TEXT` and no registry table exists for
+  permission names — new permission strings (`succession_plan.read`,
+  `authority_grant.transfer`, `leadership_handoff.execute`,
+  `leadership_context.read`) are opaque service-layer values and require no
+  seeding (D4).
 
-from __future__ import annotations
-
-from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
-
-
-revision = "wu_038_permission_intent_expiry"
-down_revision = "wu_031_read_models"
-branch_labels = None
-depends_on = None
-
-
-_EXPIRER_PERMISSIONS = (
-    '["permission_intent.write",'
-    '"permission_drift.write"]'
-)
-
-
-def upgrade() -> None:
-    op.add_column(
-        "permission_intents",
-        sa.Column("expired_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.create_check_constraint(
-        "permission_intents_expired_at_valid",
-        "permission_intents",
-        "expired_at IS NULL OR expired_at >= expires_at",
-    )
-
-    op.execute(
-        f"""
-        INSERT INTO authority_grants (
-            id,
-            grantee_id,
-            scope_kind,
-            scope_id,
-            permissions,
-            expires_at,
-            revoked_at,
-            revoked_by,
-            revocation_reason,
-            predecessor_grant_id
-        )
-        SELECT
-            gen_random_uuid(),
-            'permission-expirer',
-            'global',
-            NULL,
-            '{_EXPIRER_PERMISSIONS}'::jsonb,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            NULL
-        WHERE NOT EXISTS (
-            SELECT 1 FROM authority_grants
-             WHERE grantee_id = 'permission-expirer'
-               AND scope_kind = 'global'
-               AND scope_id IS NULL
-               AND permissions @> '{_EXPIRER_PERMISSIONS}'::jsonb
-               AND permissions <@ '{_EXPIRER_PERMISSIONS}'::jsonb
-               AND revoked_at IS NULL
-               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-        );
-        """
-    )
-
-
-def downgrade() -> None:
-    # No-op per AGENTS.md Live Server Principle.
-    pass
-```
-
-**Chain.** `wu_031_read_models → wu_038_permission_intent_expiry`. Current head confirmed at `migrations/versions/wu-031_read_models.py:11` ([D13]).
-
-**Seed rationale.** Mirrors `wu-028b_permission_reconciliation_runs.py:127-163` `@>` AND `<@` containment + `expires_at IS NULL` + `revoked_at IS NULL` guard, idempotent via `WHERE NOT EXISTS` ([D7]).
-
-**Index.** No new index is created. The existing `ix_permission_intents__temporary_expires` partial index (`WHERE temporary IS TRUE` — `wu-006a:80`) already narrows candidate rows efficiently; the `expired_at IS NULL` filter sits inside the same partition ([D1] binding implications).
-
-**Constraint rationale.** `expired_at IS NULL OR expired_at >= expires_at` prevents a row from claiming an expiration stamp that predates its own scheduled expiration — keeps the contract-layer `validate_expired_shape` validator and the DB constraint in lockstep ([D1], [D10]).
-
-**Downgrade.** No-op per the Live Server Principle (every recent migration uses a no-op downgrade). The inline comment ties the discipline to AGENTS.md.
+**No new columns, indexes, constraints, projection tables, or service-actor
+seeds are introduced.** Migration head remains `wu_038`. Any PR introducing
+an Alembic file for this slice fails review. If implementation finds a
+forced need (e.g., a partial unique index on `predecessor_grant_id`),
+escalate to synthesis revision rather than adding one silently (D2 non-goal).
 
 ---
 
-## §3 — Contracts (`services/api/app/contracts/permissions.py`)
+## §3 — Contracts (exact shapes)
 
-All additions strictly extend the module; nothing existing is renamed, widened, or deleted ([D10], [D15]).
-
-### 3.1 `expired_at` on `_PermissionIntentBase`
+### `services/api/app/contracts/authority.py` additions
 
 ```python
-class _PermissionIntentBase(_PermissionModel):
-    id: UUID
-    scope_kind: PermissionIntentScopeKind
-    scope_id: str | None = None
-    role_id: str = Field(min_length=1)
-    reason: str | None = None
-    temporary: bool
-    expires_at: datetime | None = None
-    expired_at: datetime | None = None   # NEW
+SUCCESSION_TRANSFER_REVOCATION_REASON = "succession_transfer"
 
-    # ...existing validators unchanged...
 
-    @model_validator(mode="after")
-    def validate_expired_shape(self) -> "_PermissionIntentBase":
-        if self.expired_at is not None and self.expires_at is None:
-            raise ValueError("expired_at requires expires_at")
-        if (
-            self.expired_at is not None
-            and self.expires_at is not None
-            and self.expired_at < self.expires_at
-        ):
-            raise ValueError("expired_at cannot precede expires_at")
-        return self
-```
-
-Propagates to `GuildRolePermissionIntent` / `ChannelRolePermissionIntent` (both inherit). `PermissionIntentCreate` and `PermissionIntentUpdate` are **not** widened: only the expiry service path writes `expired_at` ([D10] non-goals).
-
-### 3.2 `PermissionIntentRenewalRequest`
-
-```python
-from pydantic import AwareDatetime  # already the pattern in contracts/trust.py
-
-class PermissionIntentRenewalRequest(_PermissionModel):
-    expires_at: AwareDatetime
+class AuthorityGrantTransferRequest(BaseModel):
+    successor_id: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 
-    @field_validator("reason")
-    @classmethod
-    def reject_blank_reason(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("reason must be non-blank")
-        return value
+
+class DepartingRoleEntry(BaseModel):
+    role_id: str
+    holder_member_id: str | None
+    triggers_succession: bool
+    departure_signal: Literal["active", "roster_removed"]
+
+
+class PendingApplicationRef(BaseModel):
+    application_id: str
+    owner_id: str
+    state: str
+
+
+class PendingTicketRef(BaseModel):
+    ticket_id: str
+    owner_id: str
+    state: str
+
+
+class SuccessionPlanRead(BaseModel):
+    chapter_id: str
+    generated_at: datetime
+    departing_roles: list[DepartingRoleEntry]
+    affected_grants: list[AuthorityGrantRead]
+    pending_applications: list[PendingApplicationRef]
+    pending_tickets: list[PendingTicketRef]
+    successor_designated: bool
+    successor_member_id: str | None
+
+
+class ApplicationHandoffRequest(BaseModel):
+    successor_member_id: str = Field(min_length=1)
+
+
+HandoffFailureReason = Literal["occ_conflict", "unauthorized", "invalid_state"]
+
+
+class ApplicationHandoffFailure(BaseModel):
+    item_id: UUID
+    reason: HandoffFailureReason
+    detail: str
+
+
+class ApplicationHandoffResult(BaseModel):
+    grant_id: UUID
+    successor_member_id: str
+    application_ids_transferred: list[UUID]
+    application_ids_already_owned: list[UUID]
+    failed: list[ApplicationHandoffFailure]
+
+
+class TicketHandoffRequest(BaseModel):
+    successor_member_id: str = Field(min_length=1)
+
+
+class TicketHandoffFailure(BaseModel):
+    item_id: str
+    reason: HandoffFailureReason
+    detail: str
+
+
+class TicketHandoffResult(BaseModel):
+    grant_id: UUID
+    successor_member_id: str
+    ticket_ids_transferred: list[str]
+    ticket_ids_already_owned: list[str]
+    failed: list[TicketHandoffFailure]
+
+
+class GrantAlreadyTransferredError(ValueError):
+    """Raised when a successor grant already exists for the predecessor."""
+
+    def __init__(self, existing_grant_id: UUID) -> None:
+        super().__init__(
+            f"grant already transferred to existing successor {existing_grant_id}"
+        )
+        self.existing_grant_id = existing_grant_id
+
+
+class NonBlankReasonRequiredError(ValueError):
+    """Raised when service-layer callers pass an empty transfer reason."""
+
+
+class InvalidHolderIdError(ValueError):
+    """Raised when a roster holder id or member id is not a canonical UUID.
+
+    Per R5: succession-plan and leadership-context reads fail loudly on
+    non-UUID holder ids rather than silently filtering them out. Applications
+    join on `applications.owner_id` (UUID) and succession cannot compute
+    pending applications for a holder whose identifier cannot be coerced to
+    the canonical type.
+    """
 ```
 
-Mirrors `PermissionDriftResolutionRequest.reject_blank_reason` ([D2] rationale). `AwareDatetime` is the repo pattern for timezone-aware datetimes (`services/api/app/contracts/trust.py:7`).
+Notes:
+- `ApplicationHandoffResult.*_ids` are `UUID` (applications carry UUID ids);
+  `TicketHandoffResult.*_ids` are `str` (tickets use TEXT ids per research §1).
+- `PendingApplicationRef.owner_id` is the stringified UUID of the application
+  owner (application.owner_id is UUID FK to members.id — research §1.5);
+  callers compare it against `grant.grantee_id` (TEXT). Implementation uses
+  `str(uuid)` in the refs so the plan view is comparable against the grant's
+  TEXT holder id.
+- `AuthorityGrantRead` is unchanged and reused as both the transfer response
+  and the `affected_grants` element type.
 
-**Future-check is NOT at contract layer.** "Future" is defined against the service's `now` (see §5.1). A Pydantic validator using `datetime.now()` uses wall-clock time at parse time, which drifts from the service's `now` and cannot be exercised by tests that inject `now` at service entry. The check is raised as `RenewalExpiresAtInPastError` inside `renew_permission_intent` (see §3.4, §5.1).
-
-### 3.3 `PermissionExpirySweepResult`
+### `services/api/app/contracts/applications.py` additions
 
 ```python
-class PermissionExpirySweepResult(_PermissionModel):
-    expired_intent_ids: list[UUID] = Field(default_factory=list)
-    drift_ids: list[UUID] = Field(default_factory=list)
-    inspected_count: int = Field(ge=0)
-    expired_count: int = Field(ge=0)
-    errored_count: int = Field(ge=0)
+APPLICATION_REASSIGN_ACTION_TYPE = "application.reassign"
+APPLICATION_REASSIGN_CHANGE_TYPE = "application.reassigned"
+APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({"new_owner_id"})
 ```
 
-No `originating_actor_*` fields on the request. The manual trigger endpoint takes **no body**; the actor is always the session caller ([D5] spoof-proof).
+The `reassign` action is added to the existing action enum / `VALID_TRANSITIONS`
+registry for every open state (D5 set), with source state equal to destination
+state. No state field is mutated; only `owner_id`.
 
-### 3.4 Renewal error classes
+### `services/api/app/contracts/tickets.py` additions
 
 ```python
-class NonTemporaryIntentRenewalError(Exception):
-    def __init__(self, intent_id: UUID) -> None:
-        self.intent_id = intent_id
-        super().__init__(
-            f"permission intent {intent_id} is not temporary and cannot be renewed"
-        )
-
-
-class ExpiredIntentRenewalError(Exception):
-    def __init__(self, intent_id: UUID) -> None:
-        self.intent_id = intent_id
-        super().__init__(
-            f"permission intent {intent_id} is already expired and cannot be renewed"
-        )
-
-
-class RenewalExpiresAtInPastError(Exception):
-    def __init__(self, intent_id: UUID) -> None:
-        self.intent_id = intent_id
-        super().__init__(
-            f"permission intent {intent_id} renewal requires expires_at in the future"
-        )
+TICKET_REASSIGN_ACTION_TYPE = "ticket.reassign"
+TICKET_REASSIGN_CHANGE_TYPE = "ticket.reassigned"
+TICKET_REASSIGN_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({"new_owner_id"})
 ```
 
-All three map to HTTP 422 via `raise_known_permission_error` with codes `non_temporary_intent`, `expired_intent`, and `renewal_expires_at_in_past` respectively ([D2]).
+The `reassign` action is valid when `terminal_at IS NULL`, orthogonal to the
+category state machine (D8). Existing per-category `allow_owner_change` edges
+are not consulted.
 
-### 3.5 `__all__` additions
+### `services/api/app/contracts/read_models.py` additions
 
-Append to `__all__`: `"PermissionIntentRenewalRequest"`, `"PermissionExpirySweepResult"`, `"NonTemporaryIntentRenewalError"`, `"ExpiredIntentRenewalError"`, `"RenewalExpiresAtInPastError"`.
+```python
+class InheritedFromEntry(BaseModel):
+    predecessor_grant_id: UUID
+    predecessor_member_id: str
+    scope_kind: str
+    scope_id: str | None
+    revoked_at: datetime | None
+
+
+class StaleHandoffEntry(BaseModel):
+    predecessor_grant_id: UUID
+    predecessor_member_id: str
+    pending_application_ids: list[UUID]
+    pending_ticket_ids: list[str]
+
+
+class LeadershipContextRead(BaseModel):
+    member_id: str
+    generated_at: datetime
+    active_grants: list[AuthorityGrantRead]
+    inherited_from: list[InheritedFromEntry]
+    current_applications: list[PendingApplicationRef]
+    current_tickets: list[PendingTicketRef]
+    stale_handoff: list[StaleHandoffEntry]
+    is_stale: bool
+    projector_is_stale: bool
+```
+
+`PendingApplicationRef`/`PendingTicketRef` are defined once in
+`contracts/authority.py` and imported by `contracts/read_models.py` so both
+views share the same ref shapes. (Implementation may alternatively move them
+to a neutral module such as `contracts/_refs.py`; either approach satisfies
+the contract — no duplication allowed.)
 
 ---
 
-## §4 — Repository (`services/api/app/repositories/permissions.py`)
+## §4 — Repository layer
 
-All changes stay in this file; no schema surface other than `expired_at` is touched ([D1], [D10]).
+### `services/api/app/repositories/authority.py`
 
-### 4.1 Round-trip `expired_at`
+- `find_successor_grant(conn, predecessor_grant_id: UUID) -> AuthorityGrantRow | None`
+  — single-row lookup on `authority_grants WHERE predecessor_grant_id = :id`
+  (ordering: `created_at ASC`, expect 0 or 1; return the first). Used for D3
+  idempotency.
+- `list_active_grants_for_members(conn, member_ids: Sequence[str], *,
+  scope_kind: str | None = None, scope_id: str | None = None) ->
+  list[AuthorityGrantRow]` — active predicate
+  (`revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)`),
+  optional scope narrowing for the succession plan.
+- `list_active_grants_for_member(conn, member_id: str) ->
+  list[AuthorityGrantRow]` — convenience wrapper for the leadership-context
+  view (D10).
+- `fetch_predecessor_grants(conn, grant_ids: Sequence[UUID]) ->
+  dict[UUID, AuthorityGrantRow]` — returns a mapping `successor_grant_id →
+  predecessor_row` by joining `authority_grants` to itself over
+  `predecessor_grant_id`. One hop only (D10 non-goal).
 
-- `insert_permission_intent()` — append `expired_at` to the `INSERT` column list and `VALUES` tuple (always `NULL` on create — `PermissionIntentCreate` does not expose the field).
-- `fetch_permission_intent()` — add `expired_at` to the SELECT list.
-- `list_permission_intents()` — add `expired_at` to the SELECT list. Current active-only filter (`expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP`) is unchanged; `expired_at` is orthogonal to active/expired filtering as seen by operators ([D11]).
-- `update_permission_intent_row()` — does **not** write `expired_at`. That column is written only through `mark_intent_expired_row` below.
-- `_normalize_permission_intent_row()` — include `expired_at` in the normalized dict.
+### `services/api/app/repositories/chapter_roles.py`
 
-### 4.2 New repository helpers (for expiry worker)
+- `list_succession_triggering_roles(conn, chapter_id: str) ->
+  list[ChapterRoleRow]` — `WHERE chapter_id = :chapter_id AND
+  triggers_succession = TRUE ORDER BY ordinal`.
 
-```python
-def select_expirable_intents(
-    connection: Connection[Any],
-    *,
-    now: datetime,
-    batch_size: int,
-) -> list[dict[str, Any]]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        rows = cursor.execute(
-            """
-            SELECT id, kind, scope_kind, scope_id, role_id, channel_id,
-                   permission_bits, allow_bits, deny_bits, reason,
-                   temporary, expires_at, expired_at
-            FROM permission_intents
-            WHERE temporary = TRUE
-              AND expires_at <= %s
-              AND expired_at IS NULL
-            ORDER BY expires_at ASC, id ASC
-            LIMIT %s
-            FOR UPDATE SKIP LOCKED
-            """,
-            (now, batch_size),
-        ).fetchall()
-    return [_normalize_permission_intent_row(row) for row in rows]
+### `services/api/app/repositories/roster.py`
 
+- `list_holders_for_roles(conn, chapter_id: str, role_ids: Sequence[str]) ->
+  list[RosterEntryRow]` — current `roster_entries` for the role set, returning
+  `(role_id, member_id, status)`. Departure signal per D1 is derived in the
+  service layer from `status` (`removed` → `"roster_removed"`; otherwise
+  `"active"`).
 
-def mark_intent_expired_row(
-    connection: Connection[Any],
-    *,
-    intent_id: UUID,
-    expired_at: datetime,
-) -> int:
-    cursor = connection.execute(
-        """
-        UPDATE permission_intents
-           SET expired_at = %s
-         WHERE id = %s
-           AND expired_at IS NULL
-        """,
-        (expired_at, intent_id),
-    )
-    return cursor.rowcount
-```
+### `services/api/app/repositories/applications.py`
 
-`FOR UPDATE SKIP LOCKED` provides non-blocking job-queue claim semantics ([D4], [D6]). The `expired_at IS NULL` predicate inside `mark_intent_expired_row` is a defense-in-depth guard against duplicate marking if two sweeps race past the SELECT.
+- `list_open_applications_for_owners_in_scope(conn, owner_ids:
+  Sequence[UUID], *, scope_kind: str, scope_id: str | None) ->
+  list[ApplicationRow]` — filters on `state IN (submitted, queued, claimed,
+  in_review, interview, waitlisted)` (D5), and on
+  `form_snapshot->>'target_scope_kind' = :scope_kind` AND
+  `form_snapshot->>'target_scope_id' = :scope_id` (NULL-safe). If
+  `scope_kind="global"`, the scope filter is skipped (all owners' open apps).
+- The existing repository surface has no list-by-owner helper today
+  (research §1.4), so this is net-new.
+
+### `services/api/app/repositories/tickets.py`
+
+- `list_open_tickets_for_owners_in_scope(conn, owner_ids: Sequence[str], *,
+  scope_kind: str, scope_id: str | None) -> list[TicketRow]` —
+  `WHERE terminal_at IS NULL AND owner_id = ANY(:owner_ids)` AND
+  `category_snapshot->>'routing_scope_kind' = :scope_kind` AND
+  `category_snapshot->>'routing_scope_id' = :scope_id` (NULL-safe). If
+  `scope_kind="global"`, the scope filter is skipped.
+
+All repository helpers are single-query and SELECT-only. Mutations flow only
+through service-layer `mutate_entity` calls.
 
 ---
 
-## §5 — Service layer (`services/api/app/services/permissions.py`)
+## §5 — Service layer
 
-### 5.1 Renewal — `renew_permission_intent()`
+### `services/api/app/services/authority.py` (extended)
+
+Add two public functions alongside the existing `grant_authority`,
+`revoke_authority`, `list_authority_grants`, `get_authority_grant`.
 
 ```python
-def renew_permission_intent(
+def compute_succession_plan(
     db: PostgresDatabase,
-    intent_id: UUID,
     *,
-    expected_version: int,
-    request: PermissionIntentRenewalRequest,
+    chapter_id: str,
     actor: ActorIdentity,
-) -> tuple[Any, MutationResult]:
-    with db.connection() as connection:
-        current_row = permission_repo.fetch_permission_intent(connection, intent_id)
-    if current_row is None:
-        raise PermissionIntentNotFoundError(intent_id)
-    current = PermissionIntentRead.model_validate(current_row)
+) -> SuccessionPlanRead:
+    _require_scoped_authority(
+        "succession_plan.read",
+        scope_kind="chapter",
+        scope_id=chapter_id,
+        actor=actor,
+        db=db,
+    )
+    with db.connection() as conn:
+        roles = list_succession_triggering_roles(conn, chapter_id)
+        holders = list_holders_for_roles(conn, chapter_id, [r.id for r in roles])
+        holder_ids = [h.member_id for h in holders if h.member_id is not None]
+        # R5: do NOT silently filter non-UUID holder ids. `applications.owner_id`
+        # is a UUID FK to `members.id` (research §1.5); roster holder ids are
+        # expected to be canonical member UUIDs. A non-UUID holder id is a
+        # data-integrity bug, not a normal case, and must surface as an error
+        # rather than producing a misleading "no pending applications" plan.
+        try:
+            holder_uuids = [UUID(h) for h in holder_ids]
+        except ValueError as err:
+            raise InvalidHolderIdError(
+                f"roster holder id is not a canonical member UUID: {err}"
+            ) from err
+        grants = list_active_grants_for_members(
+            conn,
+            holder_ids,
+            scope_kind="chapter",
+            scope_id=chapter_id,
+        )
+        apps = list_open_applications_for_owners_in_scope(
+            conn,
+            holder_uuids,
+            scope_kind="chapter",
+            scope_id=chapter_id,
+        )
+        tickets = list_open_tickets_for_owners_in_scope(
+            conn,
+            holder_ids,
+            scope_kind="chapter",
+            scope_id=chapter_id,
+        )
+    return SuccessionPlanRead(
+        chapter_id=chapter_id,
+        generated_at=current_time(),
+        departing_roles=[_to_departing_role(r, holders) for r in roles],
+        affected_grants=[AuthorityGrantRead.from_row(g) for g in grants],
+        pending_applications=[PendingApplicationRef(...) for a in apps],
+        pending_tickets=[PendingTicketRef(...) for t in tickets],
+        successor_designated=False,
+        successor_member_id=None,
+    )
+
+
+def transfer_authority_grant(
+    db: PostgresDatabase,
+    *,
+    grant_id: UUID,
+    request: AuthorityGrantTransferRequest,
+    actor: ActorIdentity,
+    expected_version: int | None = None,
+) -> AuthorityGrantRead:
+    if not request.reason.strip():
+        raise NonBlankReasonRequiredError("reason must be non-blank")
+
+    with db.connection() as conn:
+        predecessor = _fetch_grant_row(conn, grant_id)
+    if predecessor is None:
+        raise LookupError(f"grant not found: {grant_id}")
+    if predecessor.revoked_at is not None:
+        raise GrantAlreadyRevokedError(grant_id)
 
     _require_scoped_authority(
-        "permission_intent.write",
-        scope_kind=current.scope_kind,
-        scope_id=current.scope_id,
+        "authority_grant.transfer",
+        scope_kind=predecessor.scope_kind,
+        scope_id=predecessor.scope_id,
         actor=actor,
         db=db,
     )
 
-    if not current.temporary:
-        raise NonTemporaryIntentRenewalError(intent_id)
-    now = datetime.now(tz=UTC)
-    if current.expired_at is not None or (
-        current.expires_at is not None and current.expires_at <= now
-    ):
-        raise ExpiredIntentRenewalError(intent_id)
-    if request.expires_at <= now:
-        raise RenewalExpiresAtInPastError(intent_id)
-
-    validated_patch = {"expires_at": request.expires_at}
-    updated = validated_update(current, validated_patch)
-    aggregate_id = build_permission_intent_aggregate_id(
-        scope_kind=current.scope_kind,
-        scope_id=current.scope_id,
-        role_id=current.role_id,
-        channel_id=getattr(current, "channel_id", None),
-    )
-
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        row = _to_permission_intent_row(updated)
-        updated_count = permission_repo.update_permission_intent_row(
-            connection, intent_id=intent_id, row=row,
-        )
-        if updated_count != 1:
-            raise PermissionIntentNotFoundError(intent_id)
-        return StateChangeDraft(
-            change_type=INTENT_CHANGE_TYPE["renewed"],
-            payload_json=updated.model_dump(mode="json"),
+    with db.transaction() as connection:
+        # R2: lock the predecessor aggregate head BEFORE the idempotency
+        # lookup. This serializes concurrent transfer attempts on the same
+        # predecessor (including different-successor races) on the FOR UPDATE
+        # row lock that `mutate_entity` itself uses for OCC. The helper is
+        # the shipped `repositories/mutations.py:get_head_for_update`.
+        get_head_for_update(
+            connection,
+            aggregate_type="authority_grant",
+            aggregate_id=str(grant_id),
         )
 
-    result = mutate_entity(
-        db=db,
-        aggregate_type="permission_intent",
-        aggregate_id=aggregate_id,
-        request=_make_request(
+        # Idempotency check now runs under the predecessor lock; a
+        # concurrent transfer cannot slip past it.
+        existing_successor = find_successor_grant(connection, grant_id)
+        if existing_successor is not None:
+            if existing_successor.grantee_id == request.successor_id:
+                return AuthorityGrantRead.from_row(existing_successor)
+            raise GrantAlreadyTransferredError(existing_successor.id)
+
+        # R1: grant + revoke share ONE connection/transaction. Both commit
+        # atomically or neither does — no dual-active state fork on partial
+        # failure. Mirrors SLICE-020 `_expire_single_intent` at
+        # `services/api/app/services/permissions.py:574-639`.
+        successor = grant_authority(
+            db=db,
+            connection=connection,
+            grantee_id=request.successor_id,
+            scope_kind=predecessor.scope_kind,
+            scope_id=predecessor.scope_id,
+            permissions=predecessor.permissions,
+            expires_at=predecessor.expires_at,
+            predecessor_grant_id=grant_id,
+            actor=(actor.actor_kind, actor.actor_id),
+        )
+        revoke_authority(
+            db=db,
+            connection=connection,
+            grant_id=grant_id,
+            actor=(actor.actor_kind, actor.actor_id),
+            revoked_by=actor.actor_id,
+            reason=SUCCESSION_TRANSFER_REVOCATION_REASON,
             expected_version=expected_version,
-            actor=actor,
-            request_surface=f"api:/api/v1/permission-intents/{intent_id}/renew",
-            reason_text=request.reason,
-        ),
-        action_type=INTENT_ACTION_TYPE["renew"],
-        action_payload={
-            "new_expires_at": request.expires_at.isoformat(),
-            "reason": request.reason,
-        },
-        payload_allowlist=INTENT_RENEW_PAYLOAD_ALLOWLIST,
-        mutate_projection=mutate_projection,
-        scope_kind=current.scope_kind,
-        scope_id=current.scope_id,
-    )
-    return read_permission_intent(db, intent_id), result
+        )
+        return successor
 ```
 
-Checks in order: (1) authority at the intent's scope, (2) temporary-only, (3) not already expired (either `expired_at` stamped or `expires_at` in the past relative to service `now`), (4) the new `request.expires_at` must itself be in the future relative to the same `now` — raising `RenewalExpiresAtInPastError` keeps the check time-consistent with the existing-expiry guard and does not depend on wall-clock at contract-parse time (R5). OCC is enforced by `mutate_entity`'s `expected_version` → `StaleMutationError` (already mapped to 412 by `raise_known_permission_error`). No new mapping code needed for AC1's 412 path.
+Transaction and concurrency notes (R1 + R2 + R3):
+- `grant_authority` and `revoke_authority` are extended to accept an
+  optional `connection: Connection[Any] | None = None` kwarg (no shim —
+  edit signatures in place per AGENTS.md "No Backwards Compatibility";
+  existing lifecycle callers continue to pass nothing and get today's
+  behavior). When `connection` is provided, the function uses that
+  connection directly instead of opening `with db.transaction()` /
+  `with db.connection()`, and threads `connection=connection` into its
+  `mutate_entity(...)` call. When `connection` is `None`, behavior is
+  unchanged. This mirrors the `mutate_entity(connection=...)` pattern
+  shipped in `services/api/app/services/mutations.py:58-70,192-196` and
+  the SLICE-020 R1 precedent at
+  `services/api/app/services/permissions.py:574-639` (`_expire_single_intent`).
+- Both mutations share the transfer service's `db.transaction()` connection
+  via the extended `connection=` parameter. Neither opens an inner
+  transaction when a shared connection is provided, so the two
+  `activity_actions` writes (and the successor insert + predecessor revoke
+  projection updates) commit together or roll back together. Audit actions
+  `authority.grant` + `authority.revoke` still share the ambient
+  `correlation_id` (D9) — correlation is orthogonal to atomicity, and both
+  now hold.
+- `get_head_for_update(connection, aggregate_type="authority_grant",
+  aggregate_id=str(grant_id))` runs at the top of the transaction body,
+  before `find_successor_grant`. The `FOR UPDATE` row lock on the
+  predecessor's `aggregate_heads` entry closes the different-successor race
+  documented in earlier drafts: a second concurrent transfer call blocks
+  on the lock, then on commit sees the first caller's successor and either
+  returns the idempotent replay (same `successor_id`) or raises
+  `GrantAlreadyTransferredError` (different `successor_id`). No DB
+  constraint is required (D2 still holds).
 
-### 5.2 Expiry — `expire_temporary_permission_intents()` + `_create_expiry_drift()`
+### `services/api/app/services/leadership_handoff_applications.py` (new module)
 
 ```python
-def expire_temporary_permission_intents(
+def execute_handoff(
     db: PostgresDatabase,
     *,
+    grant_id: UUID,
+    request: ApplicationHandoffRequest,
     actor: ActorIdentity,
-    now: datetime,
-    batch_size: int,
-    source: str = "worker_sweep",
-) -> PermissionExpirySweepResult:
+) -> ApplicationHandoffResult:
+    with db.connection() as conn:
+        grant = _fetch_grant_row(conn, grant_id)
+    if grant is None:
+        raise LookupError(...)
+
     _require_scoped_authority(
-        "permission_intent.write",
+        "leadership_handoff.execute",
+        scope_kind=grant.scope_kind,
+        scope_id=grant.scope_id,
+        actor=actor,
+        db=db,
+    )
+
+    predecessor_member_id = grant.grantee_id
+    with db.connection() as conn:
+        apps = list_open_applications_for_owners_in_scope(
+            conn,
+            [UUID(predecessor_member_id), UUID(request.successor_member_id)],
+            scope_kind=grant.scope_kind,
+            scope_id=grant.scope_id,
+        )
+
+    already_owned: list[UUID] = []
+    to_transfer: list[ApplicationRow] = []
+    for app in apps:
+        if str(app.owner_id) == request.successor_member_id:
+            already_owned.append(app.id)
+        elif str(app.owner_id) == predecessor_member_id:
+            to_transfer.append(app)
+
+    transferred: list[UUID] = []
+    failed: list[ApplicationHandoffFailure] = []
+    # R4: each item runs its own tx inside `transition_application`. A
+    # per-item OCC conflict (or other per-item error) does NOT abort the
+    # batch — we capture it in `failed` and continue. The response is always
+    # HTTP 200; partial success is represented by a non-empty `failed` list.
+    # Retries pick up just the still-failed items (already-transferred items
+    # fall into `already_owned`, idempotent by D7).
+    for app in to_transfer:
+        try:
+            transition_application(
+                db=db,
+                application_id=app.id,
+                action="reassign",
+                payload={"new_owner_id": request.successor_member_id},
+                actor=(actor.actor_kind, actor.actor_id),
+                expected_version=None,  # per-item OCC against the current head
+            )
+            transferred.append(app.id)
+        except StaleMutationError as err:
+            failed.append(ApplicationHandoffFailure(
+                item_id=app.id, reason="occ_conflict", detail=str(err),
+            ))
+        except InvalidTransitionError as err:
+            failed.append(ApplicationHandoffFailure(
+                item_id=app.id, reason="invalid_state", detail=str(err),
+            ))
+
+    return ApplicationHandoffResult(
+        grant_id=grant_id,
+        successor_member_id=request.successor_member_id,
+        application_ids_transferred=transferred,
+        application_ids_already_owned=already_owned,
+        failed=failed,
+    )
+```
+
+Idempotency (D7): re-invoking the same call finds all items already owned by
+`successor_member_id`; `to_transfer` is empty; no writes happen; the response
+reports the existing ownership as `*_already_owned` with an empty `failed`
+list. Items that failed on a prior call re-enter `to_transfer` on replay and
+are retried.
+
+Audit context (per shortcut O4): the handoff service does **not** open a new
+audit context. The per-item `transition_application` / `transition_ticket`
+calls inherit the request's ambient `AuditContextRead` via
+`get_current_audit_context()` in `mutate_entity`
+(`services/api/app/services/mutations.py:74`), so every item in the batch
+emits an `activity_actions` row carrying the same `correlation_id`. This is
+what `test_handoff_shares_correlation_id_across_items` asserts.
+
+### `services/api/app/services/leadership_handoff_tickets.py` (new module)
+
+Same shape as the applications handoff above, with `transition_ticket`
+replacing `transition_application` and the ticket scope predicate
+(`category_snapshot.routing_scope`). Per-item failures populate
+`list[TicketHandoffFailure]` with `item_id: str` (tickets use TEXT ids per
+research §1), same `HandoffFailureReason` literal union as applications.
+
+### `services/api/app/services/read_models.py` (extended)
+
+```python
+def read_leadership_context(
+    db: PostgresDatabase,
+    *,
+    member_id: str,
+    actor: ActorIdentity,
+) -> LeadershipContextRead:
+    _require_scoped_authority(
+        "leadership_context.read",
         scope_kind="global",
         scope_id=None,
         actor=actor,
         db=db,
     )
+    # R5: reject non-UUID member ids at the query boundary (same rationale
+    # as compute_succession_plan). The leadership-context view joins on
+    # applications.owner_id (UUID); a non-UUID member id is a 422 from the
+    # caller, not a silent empty response.
+    try:
+        member_uuid = UUID(member_id)
+    except ValueError as err:
+        raise InvalidHolderIdError(
+            f"member id is not a canonical UUID: {err}"
+        ) from err
 
-    with db.connection() as connection:
-        candidates = permission_repo.select_expirable_intents(
-            connection, now=now, batch_size=batch_size,
+    with db.connection() as conn:
+        grants = list_active_grants_for_member(conn, member_id)
+        predecessors = fetch_predecessor_grants(
+            conn,
+            [g.id for g in grants if g.predecessor_grant_id is not None],
         )
+        apps = list_open_applications_for_owners_in_scope(
+            conn,
+            [member_uuid],
+            scope_kind="global",
+            scope_id=None,
+        )
+        tickets = list_open_tickets_for_owners_in_scope(
+            conn,
+            [member_id],
+            scope_kind="global",
+            scope_id=None,
+        )
+        stale = _compute_stale_handoff(conn, grants, predecessors)
+        projector_cursor = load_cursor(conn, OPERATIONAL_OVERVIEW_PROJECTION_NAME)
+        projector_lag = _compute_projector_lag(conn, projector_cursor)
 
-    inspected = len(candidates)
-    expired_ids: list[UUID] = []
-    drift_ids: list[UUID] = []
-    errored = 0
-
-    for row in candidates:
-        intent = PermissionIntentRead.model_validate(row)
-        try:
-            expired_intent, drift = _expire_single_intent(
-                db, intent=intent, actor=actor, now=now, source=source,
-            )
-        except StaleMutationError:
-            # R6: expected control-flow race — another mutation advanced the
-            # head between candidate SELECT and our `mutate_entity`. Next
-            # tick re-selects because `expired_at` is still NULL.
-            logger.debug(
-                "permission expiry: OCC conflict on intent %s; retry next tick",
-                intent.id,
-            )
-            continue
-        except Exception:
-            logger.exception(
-                "permission-expiry failed for intent %s", intent.id,
-            )
-            errored += 1
-            continue
-        expired_ids.append(expired_intent.id)
-        drift_ids.append(drift.id)
-
-    return PermissionExpirySweepResult(
-        expired_intent_ids=expired_ids,
-        drift_ids=drift_ids,
-        inspected_count=inspected,
-        expired_count=len(expired_ids),
-        errored_count=errored,
+    return LeadershipContextRead(
+        member_id=member_id,
+        generated_at=current_time(),
+        active_grants=[AuthorityGrantRead.from_row(g) for g in grants],
+        inherited_from=[_to_inherited(g, predecessors) for g in grants if g.predecessor_grant_id],
+        current_applications=[PendingApplicationRef(...) for a in apps],
+        current_tickets=[PendingTicketRef(...) for t in tickets],
+        stale_handoff=stale,
+        is_stale=bool(stale),
+        projector_is_stale=projector_lag > 0,
     )
-
-
-def _expire_single_intent(
-    db: PostgresDatabase,
-    *,
-    intent: Any,
-    actor: ActorIdentity,
-    now: datetime,
-    source: str,
-) -> tuple[Any, PermissionDriftRead]:
-    aggregate_id = build_permission_intent_aggregate_id(
-        scope_kind=intent.scope_kind,
-        scope_id=intent.scope_id,
-        role_id=intent.role_id,
-        channel_id=getattr(intent, "channel_id", None),
-    )
-
-    # R1: single transaction spanning BOTH mutate_entity calls. If the drift
-    # mutation fails for any reason, the expired_at stamp rolls back with it
-    # and the candidate is re-selected on the next tick. Pattern mirrors
-    # `submit_reconciliation_snapshot` in permission_reconciliation.py:674-694.
-    with db.transaction() as connection:
-        expected_version = _read_intent_head_version(
-            connection, aggregate_id=aggregate_id, intent_id=intent.id,
-        )
-
-        def mutate_projection_expire(active: Connection[Any]) -> StateChangeDraft:
-            updated_count = permission_repo.mark_intent_expired_row(
-                active, intent_id=intent.id, expired_at=now,
-            )
-            if updated_count != 1:
-                raise PermissionIntentNotFoundError(intent.id)
-            updated = intent.model_copy(update={"expired_at": now})
-            return StateChangeDraft(
-                change_type=INTENT_CHANGE_TYPE["expired"],
-                payload_json=updated.model_dump(mode="json"),
-            )
-
-        expire_result = mutate_entity(
-            db=db,
-            aggregate_type="permission_intent",
-            aggregate_id=aggregate_id,
-            request=_make_request(
-                expected_version=expected_version,
-                actor=actor,
-                request_surface="worker:permission_expiry",
-            ),
-            action_type=INTENT_ACTION_TYPE["expire"],
-            action_payload={
-                "expired_at": now.isoformat(),
-                "source": source,
-            },
-            payload_allowlist=INTENT_EXPIRE_PAYLOAD_ALLOWLIST,
-            mutate_projection=mutate_projection_expire,
-            scope_kind=intent.scope_kind,
-            scope_id=intent.scope_id,
-            connection=connection,
-        )
-
-        drift = _create_expiry_drift(
-            db,
-            connection=connection,
-            intent=intent,
-            intent_version_after_expire=expire_result.version,
-            actor=actor,
-            now=now,
-        )
-    # Commit happens on `with` exit. Reading back the intent + drift is a
-    # read-only op outside the tx.
-    expired_intent = read_permission_intent(db, intent.id)
-    return expired_intent, drift
-
-
-def _create_expiry_drift(
-    db: PostgresDatabase,
-    *,
-    connection: Connection[Any],
-    intent: Any,
-    intent_version_after_expire: int,
-    actor: ActorIdentity,
-    now: datetime,
-) -> PermissionDriftRead:
-    # R3: NO per-intent `_require_scoped_authority` here. The sweep's
-    # top-level authority check already gates the operation at global scope,
-    # matching SLICE-014's `_record_drift_created` precedent
-    # (permission_reconciliation.py:581-639) which performs no per-scope
-    # authority check either. A chapter-scoped check here would fail because
-    # the `permission-expirer` service actor only holds a global grant; the
-    # authority model is flat (authority.py:238 requires exact scope_kind
-    # match).
-    drift = PermissionDriftRead.model_validate({
-        "id": uuid4(),
-        "permission_intent_id": intent.id,
-        "intent_version": intent_version_after_expire,
-        "scope_kind": intent.scope_kind,
-        "scope_id": intent.scope_id,
-        "role_id": intent.role_id,
-        "channel_id": getattr(intent, "channel_id", None),
-        "kind": intent.kind,
-        "reconciliation_run_id": None,
-        "intended_bits": getattr(intent, "permission_bits", None),
-        "intended_allow_bits": getattr(intent, "allow_bits", None),
-        "intended_deny_bits": getattr(intent, "deny_bits", None),
-        "actual_bits": None,
-        "actual_allow_bits": None,
-        "actual_deny_bits": None,
-        "status": "detected",
-        "detected_at": now,
-    })
-
-    # R8 lean action_payload: only the identifying + scope keys, no bit masks.
-    # Mirrors `_record_drift_created`'s split between action_payload (lean)
-    # and payload_json (full).
-    action_payload = {
-        "drift_id": str(drift.id),
-        "permission_intent_id": str(intent.id),
-        "intent_version": intent_version_after_expire,
-        "scope_kind": intent.scope_kind,
-        "scope_id": intent.scope_id,
-        "role_id": intent.role_id,
-        "channel_id": getattr(intent, "channel_id", None),
-        "kind": intent.kind,
-        "status": "detected",
-    }
-
-    def mutate_projection_drift(active: Connection[Any]) -> StateChangeDraft:
-        permission_repo.insert_permission_drift(
-            active, row=_to_permission_drift_row(drift),
-        )
-        return StateChangeDraft(
-            change_type=DRIFT_CHANGE_TYPE["detected_expired"],
-            payload_json=drift.model_dump(mode="json"),
-        )
-
-    mutate_entity(
-        db=db,
-        aggregate_type="permission_drift",
-        aggregate_id=str(drift.id),
-        request=_make_request(
-            expected_version=0,
-            actor=actor,
-            request_surface="worker:permission_expiry",
-        ),
-        action_type=DRIFT_ACTION_TYPE["detect_expired"],
-        action_payload=action_payload,
-        payload_allowlist=EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST,
-        mutate_projection=mutate_projection_drift,
-        scope_kind=intent.scope_kind,
-        scope_id=intent.scope_id,
-        connection=connection,
-    )
-    return drift
-
-
-def _read_intent_head_version(
-    connection: Connection[Any],
-    *,
-    aggregate_id: str,
-    intent_id: UUID,
-) -> int:
-    """R4: Load the head version for a `permission_intent` aggregate from
-    `aggregate_heads`. Uses the composite `aggregate_id` built by
-    `build_permission_intent_aggregate_id` — NOT the raw intent UUID (which
-    is the row id, not the aggregate id). Runs inside the caller's
-    transaction so the read is consistent with the subsequent
-    `mutate_entity` call."""
-    row = connection.execute(
-        """
-        SELECT current_seq
-          FROM aggregate_heads
-         WHERE aggregate_type = 'permission_intent'
-           AND aggregate_id = %s
-        """,
-        (aggregate_id,),
-    ).fetchone()
-    if row is None:
-        raise PermissionIntentNotFoundError(intent_id)
-    return int(row[0])
 ```
 
-**Per-intent transaction boundary (R1).** `_expire_single_intent` opens a **single** `db.transaction()` and threads that connection into both `mutate_entity` calls via `connection=connection`. Both audit rows (`permission_intent.expire` action + `permission_drift.detect_expired` action), both state-change rows (`permission_intent.expired`, `permission_drift.detected_expired`), and both projection writes (`mark_intent_expired_row`, `insert_permission_drift`) either commit together or roll back together. Partial failure is impossible — the previous two-transaction design left an intent stamped expired with no drift row, which the `expired_at IS NULL` candidate filter then permanently skipped.
+Scope note: `current_applications` and `current_tickets` are member-wide
+("work the successor currently owns"), not narrowed to any grant scope — the
+leadership-context view is cross-scope by D4. The
+`list_*_for_owners_in_scope` helpers accept `scope_kind="global",
+scope_id=None` and skip the scope filter in that case.
 
-This is a deliberate departure from `evaluate_ticket_sla`'s single-batch-tx shape (`services/api/app/services/ticket_sla.py:516-558` wraps the entire for-loop in one tx). Per-intent tx here is justified by (a) R1 atomicity between expire-stamp and drift-insert for a single intent, and (b) preventing one poison-pill intent from rolling back the whole batch. Precedent for the shared-connection threading: `permission_reconciliation.py::submit_reconciliation_snapshot` at lines 674-694 and `_record_drift_created` at line 638.
-
-**Concurrency guarantees after R1.** Single-expiry is guaranteed by **OCC on `aggregate_heads`** (first worker's `mutate_entity` bumps `current_seq`; second worker's expected_version read plus `get_head_for_update` inside `mutate_entity` detects the mismatch and raises `StaleMutationError`, caught at debug per R6) **plus** the `expired_at IS NULL` predicate in `mark_intent_expired_row` (defense-in-depth if anything bypasses OCC). `FOR UPDATE SKIP LOCKED` in `select_expirable_intents` is a minor latency-contention optimization — the row locks release when the candidate-SELECT connection returns to the pool — not a primary idempotency layer.
-
-### 5.3 Error mapping (`services/api/app/api/v1/endpoints/permissions/_shared.py`)
-
-Extend `raise_known_permission_error`:
-
-```python
-from app.contracts.permissions import (
-    ExpiredIntentRenewalError,
-    NonTemporaryIntentRenewalError,
-    RenewalExpiresAtInPastError,
-    # ...existing imports...
-)
-
-if isinstance(error, NonTemporaryIntentRenewalError):
-    raise HTTPException(
-        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-        detail={
-            "code": "non_temporary_intent",
-            "message": str(error),
-            "intent_id": str(error.intent_id),
-        },
-    ) from error
-if isinstance(error, ExpiredIntentRenewalError):
-    raise HTTPException(
-        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-        detail={
-            "code": "expired_intent",
-            "message": str(error),
-            "intent_id": str(error.intent_id),
-        },
-    ) from error
-if isinstance(error, RenewalExpiresAtInPastError):
-    raise HTTPException(
-        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-        detail={
-            "code": "renewal_expires_at_in_past",
-            "message": str(error),
-            "intent_id": str(error.intent_id),
-        },
-    ) from error
-```
-
-Placed **before** the generic `PermissionError` / `InvalidPermissionIntentError` fallbacks so the specific codes win.
-
-### 5.4 Logger
-
-Add `logger = logging.getLogger(__name__)` to `services/api/app/services/permissions.py` if not already present (used by the per-intent `logger.exception` in §5.2).
+`_compute_stale_handoff` iterates each active grant that has a predecessor,
+loads the predecessor's open applications and tickets constrained to the
+inherited grant's `(scope_kind, scope_id)`, and groups them by predecessor.
 
 ---
 
-## §6 — Worker + scheduler integration
+## §6 — Lifecycle extensions for `reassign`
 
-### 6.1 `services/api/app/tasks/permission_expiry.py` (new file)
+### `services/api/app/services/applications.py`
 
-```python
-from __future__ import annotations
+1. Add `"reassign"` to the application action registry (action enum / literal
+   union).
+2. Register `reassign` in `VALID_TRANSITIONS`:
+   - For each open state `s ∈ {submitted, queued, claimed, in_review,
+     interview, waitlisted}`, add `("reassign", s) -> s` (no state change).
+3. In `transition_application`, when `action == "reassign"`:
+   - Validate payload keys ⊆ `APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST`.
+   - Validate `new_owner_id` parses as UUID.
+   - Reject if the target application state is terminal
+     (`approved`, `denied`, `withdrawn`) — the `VALID_TRANSITIONS` check
+     already enforces this; the test asserts the invalid-transition error
+     path.
+   - Emit via `mutate_entity` with
+     `action_type=APPLICATION_REASSIGN_ACTION_TYPE`,
+     `change_type=APPLICATION_REASSIGN_CHANGE_TYPE`,
+     `payload_allowlist=APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST`.
+   - The projection update sets `owner_id = new_owner_id` and leaves `state`
+     unchanged; inserts one `application_reviews` row with
+     `reviewer_id = actor.actor_id`, `action = "reassign"`,
+     `from_state == to_state`.
 
-import logging
-from contextlib import nullcontext
-from datetime import UTC, datetime
-from uuid import uuid4
+### `services/api/app/services/tickets.py`
 
-from app.contracts.actor import ActorIdentity
-from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
-from app.contracts.permissions import PermissionExpirySweepResult
-from app.core.context import get_current_audit_context, use_audit_context
-from app.repositories.db import PostgresDatabase
-from app.services.mutations import StaleMutationError
-from app.services.permissions import (
-    PERMISSION_EXPIRER_ACTOR_ID,
-    expire_temporary_permission_intents,
-)
+1. Add `"reassign"` to the ticket action registry.
+2. Route `reassign` around the category-state-machine edge check:
+   - The normal path in `transition_ticket` calls `category_state_machine`
+     to validate the edge. For `reassign`, bypass that lookup entirely; the
+     only precondition is `terminal_at IS NULL`.
+3. Emit via `mutate_entity` with `action_type=TICKET_REASSIGN_ACTION_TYPE`,
+   `change_type=TICKET_REASSIGN_CHANGE_TYPE`,
+   `payload_allowlist=TICKET_REASSIGN_PAYLOAD_ALLOWLIST`.
+4. Projection update sets `owner_id = new_owner_id`, leaves `state`,
+   `category_id`, and `category_snapshot` unchanged, and writes a
+   `ticket_transitions` row with `from_owner_id` = current, `to_owner_id` =
+   new, `from_state == to_state`.
 
-
-logger = logging.getLogger(__name__)
-
-PERMISSION_EXPIRY_BATCH_SIZE: int = 50
-
-_DB: PostgresDatabase | None = None
-
-
-def configure_permission_expiry(*, db: PostgresDatabase) -> None:
-    global _DB
-    _DB = db
-
-
-def get_permission_expiry_db() -> PostgresDatabase:
-    global _DB
-    if _DB is None:
-        _DB = PostgresDatabase()
-    return _DB
-
-
-def _expirer_service_actor() -> ActorIdentity:
-    return ActorIdentity(actor_kind="service", actor_id=PERMISSION_EXPIRER_ACTOR_ID)
-
-
-def _root_audit_context() -> AuditContextRead:
-    """R2: Scheduler-thread root audit context. Mirrors
-    `services/api/app/services/ticket_sla.py::_root_audit_context` verbatim.
-    Without this, `mutate_entity` raises `MissingCorrelationContextError`
-    because `contextvars` do not propagate into the `asyncio.to_thread`
-    worker that invokes this tick."""
-    correlation_id = uuid4()
-    return AuditContextRead(
-        correlation_id=correlation_id,
-        causation_id=None,
-        headers=CorrelationHeadersRead(
-            x_correlation_id=correlation_id,
-            x_causation_id=None,
-        ),
-    )
-
-
-def permission_expiry_worker_tick(
-    *,
-    now: datetime | None = None,
-    batch_size: int | None = None,
-) -> PermissionExpirySweepResult | None:
-    """R2 + R6. Install root audit context when none exists (scheduler
-    thread path); reuse the ambient one if present (test / manual-trigger
-    paths). Surface `StaleMutationError` at debug — it is expected control
-    flow (SLICE-017 MAJOR 4 precedent). Log everything else via
-    `logger.exception`."""
-    existing_ctx = get_current_audit_context()
-    ambient = (
-        use_audit_context(_root_audit_context())
-        if existing_ctx is None
-        else nullcontext()
-    )
-    with ambient:
-        try:
-            return expire_temporary_permission_intents(
-                get_permission_expiry_db(),
-                actor=_expirer_service_actor(),
-                now=now or datetime.now(tz=UTC),
-                batch_size=batch_size or PERMISSION_EXPIRY_BATCH_SIZE,
-                source="worker_sweep",
-            )
-        except StaleMutationError:
-            logger.debug("permission expiry: OCC conflict, retry next tick")
-            return None
-        except Exception:
-            logger.exception("permission expiry worker tick failed")
-            return None
-```
-
-Shape matches `services/api/app/tasks/ticket_sla.py` ([D4] binding implications), with the audit-context install moved here from the service layer because the scheduler's `asyncio.to_thread` hand-off (§6.3 line 706) breaks `contextvars` propagation; the manual endpoint path (§7.1) is unaffected because FastAPI's `CorrelationMiddleware` already installed a context per request.
-
-### 6.2 `services/api/app/tasks/__init__.py`
-
-Wire into `configure_task_runtime`:
-
-```python
-from app.tasks.permission_expiry import configure_permission_expiry
-# ...
-def configure_task_runtime(...):
-    # ...existing wiring...
-    configure_ticket_sla(db=db)
-    configure_permission_expiry(db=db)   # NEW
-```
-
-### 6.3 `services/api/app/services/scheduler.py`
-
-Module-level constant:
-
-```python
-PERMISSION_EXPIRY_INTERVAL_SECONDS = 60
-```
-
-`SchedulerLoop.__init__` gains `self._last_permission_expiry_tick_at: datetime | None = None`.
-
-New method, mirroring `_run_ticket_sla_if_due`:
-
-```python
-async def _run_permission_expiry_if_due(self, now: datetime) -> None:
-    if (
-        self._last_permission_expiry_tick_at is not None
-        and (now - self._last_permission_expiry_tick_at).total_seconds()
-        < PERMISSION_EXPIRY_INTERVAL_SECONDS
-    ):
-        return
-
-    from app.tasks.permission_expiry import permission_expiry_worker_tick
-
-    self._last_permission_expiry_tick_at = now
-    try:
-        await asyncio.to_thread(permission_expiry_worker_tick, now=now)
-    except Exception:
-        logger.exception(
-            "permission-expiry worker tick failed for worker %s",
-            self._worker_id,
-        )
-```
-
-Invoked from `_tick()` after `_run_read_model_tick_if_due(now)`:
-
-```python
-await self._run_permission_expiry_if_due(now)
-```
-
-Add `"PERMISSION_EXPIRY_INTERVAL_SECONDS"` to the module `__all__` ([D8]).
+Scope of the new action (D8 non-goal): `reassign` is called only from the
+leadership-handoff service modules. The action is still reachable via the
+general `POST /api/v1/applications/{id}/transition` and
+`POST /api/v1/tickets/{id}/transition` endpoints if a caller names the
+action explicitly; gating those broader endpoints on
+`leadership_handoff.execute` authority is out of scope for this slice.
+The handoff endpoints gate authority, and no other shipped caller invokes
+`reassign` today.
 
 ---
 
 ## §7 — Endpoints
 
-### 7.1 New file: `services/api/app/api/v1/endpoints/permissions/temporary.py`
+### Package layout
 
-```python
-from __future__ import annotations
+The ticket Code Boundary places new endpoints under
+`services/api/app/api/v1/endpoints/authority/`. The existing
+`endpoints/authority.py` module exists as a single file today. Python does
+not permit both a module and a subpackage with the same name.
 
-from datetime import UTC, datetime
-from typing import Annotated, Any
-from uuid import UUID
+Decision: convert the existing module into a subpackage. The existing
+create/list/revoke handlers move verbatim into
+`endpoints/authority/lifecycle.py`; an `__init__.py` aggregator router
+includes every sub-router. This is a mechanical move, not a rewrite
+(synthesis D13 forbids rewriting the handlers themselves). Final structure:
 
-from fastapi import APIRouter, Depends, Request, Response
-from pydantic import Field
-
-from app.contracts.actor import ActorIdentity
-from app.contracts.permissions import (
-    ChannelRolePermissionIntent,
-    GuildRolePermissionIntent,
-    PermissionExpirySweepResult,
-    PermissionIntentRenewalRequest,
-)
-from app.core.dependencies import get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.permissions import (
-    PERMISSION_EXPIRY_MANUAL_DEFAULT_BATCH_SIZE,
-    expire_temporary_permission_intents,
-    renew_permission_intent,
-)
-
-from ._shared import (
-    get_db,
-    parse_if_match_strong,
-    raise_known_permission_error,
-    require_scoped,
-    set_etag,
-)
-
-
-PermissionIntentReadResponse = Annotated[
-    GuildRolePermissionIntent | ChannelRolePermissionIntent,
-    Field(discriminator="kind"),
-]
-
-
-router = APIRouter(prefix="/api/v1/permission-intents")
-
-
-@router.post("/{intent_id}/renew", response_model=PermissionIntentReadResponse)
-def renew_intent_endpoint(
-    intent_id: UUID,
-    body: PermissionIntentRenewalRequest,
-    request: Request,
-    response: Response,
-    db: PostgresDatabase = Depends(get_db),
-    actor: ActorIdentity = Depends(get_current_actor),
-) -> Any:
-    expected_version = parse_if_match_strong(request)
-    try:
-        read, result = renew_permission_intent(
-            db,
-            intent_id,
-            expected_version=expected_version,
-            request=body,
-            actor=actor,
-        )
-    except Exception as error:
-        raise_known_permission_error(error)
-    set_etag(response, result.etag)
-    return read
-
-
-@router.post("/expire/run", response_model=PermissionExpirySweepResult)
-def run_permission_expiry_endpoint(
-    db: PostgresDatabase = Depends(get_db),
-    actor: ActorIdentity = Depends(get_current_actor),
-) -> PermissionExpirySweepResult:
-    try:
-        require_scoped(
-            actor, db, "global", None, "permission_intent.write",
-        )
-        return expire_temporary_permission_intents(
-            db,
-            actor=actor,
-            now=datetime.now(tz=UTC),
-            batch_size=PERMISSION_EXPIRY_MANUAL_DEFAULT_BATCH_SIZE,
-            source="manual_trigger",
-        )
-    except Exception as error:
-        raise_known_permission_error(error)
+```
+services/api/app/api/v1/endpoints/authority/
+├── __init__.py             # APIRouter that includes all sub-routers
+├── _shared.py              # _parse_if_match, _error_body, _db helpers (moved from authority.py)
+├── lifecycle.py            # existing create/list/revoke (moved, unchanged bodies)
+├── succession_plan.py      # GET  /chapters/{chapter_id}/succession-plan
+├── transfer.py             # POST /authority-grants/{grant_id}/transfer
+├── handoff_applications.py # POST /authority-grants/{grant_id}/handoff/applications
+├── handoff_tickets.py      # POST /authority-grants/{grant_id}/handoff/tickets
+└── leadership_context.py   # GET  /members/{member_id}/leadership-context
 ```
 
-Notes:
-- Endpoint-level `require_scoped(...)` on the manual trigger matches the belt-and-braces shape used by `intents.py` for write endpoints ([D5]).
-- Renewal endpoint does **not** call `require_scoped` at the endpoint — authority requires knowing the intent's scope, which is discovered inside `renew_permission_intent`. This mirrors the service-side check the `patch_intent_endpoint` already relies on after the scope read ([D3]).
-- No body on `POST /expire/run` — spoof-proof ([D5] binding implications).
+`services/api/app/api/v1/router.py` keeps its existing
+`router.include_router(authority.router, tags=["authority"])` line; the
+subpackage `__init__.py` exposes `router` as today, preserving the
+registration.
 
-### 7.2 Router registration: `services/api/app/api/v1/endpoints/permissions/__init__.py`
+### Endpoint bodies
 
-```python
-from .temporary import router as temporary_router
-# ...
-permissions_router = APIRouter()
-permissions_router.include_router(intents.router)
-permissions_router.include_router(drift.router)
-permissions_router.include_router(reconciliation.router)
-permissions_router.include_router(temporary_router)   # NEW
-```
+Each endpoint module follows the `endpoints/permissions/*` pattern:
 
-### 7.3 Error mapping coverage
+1. Parse path/body via Pydantic.
+2. Resolve `actor = Depends(get_current_actor)`.
+3. Call the service function (the service runs the authority check).
+4. Map known exceptions to HTTP codes.
+5. Return the response model (adding `ETag` headers where the existing
+   authority lifecycle does).
 
-All error paths are handled by `raise_known_permission_error`:
+Status-code mapping (non-exhaustive):
 
-| Failure | HTTP | Source |
-|---|---|---|
-| Intent not found | 404 | `PermissionIntentNotFoundError` |
-| Stale `If-Match` | 412 | `StaleMutationError` |
-| Missing/weak `If-Match` | 428 / 412 | `parse_if_match_strong` |
-| Renewal of non-temporary | 422 `non_temporary_intent` | `NonTemporaryIntentRenewalError` |
-| Renewal of expired | 422 `expired_intent` | `ExpiredIntentRenewalError` |
-| Renewal `expires_at` not in future | 422 `renewal_expires_at_in_past` | `RenewalExpiresAtInPastError` |
-| Blank reason | 422 (Pydantic) | FastAPI body validation |
-| Authority denied | 403 | `PermissionError` |
+| Path                                                             | 200 | 201 | 403        | 404        | 409                                                 | 412              | 422                       |
+|------------------------------------------------------------------|-----|-----|------------|------------|-----------------------------------------------------|------------------|---------------------------|
+| `GET /chapters/{chapter_id}/succession-plan`                     | Y   | -   | authority  | chapter n/a| -                                                   | -                | -                         |
+| `POST /authority-grants/{grant_id}/transfer`                     | idempotent replay | new grant | authority | grant n/a | revoked / already_transferred / duplicate_guard | stale predecessor | blank reason / empty id   |
+| `POST /authority-grants/{grant_id}/handoff/applications`         | Y (partial ok) | -   | authority  | grant n/a  | -                                                   | -                | blank successor_member_id / non-UUID |
+| `POST /authority-grants/{grant_id}/handoff/tickets`              | Y (partial ok) | -   | authority  | grant n/a  | -                                                   | -                | blank successor_member_id |
+| `GET /members/{member_id}/leadership-context`                    | Y   | -   | authority  | member n/a | -                                                   | -                | non-UUID member_id                   |
+
+Per-item error model for handoff endpoints (R4 — bound contract, single
+shape, no alternatives): handoff does not take an `If-Match` on the batch.
+Each per-item `transition_application` / `transition_ticket` call runs
+without caller-supplied `expected_version` (the service uses the current
+head) inside its own transaction — **one bad item does not abort the
+batch**. The response is always HTTP 200; partial success is surfaced by
+a non-empty `failed` list on `ApplicationHandoffResult` /
+`TicketHandoffResult` (see §3). Each `HandoffFailure` carries
+`item_id`, `reason ∈ {"occ_conflict","unauthorized","invalid_state"}`,
+and a free-form `detail`. The caller retries the whole batch; already-
+transferred items fall into `already_owned`, still-failing items re-enter
+`failed` (D7 — idempotent rerun). A 4xx / 5xx at the endpoint level is
+reserved for top-of-batch conditions (403 authority, 404 grant, 422 blank
+input) — never per-item conditions.
+
+Succession-plan and leadership-context endpoints return 422 when a
+supplied `chapter_id` / `member_id` parameter or a roster holder id fails
+the UUID-canonical check (R5 `InvalidHolderIdError`).
+
+The authority gate is the only cross-cutting dependency; no endpoint here
+uses a FastAPI-level `RequireAuthority(...)` dependency (research §3
+confirms the existing authority endpoints do not declare one). The services
+call `_require_scoped_authority` internally per D4; HTTP-level tests still
+exercise the 403 path through the endpoint.
 
 ---
 
-## §8 — Tests
+## §8 — Tests (per-WU, per-AC docstrings)
 
-Per-test docstring format: first line is the AC tag (`AC1`, `AC2`, `AC3`, `AC4`) followed by a one-sentence description. The test agent writes from contracts + synthesis decisions only; the code agent implements ([AGENTS.md §Implementation Workflow]).
+Each test module carries AGENTS.md-compliant per-test AC docstrings. Tests
+do not mock the database; all run against the real test session fixture
+(D14).
 
-### 8.1 `services/api/tests/test_permission_temporary_api.py` — WU-038A (AC1, AC2)
+### WU-044A — `services/api/tests/test_succession_plan.py`
 
-```python
-def test_renew_temporary_intent_with_current_version_advances_expires_at(...):
-    """AC1: renew temporary intent with current version updates expires_at
-    and advances aggregate version."""
+- `test_plan_is_queryable_without_successor` — AC1: plan returns with
+  `successor_designated=False`, `successor_member_id=None` even when no
+  successor is chosen.
+- `test_plan_lists_succession_triggering_roles` — AC1: only roles with
+  `triggers_succession=TRUE` appear in `departing_roles`.
+- `test_plan_marks_removed_holders_as_roster_removed` — AC1 / D1:
+  `departure_signal == "roster_removed"` for holders whose roster entry is
+  in terminal `removed` state; `"active"` otherwise.
+- `test_plan_lists_active_grants_for_holders_in_chapter_scope` — AC1: only
+  active grants within the chapter scope appear; revoked/expired excluded.
+- `test_plan_lists_open_applications_in_scope` — AC1 / D5: open state set
+  includes `interview`/`waitlisted`; terminal states excluded.
+- `test_plan_lists_open_tickets_in_scope` — AC1: `terminal_at IS NULL`;
+  out-of-scope tickets excluded.
+- `test_plan_does_not_write_activity_actions` — AC1: plan generation
+  creates no new `activity_actions` rows.
+- `test_plan_requires_succession_plan_read_authority` — D4: 403 when caller
+  lacks `succession_plan.read` at the chapter scope.
 
-def test_renew_with_stale_if_match_returns_412(...):
-    """AC1: renew with stale If-Match returns 412 Precondition Failed."""
+### WU-044B — `services/api/tests/test_authority_transfer.py`
 
-def test_renew_with_missing_if_match_returns_428(...):
-    """AC1: renew without If-Match returns 428 Precondition Required."""
+- `test_transfer_creates_successor_linked_to_predecessor` — AC2: successor's
+  `predecessor_grant_id == predecessor.id`.
+- `test_transfer_revokes_predecessor_with_succession_reason` — AC2 / D12:
+  predecessor `revoked_at` is set; `revocation_reason ==
+  "succession_transfer"`.
+- `test_transfer_emits_grant_and_revoke_audit_actions` — AC2: both
+  `authority.grant` and `authority.revoke` actions are recorded through
+  `mutate_entity` (reuses lifecycle, no bypass).
+- `test_transfer_shares_correlation_id_across_actions` — AC3 / D9:
+  `correlation_id` is equal on the two emitted actions.
+- `test_transfer_is_idempotent_for_same_successor` — AC3 / D3: replay with
+  the same `successor_id` returns the existing successor; no new audit
+  actions appear.
+- `test_transfer_rejects_replay_with_different_successor` — D3: 409
+  `GrantAlreadyTransferredError`.
+- `test_transfer_rejects_revoked_predecessor` — D6: 409
+  `GrantAlreadyRevokedError`.
+- `test_transfer_rejects_blank_reason` — D6: 422 for blank reason.
+- `test_transfer_rejects_blank_successor_id` — D6: 422 for blank successor.
+- `test_transfer_rejects_stale_predecessor_version` — D6 / OCC: 412 on
+  mismatched `If-Match`.
+- `test_transfer_requires_authority_grant_transfer_permission` — D4: 403
+  without `authority_grant.transfer` at the grant's scope.
+- `test_transfer_rolls_back_successor_when_revoke_fails` — R1: when
+  `revoke_authority` raises (simulate via a monkeypatched stale head or
+  injected exception), the whole transfer rolls back — no successor row
+  exists in `authority_grants`, no `authority.grant` action row exists,
+  predecessor remains unrevoked. A subsequent retry succeeds cleanly.
+- `test_transfer_serializes_concurrent_attempts_on_predecessor` — R2: two
+  threaded transfer calls against the same predecessor with different
+  successor ids are serialized by the `get_head_for_update` lock; exactly
+  one successor grant is created, and the second call raises
+  `GrantAlreadyTransferredError` (409) rather than inserting an orphan
+  successor.
 
-def test_renew_non_temporary_intent_returns_422_non_temporary(...):
-    """AC2: renewal rejected for non-temporary intent with code
-    'non_temporary_intent'."""
+### WU-045A-applications — `services/api/tests/test_leadership_handoff_applications.py`
 
-def test_renew_already_expired_by_expires_at_returns_422_expired(...):
-    """AC1: renew intent whose expires_at has passed returns 422 with
-    code 'expired_intent'."""
+- `test_handoff_transfers_pending_applications` — AC3: pending applications
+  owned by predecessor within the grant scope are reassigned to successor.
+- `test_handoff_is_idempotent_on_replay` — AC3 / D7: replay returns
+  `already_owned` for everything; no new audit actions.
+- `test_handoff_skips_terminal_applications` — D7: approved/denied/
+  withdrawn applications remain owned by predecessor and are absent from
+  both result lists.
+- `test_handoff_respects_grant_scope` — D7: applications outside the
+  grant's `(scope_kind, scope_id)` are untouched.
+- `test_handoff_emits_reassign_action_per_item_with_constants` — D12:
+  each transferred application emits an `activity_action` with
+  `action_type == APPLICATION_REASSIGN_ACTION_TYPE`,
+  `change_type == APPLICATION_REASSIGN_CHANGE_TYPE`.
+- `test_handoff_writes_application_review_per_item` — D7: one
+  `application_reviews` row per transfer with
+  `action == "reassign"`, `from_state == to_state`,
+  `reviewer_id == actor.actor_id`.
+- `test_handoff_shares_correlation_id_across_items` — AC3 / D9: all
+  per-item reassign actions in a batch share one `correlation_id`.
+- `test_handoff_requires_leadership_handoff_execute_permission` — D4: 403
+  without `leadership_handoff.execute` at grant scope.
+- `test_handoff_rejects_blank_successor_member_id` — 422.
+- `test_handoff_partial_success_reports_failed_per_item` — R4: when one
+  item raises `StaleMutationError` (simulate a concurrent owner change),
+  the batch returns HTTP 200 with that item in `failed`
+  (`reason="occ_conflict"`) and the other items in `transferred`; a retry
+  surfaces the retry's outcome correctly (either moves to `transferred` /
+  `already_owned`, or re-enters `failed`).
 
-def test_renew_already_expired_by_expired_at_returns_422_expired(...):
-    """AC1: renew intent whose expired_at is set returns 422 with code
-    'expired_intent'."""
+### WU-045A-tickets — `services/api/tests/test_leadership_handoff_tickets.py`
 
-def test_renew_with_past_expires_at_body_returns_422_renewal_expires_at_in_past(...):
-    """AC1: renew request with past expires_at is rejected at the service
-    layer with code 'renewal_expires_at_in_past' (R5: future-check uses the
-    service's `now`, not wall-clock at Pydantic parse time)."""
+- `test_handoff_transfers_pending_tickets` — AC3.
+- `test_handoff_bypasses_category_state_machine_edges` — D8: the ticket's
+  category lacks an `allow_owner_change` edge for its current state;
+  reassign still succeeds.
+- `test_handoff_is_idempotent_on_replay` — AC3.
+- `test_handoff_skips_terminal_tickets` — D8: `terminal_at IS NOT NULL`
+  tickets are excluded.
+- `test_handoff_respects_grant_scope` — D8.
+- `test_handoff_emits_reassign_action_per_item_with_constants` — D12:
+  `TICKET_REASSIGN_ACTION_TYPE` / `TICKET_REASSIGN_CHANGE_TYPE`.
+- `test_handoff_writes_ticket_transition_per_item` — D8: one
+  `ticket_transitions` row per transfer with `from_owner_id` /
+  `to_owner_id` populated, `from_state == to_state`.
+- `test_handoff_shares_correlation_id_across_items` — AC3 / D9.
+- `test_handoff_requires_leadership_handoff_execute_permission` — D4.
+- `test_handoff_rejects_blank_successor_member_id` — 422.
+- `test_handoff_partial_success_reports_failed_per_item` — R4: same shape
+  as the applications case above; per-item `StaleMutationError` lands in
+  `TicketHandoffResult.failed` with `reason="occ_conflict"` and the batch
+  still returns HTTP 200.
 
-def test_renew_with_blank_reason_returns_422_validation(...):
-    """AC1: renew request with blank reason rejected at Pydantic layer."""
+### WU-045B — `services/api/tests/test_leadership_context.py`
 
-def test_renew_without_permission_intent_write_returns_403(...):
-    """AC1: actor lacking permission_intent.write at intent scope gets 403."""
+- `test_context_reads_for_member_with_no_inheritance` — AC4: populated
+  response with empty lists and `is_stale=False`, not an empty output.
+- `test_context_returns_active_grants_for_member` — AC4: only non-revoked,
+  non-expired grants.
+- `test_context_populates_inherited_from_from_predecessor_chain` — AC4 /
+  D10: `InheritedFromEntry` reflects the immediate predecessor grant
+  (one hop).
+- `test_context_reports_is_stale_true_when_predecessor_owns_open_work` —
+  AC4 / D11: domain staleness flag reflects pending predecessor apps or
+  tickets within the inherited scope.
+- `test_context_reports_is_stale_false_after_full_handoff` — AC4 / D11:
+  completing application + ticket handoff flips `is_stale` to False.
+- `test_context_reports_projector_is_stale_separately` — D11:
+  `projector_is_stale` tracks `read_model_cursors` lag and is independent
+  of `is_stale`.
+- `test_context_includes_current_applications_and_tickets` — AC4: open
+  work currently owned by the member.
+- `test_context_requires_leadership_context_read_permission` — D4: 403
+  without `leadership_context.read` (global).
 
-def test_renew_response_exposes_expired_at_null(...):
-    """AC1: renewed intent read response includes expired_at: null."""
-
-def test_renew_emits_renew_audit_verbs_with_allowlisted_payload(...):
-    """AC1: renewal emits permission_intent.renew action and
-    permission_intent.renewed change with payload limited to
-    INTENT_RENEW_PAYLOAD_ALLOWLIST."""
-```
-
-### 8.2 `services/api/tests/test_permission_temporary_worker.py` — WU-038B (AC3, AC4)
-
-```python
-def test_worker_marks_expired_intents_and_creates_drift_rows(...):
-    """AC3: worker stamps expired_at on temporary intents past expires_at
-    and creates one drift row per expired intent."""
-
-def test_worker_is_idempotent_on_rerun(...):
-    """AC3: running worker a second time against the same candidates does
-    not write a second expired_at or create a second drift row."""
-
-def test_worker_skips_non_temporary_intents(...):
-    """AC3: non-temporary intents are never selected regardless of timing."""
-
-def test_worker_skips_future_expires_at_intents(...):
-    """AC3: temporary intents with expires_at > now are not selected."""
-
-def test_worker_skips_already_expired_intents(...):
-    """AC3: intents with expired_at IS NOT NULL are not re-selected."""
-
-def test_expiry_drift_row_shape_matches_d9(...):
-    """AC4: drift row has permission_intent_id set, intent_version set,
-    reconciliation_run_id NULL, actual_* NULL, intended_* mirrors intent,
-    status='detected'."""
-
-def test_expiry_drift_is_listable_via_get_permission_drift(...):
-    """AC4: GET /api/v1/permission-drift?scope_kind=... returns expiry drift
-    alongside reconciliation drift."""
-
-def test_expiry_drift_resolvable_via_existing_resolve_endpoint(...):
-    """AC4: POST /api/v1/permission-drift/{id}/resolve works on expiry drift
-    for acknowledge / reconcile / accept actions."""
-
-def test_worker_batch_size_bounds_per_tick_work(...):
-    """AC3: a candidate set larger than PERMISSION_EXPIRY_BATCH_SIZE drains
-    across multiple ticks with no candidate processed twice."""
-
-def test_concurrent_sweeps_do_not_duplicate_via_for_update_skip_locked(...):
-    """AC3: two concurrent expiry sweeps processing overlapping candidates
-    result in each intent expired exactly once."""
-
-def test_per_intent_failure_does_not_abort_batch(...):
-    """AC3: a synthetic failure on one intent does not abort the batch;
-    remaining intents still expire; failed intent retried on next tick."""
-
-def test_manual_trigger_returns_sweep_result_with_counts(...):
-    """AC3: POST /api/v1/permission-intents/expire/run returns
-    PermissionExpirySweepResult with accurate expired_count + drift_ids."""
-
-def test_manual_trigger_requires_global_permission_intent_write(...):
-    """AC3: caller without permission_intent.write at global scope gets 403."""
-
-def test_manual_trigger_accepts_no_body_so_actor_cannot_be_spoofed(...):
-    """AC3: manual trigger endpoint defines no body params; any posted
-    originating-actor override is ignored — audit rows show the session
-    caller."""
-
-def test_worker_emits_expire_and_detect_expired_audit_verbs(...):
-    """AC3: each expired intent emits one permission_intent.expire action
-    with INTENT_EXPIRE_PAYLOAD_ALLOWLIST payload ({expired_at, source}),
-    one permission_intent.expired state change, one
-    permission_drift.detect_expired action with
-    EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST payload, and one
-    permission_drift.detected_expired state change — all four rows
-    committed under the same correlation_id in a single transaction (R1,
-    R2, R7, R9)."""
-
-def test_worker_installs_root_audit_context_when_invoked_from_scheduler_thread(...):
-    """AC3 (R2): invoking permission_expiry_worker_tick with no ambient
-    audit context does not raise MissingCorrelationContextError; produced
-    activity_actions rows all share one correlation_id per tick."""
-
-def test_worker_expire_and_drift_are_atomic_on_failure(...):
-    """AC3 (R1): if the drift insert raises, the expired_at stamp rolls
-    back and the intent is re-selected on the next tick. No orphaned
-    expired_at rows."""
-
-def test_worker_stale_mutation_collision_is_logged_at_debug_not_errored(...):
-    """AC3 (R6): a concurrent PATCH that advances the intent version
-    between candidate SELECT and mutate_entity produces a
-    StaleMutationError that is logged at debug, not exception, and does
-    NOT increment errored_count on the sweep result."""
-
-def test_worker_expires_chapter_scoped_intent_without_authority_failure(...):
-    """AC3 (R3): a chapter-scoped temporary intent is expired by a
-    permission-expirer service actor holding only a global grant. No
-    per-drift scope authority check obstructs the sweep."""
-```
-
-**Test harness patterns**: `httpx.AsyncClient` + DB fixtures as in existing `test_permission_intents.py`; `now` injected at service entry points (no `time.sleep`); `PERMISSION_EXPIRY_BATCH_SIZE` monkey-patched via `monkeypatch.setattr(tasks.permission_expiry, ...)` to exercise multi-batch drains ([D14] binding implications).
-
-**Fixtures not required**: no Discord adapter fixtures — AC4 specifies the stable reconciliation path is the Discord surface, not this slice ([D14] non-goals).
-
----
-
-## §9 — Constants
-
-All literals that span service / repository / test / endpoint code are hoisted to named constants. No magic strings anywhere in the slice.
-
-### 9.1 `services/api/app/services/permissions.py`
-
-```python
-PERMISSION_EXPIRER_ACTOR_ID: str = "permission-expirer"
-PERMISSION_EXPIRY_MANUAL_DEFAULT_BATCH_SIZE: int = 50
-
-# R7: audit verbs hoisted to constants-dict dispatch, matching the pattern of
-# SLICE-014's DRIFT_RESOLUTION_ACTION_TYPE / DRIFT_RESOLUTION_CHANGE_TYPE at
-# permissions.py:72-81. Every mutate_entity call site routes through these
-# dicts — no inline action_type / change_type strings in the slice.
-INTENT_ACTION_TYPE: dict[str, str] = {
-    "renew": "permission_intent.renew",
-    "expire": "permission_intent.expire",
-}
-INTENT_CHANGE_TYPE: dict[str, str] = {
-    "renewed": "permission_intent.renewed",
-    "expired": "permission_intent.expired",
-}
-# R9: distinct change_type for expiry-originated drift so operators can
-# filter audit rows by origin (reconciliation-driven drift still emits
-# `permission_drift.created`). Synthesis D12's "reused permission_drift.detected"
-# was factually incorrect — reconciliation's shipped change_type is
-# `permission_drift.created`, not `.detected`.
-DRIFT_ACTION_TYPE: dict[str, str] = {
-    "detect_expired": "permission_drift.detect_expired",
-}
-DRIFT_CHANGE_TYPE: dict[str, str] = {
-    "detected_expired": "permission_drift.detected_expired",
-}
-
-# R8: allowlists narrowed to field-specific keys. No wildcards; no mirroring
-# of the whole request. For `permission_intent` aggregates the aggregate_id
-# is the composite built by `build_permission_intent_aggregate_id`, so
-# `intent_id` / row UUID is not in the action_payload (and therefore not in
-# the allowlist). For `permission_drift`, the aggregate_id IS `drift_id`,
-# which is included in the action_payload for cross-reference.
-INTENT_RENEW_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "new_expires_at", "reason",
-})
-INTENT_EXPIRE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "expired_at", "source",  # source ∈ {"worker_sweep", "manual_trigger"}
-})
-EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "drift_id",
-    "permission_intent_id",
-    "intent_version",
-    "scope_kind",
-    "scope_id",
-    "role_id",
-    "channel_id",
-    "kind",
-    "status",
-})
-```
-
-### 9.2 `services/api/app/tasks/permission_expiry.py`
-
-```python
-PERMISSION_EXPIRY_BATCH_SIZE: int = 50
-```
-
-### 9.3 `services/api/app/services/scheduler.py`
-
-```python
-PERMISSION_EXPIRY_INTERVAL_SECONDS: int = 60
-```
-
-### 9.4 Audit verbs (dispatched via the constants dicts in §9.1)
-
-| Dict lookup | Resolved string | Call site |
-|---|---|---|
-| `INTENT_ACTION_TYPE["renew"]` | `permission_intent.renew` | `renew_permission_intent` |
-| `INTENT_CHANGE_TYPE["renewed"]` | `permission_intent.renewed` | `renew_permission_intent` |
-| `INTENT_ACTION_TYPE["expire"]` | `permission_intent.expire` | `_expire_single_intent` |
-| `INTENT_CHANGE_TYPE["expired"]` | `permission_intent.expired` | `_expire_single_intent` |
-| `DRIFT_ACTION_TYPE["detect_expired"]` | `permission_drift.detect_expired` | `_create_expiry_drift` |
-| `DRIFT_CHANGE_TYPE["detected_expired"]` | `permission_drift.detected_expired` | `_create_expiry_drift` |
-
-R7: every `mutate_entity` call site dereferences one of these dicts — no inline strings, no f-string generation. R9: the expiry-drift `change_type` is distinct from reconciliation's `permission_drift.created`, so audit readers can filter expiry-origin drift without joining to `permission_intent_id` IS NOT NULL. The **payload allowlists** (§9.1) ensure these verbs emit stable, audit-legible payloads ([D12]).
+HTTP layer coverage: each endpoint has at least one HTTP-level test that
+exercises the authority gate (403), the request validation (422), and the
+happy path. Per-AC behavioural assertions use the service layer directly
+where the HTTP surface would only add noise.
 
 ---
 
-## §10 — Out of scope (explicit)
+## §9 — Constants (module-level, no f-strings)
 
-Per synthesis **D15**, the following MUST NOT be added in this slice. Any risk / hookpoint / implementation phase flagging these is treated as scope creep:
+| Module                                   | Constant                                    | Value                     |
+|------------------------------------------|---------------------------------------------|---------------------------|
+| `contracts/authority.py`                 | `SUCCESSION_TRANSFER_REVOCATION_REASON`     | `"succession_transfer"`   |
+| `contracts/applications.py`              | `APPLICATION_REASSIGN_ACTION_TYPE`          | `"application.reassign"`  |
+| `contracts/applications.py`              | `APPLICATION_REASSIGN_CHANGE_TYPE`          | `"application.reassigned"`|
+| `contracts/applications.py`              | `APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST`    | `frozenset({"new_owner_id"})` |
+| `contracts/tickets.py`                   | `TICKET_REASSIGN_ACTION_TYPE`               | `"ticket.reassign"`       |
+| `contracts/tickets.py`                   | `TICKET_REASSIGN_CHANGE_TYPE`               | `"ticket.reassigned"`     |
+| `contracts/tickets.py`                   | `TICKET_REASSIGN_PAYLOAD_ALLOWLIST`         | `frozenset({"new_owner_id"})` |
+| (implicit, names only — D4)              | `succession_plan.read`                      | authority permission      |
+| (implicit, names only — D4)              | `authority_grant.transfer`                  | authority permission      |
+| (implicit, names only — D4)              | `leadership_handoff.execute`                | authority permission      |
+| (implicit, names only — D4)              | `leadership_context.read`                   | authority permission      |
 
-1. Auto-reconciliation of expired intents against Discord (operators continue to trigger reconciliation via existing flow).
-2. Expiry notifications / alerts via SLICE-015 consumer hooks.
-3. Time-travel or historical "was-expired-when" views.
-4. Bulk renewal endpoint.
-5. Scope-filtered expiry (worker remains global).
-6. Chapter-scoped authority on `POST /expire/run` (stays global).
-7. Backpressure / circuit-breaker around the worker beyond per-intent `try/except logger.exception`.
-8. `permission_intent.status` column or FSM.
-9. Widening `PermissionIntentUpdate` with `expired_at`.
-10. Reconciliation-run-scoped dedupe for expiry drift (expiry drift carries `reconciliation_run_id = NULL` by contract).
-11. UI / frontend consumers — contract-only surface.
-12. New permission namespace (`permission_intent.renew` / `permission_intent.expire` as **permissions**; authority remains `permission_intent.write` + `permission_drift.write`).
-13. Any new index on `permission_intents.expired_at`.
-14. Any changes to reconciliation drift shapes or `_build_drift_rows` in `permission_reconciliation.py`.
-
----
-
-## Guardrails
-
-- **SLICE-014 patterns.** Service-layer authority (`_require_scoped_authority`), constants dispatch (allowlists), `@>` AND `<@` containment in seed, spoof-proof originating actor (`POST /expire/run` takes no body).
-- **Migration.** Single migration `wu_038_permission_intent_expiry`; downgrade is no-op per Live Server Principle; seed is idempotent via `WHERE NOT EXISTS` + containment.
-- **No magic strings.** Every audit verb, allowlist, actor id, batch size, interval is a named constant at module level.
-- **Per-test AC docstring.** Each test begins with `"""ACn: ...` — binding for the test agent.
-- **Concurrent worker safety.** Primary guard is **OCC on `aggregate_heads`** (any concurrent mutation that bumps the intent's `current_seq` causes the second worker's `mutate_entity` to raise `StaleMutationError`, caught at `debug` per R6 and retried next tick) plus the **`expired_at IS NULL` predicate in `mark_intent_expired_row`** (defense-in-depth). `FOR UPDATE SKIP LOCKED` in `select_expirable_intents` is a contention-latency optimization; the row locks release when the candidate-SELECT connection returns to the pool, so it is not an idempotency layer on its own.
-- **Per-intent atomicity (R1).** Expire stamp + drift insert + both audit rows + both state-change rows commit inside a single `db.transaction()` per intent. Partial failure rolls back the expire stamp, and the candidate is re-selected on the next tick. No "expired_at with no drift row" failure mode.
-- **Worker audit context (R2).** `permission_expiry_worker_tick` installs `use_audit_context(_root_audit_context())` when no ambient context exists, so the scheduler's `asyncio.to_thread` hand-off does not break `mutate_entity`'s `MissingCorrelationContextError` guard. Every audit row emitted in one tick shares one `correlation_id`.
-- **No new abstractions.** No registries, no generic "lifecycle engine", no refactor of `update_permission_intent`. Only what AC1–AC4 demand.
-- **Test/Code agent separation.** Test files are written from contracts + this proposal; code files from contracts + tests (AGENTS.md §Implementation Workflow).
-- **No backwards-compatibility shims.** New columns, new endpoints, new audit verbs. Existing callers unchanged.
+All `mutate_entity` emissions reference these constants; tests assert
+against the constants (not hard-coded strings). Authority permission names
+are strings passed to `_require_scoped_authority`; they are not bound to a
+Python constant per D4 (no registry module). Tests and services may
+introduce local constants for convenience, but no cross-slice permission
+registry is created.
 
 ---
 
-## 5-bullet summary
+## §10 — Out of scope (explicit — D15)
 
-- **Migration `wu_038_permission_intent_expiry`** adds `permission_intents.expired_at TIMESTAMPTZ NULL` + `permission_intents_expired_at_valid` CHECK + idempotent seed of `permission-expirer` service actor with `permission_intent.write` + `permission_drift.write` at global scope; downgrade is no-op.
-- **Renewal (WU-038A)** ships as `POST /api/v1/permission-intents/{intent_id}/renew` via a new `temporary.py` endpoint + `renew_permission_intent()` service function that enforces authority, temporary-only, active-only, service-layer future-check on `request.expires_at` (R5), non-blank `reason`, and `If-Match` OCC; emits audit verbs routed through `INTENT_ACTION_TYPE["renew"]` / `INTENT_CHANGE_TYPE["renewed"]` (R7) with the narrow `INTENT_RENEW_PAYLOAD_ALLOWLIST = {"new_expires_at", "reason"}` (R8).
-- **Expiry worker (WU-038B)** ships as `services/api/app/tasks/permission_expiry.py` + `expire_temporary_permission_intents()` service, wired into `SchedulerLoop` at 60-second intervals with 50-row batches. `permission_expiry_worker_tick` installs a root audit context when none exists (R2) and catches `StaleMutationError` at `debug` (R6). `_expire_single_intent` opens **one** `db.transaction()` per candidate and threads its `connection` into both `mutate_entity` calls (R1) so the expire-stamp and drift-insert are atomic. The drift helper does **not** perform a per-intent authority check (R3); the sweep's top-level `permission_intent.write` at global scope is the sole authority gate. The head-version read uses `_read_intent_head_version(aggregate_id, …)` against `aggregate_heads` with the composite aggregate id built by `build_permission_intent_aggregate_id` (R4). Discord is never called.
-- **Expiry drift shape (D9)** carries `permission_intent_id`, `intent_version`, intended_* mirroring intent, `actual_* = NULL`, `reconciliation_run_id = NULL`, `status = 'detected'`, emitted via new verbs `DRIFT_ACTION_TYPE["detect_expired"]` → `DRIFT_CHANGE_TYPE["detected_expired"]` (R9 distinguishes expiry-origin drift from reconciliation's `permission_drift.created`). Action-payload uses the lean `EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST` (R8: 9 keys, no bit masks); bit masks live only in `StateChangeDraft.payload_json`, matching `_record_drift_created`'s split. Resolves through the existing `POST /permission-drift/{id}/resolve` flows, satisfying AC4's "stable reconciliation path" requirement.
-- **Tests split along WU boundaries**: `test_permission_temporary_api.py` covers AC1/AC2 (success, 412, 428, 422 non_temporary/expired/renewal_expires_at_in_past/validation, 403, audit payload); `test_permission_temporary_worker.py` covers AC3/AC4 (expire + drift create atomicity (R1), root audit context install (R2), chapter-scoped intent without per-drift authority obstruction (R3), OCC collision at debug (R6), idempotency, filters, batching, concurrency, per-intent resilience, manual trigger authority + spoof-proofing, audit emission with narrow allowlists). All `now` injected at service entry; no sleeps; `PERMISSION_EXPIRY_BATCH_SIZE` monkey-patched for drain tests.
+The following are explicitly deferred; any PR adding one is out-of-bounds
+for this slice and must split into a follow-up slice:
+
+1. Automatic succession triggering on role removal (roster hook, scheduled
+   worker, Discord notification).
+2. Multi-role atomic succession.
+3. Multi-successor reassignment per handoff call.
+4. Transfer rollback endpoint.
+5. Persisted successor designation (`successor_designated` is always
+   `False` this slice).
+6. New projection tables for leadership context (D10; live query only).
+7. Alembic migrations of any kind (D2).
+8. Discord messages/embeds for succession events.
+9. Cross-scope sweep — handoff is bounded to the grant's scope.
+10. `succession-worker` or other dedicated service actor.
+11. Multi-hop predecessor lineage in `InheritedFromEntry` (immediate hop
+    only; deeper history reachable via audit trail).
+12. Strict per-step `causation_id` chaining across HTTP requests (D9:
+    `predecessor_grant_id` + per-request `correlation_id` is sufficient).
+13. Exposing `reassign` as a general-purpose endpoint outside the handoff
+    flow.
 
 ---
 
-## Revision log — Revision 1
+## §11 — PR decomposition
 
-Revisions applied to close blocking findings in `plans/risk/slice-020-shortcut.md`
-(HIGH: F1, F2; MEDIUM: F3, F4, F5) and `plans/risk/slice-020-audit.md`
-(MEDIUM 1, MEDIUM 2; LOW 3, LOW 4, LOW 7). `plans/risk/slice-020-scope.md`
-verdict was LOW with no required action.
+The synthesis identifies three clean seams:
 
-| Revision | Binding risk | Sections touched |
-|---|---|---|
-| **R1** — Expire + drift commit in ONE transaction via shared `connection=` kwarg threaded into both `mutate_entity` calls; rollback on drift failure reverts the expire stamp and re-qualifies the candidate on the next tick. | shortcut F1 (HIGH), audit MEDIUM 2 | §1 AC4 step 3; §5.2 (`_expire_single_intent` rewritten, `_create_expiry_drift` accepts `connection=`); Guardrails (atomicity bullet); 5-bullet summary (worker bullet) |
-| **R2** — `permission_expiry_worker_tick` installs `use_audit_context(_root_audit_context())` when no ambient context exists (mirrors `evaluate_ticket_sla` at `services/api/app/services/ticket_sla.py:508-513`), fixing `MissingCorrelationContextError` on the scheduler's `asyncio.to_thread` path. | audit MEDIUM 1 | §6.1 (tick rewritten + new `_root_audit_context` helper); Guardrails (worker-audit-context bullet); 5-bullet summary (worker bullet); new test `test_worker_installs_root_audit_context_when_invoked_from_scheduler_thread` in §8.2 |
-| **R3** — Dropped per-intent `_require_scoped_authority("permission_drift.write", intent.scope_kind, …)` inside `_create_expiry_drift`. Chapter-scoped intents no longer fail on the flat authority model (`authority.py:238` requires exact `scope_kind` match). Precedent: SLICE-014's `_record_drift_created` also has no per-scope check. Top-level `permission_intent.write` at global scope remains the authority gate. | shortcut F2 (HIGH) | §1 AC4 step 3; §5.2 (`_create_expiry_drift` body + explanatory comment); new test `test_worker_expires_chapter_scoped_intent_without_authority_failure` in §8.2 |
-| **R4** — Deleted the stubbed `_current_intent_version(db, intent.id)` which passed the raw row UUID. Replaced with `_read_intent_head_version(connection, *, aggregate_id, intent_id)` that queries `aggregate_heads` with the **composite** aggregate id built by `build_permission_intent_aggregate_id`. The read runs inside the same transaction as the `mutate_entity` call, so it is consistent with the head-for-update check. | shortcut F3 (MEDIUM) | §5.2 (`_read_intent_head_version` added; `_expire_single_intent` uses it inside the tx) |
-| **R5** — Removed the `@field_validator("expires_at")` future-check from `PermissionIntentRenewalRequest` and added a service-layer `if request.expires_at <= now: raise RenewalExpiresAtInPastError(...)` in `renew_permission_intent` using the same `now` as the active-expired guard. Added `RenewalExpiresAtInPastError` to contracts and a 422 code `renewal_expires_at_in_past` in `_shared.raise_known_permission_error`. | shortcut F4 (MEDIUM) | §1 AC1 step 5; §1 AC2 step 4 + renumbered; §3.2 (validator removed + rationale); §3.4 (new error class); §3.5 (`__all__`); §5.1 (service check + constant dispatch); §5.3 (mapping); §7.3 (error table); §8.1 (test renamed) |
-| **R6** — `StaleMutationError` classified as expected control flow. Per-intent loop in `expire_temporary_permission_intents` catches it at `debug` and does NOT increment `errored_count`; task tick also catches it at `debug` returning `None`. Only unexpected exceptions go to `logger.exception`. | shortcut F5 (MEDIUM), audit LOW 3 | §5.2 (loop exception split); §6.1 (tick exception split); Guardrails concurrency bullet; new test `test_worker_stale_mutation_collision_is_logged_at_debug_not_errored` in §8.2 |
-| **R7** — Hoisted action/change-type strings into module-level dicts `INTENT_ACTION_TYPE`, `INTENT_CHANGE_TYPE`, `DRIFT_ACTION_TYPE`, `DRIFT_CHANGE_TYPE` matching SLICE-014's `DRIFT_RESOLUTION_ACTION_TYPE` / `DRIFT_RESOLUTION_CHANGE_TYPE` pattern. Every `mutate_entity` call site dereferences these dicts — no inline strings. | shortcut F9 (LOW, policy-bound) | §1 AC1 step 5; §1 AC4 step 3; §5.1 (`action_type=INTENT_ACTION_TYPE["renew"]`, `change_type=INTENT_CHANGE_TYPE["renewed"]`); §5.2 (expire + drift call sites use dict dispatch); §9.1 (dicts added); §9.4 (table rewritten in dict-lookup form) |
-| **R8** — Payload allowlists tightened: `INTENT_RENEW_PAYLOAD_ALLOWLIST = {"new_expires_at", "reason"}`; `INTENT_EXPIRE_PAYLOAD_ALLOWLIST = {"expired_at", "source"}` with `source ∈ {"worker_sweep", "manual_trigger"}` threaded via a new `source` parameter on `expire_temporary_permission_intents`; `EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST` narrowed from 17 keys to 9 (drift_id + permission_intent_id + intent_version + scope + target + status — no bit masks, no `actual_*` NULLs, no `reconciliation_run_id` NULL). `_create_expiry_drift` now builds a lean `action_payload` dict mirroring `_record_drift_created`'s split between action_payload and payload_json. | audit LOW 4, audit LOW 5 | §5.2 (`_create_expiry_drift` constructs lean action_payload; `expire_temporary_permission_intents` + `_expire_single_intent` accept and thread `source`); §7.1 (manual endpoint passes `source="manual_trigger"`); §9.1 (allowlists replaced; `EXPIRY_DRIFT_DETECT_PAYLOAD_ALLOWLIST` renamed to `EXPIRY_DRIFT_CREATE_PAYLOAD_ALLOWLIST`); 5-bullet summary |
-| **R9** — Expiry drift `change_type` distinguished from reconciliation's. Reconciliation emits `permission_drift.created`; expiry emits the new `permission_drift.detected_expired`. Synthesis D12's claim of reuse (originally `permission_drift.detected`) was factually incorrect and is superseded. Operators can now filter audit rows by origin without joining to `permission_intent_id IS NOT NULL`. | audit LOW 7 | §1 AC4 step 3; §5.2 (`_create_expiry_drift` uses `DRIFT_CHANGE_TYPE["detected_expired"]`); §9.1 + §9.4; 5-bullet summary |
+- **PR A** — WU-044A + WU-044B. Contained within authority / chapter-roles /
+  roster queries and the authority lifecycle. Includes the mechanical move
+  of the existing `endpoints/authority.py` into the `authority/` subpackage
+  (`lifecycle.py`) as a precondition; the move is additive with no
+  behavioural change. New authority permissions: `succession_plan.read`,
+  `authority_grant.transfer`.
+- **PR B** — WU-045A-applications + WU-045A-tickets. Highest-risk PR;
+  introduces new `reassign` actions in both subsystems. Kept atomic because
+  both share the `leadership_handoff.execute` permission and the batch
+  handoff pattern.
+- **PR C** — WU-045B. Leadership context view; depends on handoff semantics
+  being settled so the `stale_handoff` / `is_stale` signals are meaningful.
+  New permission: `leadership_context.read`.
 
-**Not-blocking findings acknowledged but not revised** (rationale-only, already consistent with revised text):
+Final decomposition is subject to the multi-concern review gate; this
+proposal does not mandate the split beyond the synthesis recommendation.
+If the reviewer at the PR stage concludes the three PRs can ship as one,
+that is acceptable; they should not be merged into more than three.
 
-- **shortcut F6 (MEDIUM)** — SKIP LOCKED framed as optimization, not idempotency layer. Addressed by rewriting Guardrails' "Concurrent worker safety" bullet to name OCC on `aggregate_heads` + `mark_intent_expired_row`'s predicate as the primary guards.
-- **shortcut F7 (LOW)** — Claim that per-intent tx "matches ticket_sla" removed; §5.2 now frames per-intent tx as a deliberate departure from `ticket_sla`'s single-batch-tx shape, citing `submit_reconciliation_snapshot` as the shared-connection precedent.
-- **shortcut F8 (LOW)** — `mark_intent_expired_row` rowcount=0 still raises `PermissionIntentNotFoundError`. Under R1's shared-tx, rowcount=0 only happens under a genuine data inconsistency (the row truly vanished) because OCC races surface as `StaleMutationError` before the projection runs. The F8 concern (benign concurrency dedupe misreported as error) is subsumed by R6's StaleMutationError split.
-- **shortcut F10 (LOW)** — Drift `uuid4()` generated outside the tx is safe because the whole `with db.transaction()` block is atomic under R1; on rollback, neither the audit row, the state-change row, nor the projection exist, and the `drift_ids` list is only appended after `with` exits. Noted in §5.2 narrative.
-- **audit LOW 6** — `request_surface` hardcoded. Not revised in this iteration; the actor disambiguates worker vs. operator and scope R7's "no inline strings" intent does not yet cover `request_surface`. Deferred to future hygiene pass.
+---
+
+## Guardrails (binding across all WUs)
+
+- D1–D15 are binding. Any apparent need to violate a decision escalates to
+  synthesis revision rather than silent expansion.
+- All mutations flow through `mutate_entity` with narrow payload
+  allowlists; no direct INSERT/UPDATE on mutable aggregates.
+- All `action_type` / `change_type` values are module-level constants
+  (§9). No f-strings or inline concatenation when emitting audit events.
+- Authority checks run at the service layer (via
+  `_require_scoped_authority`) so tests can exercise them without HTTP;
+  endpoints rely on the service-layer check rather than introducing an
+  `endpoints/authority/`-specific FastAPI dependency (matches SLICE-017
+  pattern).
+- Originating actor is spoof-proof: derived from
+  `Depends(get_current_actor)` and the ambient audit context; never from
+  the request body.
+- No Alembic migration (D2).
+- No backwards-compatibility shims: if a test pattern needs updating for
+  the new `reassign` action, update the test directly (AGENTS.md).
+- Follow the Test Agent / Code Agent separation at implementation time:
+  the test agent sees contracts only; the code agent sees contracts + tests.
+
+## Migration chain
+
+- Current head: `wu_038` (SLICE-020 temporary permission lifecycle).
+- SLICE-024 does not advance the head (D2).
+- If implementation discovers an unavoidable migration, revisit synthesis
+  before adding it; the candidate name would be
+  `wu_044_leadership_succession`.
+
+---
+
+## Revision log
+
+### Revision 1 — risk-gate closures
+
+Driven by `plans/risk/slice-024-audit.md` (HIGH) and
+`plans/risk/slice-024-shortcut.md` (MEDIUM). Scope risk passed at LOW in
+revision 0 and is untouched.
+
+| Revision | Closes                                  | Sections touched |
+|----------|-----------------------------------------|------------------|
+| R1       | audit F1 HIGH + shortcut F1 MEDIUM      | §3 (no change — parameter is on the service function, not the contract), §5 (`transfer_authority_grant` pseudocode rewritten to share one `db.transaction() as connection`; `grant_authority` / `revoke_authority` signatures extended with `connection: Connection[Any] \| None = None`; transaction-notes paragraph replaced), §8 (added `test_transfer_rolls_back_successor_when_revoke_fails`). |
+| R2       | audit F2 HIGH                           | §5 (added `get_head_for_update(connection, aggregate_type="authority_grant", aggregate_id=str(grant_id))` at top of transfer's tx body, before `find_successor_grant`), §8 (added `test_transfer_serializes_concurrent_attempts_on_predecessor`). |
+| R3       | audit F3 MEDIUM                         | §5 (deleted the "each run their own `db.transaction()` block" sentence; replaced with shared-connection narrative). |
+| R4       | shortcut O3 LOW + audit coverage        | §3 (added `HandoffFailureReason`, `ApplicationHandoffFailure`, `TicketHandoffFailure`; `ApplicationHandoffResult.failed` / `TicketHandoffResult.failed` now required), §5 (handoff loop wraps each `transition_application` / `transition_ticket` in try/except, appends to `failed` on per-item failure; added audit-context-origin note from shortcut O4), §7 (error-model paragraph rewritten to bind a single contract — HTTP 200 with `failed` list; 409 row removed from the handoff table), §8 (added `test_handoff_partial_success_reports_failed_per_item` for both applications and tickets). |
+| R5       | shortcut O2 LOW                         | §3 (added `InvalidHolderIdError(ValueError)`), §5 (`compute_succession_plan` replaces `_is_uuid(h)` filter with `UUID(h)` per holder wrapped in try/except → `InvalidHolderIdError`; `read_leadership_context` validates `member_id` at the boundary), §7 (error-model paragraph notes 422 on non-UUID `chapter_id` / `member_id` / holder id). |
+
+No other sections changed. D1–D15 are still binding; no new decisions are
+introduced. Migration head remains `wu_038`.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
