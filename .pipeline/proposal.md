@@ -1,1234 +1,2104 @@
-# SLICE-024 Phase 3 Proposal: Leadership Succession + Context Transfer
+# SLICE-022 Phase 3 Proposal: Compliance Rule Evaluation With Evidence
 
 ## Binding sources
 
 - `.pipeline/synthesis.md` — D1–D15 (binding).
 - `.pipeline/research.md` — Phase 1 evidence.
-- `product-strategy/tickets/SLICE-024.md` — AC1–AC4, WU grid, Code Boundary.
-- `AGENTS.md` — Live Server Principle, No Backwards Compatibility, Test/Code Agent
-  separation, migration discipline.
+- `product-strategy/tickets/SLICE-022.md` — AC1–AC4, WU grid, Code Boundary.
+- `AGENTS.md` — Live Server Principle, No Backwards Compatibility,
+  Test/Code Agent separation, migration discipline.
 
-This proposal is bound to D1–D15. Mechanics may vary inside those boundaries;
-scope and shape may not. No new Alembic file ships (D2). Migration head stays
-`wu_038`.
+This proposal is bound to D1–D15. Mechanics may vary inside those
+boundaries; scope and shape may not. Migration head advances
+`wu_038 → wu_039 → wu_040a → wu_041a` (D12). Consequence vocabulary is
+`"review"` / `"under_review"` — no `probation` enum or column (D1).
 
 ---
 
 ## §1 — AC mapping
 
-### AC1 — Queryable plan without successor; no automatic transfer
+### AC1 — Authority-gated compliance rule CRUD with OCC (WU-039)
 
-1. **Contracts**
-   - `services/api/app/contracts/authority.py`:
-     `SuccessionPlanRead`, `DepartingRoleEntry`, `PendingApplicationRef`,
-     `PendingTicketRef` (shapes per §3).
-2. **Repository helpers**
-   (`services/api/app/repositories/authority.py`,
-    `services/api/app/repositories/chapter_roles.py`,
-    `services/api/app/repositories/roster.py`,
-    `services/api/app/repositories/applications.py`,
-    `services/api/app/repositories/tickets.py`):
-   - `list_succession_triggering_roles(conn, chapter_id)` — rows from
-     `chapter_roles` with `triggers_succession = TRUE`, ordered by `ordinal`.
-   - `list_role_holders(conn, chapter_id, role_ids)` — roster entries for
-     the triggering roles, returning `(role_id, member_id, status)`.
-   - `list_active_grants_for_members(conn, member_ids, *, scope_kind,
-     scope_id)` — grants with `revoked_at IS NULL` and
-     `(expires_at IS NULL OR expires_at > now)` narrowed to the chapter scope.
-   - `list_open_applications_for_owners_in_scope(conn, owner_ids,
-     *, scope_kind, scope_id)` — open state set
-     `{submitted, queued, claimed, in_review, interview, waitlisted}`
-     (operational-overview set — D5).
-   - `list_open_tickets_for_owners_in_scope(conn, owner_ids,
-     *, scope_kind, scope_id)` — `terminal_at IS NULL`.
-3. **Service**
-   (`services/api/app/services/authority.py`,
-    new function `compute_succession_plan`):
-   - Authority: `_require_scoped_authority("succession_plan.read",
-     scope_kind="chapter", scope_id=chapter_id, actor=actor, db=db)` — D4.
-   - Pure read; no `mutate_entity` call; no state writes.
-   - `successor_designated=False`, `successor_member_id=None` (D5).
+1. **Migration** `migrations/versions/wu-039_compliance_rules.py` — creates
+   `compliance_rules` per D2 (see §2).
+2. **Contracts** `services/api/app/contracts/compliance.py`:
+   `ComplianceRuleCreate`, `ComplianceRuleUpdate`, `ComplianceRuleRead`,
+   plus error classes `ComplianceRuleNotFoundError`,
+   `DuplicateActiveComplianceRuleError` (see §3).
+3. **Repository** `services/api/app/repositories/compliance.py`:
+   `create_rule`, `update_rule`, `list_rules_by_chapter`, `get_rule`,
+   `_fetch_rule_for_update` (see §4).
+4. **Service** `services/api/app/services/compliance.py`:
+   `create_rule(db, request, *, actor)`,
+   `update_rule(db, rule_id, request, expected_version, *, actor)`
+   (see §5). Authority: `compliance_rule.write` at chapter scope.
+   Mutations flow through `mutate_entity` with
+   `aggregate_type="compliance_rule"` and constants from §9.
+5. **Endpoints** `services/api/app/api/v1/endpoints/compliance/rules.py`:
+   `POST /api/v1/compliance/rules`, `PATCH /api/v1/compliance/rules/{id}`,
+   `GET /api/v1/compliance/rules`. If-Match strong ETag on PATCH; 412 on
+   stale OCC (see §8).
+6. **Tests** `services/api/tests/test_compliance_rules.py` per D14 (see §10).
+
+### AC2 — Evidence submission persists pending, extraction is separate (WU-040A + WU-040B-extract)
+
+1. **Migration** `migrations/versions/wu-040a_compliance_evidence.py` —
+   creates `evidence_submissions` per D3 (see §2).
+2. **Contracts** `services/api/app/contracts/compliance.py`
+   (`EvidenceSubmissionCreate`, `EvidenceSubmissionRead`); separate
+   `services/api/app/contracts/compliance_extraction.py`
+   (`EvidenceExtractionRead`) per ticket Code Boundary.
+3. **Repository** (`services/api/app/repositories/compliance.py`):
+   `create_evidence`, `get_evidence`, `update_evidence_after_extraction`.
+4. **Services**:
+   - `services/api/app/services/compliance.py` adds
+     `submit_evidence(db, request, *, actor)` — authority
+     `compliance_evidence.submit`, inserts row with
+     `extraction_status='pending'` (actor is spoof-proof via
+     `ActorIdentity`; `submitted_by_member_id` is populated from
+     `actor.actor_id`, never from the request body).
+   - `services/api/app/services/compliance_extraction.py` adds
+     `trigger_extraction(db, evidence_id, *, actor, ocr_provider)` —
+     authority `compliance_evidence.extract`, synchronously invokes the
+     OCR provider (D5), persists result or failure.
+   - OCR boundary `services/api/app/infrastructure/ocr.py` (see §6).
+5. **Endpoints**:
+   - `services/api/app/api/v1/endpoints/compliance/evidence.py` —
+     `POST /api/v1/compliance/evidence`,
+     `GET /api/v1/compliance/evidence/{id}`.
+   - `services/api/app/api/v1/endpoints/compliance/evidence_extract.py` —
+     `POST /api/v1/compliance/evidence/{id}/extract`.
+6. **Tests** `services/api/tests/test_compliance_evidence.py` and
+   `services/api/tests/test_compliance_ocr_extract.py` per D14 (§10).
+
+### AC3 — Officer correction preserves originals with OCC (WU-040B-correct)
+
+1. **Contracts** `services/api/app/contracts/compliance_corrections.py`:
+   `OfficerCorrectionRequest`, `OfficerCorrectionRead`,
+   `CorrectionNotPermittedStatusError` (see §3).
+2. **Repository** (`services/api/app/repositories/compliance.py`):
+   `update_evidence_correction` — writes overlay columns only; never
+   touches `raw_text` or `attachment_ref`.
+3. **Service** `services/api/app/services/compliance_corrections.py`:
+   `correct_evidence(db, evidence_id, request, expected_version, *, actor)`
+   — authority `compliance_evidence.correct`, guards
+   `extraction_status IN ('completed','failed','corrected')` (409
+   otherwise), OCC via `mutate_entity`, sets `extracted_fields_corrected`,
+   `corrected_by_member_id = actor.actor_id` (spoof-proof),
+   `corrected_at`, `correction_reason`, transitions status to
+   `'corrected'` (see §5).
 4. **Endpoint**
-   (`services/api/app/api/v1/endpoints/authority/succession_plan.py`):
-   `GET /api/v1/chapters/{chapter_id}/succession-plan → SuccessionPlanRead`.
-5. **Test**
-   (`services/api/tests/test_succession_plan.py`): AC1 is satisfied when the
-   plan returns with `successor_designated=False` and lists departing roles,
-   affected grants, and pending work with no writes occurring (assert no new
-   `activity_actions` rows are emitted by the request).
+   `services/api/app/api/v1/endpoints/compliance/evidence_correct.py`:
+   `POST /api/v1/compliance/evidence/{id}/correct`. If-Match required;
+   412 on stale; 409 on `pending`/`running`; 422 on blank reason.
+5. **Tests** `services/api/tests/test_compliance_ocr_correct.py` per D14.
 
-### AC2 — Transfer creates successor linked to predecessor; reuses grant lifecycle
+### AC4 — Scheduled evaluation is idempotent; consequences route through roster (WU-041A + WU-041B)
 
-1. **Contracts**:
-   - `AuthorityGrantTransferRequest(successor_id: str, reason: str)` — both
-     `min_length=1`.
-   - Response: existing `AuthorityGrantRead` (the new grant).
-   - New errors: `GrantAlreadyTransferredError(ValueError)`,
-     `NonBlankReasonRequiredError(ValueError)` (Pydantic handles the blank-reason
-     422 via `Field(min_length=1)`; the explicit error class is reserved for
-     service-level string-only paths and test symmetry).
-   - Constant: `SUCCESSION_TRANSFER_REVOCATION_REASON = "succession_transfer"`.
-2. **Repository**
-   (`services/api/app/repositories/authority.py`):
-   - `find_successor_grant(conn, predecessor_grant_id) -> AuthorityGrantRow | None`
-     — the single row where `predecessor_grant_id = :grant_id`. The lookup is
-     not filtered by `revoked_at` — if a successor was created and later
-     revoked, D3 still treats the predecessor as "already transferred" so the
-     chain stays intact.
-3. **Service**
-   (`services/api/app/services/authority.py`, new function
-   `transfer_authority_grant`):
-   - Authority: `_require_scoped_authority("authority_grant.transfer",
-     scope_kind=grant.scope_kind, scope_id=grant.scope_id, actor=actor, db=db)`.
-   - Load predecessor via `_fetch_grant_row`; 404 if missing; 409 if
-     `revoked_at IS NOT NULL`; check `find_successor_grant` — if present and
-     `grantee_id == successor_id`: return it as an idempotent replay (HTTP 200,
-     no new writes); if present with a different `grantee_id`: raise
-     `GrantAlreadyTransferredError(existing_grant_id=successor.id)`.
-   - Call the existing `grant_authority(...)` (with
-     `predecessor_grant_id=grant_id` and predecessor's `scope_kind`,
-     `scope_id`, `permissions`, `expires_at`), then `revoke_authority(...)`
-     on the predecessor with
-     `reason=SUCCESSION_TRANSFER_REVOCATION_REASON` and the caller-supplied
-     `expected_version`.
-   - Audit actions `authority.grant` + `authority.revoke` share the ambient
-     `correlation_id` (D9).
-4. **Endpoint**
-   (`services/api/app/api/v1/endpoints/authority/transfer.py`):
-   `POST /api/v1/authority-grants/{grant_id}/transfer → AuthorityGrantRead`.
-   HTTP mapping: 200 (idempotent replay), 201 (new successor), 404, 409
-   (already-revoked / already-transferred / duplicate-guard), 412 (stale OCC),
-   403 (authority gate), 422 (blank reason, empty successor_id).
-5. **Test**
-   (`services/api/tests/test_authority_transfer.py`): AC2 is satisfied when the
-   successor's `predecessor_grant_id` equals the predecessor id, both audit
-   actions are recorded, and no bypass path (direct INSERT/UPDATE on
-   `authority_grants`) is used.
-
-### AC3 — Idempotent handoff; causal chain linking transfer and handoffs
-
-1. **Contracts**
-   (`services/api/app/contracts/applications.py`,
-    `services/api/app/contracts/tickets.py`,
-    `services/api/app/contracts/authority.py`):
-   - `ApplicationHandoffRequest(successor_member_id: str)` — `min_length=1`.
-   - `ApplicationHandoffResult(grant_id, successor_member_id,
-     application_ids_transferred, application_ids_already_owned)`.
-   - `TicketHandoffRequest(successor_member_id: str)` and
-     `TicketHandoffResult` mirroring.
-   - `APPLICATION_REASSIGN_ACTION_TYPE = "application.reassign"`,
-     `APPLICATION_REASSIGN_CHANGE_TYPE = "application.reassigned"`.
-   - `TICKET_REASSIGN_ACTION_TYPE = "ticket.reassign"`,
-     `TICKET_REASSIGN_CHANGE_TYPE = "ticket.reassigned"`.
-2. **Lifecycle extensions**
-   (`services/api/app/services/applications.py`,
-    `services/api/app/services/tickets.py`):
-   - Applications: register a new `reassign` action in the action registry.
-     Add an entry to `VALID_TRANSITIONS` for each open state (D5) where the
-     source state equals the destination state. The payload allowlist is
-     `{"new_owner_id"}`; the service function writes the `owner_id` column and
-     emits one `application_reviews` row per item with
-     `reviewer_id=actor.actor_id`, `action="reassign"`,
-     `from_state == to_state`. The branch for owner-only mutations lives
-     beside the existing claim/reactivate owner mutations.
-   - Tickets: register a new `reassign` action that bypasses
-     `category_state_machine` edge validation. It updates `owner_id`, leaves
-     `state` unchanged, and writes a `ticket_transitions` row with
-     `from_owner_id`/`to_owner_id` populated and `from_state == to_state`.
-     The payload allowlist is `{"new_owner_id"}`.
-   - Both actions emit through `mutate_entity` with the constants above.
-3. **Handoff services**
-   (new modules per ticket Code Boundary):
-   - `services/api/app/services/leadership_handoff_applications.py`:
-     `execute_handoff(db, *, grant_id, successor_member_id, actor)`.
-     Authority: `_require_scoped_authority("leadership_handoff.execute",
-     scope_kind=grant.scope_kind, scope_id=grant.scope_id, ...)`. Loads
-     grant, derives predecessor `= grant.grantee_id`, queries open
-     applications owned by predecessor in grant's scope (D5 state set;
-     scope via `form_snapshot.target_scope`), partitions
-     `already_owned`/`to_transfer`, and invokes
-     `transition_application(action="reassign",
-     payload={"new_owner_id": successor_member_id}, ...)` per item. Returns
-     `ApplicationHandoffResult`.
-   - `services/api/app/services/leadership_handoff_tickets.py`: same pattern
-     with `transition_ticket(action="reassign", ...)`, scope via
-     `category_snapshot.routing_scope`, open predicate
-     `terminal_at IS NULL`.
-   - Idempotency: items already owned by `successor_member_id` are skipped;
-     the item is reported in `*_already_owned`. Re-invoking the same call is
-     therefore a no-op on previously transferred items (AC3).
-4. **Endpoints**
-   (`services/api/app/api/v1/endpoints/authority/handoff_applications.py`,
-    `.../handoff_tickets.py`):
-   - `POST /api/v1/authority-grants/{grant_id}/handoff/applications
-     → ApplicationHandoffResult`.
-   - `POST /api/v1/authority-grants/{grant_id}/handoff/tickets
-     → TicketHandoffResult`.
-   - Error mapping: 404 grant not found, 403 missing authority, 422 blank
-     `successor_member_id`, 409 on per-item OCC collision (per-item sub-op,
-     see §7 error model).
-5. **Tests**
-   (`services/api/tests/test_leadership_handoff_applications.py`,
-    `services/api/tests/test_leadership_handoff_tickets.py`):
-   AC3 is satisfied when a batch transfers the expected items, re-invocation
-   yields only `already_owned` ids with no further writes, terminal-state and
-   out-of-scope items are excluded, and the audit trail for the batch shares
-   one `correlation_id` across all per-item reassign actions (D9).
-
-### AC4 — Leadership context view with explicit domain stale-context signal
-
-1. **Contracts**
-   (`services/api/app/contracts/read_models.py`):
-   - `InheritedFromEntry(predecessor_grant_id, predecessor_member_id,
-     scope_kind, scope_id, revoked_at)`.
-   - `StaleHandoffEntry(predecessor_grant_id, predecessor_member_id,
-     pending_application_ids, pending_ticket_ids)`.
-   - `LeadershipContextRead(member_id, active_grants, inherited_from,
-     current_applications, current_tickets, stale_handoff, is_stale,
-     projector_is_stale, generated_at)`.
-2. **Repository**
-   (`services/api/app/repositories/read_models.py` or reuse/D5/D7/D8):
-   - `list_active_grants_for_member(conn, member_id)` — grants where
-     `grantee_id = :member_id` and active predicate.
-   - `fetch_predecessor_grants(conn, grant_ids)` — single-join fetch of the
-     immediate predecessor for a set of grants (one hop only — D10 non-goal).
-   - Reuse `list_open_applications_for_owners_in_scope` /
-     `list_open_tickets_for_owners_in_scope` (narrow `owner_ids`/`scope` per
-     inherited grant).
-3. **Service**
-   (`services/api/app/services/read_models.py`, new function
-   `read_leadership_context`):
-   - Authority: `_require_scoped_authority("leadership_context.read",
-     scope_kind="global", scope_id=None, ...)` — D4.
-   - Aggregate active grants for `member_id`. For each active grant with
-     `predecessor_grant_id` set, join to fetch predecessor info and its
-     still-open work within that scope. Populate `stale_handoff`.
-   - `is_stale = len(stale_handoff) > 0` (domain staleness — D11).
-   - `projector_is_stale` is reported from `read_model_cursors` lag for the
-     `operational_overview` projector (the existing cursor), matching the
-     SLICE-017 pattern.
-4. **Endpoint**
-   (`services/api/app/api/v1/endpoints/authority/leadership_context.py`):
-   `GET /api/v1/members/{member_id}/leadership-context →
-   LeadershipContextRead`.
-5. **Test**
-   (`services/api/tests/test_leadership_context.py`):
-   AC4 is satisfied when the response is populated (never empty) even for
-   members with no inherited authority, the `is_stale` flag flips True→False
-   after a clean application+ticket handoff, and `inherited_from` reflects
-   the immediate predecessor grant's holder and scope.
+1. **Migration** `migrations/versions/wu-041a_compliance_evaluations.py` —
+   creates `compliance_evaluations` per D7 and seeds the
+   `compliance-evaluator` service actor grant per D11 (see §2).
+2. **Contracts** (`services/api/app/contracts/compliance.py`):
+   `ComplianceEvaluationRead`, `ComplianceEvaluationReviewRequest`, plus
+   error classes (see §3).
+3. **Repository**:
+   `create_evaluation` (with `ON CONFLICT DO NOTHING`),
+   `get_evaluation`, `list_evaluations_by_rule_period`,
+   `update_evaluation_review`.
+4. **Services**:
+   - `services/api/app/services/compliance_review.py`:
+     `get_evaluation(db, evaluation_id, *, actor)` (authority
+     `compliance_evaluation.read`),
+     `review_evaluation(db, evaluation_id, request, expected_version,
+     *, actor)` (authority `compliance_evaluation.review`, OCC).
+   - `services/api/app/services/compliance.py`:
+     `run_scheduled_compliance_evaluations(db, *, now, batch_size)` —
+     enumerates active rules across chapters, computes periods (D9),
+     inserts idempotent rows, evaluates on insert only, dispatches
+     consequences through the roster service (D10).
+5. **Worker** `services/api/app/tasks/compliance.py` wires
+   `compliance_evaluation_worker_tick` with root audit context per
+   SLICE-020 R2 (see §7).
+6. **Endpoints**
+   `services/api/app/api/v1/endpoints/compliance/evaluations.py`:
+   `GET /api/v1/compliance/evaluations/{id}`,
+   `POST /api/v1/compliance/evaluations/{id}/review`. Manual trigger
+   `POST /api/v1/compliance/evaluations/run` lives in
+   `services/api/app/api/v1/endpoints/compliance/evaluations_run.py`.
+   Authority: the endpoint checks `compliance_evaluation.review`
+   against the operator — the manual trigger is an operator surface,
+   not an internal-substrate write (D11: `.write` is internal-only).
+   Internal mutations executed by the invoked service use the
+   `compliance-evaluator` service actor's `.write` grant. Operator
+   attribution is preserved by threading the operator actor as
+   `originating_actor` on the roster transition call (§5 / R4);
+   audit trail records both (correlation_id shared between
+   `compliance_evaluation.create` and `roster_entry.transition`).
+   Intended for operator backfill / smoke tests.
+7. **Tests** `services/api/tests/test_compliance_review_api.py` and
+   `services/api/tests/test_compliance_evaluation_worker.py` per D14.
 
 ---
 
-## §2 — Schema (no migration)
+## §2 — Migration plan
 
-Per D2, SLICE-024 ships **zero** Alembic migrations. Confirmed preconditions:
+Chain (D12, linear off `wu_038`):
 
-- `authority_grants.predecessor_grant_id` is present since WU-004.
-- `authority_grants.revoked_at`, `.revoked_by`, `.revocation_reason` are
-  present since WU-014.
-- `chapter_roles.triggers_succession` is present since WU-007B.
-- `authority_grants.grantee_id` is `TEXT` and no registry table exists for
-  permission names — new permission strings (`succession_plan.read`,
-  `authority_grant.transfer`, `leadership_handoff.execute`,
-  `leadership_context.read`) are opaque service-layer values and require no
-  seeding (D4).
+```
+wu_038_permission_intent_expiry
+  → wu_039_compliance_rules
+    → wu_040a_compliance_evidence
+      → wu_041a_compliance_evaluations
+```
 
-**No new columns, indexes, constraints, projection tables, or service-actor
-seeds are introduced.** Migration head remains `wu_038`. Any PR introducing
-an Alembic file for this slice fails review. If implementation finds a
-forced need (e.g., a partial unique index on `predecessor_grant_id`),
-escalate to synthesis revision rather than adding one silently (D2 non-goal).
+File naming mirrors shipped convention: dashed filename, underscored
+`revision` identifier (e.g., filename
+`migrations/versions/wu-039_compliance_rules.py`, revision
+`"wu_039_compliance_rules"`). Each downgrade is a `pass` no-op per the
+Live Server Principle (matches `wu-038_permission_intent_expiry.py:76–79`).
 
----
+### `wu-039_compliance_rules.py` — WU-039
 
-## §3 — Contracts (exact shapes)
+```sql
+CREATE TABLE compliance_rules (
+    id UUID PRIMARY KEY,
+    chapter_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    cadence_kind TEXT NOT NULL,
+    cadence_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    evaluation_window_days INTEGER NOT NULL,
+    evidence_requirements JSONB NOT NULL,
+    consequence_kind TEXT NOT NULL,
+    consequence_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    archived_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT compliance_rules_cadence_kind_valid
+        CHECK (cadence_kind IN ('weekly','monthly','quarterly')),
+    CONSTRAINT compliance_rules_consequence_kind_valid
+        CHECK (consequence_kind IN ('review','under_review')),
+    CONSTRAINT compliance_rules_evaluation_window_positive
+        CHECK (evaluation_window_days > 0 AND evaluation_window_days <= 365),
+    CONSTRAINT compliance_rules_evidence_requirements_is_array
+        CHECK (jsonb_typeof(evidence_requirements) = 'array')
+);
 
-### `services/api/app/contracts/authority.py` additions
+CREATE UNIQUE INDEX ux_compliance_rules__chapter_active_name
+    ON compliance_rules (chapter_id, name)
+    WHERE archived_at IS NULL;
+
+CREATE INDEX ix_compliance_rules__chapter_active
+    ON compliance_rules (chapter_id)
+    WHERE active = TRUE AND archived_at IS NULL;
+```
+
+Versioning lives in `aggregate_heads` per D2; no dedicated `version`
+column.
+
+### `wu-040a_compliance_evidence.py` — WU-040A
+
+```sql
+CREATE TABLE evidence_submissions (
+    id UUID PRIMARY KEY,
+    rule_id UUID NOT NULL REFERENCES compliance_rules(id),
+    member_id TEXT NOT NULL,
+    chapter_id TEXT NOT NULL,
+    attachment_ref TEXT NOT NULL,
+    raw_text TEXT NULL,
+    extracted_fields JSONB NULL,
+    extracted_fields_corrected JSONB NULL,
+    extraction_status TEXT NOT NULL,
+    extraction_confidence NUMERIC(5,4) NULL,
+    extraction_error TEXT NULL,
+    submitted_by_member_id TEXT NOT NULL,
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    corrected_by_member_id TEXT NULL,
+    corrected_at TIMESTAMPTZ NULL,
+    correction_reason TEXT NULL,
+    CONSTRAINT evidence_submissions_attachment_ref_non_blank
+        CHECK (char_length(attachment_ref) > 0),
+    CONSTRAINT evidence_submissions_extraction_status_valid
+        CHECK (extraction_status IN
+            ('pending','running','completed','failed','corrected')),
+    CONSTRAINT evidence_submissions_confidence_bounded
+        CHECK (extraction_confidence IS NULL
+               OR (extraction_confidence >= 0 AND extraction_confidence <= 1)),
+    CONSTRAINT evidence_submissions_completed_requires_ocr
+        CHECK (extraction_status <> 'completed'
+               OR (raw_text IS NOT NULL AND extracted_fields IS NOT NULL)),
+    CONSTRAINT evidence_submissions_failed_requires_error
+        CHECK (extraction_status <> 'failed'
+               OR extraction_error IS NOT NULL),
+    CONSTRAINT evidence_submissions_corrected_requires_overlay
+        CHECK (extraction_status <> 'corrected'
+               OR (extracted_fields_corrected IS NOT NULL
+                   AND corrected_by_member_id IS NOT NULL
+                   AND correction_reason IS NOT NULL))
+);
+
+CREATE INDEX ix_evidence_submissions__rule_member
+    ON evidence_submissions (rule_id, member_id, submitted_at DESC);
+
+CREATE INDEX ix_evidence_submissions__chapter_period
+    ON evidence_submissions (chapter_id, submitted_at);
+```
+
+### `wu-041a_compliance_evaluations.py` — WU-041A
+
+```sql
+CREATE TABLE compliance_evaluations (
+    id UUID PRIMARY KEY,
+    rule_id UUID NOT NULL REFERENCES compliance_rules(id),
+    rule_version BIGINT NOT NULL,
+    chapter_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    result TEXT NOT NULL,
+    consequence_applied TEXT NOT NULL,
+    review_status TEXT NOT NULL,
+    reviewer_id TEXT NULL,
+    review_reason TEXT NULL,
+    reviewed_at TIMESTAMPTZ NULL,
+    evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    evidence_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    CONSTRAINT compliance_evaluations_result_valid
+        CHECK (result IN ('compliant','violation','insufficient_evidence')),
+    CONSTRAINT compliance_evaluations_consequence_valid
+        CHECK (consequence_applied IN
+            ('none','review_queued','under_review_applied')),
+    CONSTRAINT compliance_evaluations_review_status_valid
+        CHECK (review_status IN
+            ('pending','approved','overridden','not_required')),
+    CONSTRAINT compliance_evaluations_period_ordered
+        CHECK (period_end >= period_start),
+    CONSTRAINT compliance_evaluations_rule_version_positive
+        CHECK (rule_version >= 1)
+);
+
+CREATE UNIQUE INDEX ux_compliance_evaluations__member_rule_period
+    ON compliance_evaluations (member_id, rule_id, period_start, period_end);
+
+CREATE INDEX ix_compliance_evaluations__rule_period
+    ON compliance_evaluations (rule_id, period_start);
+
+CREATE INDEX ix_compliance_evaluations__review_pending
+    ON compliance_evaluations (chapter_id, evaluated_at DESC)
+    WHERE review_status = 'pending';
+```
+
+**Service-actor seed** (same migration, mirrors
+`wu-038_permission_intent_expiry.py:36–73`):
 
 ```python
-SUCCESSION_TRANSFER_REVOCATION_REASON = "succession_transfer"
+_EVALUATOR_PERMISSIONS = (
+    '["compliance_rule.read",'
+    '"compliance_evaluation.write",'
+    '"roster.transition"]'
+)
 
-
-class AuthorityGrantTransferRequest(BaseModel):
-    successor_id: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-
-
-class DepartingRoleEntry(BaseModel):
-    role_id: str
-    holder_member_id: str | None
-    triggers_succession: bool
-    departure_signal: Literal["active", "roster_removed"]
-
-
-class PendingApplicationRef(BaseModel):
-    application_id: str
-    owner_id: str
-    state: str
-
-
-class PendingTicketRef(BaseModel):
-    ticket_id: str
-    owner_id: str
-    state: str
-
-
-class SuccessionPlanRead(BaseModel):
-    chapter_id: str
-    generated_at: datetime
-    departing_roles: list[DepartingRoleEntry]
-    affected_grants: list[AuthorityGrantRead]
-    pending_applications: list[PendingApplicationRef]
-    pending_tickets: list[PendingTicketRef]
-    successor_designated: bool
-    successor_member_id: str | None
-
-
-class ApplicationHandoffRequest(BaseModel):
-    successor_member_id: str = Field(min_length=1)
-
-
-HandoffFailureReason = Literal["occ_conflict", "unauthorized", "invalid_state"]
-
-
-class ApplicationHandoffFailure(BaseModel):
-    item_id: UUID
-    reason: HandoffFailureReason
-    detail: str
-
-
-class ApplicationHandoffResult(BaseModel):
-    grant_id: UUID
-    successor_member_id: str
-    application_ids_transferred: list[UUID]
-    application_ids_already_owned: list[UUID]
-    failed: list[ApplicationHandoffFailure]
-
-
-class TicketHandoffRequest(BaseModel):
-    successor_member_id: str = Field(min_length=1)
-
-
-class TicketHandoffFailure(BaseModel):
-    item_id: str
-    reason: HandoffFailureReason
-    detail: str
-
-
-class TicketHandoffResult(BaseModel):
-    grant_id: UUID
-    successor_member_id: str
-    ticket_ids_transferred: list[str]
-    ticket_ids_already_owned: list[str]
-    failed: list[TicketHandoffFailure]
-
-
-class GrantAlreadyTransferredError(ValueError):
-    """Raised when a successor grant already exists for the predecessor."""
-
-    def __init__(self, existing_grant_id: UUID) -> None:
-        super().__init__(
-            f"grant already transferred to existing successor {existing_grant_id}"
-        )
-        self.existing_grant_id = existing_grant_id
-
-
-class NonBlankReasonRequiredError(ValueError):
-    """Raised when service-layer callers pass an empty transfer reason."""
-
-
-class InvalidHolderIdError(ValueError):
-    """Raised when a roster holder id or member id is not a canonical UUID.
-
-    Per R5: succession-plan and leadership-context reads fail loudly on
-    non-UUID holder ids rather than silently filtering them out. Applications
-    join on `applications.owner_id` (UUID) and succession cannot compute
-    pending applications for a holder whose identifier cannot be coerced to
-    the canonical type.
+op.execute(
+    f"""
+    INSERT INTO authority_grants (
+        id, grantee_id, scope_kind, scope_id, permissions,
+        expires_at, revoked_at, revoked_by, revocation_reason,
+        predecessor_grant_id
+    )
+    SELECT
+        gen_random_uuid(),
+        'compliance-evaluator',
+        'global',
+        NULL,
+        '{_EVALUATOR_PERMISSIONS}'::jsonb,
+        NULL, NULL, NULL, NULL, NULL
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM authority_grants
+        WHERE grantee_id = 'compliance-evaluator'
+          AND scope_kind = 'global'
+          AND scope_id IS NULL
+          AND permissions @> '{_EVALUATOR_PERMISSIONS}'::jsonb
+          AND permissions <@ '{_EVALUATOR_PERMISSIONS}'::jsonb
+          AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+    )
     """
+)
 ```
 
-Notes:
-- `ApplicationHandoffResult.*_ids` are `UUID` (applications carry UUID ids);
-  `TicketHandoffResult.*_ids` are `str` (tickets use TEXT ids per research §1).
-- `PendingApplicationRef.owner_id` is the stringified UUID of the application
-  owner (application.owner_id is UUID FK to members.id — research §1.5);
-  callers compare it against `grant.grantee_id` (TEXT). Implementation uses
-  `str(uuid)` in the refs so the plan view is comparable against the grant's
-  TEXT holder id.
-- `AuthorityGrantRead` is unchanged and reused as both the transfer response
-  and the `affected_grants` element type.
+---
 
-### `services/api/app/contracts/applications.py` additions
+## §3 — Contracts
+
+### `services/api/app/contracts/compliance.py` (new)
 
 ```python
-APPLICATION_REASSIGN_ACTION_TYPE = "application.reassign"
-APPLICATION_REASSIGN_CHANGE_TYPE = "application.reassigned"
-APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({"new_owner_id"})
-```
+from __future__ import annotations
 
-The `reassign` action is added to the existing action enum / `VALID_TRANSITIONS`
-registry for every open state (D5 set), with source state equal to destination
-state. No state field is mutated; only `owner_id`.
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Literal
+from uuid import UUID
 
-### `services/api/app/contracts/tickets.py` additions
-
-```python
-TICKET_REASSIGN_ACTION_TYPE = "ticket.reassign"
-TICKET_REASSIGN_CHANGE_TYPE = "ticket.reassigned"
-TICKET_REASSIGN_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({"new_owner_id"})
-```
-
-The `reassign` action is valid when `terminal_at IS NULL`, orthogonal to the
-category state machine (D8). Existing per-category `allow_owner_change` edges
-are not consulted.
-
-### `services/api/app/contracts/read_models.py` additions
-
-```python
-class InheritedFromEntry(BaseModel):
-    predecessor_grant_id: UUID
-    predecessor_member_id: str
-    scope_kind: str
-    scope_id: str | None
-    revoked_at: datetime | None
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class StaleHandoffEntry(BaseModel):
-    predecessor_grant_id: UUID
-    predecessor_member_id: str
-    pending_application_ids: list[UUID]
-    pending_ticket_ids: list[str]
+CadenceKind = Literal["weekly", "monthly", "quarterly"]
+ConsequenceKind = Literal["review", "under_review"]
+ExtractionStatus = Literal[
+    "pending", "running", "completed", "failed", "corrected"
+]
+EvaluationResult = Literal[
+    "compliant", "violation", "insufficient_evidence"
+]
+ConsequenceApplied = Literal[
+    "none", "review_queued", "under_review_applied"
+]
+ReviewStatus = Literal["pending", "approved", "overridden", "not_required"]
 
 
-class LeadershipContextRead(BaseModel):
+class _ComplianceModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class EvidenceRequirement(_ComplianceModel):
+    type: str = Field(min_length=1)
+    required: bool = True
+
+
+class ComplianceRuleCreate(_ComplianceModel):
+    chapter_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    cadence_kind: CadenceKind
+    cadence_params: dict[str, Any] = Field(default_factory=dict)
+    evaluation_window_days: int = Field(ge=1, le=365)
+    evidence_requirements: list[EvidenceRequirement]
+    consequence_kind: ConsequenceKind
+    consequence_params: dict[str, Any] = Field(default_factory=dict)
+
+
+class ComplianceRuleUpdate(_ComplianceModel):
+    name: str | None = Field(default=None, min_length=1)
+    cadence_kind: CadenceKind | None = None
+    cadence_params: dict[str, Any] | None = None
+    evaluation_window_days: int | None = Field(default=None, ge=1, le=365)
+    evidence_requirements: list[EvidenceRequirement] | None = None
+    consequence_kind: ConsequenceKind | None = None
+    consequence_params: dict[str, Any] | None = None
+    active: bool | None = None
+
+
+class ComplianceRuleRead(_ComplianceModel):
+    id: UUID
+    chapter_id: str
+    name: str
+    cadence_kind: CadenceKind
+    cadence_params: dict[str, Any]
+    evaluation_window_days: int
+    evidence_requirements: list[EvidenceRequirement]
+    consequence_kind: ConsequenceKind
+    consequence_params: dict[str, Any]
+    active: bool
+    archived_at: datetime | None
+    created_at: datetime
+    version: int = Field(ge=1)
+
+
+class EvidenceSubmissionCreate(_ComplianceModel):
+    rule_id: UUID
+    member_id: str = Field(min_length=1)
+    chapter_id: str = Field(min_length=1)
+    attachment_ref: str = Field(min_length=1)
+
+
+class EvidenceSubmissionRead(_ComplianceModel):
+    id: UUID
+    rule_id: UUID
     member_id: str
-    generated_at: datetime
-    active_grants: list[AuthorityGrantRead]
-    inherited_from: list[InheritedFromEntry]
-    current_applications: list[PendingApplicationRef]
-    current_tickets: list[PendingTicketRef]
-    stale_handoff: list[StaleHandoffEntry]
-    is_stale: bool
-    projector_is_stale: bool
+    chapter_id: str
+    attachment_ref: str
+    raw_text: str | None
+    extracted_fields: dict[str, Any] | None
+    extracted_fields_corrected: dict[str, Any] | None
+    extraction_status: ExtractionStatus
+    extraction_confidence: Decimal | None
+    extraction_error: str | None
+    submitted_by_member_id: str
+    submitted_at: datetime
+    corrected_by_member_id: str | None
+    corrected_at: datetime | None
+    correction_reason: str | None
+    version: int = Field(ge=1)
+
+
+class ComplianceEvaluationRead(_ComplianceModel):
+    id: UUID
+    rule_id: UUID
+    rule_version: int = Field(ge=1)
+    chapter_id: str
+    member_id: str
+    period_start: date
+    period_end: date
+    result: EvaluationResult
+    consequence_applied: ConsequenceApplied
+    review_status: ReviewStatus
+    reviewer_id: str | None
+    review_reason: str | None
+    reviewed_at: datetime | None
+    evaluated_at: datetime
+    evidence_ids: list[UUID]
+    version: int = Field(ge=1)
+
+
+class ComplianceEvaluationReviewRequest(_ComplianceModel):
+    action: Literal["approve", "override"]
+    override_result: EvaluationResult | None = None
+    reviewer_reason: str = Field(min_length=1)
+
+
+# Constants-only audit dispatch (D13)
+
+COMPLIANCE_RULE_CREATE_ACTION_TYPE = "compliance_rule.create"
+COMPLIANCE_RULE_CREATE_CHANGE_TYPE = "compliance_rule.created"
+COMPLIANCE_RULE_UPDATE_ACTION_TYPE = "compliance_rule.update"
+COMPLIANCE_RULE_UPDATE_CHANGE_TYPE = "compliance_rule.updated"
+COMPLIANCE_RULE_ARCHIVE_ACTION_TYPE = "compliance_rule.archive"
+COMPLIANCE_RULE_ARCHIVE_CHANGE_TYPE = "compliance_rule.archived"
+
+EVIDENCE_SUBMIT_ACTION_TYPE = "evidence_submission.submit"
+EVIDENCE_SUBMIT_CHANGE_TYPE = "evidence_submission.submitted"
+EVIDENCE_EXTRACT_ACTION_TYPE = "evidence_submission.extract"
+EVIDENCE_EXTRACT_CHANGE_TYPE = "evidence_submission.extracted"
+EVIDENCE_EXTRACTION_FAILED_CHANGE_TYPE = "evidence_submission.extraction_failed"
+EVIDENCE_CORRECT_ACTION_TYPE = "evidence_submission.correct"
+EVIDENCE_CORRECT_CHANGE_TYPE = "evidence_submission.corrected"
+
+COMPLIANCE_EVALUATION_CREATE_ACTION_TYPE = "compliance_evaluation.create"
+COMPLIANCE_EVALUATION_CREATE_CHANGE_TYPE = "compliance_evaluation.created"
+COMPLIANCE_EVALUATION_REVIEW_ACTION_TYPE = "compliance_evaluation.review"
+COMPLIANCE_EVALUATION_REVIEW_CHANGE_TYPE = "compliance_evaluation.reviewed"
+COMPLIANCE_EVALUATION_OVERRIDE_ACTION_TYPE = "compliance_evaluation.override"
+COMPLIANCE_EVALUATION_OVERRIDE_CHANGE_TYPE = "compliance_evaluation.overridden"
+# Note (Revision 1, R3): no standalone `compliance_evaluation.consequence_applied`
+# change_type — `consequence_applied` is an attribute of the evaluation,
+# written inside the CREATE action's `mutate_projection` and captured in
+# the CREATE state change's `payload_json`. The roster transition lives
+# on its own audit chain (`roster_entry.transition`), threaded via
+# correlation_id.
+
+# Narrow payload allowlists per action
+COMPLIANCE_RULE_CREATE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "chapter_id", "name", "cadence_kind", "cadence_params",
+    "evaluation_window_days", "evidence_requirements",
+    "consequence_kind", "consequence_params",
+})
+COMPLIANCE_RULE_UPDATE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "name", "cadence_kind", "cadence_params", "evaluation_window_days",
+    "evidence_requirements", "consequence_kind", "consequence_params",
+    "active",
+})
+EVIDENCE_SUBMIT_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "rule_id", "member_id", "chapter_id", "attachment_ref",
+    "submitted_by_member_id",
+})
+EVIDENCE_EXTRACT_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "extraction_status", "extraction_confidence",
+    "extraction_error", "raw_text_present",
+})
+EVIDENCE_CORRECT_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "corrected_fields", "correction_reason", "corrected_by_member_id",
+})
+COMPLIANCE_EVALUATION_CREATE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "rule_id", "rule_version", "chapter_id", "member_id",
+    "period_start", "period_end", "result", "consequence_applied",
+    "evidence_ids",
+})
+COMPLIANCE_EVALUATION_REVIEW_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "action", "override_result", "reviewer_reason",
+})
+# Revision 2 (R8 / audit L2): dedicated override allowlist so the override
+# action dispatches with its own named allowlist rather than reusing the
+# review one implicitly. Fields cover the evaluation target, the override
+# result, and the reviewer justification.
+COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
+    "evaluation_id", "override_result", "reviewer_reason",
+})
+
+
+# Errors
+class ComplianceRuleNotFoundError(Exception):
+    def __init__(self, rule_id: UUID) -> None:
+        self.rule_id = rule_id
+        super().__init__(f"compliance rule {rule_id} was not found")
+
+
+class DuplicateActiveComplianceRuleError(Exception):
+    def __init__(self, chapter_id: str, name: str) -> None:
+        self.chapter_id = chapter_id
+        self.name = name
+        super().__init__(
+            f"compliance rule {name!r} already active in chapter {chapter_id}"
+        )
+
+
+class EvidenceSubmissionNotFoundError(Exception):
+    def __init__(self, evidence_id: UUID) -> None:
+        self.evidence_id = evidence_id
+        super().__init__(f"evidence submission {evidence_id} was not found")
+
+
+class ComplianceEvaluationNotFoundError(Exception):
+    def __init__(self, evaluation_id: UUID) -> None:
+        self.evaluation_id = evaluation_id
+        super().__init__(
+            f"compliance evaluation {evaluation_id} was not found"
+        )
+
+
+class InvalidEvaluationReviewActionError(Exception):
+    """`override` requested without `override_result` (422)."""
+
+
+class EvidenceChapterMismatchError(Exception):
+    """Raised when submit_evidence's request.chapter_id does not match the
+    rule's chapter_id (422). Authorization is always derived from the
+    rule; this error exists so the caller discovers an inconsistent
+    request rather than silently accepting the rule's chapter."""
+
+    def __init__(
+        self, *, rule_id: UUID, rule_chapter_id: str, request_chapter_id: str
+    ) -> None:
+        self.rule_id = rule_id
+        self.rule_chapter_id = rule_chapter_id
+        self.request_chapter_id = request_chapter_id
+        super().__init__(
+            f"request.chapter_id {request_chapter_id!r} does not match "
+            f"rule {rule_id} chapter_id {rule_chapter_id!r}"
+        )
+
+
+class OcrProviderNotConfiguredError(Exception):
+    """Raised by the stub provider; mapped to 503 in the endpoint layer."""
 ```
 
-`PendingApplicationRef`/`PendingTicketRef` are defined once in
-`contracts/authority.py` and imported by `contracts/read_models.py` so both
-views share the same ref shapes. (Implementation may alternatively move them
-to a neutral module such as `contracts/_refs.py`; either approach satisfies
-the contract — no duplication allowed.)
+### `services/api/app/contracts/compliance_corrections.py` (new)
+
+```python
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class _CorrectionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class OfficerCorrectionRequest(_CorrectionModel):
+    corrected_fields: dict[str, Any]
+    correction_reason: str = Field(min_length=1)
+
+
+class OfficerCorrectionRead(_CorrectionModel):
+    evidence_id: UUID
+    corrected_fields: dict[str, Any]
+    corrected_by_member_id: str
+    corrected_at: datetime
+    correction_reason: str
+    version: int = Field(ge=1)
+
+
+class CorrectionNotPermittedStatusError(Exception):
+    """Raised when correction is attempted in `pending` or `running` (409)."""
+
+    def __init__(self, evidence_id: UUID, status: str) -> None:
+        self.evidence_id = evidence_id
+        self.status = status
+        super().__init__(
+            f"correction not permitted while evidence {evidence_id} "
+            f"is in status {status!r}"
+        )
+```
+
+### `services/api/app/contracts/compliance_extraction.py` (new)
+
+```python
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
+
+class _ExtractionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class EvidenceExtractionRead(_ExtractionModel):
+    evidence_id: UUID
+    extraction_status: str
+    raw_text: str | None
+    extracted_fields: dict[str, Any] | None
+    extraction_confidence: Decimal | None
+    extraction_error: str | None
+    extraction_completed_at: datetime
+    version: int
+```
 
 ---
 
 ## §4 — Repository layer
 
-### `services/api/app/repositories/authority.py`
+### `services/api/app/repositories/compliance.py` (new)
 
-- `find_successor_grant(conn, predecessor_grant_id: UUID) -> AuthorityGrantRow | None`
-  — single-row lookup on `authority_grants WHERE predecessor_grant_id = :id`
-  (ordering: `created_at ASC`, expect 0 or 1; return the first). Used for D3
-  idempotency.
-- `list_active_grants_for_members(conn, member_ids: Sequence[str], *,
-  scope_kind: str | None = None, scope_id: str | None = None) ->
-  list[AuthorityGrantRow]` — active predicate
-  (`revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)`),
-  optional scope narrowing for the succession plan.
-- `list_active_grants_for_member(conn, member_id: str) ->
-  list[AuthorityGrantRow]` — convenience wrapper for the leadership-context
-  view (D10).
-- `fetch_predecessor_grants(conn, grant_ids: Sequence[UUID]) ->
-  dict[UUID, AuthorityGrantRow]` — returns a mapping `successor_grant_id →
-  predecessor_row` by joining `authority_grants` to itself over
-  `predecessor_grant_id`. One hop only (D10 non-goal).
+All functions are thin SQL wrappers returning typed rows/dicts. No
+business logic. All mutations go through `mutate_entity`; repository
+helpers only run DML inside the projection callback.
 
-### `services/api/app/repositories/chapter_roles.py`
+```python
+def create_rule(
+    connection: Connection[Any], *, row: dict[str, Any]
+) -> dict[str, Any]: ...
 
-- `list_succession_triggering_roles(conn, chapter_id: str) ->
-  list[ChapterRoleRow]` — `WHERE chapter_id = :chapter_id AND
-  triggers_succession = TRUE ORDER BY ordinal`.
+def update_rule(
+    connection: Connection[Any], *, rule_id: UUID, updates: dict[str, Any]
+) -> dict[str, Any]: ...
 
-### `services/api/app/repositories/roster.py`
+def _fetch_rule_for_update(
+    connection: Connection[Any], rule_id: UUID
+) -> dict[str, Any] | None: ...
 
-- `list_holders_for_roles(conn, chapter_id: str, role_ids: Sequence[str]) ->
-  list[RosterEntryRow]` — current `roster_entries` for the role set, returning
-  `(role_id, member_id, status)`. Departure signal per D1 is derived in the
-  service layer from `status` (`removed` → `"roster_removed"`; otherwise
-  `"active"`).
+def get_rule(
+    connection: Connection[Any], rule_id: UUID
+) -> dict[str, Any] | None: ...
 
-### `services/api/app/repositories/applications.py`
+def list_rules_by_chapter(
+    connection: Connection[Any], chapter_id: str, *, active_only: bool
+) -> list[dict[str, Any]]: ...
 
-- `list_open_applications_for_owners_in_scope(conn, owner_ids:
-  Sequence[UUID], *, scope_kind: str, scope_id: str | None) ->
-  list[ApplicationRow]` — filters on `state IN (submitted, queued, claimed,
-  in_review, interview, waitlisted)` (D5), and on
-  `form_snapshot->>'target_scope_kind' = :scope_kind` AND
-  `form_snapshot->>'target_scope_id' = :scope_id` (NULL-safe). If
-  `scope_kind="global"`, the scope filter is skipped (all owners' open apps).
-- The existing repository surface has no list-by-owner helper today
-  (research §1.4), so this is net-new.
+def list_active_rules(
+    connection: Connection[Any]
+) -> list[dict[str, Any]]: ...
 
-### `services/api/app/repositories/tickets.py`
+def create_evidence(
+    connection: Connection[Any], *, row: dict[str, Any]
+) -> dict[str, Any]: ...
 
-- `list_open_tickets_for_owners_in_scope(conn, owner_ids: Sequence[str], *,
-  scope_kind: str, scope_id: str | None) -> list[TicketRow]` —
-  `WHERE terminal_at IS NULL AND owner_id = ANY(:owner_ids)` AND
-  `category_snapshot->>'routing_scope_kind' = :scope_kind` AND
-  `category_snapshot->>'routing_scope_id' = :scope_id` (NULL-safe). If
-  `scope_kind="global"`, the scope filter is skipped.
+def get_evidence(
+    connection: Connection[Any], evidence_id: UUID
+) -> dict[str, Any] | None: ...
 
-All repository helpers are single-query and SELECT-only. Mutations flow only
-through service-layer `mutate_entity` calls.
+def _fetch_evidence_for_update(
+    connection: Connection[Any], evidence_id: UUID
+) -> dict[str, Any] | None: ...
+
+def update_evidence_after_extraction(
+    connection: Connection[Any], *, evidence_id: UUID,
+    extraction_status: str, raw_text: str | None,
+    extracted_fields: dict[str, Any] | None,
+    extraction_confidence: Decimal | None,
+    extraction_error: str | None,
+) -> dict[str, Any]: ...
+
+def update_evidence_correction(
+    connection: Connection[Any], *, evidence_id: UUID,
+    corrected_fields: dict[str, Any],
+    corrected_by_member_id: str,
+    correction_reason: str,
+) -> dict[str, Any]:
+    """UPDATE sets overlay + status='corrected'; never touches
+    `raw_text`, `attachment_ref`, or `extracted_fields` (D3/AC3)."""
+
+def list_evidence_for_rule_period(
+    connection: Connection[Any], *, rule_id: UUID,
+    period_start: date, period_end: date,
+    member_id: str | None = None,
+) -> list[dict[str, Any]]: ...
+
+def insert_evaluation_if_absent(
+    connection: Connection[Any], *, row: dict[str, Any]
+) -> dict[str, Any] | None:
+    """`INSERT ... ON CONFLICT (member_id, rule_id, period_start,
+    period_end) DO NOTHING RETURNING *`. Returns the inserted row or
+    None if a prior tick already created it (AC4 idempotency; mirrors
+    `repositories/ticket_sla.py:135–136`).
+
+    **Revision 1 (R2):** invoked only from inside
+    `_evaluate_member_rule`'s `mutate_projection` callback — never as a
+    naked DML step outside a `mutate_entity` call. The connection passed
+    in is the one `mutate_entity` opened for the per-member transaction;
+    if the audit projection raises, the ON CONFLICT insert rolls back
+    atomically so the next tick can retry cleanly."""
+
+def get_evaluation(
+    connection: Connection[Any], evaluation_id: UUID
+) -> dict[str, Any] | None: ...
+
+def _fetch_evaluation_for_update(
+    connection: Connection[Any], evaluation_id: UUID
+) -> dict[str, Any] | None: ...
+
+def update_evaluation_review(
+    connection: Connection[Any], *, evaluation_id: UUID,
+    review_status: str, reviewer_id: str,
+    review_reason: str, result: str | None,
+    consequence_applied: str | None,
+) -> dict[str, Any]: ...
+```
+
+**Revision 1 (R3):** `mark_consequence_applied` is intentionally absent.
+Consequence is recorded as an attribute of the evaluation in the CREATE
+action's `mutate_projection` — no second repository helper, no second
+mutation, no orphan change_type.
+
+### Roster member enumeration + per-member entry read
+
+`run_scheduled_compliance_evaluations` enumerates chapter members via
+the existing roster repository (research §5, §6); a single new helper
+`list_active_members_by_chapter(connection, chapter_id)` is added to
+`services/api/app/repositories/roster.py` returning
+`roster_entries` rows where `status = 'active'`. No new table is
+introduced (D1/D15); there is no `chapter_members` relation.
+
+**Revision 1 (R6)** — `_evaluate_member_rule` additionally calls the
+shipped roster read helper `get_roster_entry(connection, *,
+chapter_id, member_id)` (already in
+`services/api/app/repositories/roster.py`; add the helper if not
+present, returning `roster_entries` row + its `aggregate_heads`
+version). The returned `id` and `version` drive the
+`transition_roster_entry(..., entry_id=..., expected_version=...)`
+call so OCC is explicit — no stale-version assumption. Also exposes
+a service-layer alias `roster_service.get_roster_entry` if
+compliance needs a service-contract view (used by the worker only,
+SELECT-only, no authority check required — matches the repository
+access pattern used by other workers).
 
 ---
 
 ## §5 — Service layer
 
-### `services/api/app/services/authority.py` (extended)
+All service functions take `actor: ActorIdentity` and perform an
+authority check before any mutation (D11). Mutations flow through
+`mutate_entity` (`services/api/app/services/mutations.py:58`) with the
+constants from §9; payload allowlists are narrow per action. Originating
+actor is derived from `actor.actor_id` / `actor.actor_kind` and never
+from the request body.
 
-Add two public functions alongside the existing `grant_authority`,
-`revoke_authority`, `list_authority_grants`, `get_authority_grant`.
+**Revision 2 — Roster service signature extensions (backward-compatible):**
+`services/api/app/services/roster.py::transition_roster_entry` and
+`get_roster_entry` accept an optional `connection=` kwarg to support
+caller-managed transactions. Omitting it preserves today's behaviour
+(open a fresh tx); supplying it runs the roster work on the caller's
+connection so the roster write commits or rolls back with the caller's
+outer `mutate_entity`. Mirrors SLICE-020 R1's extension of
+`grant_authority` / `revoke_authority`.
 
-```python
-def compute_succession_plan(
-    db: PostgresDatabase,
-    *,
-    chapter_id: str,
-    actor: ActorIdentity,
-) -> SuccessionPlanRead:
-    _require_scoped_authority(
-        "succession_plan.read",
-        scope_kind="chapter",
-        scope_id=chapter_id,
-        actor=actor,
-        db=db,
-    )
-    with db.connection() as conn:
-        roles = list_succession_triggering_roles(conn, chapter_id)
-        holders = list_holders_for_roles(conn, chapter_id, [r.id for r in roles])
-        holder_ids = [h.member_id for h in holders if h.member_id is not None]
-        # R5: do NOT silently filter non-UUID holder ids. `applications.owner_id`
-        # is a UUID FK to `members.id` (research §1.5); roster holder ids are
-        # expected to be canonical member UUIDs. A non-UUID holder id is a
-        # data-integrity bug, not a normal case, and must surface as an error
-        # rather than producing a misleading "no pending applications" plan.
-        try:
-            holder_uuids = [UUID(h) for h in holder_ids]
-        except ValueError as err:
-            raise InvalidHolderIdError(
-                f"roster holder id is not a canonical member UUID: {err}"
-            ) from err
-        grants = list_active_grants_for_members(
-            conn,
-            holder_ids,
-            scope_kind="chapter",
-            scope_id=chapter_id,
-        )
-        apps = list_open_applications_for_owners_in_scope(
-            conn,
-            holder_uuids,
-            scope_kind="chapter",
-            scope_id=chapter_id,
-        )
-        tickets = list_open_tickets_for_owners_in_scope(
-            conn,
-            holder_ids,
-            scope_kind="chapter",
-            scope_id=chapter_id,
-        )
-    return SuccessionPlanRead(
-        chapter_id=chapter_id,
-        generated_at=current_time(),
-        departing_roles=[_to_departing_role(r, holders) for r in roles],
-        affected_grants=[AuthorityGrantRead.from_row(g) for g in grants],
-        pending_applications=[PendingApplicationRef(...) for a in apps],
-        pending_tickets=[PendingTicketRef(...) for t in tickets],
-        successor_designated=False,
-        successor_member_id=None,
-    )
+### Roster service signature extension (Revision 2 — R7)
+
+`_evaluate_member_rule` (§5) threads its per-member `mutate_entity`
+connection into `transition_roster_entry(..., connection=conn)` so the
+evaluation insert and the roster transition commit atomically. The
+shipped `transition_roster_entry` in
+`services/api/app/services/roster.py:186-192` does **not** currently
+accept a `connection=` kwarg; its internal `mutate_entity` call opens
+its own `db.transaction()`. Without the extension, the
+`transition_roster_entry(..., connection=conn)` call in §5 raises
+`TypeError` at import time, and the atomicity guarantee R2 was built
+to deliver collapses (evaluation + roster transition commit in
+separate transactions; a crash between them leaves a
+`consequence_applied='under_review_applied'` evaluation with no
+matching `roster_entries.status='under_review'`).
+
+Change — `services/api/app/services/roster.py`:
+
+1. Extend `transition_roster_entry(db, entry_id, request, actor, *,
+   expected_version, connection: Connection[Any] | None = None)` — add
+   an optional `connection` kwarg. When provided, pass it through to
+   the internal `mutate_entity(..., connection=connection)` call so the
+   roster write runs on the caller's transaction. When `None`, open a
+   fresh tx as today.
+2. Extend `get_roster_entry(db, *, chapter_id, member_id,
+   connection: Connection[Any] | None = None)` with the same shape —
+   reading on the same connection the caller will write on ensures a
+   consistent snapshot of `(id, version)` when the caller needs
+   read-then-write inside one tx. Lookup-only callers (today's usage)
+   keep the default `None` path and open their own read connection.
+3. The signature is append-only and defaults to `None`, so every
+   existing caller continues to work unchanged (no backwards-compat
+   shim; the kwarg is genuinely optional per AGENTS.md).
+4. Pattern precedent: SLICE-020 R1 extended `grant_authority` /
+   `revoke_authority` with the same optional-`connection=` shape so
+   the permission-intent worker could share a tx with its audit
+   projection. R7 applies the same shape to roster for the same
+   reason.
+
+`services/api/app/services/mutations.py:70` already accepts
+`connection=` on `mutate_entity`, so the threading is mechanical —
+the extension is purely adding the kwarg to the roster service layer
+and routing it into the existing `mutate_entity` call.
+
+Test (in `services/api/tests/test_roster.py`, the roster service's
+own test home, not a SLICE-022 file — so the signature change is
+testable where it lives):
+
+- `test_transition_roster_entry_accepts_shared_connection` — opens
+  a caller-managed `db.transaction()`, invokes
+  `transition_roster_entry(..., connection=conn)`, and asserts (a)
+  the roster row + its audit projection are visible inside the same
+  tx before commit, and (b) a rollback on the caller's connection
+  rolls back the roster transition atomically (both commit or both
+  roll back — no partial state). This verifies the shared-connection
+  tx behavior rather than the signature alone.
 
 
-def transfer_authority_grant(
-    db: PostgresDatabase,
-    *,
-    grant_id: UUID,
-    request: AuthorityGrantTransferRequest,
-    actor: ActorIdentity,
-    expected_version: int | None = None,
-) -> AuthorityGrantRead:
-    if not request.reason.strip():
-        raise NonBlankReasonRequiredError("reason must be non-blank")
-
-    with db.connection() as conn:
-        predecessor = _fetch_grant_row(conn, grant_id)
-    if predecessor is None:
-        raise LookupError(f"grant not found: {grant_id}")
-    if predecessor.revoked_at is not None:
-        raise GrantAlreadyRevokedError(grant_id)
-
-    _require_scoped_authority(
-        "authority_grant.transfer",
-        scope_kind=predecessor.scope_kind,
-        scope_id=predecessor.scope_id,
-        actor=actor,
-        db=db,
-    )
-
-    with db.transaction() as connection:
-        # R2: lock the predecessor aggregate head BEFORE the idempotency
-        # lookup. This serializes concurrent transfer attempts on the same
-        # predecessor (including different-successor races) on the FOR UPDATE
-        # row lock that `mutate_entity` itself uses for OCC. The helper is
-        # the shipped `repositories/mutations.py:get_head_for_update`.
-        get_head_for_update(
-            connection,
-            aggregate_type="authority_grant",
-            aggregate_id=str(grant_id),
-        )
-
-        # Idempotency check now runs under the predecessor lock; a
-        # concurrent transfer cannot slip past it.
-        existing_successor = find_successor_grant(connection, grant_id)
-        if existing_successor is not None:
-            if existing_successor.grantee_id == request.successor_id:
-                return AuthorityGrantRead.from_row(existing_successor)
-            raise GrantAlreadyTransferredError(existing_successor.id)
-
-        # R1: grant + revoke share ONE connection/transaction. Both commit
-        # atomically or neither does — no dual-active state fork on partial
-        # failure. Mirrors SLICE-020 `_expire_single_intent` at
-        # `services/api/app/services/permissions.py:574-639`.
-        successor = grant_authority(
-            db=db,
-            connection=connection,
-            grantee_id=request.successor_id,
-            scope_kind=predecessor.scope_kind,
-            scope_id=predecessor.scope_id,
-            permissions=predecessor.permissions,
-            expires_at=predecessor.expires_at,
-            predecessor_grant_id=grant_id,
-            actor=(actor.actor_kind, actor.actor_id),
-        )
-        revoke_authority(
-            db=db,
-            connection=connection,
-            grant_id=grant_id,
-            actor=(actor.actor_kind, actor.actor_id),
-            revoked_by=actor.actor_id,
-            reason=SUCCESSION_TRANSFER_REVOCATION_REASON,
-            expected_version=expected_version,
-        )
-        return successor
-```
-
-Transaction and concurrency notes (R1 + R2 + R3):
-- `grant_authority` and `revoke_authority` are extended to accept an
-  optional `connection: Connection[Any] | None = None` kwarg (no shim —
-  edit signatures in place per AGENTS.md "No Backwards Compatibility";
-  existing lifecycle callers continue to pass nothing and get today's
-  behavior). When `connection` is provided, the function uses that
-  connection directly instead of opening `with db.transaction()` /
-  `with db.connection()`, and threads `connection=connection` into its
-  `mutate_entity(...)` call. When `connection` is `None`, behavior is
-  unchanged. This mirrors the `mutate_entity(connection=...)` pattern
-  shipped in `services/api/app/services/mutations.py:58-70,192-196` and
-  the SLICE-020 R1 precedent at
-  `services/api/app/services/permissions.py:574-639` (`_expire_single_intent`).
-- Both mutations share the transfer service's `db.transaction()` connection
-  via the extended `connection=` parameter. Neither opens an inner
-  transaction when a shared connection is provided, so the two
-  `activity_actions` writes (and the successor insert + predecessor revoke
-  projection updates) commit together or roll back together. Audit actions
-  `authority.grant` + `authority.revoke` still share the ambient
-  `correlation_id` (D9) — correlation is orthogonal to atomicity, and both
-  now hold.
-- `get_head_for_update(connection, aggregate_type="authority_grant",
-  aggregate_id=str(grant_id))` runs at the top of the transaction body,
-  before `find_successor_grant`. The `FOR UPDATE` row lock on the
-  predecessor's `aggregate_heads` entry closes the different-successor race
-  documented in earlier drafts: a second concurrent transfer call blocks
-  on the lock, then on commit sees the first caller's successor and either
-  returns the idempotent replay (same `successor_id`) or raises
-  `GrantAlreadyTransferredError` (different `successor_id`). No DB
-  constraint is required (D2 still holds).
-
-### `services/api/app/services/leadership_handoff_applications.py` (new module)
+### `services/api/app/services/compliance.py` (new)
 
 ```python
-def execute_handoff(
-    db: PostgresDatabase,
-    *,
-    grant_id: UUID,
-    request: ApplicationHandoffRequest,
+def create_rule(
+    db: PostgresDatabase, request: ComplianceRuleCreate, *,
     actor: ActorIdentity,
-) -> ApplicationHandoffResult:
-    with db.connection() as conn:
-        grant = _fetch_grant_row(conn, grant_id)
-    if grant is None:
-        raise LookupError(...)
-
+) -> ComplianceRuleRead:
     _require_scoped_authority(
-        "leadership_handoff.execute",
-        scope_kind=grant.scope_kind,
-        scope_id=grant.scope_id,
-        actor=actor,
-        db=db,
+        "compliance_rule.write",
+        scope_kind="chapter", scope_id=request.chapter_id,
+        actor=actor, db=db,
     )
+    rule_id = uuid4()
 
-    predecessor_member_id = grant.grantee_id
-    with db.connection() as conn:
-        apps = list_open_applications_for_owners_in_scope(
-            conn,
-            [UUID(predecessor_member_id), UUID(request.successor_member_id)],
-            scope_kind=grant.scope_kind,
-            scope_id=grant.scope_id,
-        )
-
-    already_owned: list[UUID] = []
-    to_transfer: list[ApplicationRow] = []
-    for app in apps:
-        if str(app.owner_id) == request.successor_member_id:
-            already_owned.append(app.id)
-        elif str(app.owner_id) == predecessor_member_id:
-            to_transfer.append(app)
-
-    transferred: list[UUID] = []
-    failed: list[ApplicationHandoffFailure] = []
-    # R4: each item runs its own tx inside `transition_application`. A
-    # per-item OCC conflict (or other per-item error) does NOT abort the
-    # batch — we capture it in `failed` and continue. The response is always
-    # HTTP 200; partial success is represented by a non-empty `failed` list.
-    # Retries pick up just the still-failed items (already-transferred items
-    # fall into `already_owned`, idempotent by D7).
-    for app in to_transfer:
+    def mutate_projection(conn: Connection[Any]) -> StateChangeDraft:
         try:
-            transition_application(
-                db=db,
-                application_id=app.id,
-                action="reassign",
-                payload={"new_owner_id": request.successor_member_id},
-                actor=(actor.actor_kind, actor.actor_id),
-                expected_version=None,  # per-item OCC against the current head
+            row = create_rule_row(
+                conn,
+                row={
+                    "id": rule_id,
+                    "chapter_id": request.chapter_id,
+                    "name": request.name,
+                    "cadence_kind": request.cadence_kind,
+                    "cadence_params": request.cadence_params,
+                    "evaluation_window_days": request.evaluation_window_days,
+                    "evidence_requirements":
+                        [r.model_dump() for r in request.evidence_requirements],
+                    "consequence_kind": request.consequence_kind,
+                    "consequence_params": request.consequence_params,
+                },
             )
-            transferred.append(app.id)
-        except StaleMutationError as err:
-            failed.append(ApplicationHandoffFailure(
-                item_id=app.id, reason="occ_conflict", detail=str(err),
-            ))
-        except InvalidTransitionError as err:
-            failed.append(ApplicationHandoffFailure(
-                item_id=app.id, reason="invalid_state", detail=str(err),
-            ))
+        except errors.UniqueViolation as err:
+            raise DuplicateActiveComplianceRuleError(
+                request.chapter_id, request.name
+            ) from err
+        return StateChangeDraft(
+            change_type=COMPLIANCE_RULE_CREATE_CHANGE_TYPE,
+            payload_json={"rule_id": str(rule_id), ...},
+            diff_json={},
+        )
 
-    return ApplicationHandoffResult(
-        grant_id=grant_id,
-        successor_member_id=request.successor_member_id,
-        application_ids_transferred=transferred,
-        application_ids_already_owned=already_owned,
-        failed=failed,
+    result = mutate_entity(
+        db=db,
+        aggregate_type="compliance_rule",
+        aggregate_id=str(rule_id),
+        request=_make_request(
+            expected_version=0, actor=actor,
+            request_surface="api:/api/v1/compliance/rules",
+        ),
+        action_type=COMPLIANCE_RULE_CREATE_ACTION_TYPE,
+        action_payload=request.model_dump(mode="json"),
+        payload_allowlist=set(COMPLIANCE_RULE_CREATE_PAYLOAD_ALLOWLIST),
+        mutate_projection=mutate_projection,
+        scope_kind="chapter", scope_id=request.chapter_id,
     )
+    return _rule_read_from_result(result)
+
+
+def update_rule(
+    db: PostgresDatabase, rule_id: UUID,
+    request: ComplianceRuleUpdate, expected_version: int,
+    *, actor: ActorIdentity,
+) -> ComplianceRuleRead: ...
+    # authority `compliance_rule.write` (chapter scope via loaded row);
+    # mutate_entity with aggregate_type="compliance_rule",
+    # COMPLIANCE_RULE_UPDATE_*; If-Match → expected_version drives OCC.
+
+
+def submit_evidence(
+    db: PostgresDatabase, request: EvidenceSubmissionCreate,
+    *, actor: ActorIdentity,
+) -> EvidenceSubmissionRead:
+    # Revision 1 (R1): authorize against the rule's chapter, not the
+    # request's chapter. The rule is the source of truth for scope; the
+    # request's chapter_id is cross-checked and a mismatch returns 422.
+    # Pattern applies to any endpoint that takes both `rule_id` and
+    # `chapter_id`.
+    with db.connection() as conn:
+        rule = get_rule(conn, request.rule_id)
+    if rule is None:
+        raise ComplianceRuleNotFoundError(request.rule_id)
+    if request.chapter_id != rule["chapter_id"]:
+        raise EvidenceChapterMismatchError(
+            rule_id=request.rule_id,
+            rule_chapter_id=rule["chapter_id"],
+            request_chapter_id=request.chapter_id,
+        )
+
+    _require_scoped_authority(
+        "compliance_evidence.submit",
+        scope_kind="chapter", scope_id=rule["chapter_id"],
+        actor=actor, db=db,
+    )
+    # FK-validate rule_id; inserts with extraction_status='pending',
+    # chapter_id=rule["chapter_id"] (derived, spoof-proof),
+    # submitted_by_member_id=actor.actor_id (spoof-proof).
 ```
 
-Idempotency (D7): re-invoking the same call finds all items already owned by
-`successor_member_id`; `to_transfer` is empty; no writes happen; the response
-reports the existing ownership as `*_already_owned` with an empty `failed`
-list. Items that failed on a prior call re-enter `to_transfer` on replay and
-are retried.
-
-Audit context (per shortcut O4): the handoff service does **not** open a new
-audit context. The per-item `transition_application` / `transition_ticket`
-calls inherit the request's ambient `AuditContextRead` via
-`get_current_audit_context()` in `mutate_entity`
-(`services/api/app/services/mutations.py:74`), so every item in the batch
-emits an `activity_actions` row carrying the same `correlation_id`. This is
-what `test_handoff_shares_correlation_id_across_items` asserts.
-
-### `services/api/app/services/leadership_handoff_tickets.py` (new module)
-
-Same shape as the applications handoff above, with `transition_ticket`
-replacing `transition_application` and the ticket scope predicate
-(`category_snapshot.routing_scope`). Per-item failures populate
-`list[TicketHandoffFailure]` with `item_id: str` (tickets use TEXT ids per
-research §1), same `HandoffFailureReason` literal union as applications.
-
-### `services/api/app/services/read_models.py` (extended)
+### `services/api/app/services/compliance_corrections.py` (new)
 
 ```python
-def read_leadership_context(
-    db: PostgresDatabase,
-    *,
-    member_id: str,
-    actor: ActorIdentity,
-) -> LeadershipContextRead:
-    _require_scoped_authority(
-        "leadership_context.read",
-        scope_kind="global",
-        scope_id=None,
-        actor=actor,
-        db=db,
-    )
-    # R5: reject non-UUID member ids at the query boundary (same rationale
-    # as compute_succession_plan). The leadership-context view joins on
-    # applications.owner_id (UUID); a non-UUID member id is a 422 from the
-    # caller, not a silent empty response.
-    try:
-        member_uuid = UUID(member_id)
-    except ValueError as err:
-        raise InvalidHolderIdError(
-            f"member id is not a canonical UUID: {err}"
-        ) from err
-
+def correct_evidence(
+    db: PostgresDatabase, evidence_id: UUID,
+    request: OfficerCorrectionRequest, expected_version: int,
+    *, actor: ActorIdentity,
+) -> OfficerCorrectionRead:
     with db.connection() as conn:
-        grants = list_active_grants_for_member(conn, member_id)
-        predecessors = fetch_predecessor_grants(
-            conn,
-            [g.id for g in grants if g.predecessor_grant_id is not None],
-        )
-        apps = list_open_applications_for_owners_in_scope(
-            conn,
-            [member_uuid],
-            scope_kind="global",
-            scope_id=None,
-        )
-        tickets = list_open_tickets_for_owners_in_scope(
-            conn,
-            [member_id],
-            scope_kind="global",
-            scope_id=None,
-        )
-        stale = _compute_stale_handoff(conn, grants, predecessors)
-        projector_cursor = load_cursor(conn, OPERATIONAL_OVERVIEW_PROJECTION_NAME)
-        projector_lag = _compute_projector_lag(conn, projector_cursor)
+        current = get_evidence(conn, evidence_id)
+    if current is None:
+        raise EvidenceSubmissionNotFoundError(evidence_id)
 
-    return LeadershipContextRead(
-        member_id=member_id,
-        generated_at=current_time(),
-        active_grants=[AuthorityGrantRead.from_row(g) for g in grants],
-        inherited_from=[_to_inherited(g, predecessors) for g in grants if g.predecessor_grant_id],
-        current_applications=[PendingApplicationRef(...) for a in apps],
-        current_tickets=[PendingTicketRef(...) for t in tickets],
-        stale_handoff=stale,
-        is_stale=bool(stale),
-        projector_is_stale=projector_lag > 0,
+    _require_scoped_authority(
+        "compliance_evidence.correct",
+        scope_kind="chapter", scope_id=current["chapter_id"],
+        actor=actor, db=db,
     )
+
+    if current["extraction_status"] in ("pending", "running"):
+        raise CorrectionNotPermittedStatusError(
+            evidence_id, current["extraction_status"]
+        )
+
+    def mutate_projection(conn: Connection[Any]) -> StateChangeDraft:
+        row = _fetch_evidence_for_update(conn, evidence_id)
+        if row is None:
+            raise EvidenceSubmissionNotFoundError(evidence_id)
+        if row["extraction_status"] in ("pending", "running"):
+            raise CorrectionNotPermittedStatusError(
+                evidence_id, row["extraction_status"]
+            )
+        update_evidence_correction(
+            conn,
+            evidence_id=evidence_id,
+            corrected_fields=request.corrected_fields,
+            corrected_by_member_id=actor.actor_id,
+            correction_reason=request.correction_reason,
+        )
+        return StateChangeDraft(
+            change_type=EVIDENCE_CORRECT_CHANGE_TYPE,
+            payload_json={
+                "evidence_id": str(evidence_id),
+                "corrected_fields": request.corrected_fields,
+                "corrected_by_member_id": actor.actor_id,
+                "correction_reason": request.correction_reason,
+            },
+            # Revision 1 (R5): `extracted_fields_corrected` diff captures
+            # the prior overlay (None on the first correction) and the new
+            # overlay, so a second-correction row is self-describing
+            # without walking backward across rows. `extracted_fields` is
+            # the immutable OCR baseline — included for completeness so an
+            # auditor inspecting a single state-change row sees
+            # (baseline, prior overlay, new overlay) in one place.
+            diff_json={
+                "extraction_status": {
+                    "old": row["extraction_status"], "new": "corrected",
+                },
+                "extracted_fields": row["extracted_fields"],
+                "extracted_fields_corrected": {
+                    "old": row["extracted_fields_corrected"],
+                    "new": request.corrected_fields,
+                },
+            },
+        )
+
+    result = mutate_entity(
+        db=db,
+        aggregate_type="evidence_submission",
+        aggregate_id=str(evidence_id),
+        request=_make_request(
+            expected_version=expected_version, actor=actor,
+            request_surface=(
+                f"api:/api/v1/compliance/evidence/{evidence_id}/correct"
+            ),
+            reason_text=request.correction_reason,
+        ),
+        action_type=EVIDENCE_CORRECT_ACTION_TYPE,
+        action_payload={
+            "corrected_fields": request.corrected_fields,
+            "correction_reason": request.correction_reason,
+            "corrected_by_member_id": actor.actor_id,
+        },
+        payload_allowlist=set(EVIDENCE_CORRECT_PAYLOAD_ALLOWLIST),
+        mutate_projection=mutate_projection,
+        scope_kind="chapter", scope_id=current["chapter_id"],
+    )
+    return _correction_read_from_result(result)
 ```
 
-Scope note: `current_applications` and `current_tickets` are member-wide
-("work the successor currently owns"), not narrowed to any grant scope — the
-leadership-context view is cross-scope by D4. The
-`list_*_for_owners_in_scope` helpers accept `scope_kind="global",
-scope_id=None` and skip the scope filter in that case.
+Raw text + attachment ref are never touched by this path (AC3 / D6).
 
-`_compute_stale_handoff` iterates each active grant that has a predecessor,
-loads the predecessor's open applications and tickets constrained to the
-inherited grant's `(scope_kind, scope_id)`, and groups them by predecessor.
+### `services/api/app/services/compliance_extraction.py` (new)
+
+Thin wrapper orchestrating OCR provider + persistence. The service
+opens a single `db.transaction()` and runs provider invocation inside
+a coroutine bridge:
+
+```python
+def trigger_extraction(
+    db: PostgresDatabase, evidence_id: UUID,
+    *, actor: ActorIdentity,
+    ocr_provider: OcrProvider,
+) -> EvidenceExtractionRead:
+    with db.connection() as conn:
+        current = get_evidence(conn, evidence_id)
+    if current is None:
+        raise EvidenceSubmissionNotFoundError(evidence_id)
+
+    _require_scoped_authority(
+        "compliance_evidence.extract",
+        scope_kind="chapter", scope_id=current["chapter_id"],
+        actor=actor, db=db,
+    )
+
+    # Run provider OUTSIDE the transaction so a slow OCR call doesn't
+    # hold row locks. Persisting the result is OCC-safe via
+    # mutate_entity (extraction is idempotent — repeated calls
+    # overwrite with the latest provider result).
+    try:
+        extraction = asyncio.run(
+            ocr_provider.extract(
+                attachment_ref=current["attachment_ref"],
+                rule_hint=None,
+            )
+        )
+    except OcrProviderNotConfiguredError:
+        raise  # bubbles to endpoint → 503
+    except Exception as err:
+        return _persist_extraction_failure(db, evidence_id, err, actor)
+
+    return _persist_extraction_success(db, evidence_id, extraction, actor)
+```
+
+`_persist_extraction_success` / `_persist_extraction_failure` call
+`mutate_entity` with `EVIDENCE_EXTRACT_ACTION_TYPE` and the success /
+failed change type per D13. Extraction is idempotent: a second
+successful extraction overwrites `raw_text` + `extracted_fields` and
+leaves the `corrected` overlay untouched (status transitions
+`completed → completed`).
+
+### `services/api/app/services/compliance_review.py` (new)
+
+```python
+def get_evaluation(
+    db: PostgresDatabase, evaluation_id: UUID,
+    *, actor: ActorIdentity,
+) -> ComplianceEvaluationRead:
+    with db.connection() as conn:
+        row = get_evaluation_row(conn, evaluation_id)
+    if row is None:
+        raise ComplianceEvaluationNotFoundError(evaluation_id)
+    _require_scoped_authority(
+        "compliance_evaluation.read",
+        scope_kind="chapter", scope_id=row["chapter_id"],
+        actor=actor, db=db,
+    )
+    return _evaluation_read_from_row(row)
+
+
+def review_evaluation(
+    db: PostgresDatabase, evaluation_id: UUID,
+    request: ComplianceEvaluationReviewRequest,
+    expected_version: int, *, actor: ActorIdentity,
+) -> ComplianceEvaluationRead:
+    if request.action == "override" and request.override_result is None:
+        raise InvalidEvaluationReviewActionError(
+            "override requires override_result"
+        )
+    # authority: compliance_evaluation.review (chapter scope from row)
+    # mutate_entity with aggregate_type="compliance_evaluation";
+    # OCC from expected_version.
+    # Revision 2 (R8 / audit L2): pair the action_type with its dedicated
+    # payload allowlist — review → COMPLIANCE_EVALUATION_REVIEW_*
+    # + COMPLIANCE_EVALUATION_REVIEW_PAYLOAD_ALLOWLIST; override →
+    # COMPLIANCE_EVALUATION_OVERRIDE_* + COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST.
+    # Both dispatches route through the same mutate_entity call with the
+    # allowlist chosen per request.action; no f-strings, constants-only.
+```
+
+### `run_scheduled_compliance_evaluations` (WU-041B core logic)
+
+Lives in `services/api/app/services/compliance.py` to keep worker +
+API in one service module (ticket Code Boundary). Algorithm
+(Revision 1 rewrites R2 + R4 + R6):
+
+```python
+def run_scheduled_compliance_evaluations(
+    db: PostgresDatabase, *,
+    now: datetime,
+    batch_size: int = COMPLIANCE_EVIDENCE_BATCH_SIZE,
+    actor: ActorIdentity,
+    originating_actor: ActorIdentity | None = None,
+) -> list[ComplianceEvaluationRead]:
+    """Enumerate active rules + members, insert per-member evaluations
+    idempotently, dispatch consequences through the roster service.
+
+    Revision 1 (R4):
+    - `actor` is the authority-bearing identity used for inner
+      `mutate_entity` calls; the scheduled worker passes the
+      `compliance-evaluator` service actor (which holds the internal
+      `compliance_evaluation.write` + `roster.transition` grants).
+    - `originating_actor` is the identity recorded as
+      `originating_actor_kind` / `originating_actor_id` on the roster
+      transition request, preserving operator attribution when the
+      manual `/evaluations/run` endpoint triggers this path. Defaults
+      to `actor` (so the scheduled worker naturally records the
+      service actor as originating).
+    """
+    created: list[ComplianceEvaluationRead] = []
+    effective_originating = originating_actor or actor
+
+    with db.connection() as conn:
+        rules = list_active_rules(conn)
+
+    for rule in rules:
+        try:
+            period_start, period_end = _compute_period(
+                cadence_kind=rule["cadence_kind"],
+                cadence_params=rule["cadence_params"],
+                evaluation_window_days=rule["evaluation_window_days"],
+                now=now,
+            )
+            with db.connection() as conn:
+                members = list_active_members_by_chapter(
+                    conn, rule["chapter_id"]
+                )
+        except Exception:
+            logger.exception(
+                "compliance evaluation rule setup failed rule=%s",
+                rule["id"],
+            )
+            continue
+
+        # Revision 1 (R2 / F2): per-member isolation. A failure on one
+        # member's evaluation tx does NOT abort the remaining members
+        # of this rule. Mirrors SLICE-020 R1 `_expire_single_intent`
+        # batch pattern.
+        for member in members:
+            try:
+                inserted = _evaluate_member_rule(
+                    db,
+                    rule=rule,
+                    member=member,
+                    period_start=period_start,
+                    period_end=period_end,
+                    actor=actor,
+                    originating_actor=effective_originating,
+                )
+                if inserted is not None:
+                    created.append(inserted)
+            except StaleMutationError:
+                logger.debug(
+                    "compliance evaluation OCC skip rule=%s member=%s",
+                    rule["id"], member["member_id"],
+                )
+                continue
+            except Exception:
+                logger.exception(
+                    "compliance evaluation failed rule=%s member=%s",
+                    rule["id"], member["member_id"],
+                )
+                continue
+    return created
+```
+
+`_evaluate_member_rule` (private helper) — **Revision 1 (R2, R3,
+R6)** rewrites the body to a single per-member transaction that
+atomically covers the idempotency insert, the audit projection, and
+the consequence dispatch. Mirrors SLICE-020 R1
+`_expire_single_intent` point-for-point.
+
+```python
+def _evaluate_member_rule(
+    db: PostgresDatabase, *,
+    rule: dict[str, Any],
+    member: dict[str, Any],
+    period_start: date,
+    period_end: date,
+    actor: ActorIdentity,
+    originating_actor: ActorIdentity,
+) -> ComplianceEvaluationRead | None:
+    evaluation_id = uuid4()
+
+    # (R6) Snapshot the roster entry's id + version BEFORE opening the
+    # mutate_entity transaction, so the transition call has a concrete
+    # `expected_version` to drive OCC. `list_active_members_by_chapter`
+    # already returned the roster row; pull from there (roster row id +
+    # its aggregate head version) via `get_roster_entry` to avoid a
+    # stale version assumption.
+    with db.connection() as conn:
+        roster_entry = get_roster_entry(
+            conn,
+            chapter_id=rule["chapter_id"],
+            member_id=member["member_id"],
+        )
+    if roster_entry is None:
+        logger.debug(
+            "compliance evaluation skipped; roster entry gone rule=%s "
+            "member=%s", rule["id"], member["member_id"],
+        )
+        return None
+
+    # (R6) Snapshot evidence outside the tx (read-only) to keep the
+    # write-path transaction short.
+    with db.connection() as conn:
+        evidence_rows = list_evidence_for_rule_period(
+            conn,
+            rule_id=rule["id"],
+            period_start=period_start,
+            period_end=period_end,
+            member_id=member["member_id"],
+        )
+    rule_version = _current_rule_version(db, rule_id=rule["id"])
+
+    result, evidence_ids = _compute_rule_result(
+        rule=rule, evidence_rows=evidence_rows
+    )
+    consequence_applied, review_status = _compute_consequence_shape(
+        rule=rule, result=result
+    )
+
+    def mutate_projection(conn: Connection[Any]) -> StateChangeDraft:
+        # (R2 / M1) The idempotency insert runs INSIDE mutate_projection,
+        # so if any downstream step raises, the insert rolls back with
+        # the audit row — no bare evaluation row persists.
+        inserted = insert_evaluation_if_absent(
+            conn,
+            row={
+                "id": evaluation_id,
+                "rule_id": rule["id"],
+                "rule_version": rule_version,
+                "chapter_id": rule["chapter_id"],
+                "member_id": member["member_id"],
+                "period_start": period_start,
+                "period_end": period_end,
+                "result": result,
+                "consequence_applied": consequence_applied,
+                "review_status": review_status,
+                "evidence_ids": [str(x) for x in evidence_ids],
+            },
+        )
+        if inserted is None:
+            # Another tick already evaluated this (member, rule, period).
+            # Raise the well-known sentinel so mutate_entity aborts the
+            # projection cleanly and the caller treats this member as a
+            # no-op (no audit row written).
+            raise _AlreadyEvaluatedSentinel()
+
+        # (R3 / R6) Dispatch consequence inside the same connection so
+        # the roster transition either commits alongside the evaluation
+        # insert or both roll back together. `transition_roster_entry`
+        # accepts `connection=` via mutate_entity so we thread ours in.
+        # StaleMutationError / InvalidRosterStatusTransitionError
+        # propagate out of mutate_projection → mutate_entity's
+        # rollback covers the evaluation insert too. On the next tick
+        # the ON CONFLICT skip will NOT fire (the insert rolled back),
+        # so the whole member/period is retried cleanly — no retry
+        # bookkeeping, no `deferred_occ_conflict` marker state.
+        if consequence_applied == "under_review_applied":
+            roster_service.transition_roster_entry(
+                db,
+                entry_id=roster_entry["id"],
+                request=RosterEntryTransitionRequest(
+                    to_status="under_review",
+                    reason=f"compliance_violation:{rule['name']}",
+                    originating_actor_kind=originating_actor.actor_kind,
+                    originating_actor_id=originating_actor.actor_id,
+                ),
+                expected_version=roster_entry["version"],
+                actor=actor,
+                connection=conn,  # mutations.py:70 accepts this kwarg
+            )
+
+        return StateChangeDraft(
+            change_type=COMPLIANCE_EVALUATION_CREATE_CHANGE_TYPE,
+            payload_json={
+                "rule_id": str(rule["id"]),
+                "rule_version": rule_version,
+                "chapter_id": rule["chapter_id"],
+                "member_id": member["member_id"],
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+                "result": result,
+                "consequence_applied": consequence_applied,
+                "evidence_ids": [str(x) for x in evidence_ids],
+            },
+            diff_json={},
+        )
+
+    try:
+        mutation_result = mutate_entity(
+            db=db,
+            aggregate_type="compliance_evaluation",
+            aggregate_id=str(evaluation_id),
+            request=_make_request(
+                expected_version=0,
+                actor=actor,
+                request_surface="worker:compliance_evaluation",
+            ),
+            action_type=COMPLIANCE_EVALUATION_CREATE_ACTION_TYPE,
+            action_payload={
+                "rule_id": str(rule["id"]),
+                "rule_version": rule_version,
+                "chapter_id": rule["chapter_id"],
+                "member_id": member["member_id"],
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+                "result": result,
+                "consequence_applied": consequence_applied,
+                "evidence_ids": [str(x) for x in evidence_ids],
+            },
+            payload_allowlist=set(
+                COMPLIANCE_EVALUATION_CREATE_PAYLOAD_ALLOWLIST
+            ),
+            mutate_projection=mutate_projection,
+            scope_kind="chapter", scope_id=rule["chapter_id"],
+        )
+    except _AlreadyEvaluatedSentinel:
+        return None
+
+    return _evaluation_read_from_result(mutation_result)
+
+
+def _compute_consequence_shape(
+    *, rule: dict[str, Any], result: str
+) -> tuple[str, str]:
+    """Map (consequence_kind, result) → (consequence_applied,
+    review_status). D1/D10:
+    - `consequence_kind='review'` → `(review_queued, pending)`
+    - `consequence_kind='under_review'` + `result='violation'` +
+      `consequence_params.auto_apply` (fail-safe default: must be
+      explicitly True; absence → False) → `(under_review_applied,
+      not_required)`
+    - otherwise → `(none, not_required)` or `(none, pending)` per
+      `consequence_params.require_review`."""
+```
+
+The private sentinel `_AlreadyEvaluatedSentinel` is a module-local
+exception that carries no payload; it signals ON CONFLICT hit so the
+caller does not treat the skip as an error.
+
+**Revision 1 (R2) summary.** A mid-step failure rolls back the
+entire (evaluation insert + audit projection + roster transition) as
+one unit. On next tick the ON CONFLICT insert succeeds cleanly —
+there is no bare evaluation row to heal, no orphan consequence state,
+no retry bookkeeping. Per-member isolation is at the worker loop
+level.
+
+Period computation (D9):
+
+```python
+def _compute_period(
+    *, cadence_kind, cadence_params, evaluation_window_days, now
+) -> tuple[date, date]:
+    anchor = now - timedelta(days=evaluation_window_days)
+    offset = int(cadence_params.get("week_offset", 0))  # or month/quarter
+    if cadence_kind == "weekly":
+        # ISO week: Monday 00:00 UTC → Sunday 23:59:59 UTC
+        ...
+    elif cadence_kind == "monthly":
+        # calendar month in UTC
+        ...
+    elif cadence_kind == "quarterly":
+        # calendar quarter in UTC
+        ...
+```
 
 ---
 
-## §6 — Lifecycle extensions for `reassign`
+## §6 — OCR infrastructure
 
-### `services/api/app/services/applications.py`
+### `services/api/app/infrastructure/ocr.py` (new)
 
-1. Add `"reassign"` to the application action registry (action enum / literal
-   union).
-2. Register `reassign` in `VALID_TRANSITIONS`:
-   - For each open state `s ∈ {submitted, queued, claimed, in_review,
-     interview, waitlisted}`, add `("reassign", s) -> s` (no state change).
-3. In `transition_application`, when `action == "reassign"`:
-   - Validate payload keys ⊆ `APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST`.
-   - Validate `new_owner_id` parses as UUID.
-   - Reject if the target application state is terminal
-     (`approved`, `denied`, `withdrawn`) — the `VALID_TRANSITIONS` check
-     already enforces this; the test asserts the invalid-transition error
-     path.
-   - Emit via `mutate_entity` with
-     `action_type=APPLICATION_REASSIGN_ACTION_TYPE`,
-     `change_type=APPLICATION_REASSIGN_CHANGE_TYPE`,
-     `payload_allowlist=APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST`.
-   - The projection update sets `owner_id = new_owner_id` and leaves `state`
-     unchanged; inserts one `application_reviews` row with
-     `reviewer_id = actor.actor_id`, `action = "reassign"`,
-     `from_state == to_state`.
+```python
+from __future__ import annotations
 
-### `services/api/app/services/tickets.py`
+from decimal import Decimal
+from typing import Any, Protocol
 
-1. Add `"reassign"` to the ticket action registry.
-2. Route `reassign` around the category-state-machine edge check:
-   - The normal path in `transition_ticket` calls `category_state_machine`
-     to validate the edge. For `reassign`, bypass that lookup entirely; the
-     only precondition is `terminal_at IS NULL`.
-3. Emit via `mutate_entity` with `action_type=TICKET_REASSIGN_ACTION_TYPE`,
-   `change_type=TICKET_REASSIGN_CHANGE_TYPE`,
-   `payload_allowlist=TICKET_REASSIGN_PAYLOAD_ALLOWLIST`.
-4. Projection update sets `owner_id = new_owner_id`, leaves `state`,
-   `category_id`, and `category_snapshot` unchanged, and writes a
-   `ticket_transitions` row with `from_owner_id` = current, `to_owner_id` =
-   new, `from_state == to_state`.
+from pydantic import BaseModel, ConfigDict
 
-Scope of the new action (D8 non-goal): `reassign` is called only from the
-leadership-handoff service modules. The action is still reachable via the
-general `POST /api/v1/applications/{id}/transition` and
-`POST /api/v1/tickets/{id}/transition` endpoints if a caller names the
-action explicitly; gating those broader endpoints on
-`leadership_handoff.execute` authority is out of scope for this slice.
-The handoff endpoints gate authority, and no other shipped caller invokes
-`reassign` today.
+
+class OcrExtractionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    raw_text: str
+    extracted_fields: dict[str, Any]
+    confidence: Decimal
+
+
+class OcrProvider(Protocol):
+    async def extract(
+        self, attachment_ref: str, rule_hint: str | None = None
+    ) -> OcrExtractionResult: ...
+
+
+class StubOcrProvider:
+    async def extract(
+        self, attachment_ref: str, rule_hint: str | None = None
+    ) -> OcrExtractionResult:
+        from app.contracts.compliance import OcrProviderNotConfiguredError
+        raise OcrProviderNotConfiguredError(
+            "OCR provider not configured"
+        )
+
+
+def get_ocr_provider(settings) -> OcrProvider:
+    # Operators wire a concrete provider via settings in a later slice;
+    # SLICE-022 ships the stub only (D4, D15).
+    return StubOcrProvider()
+```
+
+The endpoint layer maps `OcrProviderNotConfiguredError → 503` via
+`_shared.py` (see §8). No third-party SDKs are added as dependencies.
 
 ---
 
-## §7 — Endpoints
+## §7 — Scheduled worker (WU-041B)
+
+### `services/api/app/tasks/compliance.py` (new)
+
+Mirrors `services/api/app/tasks/permission_expiry.py` structurally:
+module-level `_DB`, `configure_compliance(*, db)`, service-actor
+helper, root audit context, tick function.
+
+```python
+from __future__ import annotations
+
+import logging
+from contextlib import nullcontext
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from app.contracts.actor import ActorIdentity
+from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
+from app.contracts.mutations import StaleMutationError
+from app.core.context import get_current_audit_context, use_audit_context
+from app.repositories.db import PostgresDatabase
+from app.services.compliance import (
+    COMPLIANCE_EVIDENCE_BATCH_SIZE,
+    run_scheduled_compliance_evaluations,
+)
+
+logger = logging.getLogger(__name__)
+
+COMPLIANCE_EVALUATOR_ACTOR_ID = "compliance-evaluator"
+_DB: PostgresDatabase | None = None
+
+
+def configure_compliance(*, db: PostgresDatabase) -> None:
+    global _DB
+    _DB = db
+
+
+def get_compliance_db() -> PostgresDatabase:
+    global _DB
+    if _DB is None:
+        _DB = PostgresDatabase()
+    return _DB
+
+
+def _evaluator_service_actor() -> ActorIdentity:
+    return ActorIdentity(
+        actor_kind="service", actor_id=COMPLIANCE_EVALUATOR_ACTOR_ID
+    )
+
+
+def _root_audit_context() -> AuditContextRead:
+    correlation_id = uuid4()
+    return AuditContextRead(
+        correlation_id=correlation_id,
+        causation_id=None,
+        headers=CorrelationHeadersRead(
+            x_correlation_id=correlation_id,
+            x_causation_id=None,
+        ),
+    )
+
+
+def compliance_evaluation_worker_tick(
+    *,
+    now: datetime | None = None,
+    batch_size: int | None = None,
+) -> list | None:
+    existing_ctx = get_current_audit_context()
+    ambient = (
+        use_audit_context(_root_audit_context())
+        if existing_ctx is None
+        else nullcontext()
+    )
+    with ambient:
+        try:
+            return run_scheduled_compliance_evaluations(
+                get_compliance_db(),
+                actor=_evaluator_service_actor(),
+                originating_actor=None,  # defaults to actor (service)
+                now=now or datetime.now(tz=UTC),
+                batch_size=batch_size or COMPLIANCE_EVIDENCE_BATCH_SIZE,
+            )
+        except StaleMutationError:
+            logger.debug(
+                "compliance evaluation: OCC conflict, retry next tick"
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "compliance evaluation worker tick failed"
+            )
+            return None
+```
+
+### Scheduler wiring
+
+`services/api/app/services/scheduler.py`:
+
+- Add module-level constant
+  `COMPLIANCE_EVALUATION_INTERVAL_SECONDS = 3600` (near line 34).
+- Add `self._last_compliance_evaluation_tick_at: datetime | None = None`
+  to `SchedulerLoop.__init__` (near line 150).
+- Add `await self._run_compliance_evaluation_if_due(now)` to `_tick`
+  (after existing worker dispatches).
+- Add the `_run_compliance_evaluation_if_due` method mirroring
+  `_run_permission_expiry_if_due` (lines 256–273).
+- Append `"COMPLIANCE_EVALUATION_INTERVAL_SECONDS"` to `__all__`.
+
+`services/api/app/tasks/__init__.py`:
+
+- Import `configure_compliance` from `app.tasks.compliance`.
+- Call `configure_compliance(db=db)` inside `configure_task_runtime`.
+
+No `scheduled_jobs` row is registered — compliance uses the in-loop
+interval pattern (same as permission expiry, ticket SLA, archive, and
+read-model workers).
+
+---
+
+## §8 — Endpoints
 
 ### Package layout
 
-The ticket Code Boundary places new endpoints under
-`services/api/app/api/v1/endpoints/authority/`. The existing
-`endpoints/authority.py` module exists as a single file today. Python does
-not permit both a module and a subpackage with the same name.
-
-Decision: convert the existing module into a subpackage. The existing
-create/list/revoke handlers move verbatim into
-`endpoints/authority/lifecycle.py`; an `__init__.py` aggregator router
-includes every sub-router. This is a mechanical move, not a rewrite
-(synthesis D13 forbids rewriting the handlers themselves). Final structure:
+Under ticket Code Boundary the endpoints live in a new subpackage
+`services/api/app/api/v1/endpoints/compliance/`, mirroring
+`endpoints/permissions/`:
 
 ```
-services/api/app/api/v1/endpoints/authority/
-├── __init__.py             # APIRouter that includes all sub-routers
-├── _shared.py              # _parse_if_match, _error_body, _db helpers (moved from authority.py)
-├── lifecycle.py            # existing create/list/revoke (moved, unchanged bodies)
-├── succession_plan.py      # GET  /chapters/{chapter_id}/succession-plan
-├── transfer.py             # POST /authority-grants/{grant_id}/transfer
-├── handoff_applications.py # POST /authority-grants/{grant_id}/handoff/applications
-├── handoff_tickets.py      # POST /authority-grants/{grant_id}/handoff/tickets
-└── leadership_context.py   # GET  /members/{member_id}/leadership-context
+services/api/app/api/v1/endpoints/compliance/
+├── __init__.py            # APIRouter aggregator
+├── _shared.py             # get_db, parse_if_match_strong, exception mapper
+├── rules.py               # POST, PATCH, GET /rules
+├── evidence.py            # POST, GET /evidence
+├── evidence_correct.py    # POST /evidence/{id}/correct
+├── evidence_extract.py    # POST /evidence/{id}/extract
+├── evaluations.py         # GET, POST /evaluations/{id}[/review]
+└── evaluations_run.py     # POST /evaluations/run (manual trigger)
 ```
 
-`services/api/app/api/v1/router.py` keeps its existing
-`router.include_router(authority.router, tags=["authority"])` line; the
-subpackage `__init__.py` exposes `router` as today, preserving the
-registration.
+`services/api/app/api/v1/router.py` gains one line:
+
+```python
+from .endpoints import compliance
+router.include_router(compliance.router, prefix="/compliance")
+```
+
+(The path prefix `/compliance` is applied at the aggregator; each
+sub-router keeps relative paths like `/rules`.)
+
+### `_shared.py`
+
+Reused helpers adapted from
+`services/api/app/api/v1/endpoints/permissions/_shared.py`:
+
+- `get_db(request) -> PostgresDatabase`
+- `parse_if_match_strong(request) -> int` (verbatim semantics;
+  RFC 7232 strong ETag)
+- `set_etag(response, etag)`
+- `raise_known_compliance_error(error)` maps:
+  - `ComplianceRuleNotFoundError`, `EvidenceSubmissionNotFoundError`,
+    `ComplianceEvaluationNotFoundError`, `MissingAggregateError` → 404
+  - `StaleMutationError` → 412 (with
+    `expected_version` / `current_version` detail per permissions
+    pattern)
+  - `CorrectionNotPermittedStatusError` → 409
+  - `DuplicateActiveComplianceRuleError` → 409
+  - `InvalidEvaluationReviewActionError` → 422
+  - `EvidenceChapterMismatchError` → 422 (Revision 1 / R1;
+    `{"code": "evidence_chapter_mismatch"}` with
+    `rule_id`, `rule_chapter_id`, `request_chapter_id` detail)
+  - `OcrProviderNotConfiguredError` → 503 (`{"code":
+    "ocr_provider_not_configured"}`)
+  - `PermissionError` → 403
+  - Pydantic `ValidationError` (blank `correction_reason` etc.) → 422
 
 ### Endpoint bodies
 
-Each endpoint module follows the `endpoints/permissions/*` pattern:
+Each module follows the `endpoints/permissions/*` pattern: parse path /
+body via Pydantic, resolve `actor = Depends(get_current_actor)`, call
+the service (which runs the authority check internally per D11), map
+known exceptions via `_shared.raise_known_compliance_error`. ETag is
+set on any response that carries a versioned aggregate.
 
-1. Parse path/body via Pydantic.
-2. Resolve `actor = Depends(get_current_actor)`.
-3. Call the service function (the service runs the authority check).
-4. Map known exceptions to HTTP codes.
-5. Return the response model (adding `ETag` headers where the existing
-   authority lifecycle does).
+Status-code mapping:
 
-Status-code mapping (non-exhaustive):
-
-| Path                                                             | 200 | 201 | 403        | 404        | 409                                                 | 412              | 422                       |
-|------------------------------------------------------------------|-----|-----|------------|------------|-----------------------------------------------------|------------------|---------------------------|
-| `GET /chapters/{chapter_id}/succession-plan`                     | Y   | -   | authority  | chapter n/a| -                                                   | -                | -                         |
-| `POST /authority-grants/{grant_id}/transfer`                     | idempotent replay | new grant | authority | grant n/a | revoked / already_transferred / duplicate_guard | stale predecessor | blank reason / empty id   |
-| `POST /authority-grants/{grant_id}/handoff/applications`         | Y (partial ok) | -   | authority  | grant n/a  | -                                                   | -                | blank successor_member_id / non-UUID |
-| `POST /authority-grants/{grant_id}/handoff/tickets`              | Y (partial ok) | -   | authority  | grant n/a  | -                                                   | -                | blank successor_member_id |
-| `GET /members/{member_id}/leadership-context`                    | Y   | -   | authority  | member n/a | -                                                   | -                | non-UUID member_id                   |
-
-Per-item error model for handoff endpoints (R4 — bound contract, single
-shape, no alternatives): handoff does not take an `If-Match` on the batch.
-Each per-item `transition_application` / `transition_ticket` call runs
-without caller-supplied `expected_version` (the service uses the current
-head) inside its own transaction — **one bad item does not abort the
-batch**. The response is always HTTP 200; partial success is surfaced by
-a non-empty `failed` list on `ApplicationHandoffResult` /
-`TicketHandoffResult` (see §3). Each `HandoffFailure` carries
-`item_id`, `reason ∈ {"occ_conflict","unauthorized","invalid_state"}`,
-and a free-form `detail`. The caller retries the whole batch; already-
-transferred items fall into `already_owned`, still-failing items re-enter
-`failed` (D7 — idempotent rerun). A 4xx / 5xx at the endpoint level is
-reserved for top-of-batch conditions (403 authority, 404 grant, 422 blank
-input) — never per-item conditions.
-
-Succession-plan and leadership-context endpoints return 422 when a
-supplied `chapter_id` / `member_id` parameter or a roster holder id fails
-the UUID-canonical check (R5 `InvalidHolderIdError`).
-
-The authority gate is the only cross-cutting dependency; no endpoint here
-uses a FastAPI-level `RequireAuthority(...)` dependency (research §3
-confirms the existing authority endpoints do not declare one). The services
-call `_require_scoped_authority` internally per D4; HTTP-level tests still
-exercise the 403 path through the endpoint.
-
----
-
-## §8 — Tests (per-WU, per-AC docstrings)
-
-Each test module carries AGENTS.md-compliant per-test AC docstrings. Tests
-do not mock the database; all run against the real test session fixture
-(D14).
-
-### WU-044A — `services/api/tests/test_succession_plan.py`
-
-- `test_plan_is_queryable_without_successor` — AC1: plan returns with
-  `successor_designated=False`, `successor_member_id=None` even when no
-  successor is chosen.
-- `test_plan_lists_succession_triggering_roles` — AC1: only roles with
-  `triggers_succession=TRUE` appear in `departing_roles`.
-- `test_plan_marks_removed_holders_as_roster_removed` — AC1 / D1:
-  `departure_signal == "roster_removed"` for holders whose roster entry is
-  in terminal `removed` state; `"active"` otherwise.
-- `test_plan_lists_active_grants_for_holders_in_chapter_scope` — AC1: only
-  active grants within the chapter scope appear; revoked/expired excluded.
-- `test_plan_lists_open_applications_in_scope` — AC1 / D5: open state set
-  includes `interview`/`waitlisted`; terminal states excluded.
-- `test_plan_lists_open_tickets_in_scope` — AC1: `terminal_at IS NULL`;
-  out-of-scope tickets excluded.
-- `test_plan_does_not_write_activity_actions` — AC1: plan generation
-  creates no new `activity_actions` rows.
-- `test_plan_requires_succession_plan_read_authority` — D4: 403 when caller
-  lacks `succession_plan.read` at the chapter scope.
-
-### WU-044B — `services/api/tests/test_authority_transfer.py`
-
-- `test_transfer_creates_successor_linked_to_predecessor` — AC2: successor's
-  `predecessor_grant_id == predecessor.id`.
-- `test_transfer_revokes_predecessor_with_succession_reason` — AC2 / D12:
-  predecessor `revoked_at` is set; `revocation_reason ==
-  "succession_transfer"`.
-- `test_transfer_emits_grant_and_revoke_audit_actions` — AC2: both
-  `authority.grant` and `authority.revoke` actions are recorded through
-  `mutate_entity` (reuses lifecycle, no bypass).
-- `test_transfer_shares_correlation_id_across_actions` — AC3 / D9:
-  `correlation_id` is equal on the two emitted actions.
-- `test_transfer_is_idempotent_for_same_successor` — AC3 / D3: replay with
-  the same `successor_id` returns the existing successor; no new audit
-  actions appear.
-- `test_transfer_rejects_replay_with_different_successor` — D3: 409
-  `GrantAlreadyTransferredError`.
-- `test_transfer_rejects_revoked_predecessor` — D6: 409
-  `GrantAlreadyRevokedError`.
-- `test_transfer_rejects_blank_reason` — D6: 422 for blank reason.
-- `test_transfer_rejects_blank_successor_id` — D6: 422 for blank successor.
-- `test_transfer_rejects_stale_predecessor_version` — D6 / OCC: 412 on
-  mismatched `If-Match`.
-- `test_transfer_requires_authority_grant_transfer_permission` — D4: 403
-  without `authority_grant.transfer` at the grant's scope.
-- `test_transfer_rolls_back_successor_when_revoke_fails` — R1: when
-  `revoke_authority` raises (simulate via a monkeypatched stale head or
-  injected exception), the whole transfer rolls back — no successor row
-  exists in `authority_grants`, no `authority.grant` action row exists,
-  predecessor remains unrevoked. A subsequent retry succeeds cleanly.
-- `test_transfer_serializes_concurrent_attempts_on_predecessor` — R2: two
-  threaded transfer calls against the same predecessor with different
-  successor ids are serialized by the `get_head_for_update` lock; exactly
-  one successor grant is created, and the second call raises
-  `GrantAlreadyTransferredError` (409) rather than inserting an orphan
-  successor.
-
-### WU-045A-applications — `services/api/tests/test_leadership_handoff_applications.py`
-
-- `test_handoff_transfers_pending_applications` — AC3: pending applications
-  owned by predecessor within the grant scope are reassigned to successor.
-- `test_handoff_is_idempotent_on_replay` — AC3 / D7: replay returns
-  `already_owned` for everything; no new audit actions.
-- `test_handoff_skips_terminal_applications` — D7: approved/denied/
-  withdrawn applications remain owned by predecessor and are absent from
-  both result lists.
-- `test_handoff_respects_grant_scope` — D7: applications outside the
-  grant's `(scope_kind, scope_id)` are untouched.
-- `test_handoff_emits_reassign_action_per_item_with_constants` — D12:
-  each transferred application emits an `activity_action` with
-  `action_type == APPLICATION_REASSIGN_ACTION_TYPE`,
-  `change_type == APPLICATION_REASSIGN_CHANGE_TYPE`.
-- `test_handoff_writes_application_review_per_item` — D7: one
-  `application_reviews` row per transfer with
-  `action == "reassign"`, `from_state == to_state`,
-  `reviewer_id == actor.actor_id`.
-- `test_handoff_shares_correlation_id_across_items` — AC3 / D9: all
-  per-item reassign actions in a batch share one `correlation_id`.
-- `test_handoff_requires_leadership_handoff_execute_permission` — D4: 403
-  without `leadership_handoff.execute` at grant scope.
-- `test_handoff_rejects_blank_successor_member_id` — 422.
-- `test_handoff_partial_success_reports_failed_per_item` — R4: when one
-  item raises `StaleMutationError` (simulate a concurrent owner change),
-  the batch returns HTTP 200 with that item in `failed`
-  (`reason="occ_conflict"`) and the other items in `transferred`; a retry
-  surfaces the retry's outcome correctly (either moves to `transferred` /
-  `already_owned`, or re-enters `failed`).
-
-### WU-045A-tickets — `services/api/tests/test_leadership_handoff_tickets.py`
-
-- `test_handoff_transfers_pending_tickets` — AC3.
-- `test_handoff_bypasses_category_state_machine_edges` — D8: the ticket's
-  category lacks an `allow_owner_change` edge for its current state;
-  reassign still succeeds.
-- `test_handoff_is_idempotent_on_replay` — AC3.
-- `test_handoff_skips_terminal_tickets` — D8: `terminal_at IS NOT NULL`
-  tickets are excluded.
-- `test_handoff_respects_grant_scope` — D8.
-- `test_handoff_emits_reassign_action_per_item_with_constants` — D12:
-  `TICKET_REASSIGN_ACTION_TYPE` / `TICKET_REASSIGN_CHANGE_TYPE`.
-- `test_handoff_writes_ticket_transition_per_item` — D8: one
-  `ticket_transitions` row per transfer with `from_owner_id` /
-  `to_owner_id` populated, `from_state == to_state`.
-- `test_handoff_shares_correlation_id_across_items` — AC3 / D9.
-- `test_handoff_requires_leadership_handoff_execute_permission` — D4.
-- `test_handoff_rejects_blank_successor_member_id` — 422.
-- `test_handoff_partial_success_reports_failed_per_item` — R4: same shape
-  as the applications case above; per-item `StaleMutationError` lands in
-  `TicketHandoffResult.failed` with `reason="occ_conflict"` and the batch
-  still returns HTTP 200.
-
-### WU-045B — `services/api/tests/test_leadership_context.py`
-
-- `test_context_reads_for_member_with_no_inheritance` — AC4: populated
-  response with empty lists and `is_stale=False`, not an empty output.
-- `test_context_returns_active_grants_for_member` — AC4: only non-revoked,
-  non-expired grants.
-- `test_context_populates_inherited_from_from_predecessor_chain` — AC4 /
-  D10: `InheritedFromEntry` reflects the immediate predecessor grant
-  (one hop).
-- `test_context_reports_is_stale_true_when_predecessor_owns_open_work` —
-  AC4 / D11: domain staleness flag reflects pending predecessor apps or
-  tickets within the inherited scope.
-- `test_context_reports_is_stale_false_after_full_handoff` — AC4 / D11:
-  completing application + ticket handoff flips `is_stale` to False.
-- `test_context_reports_projector_is_stale_separately` — D11:
-  `projector_is_stale` tracks `read_model_cursors` lag and is independent
-  of `is_stale`.
-- `test_context_includes_current_applications_and_tickets` — AC4: open
-  work currently owned by the member.
-- `test_context_requires_leadership_context_read_permission` — D4: 403
-  without `leadership_context.read` (global).
-
-HTTP layer coverage: each endpoint has at least one HTTP-level test that
-exercises the authority gate (403), the request validation (422), and the
-happy path. Per-AC behavioural assertions use the service layer directly
-where the HTTP surface would only add noise.
+| Path                                                       | 200 | 201 | 403 | 404 | 409                                | 412            | 422                          | 503                         |
+|------------------------------------------------------------|-----|-----|-----|-----|------------------------------------|----------------|------------------------------|-----------------------------|
+| `POST /compliance/rules`                                   | -   | Y   | authority | chapter n/a | duplicate_active_rule              | -              | validation                   | -                           |
+| `PATCH /compliance/rules/{id}`                             | Y   | -   | authority | rule n/a    | -                                  | stale If-Match | validation                   | -                           |
+| `GET /compliance/rules`                                    | Y   | -   | authority | -           | -                                  | -              | -                            | -                           |
+| `POST /compliance/evidence`                                | -   | Y   | authority | rule n/a    | -                                  | -              | blank attachment_ref; chapter_id/rule mismatch (R1) | -              |
+| `GET /compliance/evidence/{id}`                            | Y   | -   | authority | evidence n/a| -                                  | -              | -                            | -                           |
+| `POST /compliance/evidence/{id}/correct`                   | Y   | -   | authority | evidence n/a| status not correctable             | stale If-Match | blank reason                 | -                           |
+| `POST /compliance/evidence/{id}/extract`                   | Y   | -   | authority | evidence n/a| -                                  | -              | -                            | ocr_provider_not_configured |
+| `GET /compliance/evaluations/{id}`                         | Y   | -   | authority | evaluation n/a | -                               | -              | -                            | -                           |
+| `POST /compliance/evaluations/{id}/review`                 | Y   | -   | authority | evaluation n/a | -                               | stale If-Match | override without result      | -                           |
+| `POST /compliance/evaluations/run`                         | Y   | -   | authority | -           | -                                  | -              | -                            | -                           |
 
 ---
 
 ## §9 — Constants (module-level, no f-strings)
 
-| Module                                   | Constant                                    | Value                     |
-|------------------------------------------|---------------------------------------------|---------------------------|
-| `contracts/authority.py`                 | `SUCCESSION_TRANSFER_REVOCATION_REASON`     | `"succession_transfer"`   |
-| `contracts/applications.py`              | `APPLICATION_REASSIGN_ACTION_TYPE`          | `"application.reassign"`  |
-| `contracts/applications.py`              | `APPLICATION_REASSIGN_CHANGE_TYPE`          | `"application.reassigned"`|
-| `contracts/applications.py`              | `APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST`    | `frozenset({"new_owner_id"})` |
-| `contracts/tickets.py`                   | `TICKET_REASSIGN_ACTION_TYPE`               | `"ticket.reassign"`       |
-| `contracts/tickets.py`                   | `TICKET_REASSIGN_CHANGE_TYPE`               | `"ticket.reassigned"`     |
-| `contracts/tickets.py`                   | `TICKET_REASSIGN_PAYLOAD_ALLOWLIST`         | `frozenset({"new_owner_id"})` |
-| (implicit, names only — D4)              | `succession_plan.read`                      | authority permission      |
-| (implicit, names only — D4)              | `authority_grant.transfer`                  | authority permission      |
-| (implicit, names only — D4)              | `leadership_handoff.execute`                | authority permission      |
-| (implicit, names only — D4)              | `leadership_context.read`                   | authority permission      |
+All `action_type` / `change_type` / payload allowlist values live in
+`services/api/app/contracts/compliance.py` (contracts-level, as
+elsewhere in the codebase); imported by services and tests. No
+f-string / dynamic vocabulary per D13 + AGENTS.md.
 
-All `mutate_entity` emissions reference these constants; tests assert
-against the constants (not hard-coded strings). Authority permission names
-are strings passed to `_require_scoped_authority`; they are not bound to a
-Python constant per D4 (no registry module). Tests and services may
-introduce local constants for convenience, but no cross-slice permission
-registry is created.
+Additional module-level constants:
 
----
-
-## §10 — Out of scope (explicit — D15)
-
-The following are explicitly deferred; any PR adding one is out-of-bounds
-for this slice and must split into a follow-up slice:
-
-1. Automatic succession triggering on role removal (roster hook, scheduled
-   worker, Discord notification).
-2. Multi-role atomic succession.
-3. Multi-successor reassignment per handoff call.
-4. Transfer rollback endpoint.
-5. Persisted successor designation (`successor_designated` is always
-   `False` this slice).
-6. New projection tables for leadership context (D10; live query only).
-7. Alembic migrations of any kind (D2).
-8. Discord messages/embeds for succession events.
-9. Cross-scope sweep — handoff is bounded to the grant's scope.
-10. `succession-worker` or other dedicated service actor.
-11. Multi-hop predecessor lineage in `InheritedFromEntry` (immediate hop
-    only; deeper history reachable via audit trail).
-12. Strict per-step `causation_id` chaining across HTTP requests (D9:
-    `predecessor_grant_id` + per-request `correlation_id` is sufficient).
-13. Exposing `reassign` as a general-purpose endpoint outside the handoff
-    flow.
+| Module                                    | Constant                                    | Value                     |
+|-------------------------------------------|---------------------------------------------|---------------------------|
+| `services/api/app/services/scheduler.py`  | `COMPLIANCE_EVALUATION_INTERVAL_SECONDS`    | `3600`                    |
+| `services/api/app/services/compliance.py` | `COMPLIANCE_EVIDENCE_BATCH_SIZE`            | `50`                      |
+| `services/api/app/tasks/compliance.py`    | `COMPLIANCE_EVALUATOR_ACTOR_ID`             | `"compliance-evaluator"`  |
+| (implicit — D11, opaque strings)          | `compliance_rule.read`                      | authority permission      |
+| (implicit — D11, opaque strings)          | `compliance_rule.write`                     | authority permission      |
+| (implicit — D11, opaque strings)          | `compliance_evidence.submit`                | authority permission      |
+| (implicit — D11, opaque strings)          | `compliance_evidence.correct`               | authority permission      |
+| (implicit — D11, opaque strings)          | `compliance_evidence.extract`               | authority permission      |
+| (implicit — D11, opaque strings)          | `compliance_evaluation.read`                | authority permission      |
+| (implicit — D11, opaque strings)          | `compliance_evaluation.review`              | authority permission      |
+| (implicit — D11, opaque strings)          | `compliance_evaluation.write`               | internal substrate perm   |
+| (implicit — D11, opaque strings)          | `roster.transition`                         | reused shipped permission |
 
 ---
 
-## §11 — PR decomposition
+## §10 — Tests (per-WU, per-AC docstrings)
 
-The synthesis identifies three clean seams:
+Tests follow D14 and AGENTS.md Test/Code separation: the test agent
+sees contracts only; each test docstring names the AC or guardrail it
+enforces. Tests hit a real DB fixture (`governance_db` style —
+`services/api/tests/test_roster.py:34–40`). Approximately 40 tests
+across six files.
 
-- **PR A** — WU-044A + WU-044B. Contained within authority / chapter-roles /
-  roster queries and the authority lifecycle. Includes the mechanical move
-  of the existing `endpoints/authority.py` into the `authority/` subpackage
-  (`lifecycle.py`) as a precondition; the move is additive with no
-  behavioural change. New authority permissions: `succession_plan.read`,
-  `authority_grant.transfer`.
-- **PR B** — WU-045A-applications + WU-045A-tickets. Highest-risk PR;
-  introduces new `reassign` actions in both subsystems. Kept atomic because
-  both share the `leadership_handoff.execute` permission and the batch
-  handoff pattern.
-- **PR C** — WU-045B. Leadership context view; depends on handoff semantics
-  being settled so the `stale_handoff` / `is_stale` signals are meaningful.
-  New permission: `leadership_context.read`.
+### `services/api/tests/test_compliance_rules.py` (WU-039)
 
-Final decomposition is subject to the multi-concern review gate; this
-proposal does not mandate the split beyond the synthesis recommendation.
-If the reviewer at the PR stage concludes the three PRs can ship as one,
-that is acceptable; they should not be merged into more than three.
+- `test_create_persists_cadence_requirements_and_consequence` — AC1.
+- `test_create_emits_compliance_rule_create_action_with_constants` — D13.
+- `test_create_requires_compliance_rule_write_authority` — D11: 403.
+- `test_create_rejects_duplicate_active_name_in_chapter` — D2: 409.
+- `test_create_rejects_invalid_cadence_kind` — D2: 422 CHECK
+  proxy / Pydantic literal.
+- `test_create_rejects_invalid_consequence_kind` — D1: 422.
+- `test_update_advances_version_with_if_match` — AC1 OCC.
+- `test_update_rejects_stale_if_match` — AC1: 412.
+- `test_archive_allows_name_reuse` — D2: partial unique index.
+- `test_list_rules_returns_chapter_scoped_results` — AC1.
+
+### `services/api/tests/test_compliance_evidence.py` (WU-040A)
+
+- `test_submit_creates_row_in_pending_state` — AC2.
+- `test_submit_emits_evidence_submission_submit_action_with_constants` — D13.
+- `test_submit_requires_compliance_evidence_submit_authority` — D11.
+- `test_submit_enforces_rule_fk_integrity` — D3: 404 (rule missing) /
+  FK violation surfaced.
+- `test_submit_rejects_blank_attachment_ref` — D3: 422.
+- `test_submitted_by_is_derived_from_actor_not_request_body` — D3 /
+  spoof-proof: even if body carries a different `submitted_by`, row
+  stores `actor.actor_id` (extra field is rejected by `extra="forbid"`).
+- `test_submit_rejects_chapter_id_mismatch_with_rule` — Revision 1
+  (R1): request carries `chapter_id` that differs from the rule's
+  chapter; service raises `EvidenceChapterMismatchError` → HTTP 422.
+- `test_submit_authorizes_against_rules_chapter_not_request_chapter`
+  — Revision 1 (R1): actor holds `compliance_evidence.submit` only
+  on the rule's chapter; request carries an unrelated `chapter_id`
+  the actor also has authority on; service uses rule's chapter for
+  the authority check (422 precedes authority, so mismatch is
+  rejected before authority is consulted; an aligned matching request
+  proceeds).
+- `test_submit_persists_chapter_id_from_rule_not_request` —
+  Revision 1 (R1): the evidence row's `chapter_id` column always
+  equals the rule's chapter, regardless of what the body supplied
+  (in the matching case).
+- `test_get_returns_pending_state_and_version_etag` — AC2.
+
+### `services/api/tests/test_compliance_ocr_correct.py` (WU-040B-correct)
+
+- `test_correction_writes_overlay_with_actor_as_corrector` — AC3.
+- `test_correction_preserves_raw_text_and_attachment_ref` — AC3.
+- `test_correction_preserves_original_extracted_fields` — AC3 / D3.
+- `test_correction_transitions_status_to_corrected` — AC3.
+- `test_correction_rejects_stale_if_match` — AC3 OCC: 412.
+- `test_correction_rejects_pending_status` — D6: 409.
+- `test_correction_rejects_running_status` — D6: 409.
+- `test_correction_rejects_blank_reason` — D6: 422.
+- `test_correction_requires_compliance_evidence_correct_authority` — D11.
+- `test_correction_emits_evidence_submission_correct_action_with_constants` — D13.
+- `test_second_correction_overwrites_overlay_and_preserves_baseline` — D6.
+- `test_correction_diff_json_records_prior_overlay_on_second_correction`
+  — Revision 1 (R5) / audit M4: second correction's
+  `activity_state_changes.diff_json` records
+  `extracted_fields_corrected: {old: <overlay_1>, new: <overlay_2>}`
+  and the immutable `extracted_fields` baseline. First correction's
+  diff records `extracted_fields_corrected: {old: null, new: <overlay_1>}`.
+
+### `services/api/tests/test_compliance_ocr_extract.py` (WU-040B-extract)
+
+- `test_extract_invokes_provider_and_transitions_to_completed` — D4/D5.
+- `test_extract_persists_raw_text_fields_and_confidence` — D3.
+- `test_extract_failure_transitions_to_failed_with_error_populated` — D3.
+- `test_extract_with_stub_provider_returns_503` — D4/D5.
+- `test_extract_is_idempotent_on_repeat_invocation` — D5.
+- `test_extract_requires_compliance_evidence_extract_authority` — D11.
+- `test_extract_emits_evidence_submission_extract_action_with_constants` — D13.
+
+### `services/api/tests/test_compliance_review_api.py` (WU-041A)
+
+- `test_get_evaluation_returns_populated_read_model` — AC1/AC4.
+- `test_review_approve_updates_review_status_and_reviewer` — AC1.
+- `test_review_override_changes_result_and_advances_consequence` — AC1.
+- `test_review_override_without_result_returns_422` — D7.
+- `test_review_rejects_stale_if_match` — AC1 OCC: 412.
+- `test_review_rejects_blank_reason` — 422.
+- `test_review_requires_compliance_evaluation_review_authority` — D11.
+- `test_review_emits_compliance_evaluation_review_action_with_constants` — D13.
+
+### `services/api/tests/test_compliance_evaluation_worker.py` (WU-041B)
+
+- `test_worker_inserts_evaluation_once_per_member_rule_period` — AC4.
+- `test_worker_is_idempotent_across_multiple_ticks` — AC4 / D8.
+- `test_worker_routes_under_review_consequence_through_roster_service` — AC4 / D10.
+- `test_worker_records_review_queued_for_review_consequence_kind` — D1/D10.
+- `test_worker_records_consequence_applied_under_review_on_success` — D10.
+- `test_worker_tolerates_per_rule_failure_and_continues_batch` — D8.
+- `test_worker_tolerates_occ_conflict_and_retries_next_tick` — D8.
+- `test_period_computation_weekly_monthly_quarterly` — D9.
+- `test_worker_records_insufficient_evidence_with_no_consequence` — D7/D14.
+- `test_worker_installs_root_audit_context` — D8.
+- `test_worker_respects_consequence_kind_under_review_only_on_violation` — D10.
+- `test_worker_does_not_bypass_roster_service_with_raw_sql` — D10.
+- `test_worker_member_failure_does_not_skip_remaining_members_of_rule`
+  — Revision 1 (R2 / F2): a mid-rule member raising a non-OCC
+  exception is caught at the per-member arm; remaining members of
+  that rule are processed within the same tick.
+- `test_worker_rolls_back_evaluation_insert_when_audit_projection_fails`
+  — Revision 1 (R2 / M1): injected fault inside the audit projection
+  raises; neither the `compliance_evaluations` row nor any
+  `activity_actions` row persists; the next tick retries cleanly
+  (no ON CONFLICT shadow row, no bare evaluation row).
+- `test_worker_rolls_back_evaluation_insert_when_roster_transition_occ_fails`
+  — Revision 1 (R6): roster transition raises
+  `StaleMutationError` inside the projection; whole per-member tx
+  rolls back; next tick retries and commits when version matches.
+- `test_manual_run_preserves_operator_attribution_on_roster_transition`
+  — Revision 1 (R4 / audit M3): HTTP operator triggers
+  `POST /evaluations/run`; resulting `roster_entry.transition`
+  action row records
+  `originating_actor_kind=<operator.kind>`,
+  `originating_actor_id=<operator.id>` (not
+  `compliance-evaluator`). Scheduled worker tick in the same test
+  fixture records the service actor as originating.
+- `test_manual_run_requires_compliance_evaluation_review_authority`
+  — Revision 1 (R4): operator without `compliance_evaluation.review`
+  receives 403; the inner service-actor's `.write` grant is not
+  consulted for authority purposes when the endpoint check fails.
+
+HTTP-layer coverage: each endpoint has at least one HTTP-level test
+exercising 403 (authority), 422 (validation), and the happy path.
+Service-layer tests carry the per-AC behavioural assertions.
+
+---
+
+## §11 — Out of scope (explicit — D15)
+
+The following are deferred; any PR adding one is out-of-bounds for this
+slice and must split into a follow-up slice:
+
+1. Real OCR engine implementation (Google Vision, Gemini, Tesseract,
+   etc.) — pluggable Protocol + stub only (D4).
+2. Async extraction queue — synchronous only (D5).
+3. File upload endpoint / blob storage — `attachment_ref` is opaque.
+4. Per-rule-type evidence validators or dispatch tables.
+5. Multi-member / batch consequences — one consequence per evaluation
+   row.
+6. Evidence deletion / GDPR flows.
+7. Discord-triggered evidence submission — HTTP intake only.
+8. Trust-signal integration — compliance violations do not generate
+   trust signals this slice.
+9. Immutable corrections history table — history lives in
+   `activity_state_changes` via the audit projection.
+10. `probation` as a new roster state — the only roster consequence is
+    existing `under_review` (D1).
+11. Per-chapter timezone overrides on cadence windows — UTC only (D9).
+12. Confidence-based auto-approval of extractions.
+13. Cross-scope (global) compliance rules — chapter-scoped only.
+
+---
+
+## §12 — PR decomposition
+
+Three candidate seams emerge from the synthesis:
+
+- **PR A — Rule lifecycle.** WU-039 (migration + contracts + repo +
+  service + endpoints + tests) and WU-041A review API (migration +
+  review service + endpoints + tests). Clean read/write-gated
+  substrate without any evidence flow.
+- **PR B — Evidence flow.** WU-040A (migration + evidence contracts +
+  service + endpoints + tests), WU-040B-correct (contracts + service
+  + endpoints + tests), WU-040B-extract (contracts + infrastructure
+  OCR + service + endpoints + tests). All three share the
+  `evidence_submissions` row lifecycle.
+- **PR C — Scheduled worker.** WU-041B only (worker module,
+  scheduler wiring, period helper, roster-service consequence
+  dispatch, tests). Depends on PR A + PR B being merged.
+
+Alternative single-PR bundling (PR A+B+C): acceptable at multi-concern
+review time if the reviewer prefers one coherent drop — the three
+migrations can be chained in a single PR (still linear per D12). The
+proposal recommends the three-PR split for review surface area; final
+decomposition is subject to the multi-concern review gate and should
+not exceed three PRs.
 
 ---
 
 ## Guardrails (binding across all WUs)
 
-- D1–D15 are binding. Any apparent need to violate a decision escalates to
-  synthesis revision rather than silent expansion.
+- D1–D15 are binding. Any apparent need to violate a decision escalates
+  to synthesis revision rather than silent expansion.
 - All mutations flow through `mutate_entity` with narrow payload
-  allowlists; no direct INSERT/UPDATE on mutable aggregates.
+  allowlists; no direct INSERT/UPDATE on mutable aggregates
+  (§5 / `services/api/app/services/mutations.py:58`).
 - All `action_type` / `change_type` values are module-level constants
-  (§9). No f-strings or inline concatenation when emitting audit events.
-- Authority checks run at the service layer (via
-  `_require_scoped_authority`) so tests can exercise them without HTTP;
-  endpoints rely on the service-layer check rather than introducing an
-  `endpoints/authority/`-specific FastAPI dependency (matches SLICE-017
+  (§9). No f-strings or inline concatenation when emitting audit
+  events (D13).
+- Authority checks run at the service layer via
+  `_require_scoped_authority`; endpoints do not declare per-route
+  FastAPI authority dependencies (matches SLICE-020 / permissions
   pattern).
 - Originating actor is spoof-proof: derived from
-  `Depends(get_current_actor)` and the ambient audit context; never from
-  the request body.
-- No Alembic migration (D2).
-- No backwards-compatibility shims: if a test pattern needs updating for
-  the new `reassign` action, update the test directly (AGENTS.md).
-- Follow the Test Agent / Code Agent separation at implementation time:
-  the test agent sees contracts only; the code agent sees contracts + tests.
+  `Depends(get_current_actor)` / the ambient audit context, never
+  from the request body.
+- Roster consequences route only through
+  `services/api/app/services/roster.py::transition_roster_entry` (D10).
+  No raw `UPDATE roster_entries` in compliance code.
+- Multi-aggregate service operations share one connection via
+  `mutate_entity(connection=...)` — the kwarg exists at
+  `services/api/app/services/mutations.py:70`.
+- Worker installs root audit context (§7 — mirrors
+  `services/api/app/tasks/permission_expiry.py:43–74`).
+- Migration chain is linear off `wu_038` (D12); downgrades are
+  no-ops.
+- Roster state vocabulary is `under_review`, not `probation` (D1).
+- Test/Code Agent separation (D14): test agent sees contracts only;
+  code agent sees contracts + tests.
+
+---
 
 ## Migration chain
 
-- Current head: `wu_038` (SLICE-020 temporary permission lifecycle).
-- SLICE-024 does not advance the head (D2).
-- If implementation discovers an unavoidable migration, revisit synthesis
-  before adding it; the candidate name would be
-  `wu_044_leadership_succession`.
+- Current head: `wu_038_permission_intent_expiry`.
+- SLICE-022 advances the head through three migrations in order:
+  `wu_039_compliance_rules` → `wu_040a_compliance_evidence` →
+  `wu_041a_compliance_evaluations`. New head after slice:
+  `wu_041a_compliance_evaluations`.
+- Filename convention (shipped): `wu-039_compliance_rules.py` (dash
+  between number and title); internal `revision` identifier uses
+  underscore: `"wu_039_compliance_rules"`.
 
 ---
 
 ## Revision log
 
-### Revision 1 — risk-gate closures
+### Revision 2 — audit re-run MEDIUM + LOW findings closed
 
-Driven by `plans/risk/slice-024-audit.md` (HIGH) and
-`plans/risk/slice-024-shortcut.md` (MEDIUM). Scope risk passed at LOW in
-revision 0 and is untouched.
+Binding risk inputs (re-run): `plans/risk/slice-022-audit.md` (MEDIUM:
+M5; LOW: L1 unchanged, L2 new), `plans/risk/slice-022-shortcut.md`
+(LOW — no action).
 
-| Revision | Closes                                  | Sections touched |
-|----------|-----------------------------------------|------------------|
-| R1       | audit F1 HIGH + shortcut F1 MEDIUM      | §3 (no change — parameter is on the service function, not the contract), §5 (`transfer_authority_grant` pseudocode rewritten to share one `db.transaction() as connection`; `grant_authority` / `revoke_authority` signatures extended with `connection: Connection[Any] \| None = None`; transaction-notes paragraph replaced), §8 (added `test_transfer_rolls_back_successor_when_revoke_fails`). |
-| R2       | audit F2 HIGH                           | §5 (added `get_head_for_update(connection, aggregate_type="authority_grant", aggregate_id=str(grant_id))` at top of transfer's tx body, before `find_successor_grant`), §8 (added `test_transfer_serializes_concurrent_attempts_on_predecessor`). |
-| R3       | audit F3 MEDIUM                         | §5 (deleted the "each run their own `db.transaction()` block" sentence; replaced with shared-connection narrative). |
-| R4       | shortcut O3 LOW + audit coverage        | §3 (added `HandoffFailureReason`, `ApplicationHandoffFailure`, `TicketHandoffFailure`; `ApplicationHandoffResult.failed` / `TicketHandoffResult.failed` now required), §5 (handoff loop wraps each `transition_application` / `transition_ticket` in try/except, appends to `failed` on per-item failure; added audit-context-origin note from shortcut O4), §7 (error-model paragraph rewritten to bind a single contract — HTTP 200 with `failed` list; 409 row removed from the handoff table), §8 (added `test_handoff_partial_success_reports_failed_per_item` for both applications and tickets). |
-| R5       | shortcut O2 LOW                         | §3 (added `InvalidHolderIdError(ValueError)`), §5 (`compute_succession_plan` replaces `_is_uuid(h)` filter with `UUID(h)` per holder wrapped in try/except → `InvalidHolderIdError`; `read_leadership_context` validates `member_id` at the boundary), §7 (error-model paragraph notes 422 on non-UUID `chapter_id` / `member_id` / holder id). |
+- **R7 (audit M5 MEDIUM — roster-service `connection=` kwarg).**
+  R6's atomicity guarantee (evaluation insert + roster transition
+  share one `mutate_entity` transaction) depended on
+  `transition_roster_entry(..., connection=conn)` threading the
+  caller's connection. The shipped
+  `services/api/app/services/roster.py::transition_roster_entry`
+  does not accept a `connection=` kwarg today, so without an
+  explicit signature extension the §5 call would raise `TypeError`
+  at import and the evaluation + roster transition would commit in
+  separate transactions — re-opening the exact atomicity failure R2
+  was built to close. Revision 2 adds an explicit subsection to §5
+  ("Roster service signature extension") documenting the
+  backward-compatible extension of `transition_roster_entry` and
+  `get_roster_entry` with an optional `connection=None` kwarg,
+  mirroring SLICE-020 R1's same-shape extension of
+  `grant_authority` / `revoke_authority`. Test:
+  `test_transition_roster_entry_accepts_shared_connection` in
+  `services/api/tests/test_roster.py` (roster's own test home — so
+  the signature change is pinned where it lives, not smeared into
+  SLICE-022 tests). File/line refs: §5 header + §5 "Roster service
+  signature extension" subsection; §10 notes the cross-file test.
 
-No other sections changed. D1–D15 are still binding; no new decisions are
-introduced. Migration head remains `wu_038`.
+- **R8 (audit L2 LOW — override payload allowlist).** Added
+  `COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST = frozenset({
+  "evaluation_id", "override_result", "reviewer_reason"})` alongside
+  the review allowlist in §3. §5 `review_evaluation` selects the
+  allowlist per `request.action`: review dispatches pair
+  `COMPLIANCE_EVALUATION_REVIEW_ACTION_TYPE` with
+  `COMPLIANCE_EVALUATION_REVIEW_PAYLOAD_ALLOWLIST`; override
+  dispatches pair `COMPLIANCE_EVALUATION_OVERRIDE_ACTION_TYPE` with
+  `COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST`. Closes D13's
+  "named allowlist per action" requirement at the naming layer
+  (previously review and override implicitly shared one allowlist,
+  which read correctly but scanned poorly). File/line refs: §3
+  (new constant); §5 `review_evaluation` (selection comment).
+
+- **Audit L1 (LOW) — unchanged.** Still documented-silent (no audit
+  row on 503 path); accepted per Revision 1's deferral.
+
+- **Shortcut LOW items — no action.** Shortcut re-run is LOW with no
+  new findings; Revision 1's LOW deferrals stand.
+
+### Revision 1 — audit/shortcut MEDIUM findings closed
+
+Binding risk inputs: `plans/risk/slice-022-audit.md` (MEDIUM: M1, M2,
+M3, M4; LOW: L1), `plans/risk/slice-022-shortcut.md` (MEDIUM: F1, F2,
+F3; six LOW), `plans/risk/slice-022-scope.md` (LOW — no action).
+
+- **R1 (shortcut F1 MEDIUM — chapter_id spoof).** `submit_evidence`
+  loads the rule first via `get_rule(request.rule_id)` and authorizes
+  against `rule["chapter_id"]`, not `request.chapter_id`. Mismatch
+  raises `EvidenceChapterMismatchError` → HTTP 422. The evidence row
+  persists `chapter_id = rule["chapter_id"]` — derived, spoof-proof.
+  Same rule-first pattern documented for any future endpoint that
+  accepts both `rule_id` and `chapter_id`. Tests:
+  `test_submit_rejects_chapter_id_mismatch_with_rule`,
+  `test_submit_authorizes_against_rules_chapter_not_request_chapter`,
+  `test_submit_persists_chapter_id_from_rule_not_request`.
+  File/line refs in this proposal: §3 `EvidenceChapterMismatchError`;
+  §5 `submit_evidence`; §8 `_shared.py` + status table; §10
+  `test_compliance_evidence.py`.
+
+- **R2 (audit M1 MEDIUM + shortcut F2 MEDIUM — atomic evaluation +
+  per-member isolation).** `_evaluate_member_rule` is now a single
+  per-member transaction — `insert_evaluation_if_absent`, the audit
+  projection, and the roster transition commit or roll back together
+  (mirrors SLICE-020 R1 `_expire_single_intent`). On ON CONFLICT, a
+  private `_AlreadyEvaluatedSentinel` raised from
+  `mutate_projection` aborts the projection cleanly (no audit row,
+  no duplicate). `run_scheduled_compliance_evaluations` wraps the
+  member loop in a per-member `try / except StaleMutationError /
+  except Exception` so one bad member does not abort the rule's
+  remaining members. Tests:
+  `test_worker_rolls_back_evaluation_insert_when_audit_projection_fails`,
+  `test_worker_member_failure_does_not_skip_remaining_members_of_rule`.
+  File/line refs: §4 `insert_evaluation_if_absent` docstring; §5
+  `_evaluate_member_rule` rewrite.
+
+- **R3 (audit M2 MEDIUM — consequence audit shape).** Picked option
+  (a) per risk guidance: consequence is an attribute of the
+  evaluation and is written inside the CREATE action's
+  `mutate_projection`. The orphan
+  `COMPLIANCE_EVALUATION_CONSEQUENCE_CHANGE_TYPE` constant is
+  removed; the `mark_consequence_applied` repository helper is
+  removed from §4. The roster transition is its own audit chain
+  (`roster_entry.transition`) threaded via the shared
+  `correlation_id`. File/line refs: §3 (constant removal);
+  §4 (helper removal); §5 `_evaluate_member_rule.mutate_projection`.
+
+- **R4 (audit M3 MEDIUM — operator attribution on manual /run).**
+  `run_scheduled_compliance_evaluations` grows an explicit
+  `originating_actor: ActorIdentity | None` parameter (defaulting
+  to `actor`). The scheduled worker passes `None`, so the service
+  actor is originating as before. The manual
+  `POST /evaluations/run` endpoint authorizes the operator with
+  `compliance_evaluation.review` (D11: `.write` is internal-only),
+  then invokes the service with
+  `actor=_evaluator_service_actor(), originating_actor=<operator>`.
+  The resulting `roster_entry.transition` records operator kind +
+  id; the `compliance_evaluation.create` row records the service
+  actor (consistent with the scheduled path); correlation_id ties
+  them together. This is a legitimate authority-escalation pattern
+  (operator cannot self-write `.write` but can trigger the service
+  actor for a backfill) and is documented in §1 AC4 and the
+  Guardrails. Tests:
+  `test_manual_run_preserves_operator_attribution_on_roster_transition`,
+  `test_manual_run_requires_compliance_evaluation_review_authority`.
+  File/line refs: §1 AC4 endpoints bullet; §5
+  `run_scheduled_compliance_evaluations`; §7 worker tick (defaults
+  `originating_actor=None`).
+
+- **R5 (audit M4 MEDIUM — second-correction diff_json).**
+  `correct_evidence.mutate_projection` now emits
+  `diff_json = {extraction_status: {old, new},
+  extracted_fields: <baseline>,
+  extracted_fields_corrected: {old: <prior overlay>, new: <new
+  overlay>}}`. First correction's `old` is `None`; subsequent
+  corrections carry the prior overlay. A single state-change row is
+  self-describing: baseline + prior overlay + new overlay. Test:
+  `test_correction_diff_json_records_prior_overlay_on_second_correction`.
+  File/line refs: §5 `correct_evidence.mutate_projection` diff_json.
+
+- **R6 (shortcut F3 MEDIUM — roster call signature).** The worker
+  now explicitly (a) fetches `roster_entry` via
+  `get_roster_entry(connection, chapter_id=..., member_id=...)`
+  before opening the mutate_entity transaction, and (b) passes
+  `entry_id=roster_entry["id"]` and
+  `expected_version=roster_entry["version"]` into
+  `roster.transition_roster_entry`, which runs on the shared
+  connection (`mutations.py:70` accepts `connection=`). On
+  `StaleMutationError` the entire per-member transaction rolls back
+  (R2), so the next tick retries naturally — no
+  `deferred_occ_conflict` marker state, no `pending_consequence`
+  intermediate, no second mutation. Observation 3 from the shortcut
+  report (non-atomic consequence) is closed by the same tx boundary.
+  `InvalidRosterStatusTransitionError` (member already
+  `under_review`/`removed`) is mapped upstream by
+  `_compute_consequence_shape` choosing `consequence_applied="none"`
+  when the preconditions do not hold; there is no silent catch
+  inside the write path. Test:
+  `test_worker_rolls_back_evaluation_insert_when_roster_transition_occ_fails`.
+  File/line refs: §4 "Roster member enumeration" expansion;
+  §5 `_evaluate_member_rule` rewrite.
+
+- **Audit L1 (LOW) — unchanged.** The 503 path remains
+  documented-silent (no audit row). Raising this to a MEDIUM-action
+  revision was not required; the proposal already documents the
+  503 short-circuit in §5 and the tests pin the behavior. Deferred
+  to a follow-up slice if operational visibility becomes a concern.
+
+- **Scope findings — none.** `plans/risk/slice-022-scope.md` rated
+  LOW with observations only; no action.
+
+- **Shortcut LOW items (Obs 1–6) — not addressed in this revision.**
+  Obs 1 (failed → corrected COALESCE rule), Obs 2 (rule_version
+  snapshot mechanism), Obs 4 (unused `compliance_rule.read` on
+  service actor), Obs 5 (`asyncio.run` endpoint declaration),
+  Obs 6 (negative-test naming). These are hygiene items;
+  implementation phase can absorb them inline without a revision
+  cycle.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
