@@ -8,6 +8,9 @@ from psycopg import Connection, errors
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.applications import (
+    APPLICATION_REASSIGN_ACTION_TYPE,
+    APPLICATION_REASSIGN_CHANGE_TYPE,
+    APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST,
     ApplicationAlreadyClaimedError,
     ApplicationDecisionReasonRequiredError,
     ApplicationFormField,
@@ -47,15 +50,21 @@ from app.services.mutations import mutate_entity
 
 VALID_TRANSITIONS = {
     ("submitted", "route"): "queued",
+    ("submitted", "reassign"): "submitted",
+    ("queued", "reassign"): "queued",
     ("queued", "claim"): "claimed",
+    ("claimed", "reassign"): "claimed",
     ("claimed", "review"): "in_review",
+    ("in_review", "reassign"): "in_review",
     ("in_review", "request_interview"): "interview",
     ("in_review", "waitlist"): "waitlisted",
+    ("interview", "reassign"): "interview",
     ("interview", "waitlist"): "waitlisted",
     ("interview", "approve"): "approved",
     ("interview", "deny"): "denied",
     ("in_review", "approve"): "approved",
     ("in_review", "deny"): "denied",
+    ("waitlisted", "reassign"): "waitlisted",
     ("waitlisted", "reactivate"): "claimed",
     ("submitted", "withdraw"): "withdrawn",
     ("queued", "withdraw"): "withdrawn",
@@ -71,10 +80,24 @@ AUDIT_ACTION_TYPE = {
     "review": "application.review",
     "request_interview": "application.interview",
     "waitlist": "application.waitlist",
+    "reassign": APPLICATION_REASSIGN_ACTION_TYPE,
     "reactivate": "application.reactivate",
     "approve": "application.decision",
     "deny": "application.decision",
     "withdraw": "application.review",
+}
+
+AUDIT_CHANGE_TYPE = {
+    "route": "application.queued",
+    "claim": "application.transitioned",
+    "review": "application.transitioned",
+    "request_interview": "application.transitioned",
+    "waitlist": "application.transitioned",
+    "reassign": APPLICATION_REASSIGN_CHANGE_TYPE,
+    "reactivate": "application.transitioned",
+    "approve": "application.transitioned",
+    "deny": "application.transitioned",
+    "withdraw": "application.transitioned",
 }
 
 TRANSITION_PAYLOAD_ALLOWLIST = {
@@ -95,6 +118,7 @@ TRANSITION_PAYLOAD_ALLOWLIST = {
         "originating_actor_kind",
         "originating_actor_id",
     },
+    "reassign": set(APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST),
     "reactivate": {
         "action",
         "reviewer_id",
@@ -243,7 +267,7 @@ def require_transition_authority(
     action: str,
     target_scope: dict[str, Any],
 ) -> None:
-    permission = f"application.{action}"
+    permission = "application.review" if action == "reassign" else f"application.{action}"
     _require_authority(
         db,
         actor=actor,
@@ -372,6 +396,8 @@ def validate_required_transition_fields(
     action: str,
     request: ApplicationTransitionRequest,
 ) -> None:
+    if action == "reassign" and request.new_owner_id is None:
+        raise ValueError("new_owner_id is required for reassign")
     if action in {"approve", "deny"}:
         reason = None if request.decision_reason is None else request.decision_reason.strip()
         if not reason:
@@ -659,6 +685,12 @@ def _transition_application_locked(
             )
         elif action == "waitlist":
             pass
+        elif action == "reassign":
+            if request.new_owner_id is None:
+                raise ValueError("new_owner_id is required for reassign")
+            if fetch_member_by_id(active_connection, request.new_owner_id) is None:
+                raise ValueError(f"member {request.new_owner_id} was not found")
+            updated["owner_id"] = request.new_owner_id
         elif action == "reactivate":
             next_owner_id = request.new_owner_id or current["owner_id"]
             if next_owner_id is None:
@@ -679,6 +711,7 @@ def _transition_application_locked(
             row=updated,
         )
         aggregate_seq = expected_version + 1
+        review_action = "review" if action == "reassign" else action
         insert_review_row(
             active_connection,
             row={
@@ -688,7 +721,7 @@ def _transition_application_locked(
                 "reviewer_id": reviewer_id,
                 "actor_kind": actor.actor_kind,
                 "actor_id": actor.actor_id,
-                "action": action,
+                "action": review_action,
                 "from_state": current["state"],
                 "to_state": next_state,
                 "notes": notes,
@@ -707,15 +740,13 @@ def _transition_application_locked(
         }
         if action == "request_interview":
             payload_json["thread_id"] = request.thread_id
-        if action == "reactivate" and request.new_owner_id is not None:
+        if action in {"reassign", "reactivate"} and request.new_owner_id is not None:
             payload_json["new_owner_id"] = str(request.new_owner_id)
         if action in {"request_interview", "waitlist", "reactivate"} and reason is not None:
             payload_json["reason"] = reason
 
         return StateChangeDraft(
-            change_type="application.queued"
-            if action == "route"
-            else "application.transitioned",
+            change_type=AUDIT_CHANGE_TYPE[action],
             payload_json=payload_json,
             diff_json=_transition_diff(current, updated, notes=notes),
         )
@@ -746,6 +777,7 @@ def transition_application(
     request: ApplicationTransitionRequest,
     actor: ActorIdentity,
     request_surface: str | None = None,
+    skip_authority_check: bool = False,
 ) -> tuple[ApplicationRead, MutationResult]:
     action = request.action.value
     if action == "route":
@@ -757,12 +789,13 @@ def transition_application(
     with db.connection() as read_connection:
         current = _fetch_application_row(read_connection, application_id)
     target_scope = current["form_snapshot"]["target_scope"]
-    require_transition_authority(
-        db,
-        actor=actor,
-        action=action,
-        target_scope=target_scope,
-    )
+    if not skip_authority_check:
+        require_transition_authority(
+            db,
+            actor=actor,
+            action=action,
+            target_scope=target_scope,
+        )
     reviewer_id = _reviewer_id(actor, action)
     if (
         action in {"request_interview", "waitlist"}

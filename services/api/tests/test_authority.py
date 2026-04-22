@@ -24,6 +24,10 @@ import pytest
 from httpx import AsyncClient
 from psycopg.rows import dict_row
 
+from app.repositories.db import PostgresDatabase
+
+from .authority_slice_helpers import seed_lifecycle_permissions
+
 
 BASE_URL = "/api/v1/authority-grants"
 
@@ -100,9 +104,11 @@ def _fetch_grant_row(dsn: str, grant_id: UUID | str) -> dict[str, Any] | None:
 async def test_create_grant_persists_exact_scope_permissions_expiry(
     migrated_async_client: AsyncClient,
     governance_dsn: str,
+    governance_db: PostgresDatabase,
 ) -> None:
     """AC1: persist scope_kind, scope_id, permissions, and expiry exactly."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     expires_at = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
     payload = _create_payload(
         grantee_id="u1",
@@ -144,11 +150,13 @@ async def test_create_grant_persists_exact_scope_permissions_expiry(
 async def test_create_grant_returns_etag_matching_aggregate_version(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001 — truncates governance state
+    governance_db: PostgresDatabase,
 ) -> None:
     """Response ETag must be the strong form ``"<version>"`` and the embedded
     version integer must match the aggregate head version (first write -> 1).
     """
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     _, etag = await _post_create(migrated_async_client)
 
     assert etag.startswith('"') and etag.endswith('"')
@@ -194,11 +202,13 @@ async def test_create_grant_missing_required_field_rejected(
 async def test_create_grant_duplicate_active_grant_returns_409(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """D8: duplicate active grant for
     ``(grantee_id, scope_kind, scope_id, permissions)`` returns 409 with a body
     identifying the existing grant by id."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     first, _ = await _post_create(migrated_async_client)
 
     response = await migrated_async_client.post(
@@ -217,10 +227,12 @@ async def test_create_grant_duplicate_active_grant_returns_409(
 async def test_create_grant_with_predecessor_grant_id_creates_lineage(
     migrated_async_client: AsyncClient,
     governance_dsn: str,
+    governance_db: PostgresDatabase,
 ) -> None:
     """``predecessor_grant_id`` is stored verbatim so supersession lineage is
     queryable."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     first, _ = await _post_create(migrated_async_client)
 
     successor_payload = _create_payload(
@@ -249,9 +261,11 @@ async def test_create_grant_with_predecessor_grant_id_creates_lineage(
 async def test_list_grants_returns_active_only_by_default(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """Default ``include_revoked=False`` hides revoked rows."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     active, _ = await _post_create(migrated_async_client)
     to_revoke_payload = _create_payload(scope_id="ch-2")
     to_revoke, to_revoke_etag = await _post_create(
@@ -280,9 +294,11 @@ async def test_list_grants_returns_active_only_by_default(
 async def test_list_grants_include_revoked_returns_all(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """``include_revoked=true`` includes revoked rows alongside active ones."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     active, _ = await _post_create(migrated_async_client)
     revoked_payload = _create_payload(scope_id="ch-2")
     revoked_grant, revoked_etag = await _post_create(
@@ -311,9 +327,11 @@ async def test_list_grants_include_revoked_returns_all(
 async def test_list_grants_filters_by_scope_kind(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """``scope_kind`` filter returns only rows matching that scope kind."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     chapter_grant, _ = await _post_create(migrated_async_client)
     global_payload = _create_payload(scope_kind="global", scope_id=None)
     global_grant, _ = await _post_create(migrated_async_client, body=global_payload)
@@ -335,9 +353,11 @@ async def test_list_grants_filters_by_scope_kind(
 async def test_list_grants_filters_by_scope_id(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """``scope_id`` filter returns only rows whose scope_id matches exactly."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     one, _ = await _post_create(migrated_async_client, body=_create_payload(scope_id="ch-1"))
     two, _ = await _post_create(
         migrated_async_client, body=_create_payload(scope_id="ch-2")
@@ -360,9 +380,11 @@ async def test_list_grants_filters_by_scope_id(
 async def test_list_grants_pagination_with_after_id(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """``limit`` + ``after_id`` produce deterministic cursor pagination."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     created_ids: list[str] = []
     for scope in ("ch-1", "ch-2", "ch-3"):
         payload = _create_payload(scope_id=scope)
@@ -426,10 +448,13 @@ async def test_list_grants_missing_grantee_id_returns_400(
 async def test_revoke_grant_records_revoked_at_revoked_by_revocation_reason(
     migrated_async_client: AsyncClient,
     governance_dsn: str,
+    governance_db: PostgresDatabase,
 ) -> None:
     """AC2: revocation persists ``revoked_at``, ``revoked_by``, and
     ``revocation_reason`` atomically."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
+    seed_lifecycle_permissions(governance_db, actor_id="revoker-1")
     grant, etag = await _post_create(migrated_async_client)
 
     response = await migrated_async_client.post(
@@ -456,9 +481,11 @@ async def test_revoke_grant_records_revoked_at_revoked_by_revocation_reason(
 async def test_revoke_grant_requires_if_match_header(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """OCC: revoke without ``If-Match`` returns 428 Precondition Required."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     grant, _ = await _post_create(migrated_async_client)
 
     response = await migrated_async_client.post(
@@ -474,9 +501,11 @@ async def test_revoke_grant_requires_if_match_header(
 async def test_revoke_grant_stale_etag_returns_412(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """OCC: stale ``If-Match`` returns 412 Precondition Failed."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     grant, _ = await _post_create(migrated_async_client)
 
     response = await migrated_async_client.post(
@@ -492,9 +521,11 @@ async def test_revoke_grant_stale_etag_returns_412(
 async def test_revoke_grant_already_revoked_returns_409(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """Second revoke on the same grant -> 409 with ``grant_already_revoked``."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     grant, create_etag = await _post_create(migrated_async_client)
 
     first = await migrated_async_client.post(
@@ -537,9 +568,11 @@ async def test_revoke_grant_not_found_returns_404(
 async def test_revoke_grant_empty_reason_rejected(
     migrated_async_client: AsyncClient,
     governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
 ) -> None:
     """``AuthorityGrantRevoke.reason`` has ``min_length=1``; empty -> 422."""
 
+    seed_lifecycle_permissions(governance_db, actor_id="test-user")
     grant, etag = await _post_create(migrated_async_client)
 
     response = await migrated_async_client.post(
@@ -549,3 +582,92 @@ async def test_revoke_grant_empty_reason_rejected(
     )
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+
+
+# ---------------------------------------------------------------------------
+# Authorization — CRITICAL 1 (authority_grant.create / .read / .revoke)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_grant_without_permission_returns_403(
+    migrated_async_client: AsyncClient,
+    governance_dsn: str,  # noqa: ARG001
+) -> None:
+    """Creating a grant without ``authority_grant.create`` returns 403."""
+
+    response = await migrated_async_client.post(
+        BASE_URL, json=_create_payload(), headers=_actor_headers()
+    )
+
+    assert response.status_code == HTTPStatus.FORBIDDEN, response.text
+    assert response.json()["code"] == "authority_decision_denied"
+
+
+@pytest.mark.asyncio
+async def test_list_grants_without_permission_returns_403(
+    migrated_async_client: AsyncClient,
+    governance_dsn: str,  # noqa: ARG001
+) -> None:
+    """Listing someone else's grants without ``authority_grant.read`` returns 403."""
+
+    response = await migrated_async_client.get(
+        BASE_URL,
+        params={"grantee_id": "someone-else"},
+        headers=_actor_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.FORBIDDEN, response.text
+
+
+@pytest.mark.asyncio
+async def test_revoke_grant_without_permission_returns_403(
+    migrated_async_client: AsyncClient,
+    governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
+) -> None:
+    """Revoking a grant without ``authority_grant.revoke`` returns 403."""
+
+    seed_lifecycle_permissions(governance_db, actor_id="creator")
+    create_response = await migrated_async_client.post(
+        BASE_URL,
+        json=_create_payload(),
+        headers=_actor_headers(actor_id="creator"),
+    )
+    assert create_response.status_code == HTTPStatus.CREATED, create_response.text
+    grant = create_response.json()
+    etag = create_response.headers["etag"]
+
+    response = await migrated_async_client.post(
+        f"{BASE_URL}/{grant['id']}/revoke",
+        json={"reason": "no perms"},
+        headers={**_actor_headers(actor_id="intruder"), "If-Match": etag},
+    )
+
+    assert response.status_code == HTTPStatus.FORBIDDEN, response.text
+
+
+@pytest.mark.asyncio
+async def test_list_own_grants_without_permission_is_allowed(
+    migrated_async_client: AsyncClient,
+    governance_dsn: str,  # noqa: ARG001
+    governance_db: PostgresDatabase,
+) -> None:
+    """Self-read (grantee_id == actor alias) bypasses ``authority_grant.read``."""
+
+    seed_lifecycle_permissions(governance_db, actor_id="creator")
+    create_response = await migrated_async_client.post(
+        BASE_URL,
+        json=_create_payload(grantee_id="self-reader"),
+        headers=_actor_headers(actor_id="creator"),
+    )
+    assert create_response.status_code == HTTPStatus.CREATED, create_response.text
+
+    response = await migrated_async_client.get(
+        BASE_URL,
+        params={"grantee_id": "self-reader"},
+        headers=_actor_headers(actor_id="self-reader"),
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert len(response.json()["items"]) >= 1

@@ -50,3 +50,21 @@ def fetch_chapter_role(
             (role_id,),
         ).fetchone()
 
+
+def list_succession_triggering_roles(
+    connection: Connection[Any],
+    *,
+    chapter_id: str,
+) -> list[dict[str, Any]]:
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            """
+            SELECT id, chapter_id, template_id, name, ordinal,
+                   triggers_succession, created_at
+            FROM chapter_roles
+            WHERE chapter_id = %s
+              AND triggers_succession = TRUE
+            ORDER BY ordinal ASC, id ASC
+            """,
+            (chapter_id,),
+        ).fetchall()

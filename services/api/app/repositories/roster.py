@@ -165,3 +165,29 @@ def _touch_roster_entry(
         "UPDATE roster_entries SET updated_at = CURRENT_TIMESTAMP WHERE id = %s",
         (entry_id,),
     )
+
+
+def list_latest_role_holders(
+    connection: Connection[Any],
+    *,
+    chapter_id: str,
+    role_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    if not role_ids:
+        return []
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            """
+            SELECT DISTINCT ON (r.role_id)
+                   r.role_id,
+                   r.member_id,
+                   r.status,
+                   r.updated_at,
+                   r.id
+            FROM roster_entries AS r
+            WHERE r.chapter_id = %s
+              AND r.role_id = ANY(%s)
+            ORDER BY r.role_id ASC, r.updated_at DESC, r.id DESC
+            """,
+            (chapter_id, role_ids),
+        ).fetchall()

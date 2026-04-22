@@ -12,6 +12,9 @@ from app.contracts.mutations import MutationRequest, MutationResult, StateChange
 from app.contracts.ticket_messages import TicketMessageRead
 from app.contracts.ticket_categories import TicketCategoryNotFoundError
 from app.contracts.tickets import (
+    TICKET_REASSIGN_ACTION_TYPE,
+    TICKET_REASSIGN_CHANGE_TYPE,
+    TICKET_REASSIGN_PAYLOAD_ALLOWLIST,
     DuplicateTicketCreateError,
     InvalidTicketTransitionError,
     TicketCategorySnapshotRead,
@@ -57,6 +60,16 @@ TICKET_TRANSITION_PAYLOAD_ALLOWLIST = {
     "priority",
     "originating_actor_kind",
     "originating_actor_id",
+}
+AUDIT_ACTION_TYPE = {
+    "create": "ticket.create",
+    "transition": "ticket.transition",
+    "reassign": TICKET_REASSIGN_ACTION_TYPE,
+}
+AUDIT_CHANGE_TYPE = {
+    "create": "ticket.created",
+    "transition": "ticket.transitioned",
+    "reassign": TICKET_REASSIGN_CHANGE_TYPE,
 }
 DEFAULT_TICKET_PRIORITY = "normal"
 
@@ -153,6 +166,25 @@ def validate_transition(
     ticket_row: dict[str, Any],
     request: TicketTransitionRequest,
 ) -> dict[str, Any]:
+    if request.action == "reassign":
+        new_owner_id = request.new_owner_id
+        if ticket_row["terminal_at"] is not None or new_owner_id is None:
+            raise InvalidTicketTransitionError(
+                ticket_id=ticket_row["id"],
+                from_state=str(ticket_row["state"]),
+                action=request.action,
+                to_state=request.to_state,
+            )
+        return {
+            "edge": None,
+            "reason": None,
+            "resolution": ticket_row["resolution"],
+            "next_state": ticket_row["state"],
+            "next_owner_id": new_owner_id,
+            "next_priority": ticket_row["priority"],
+            "next_terminal_at": ticket_row["terminal_at"],
+        }
+
     edge = _transition_edge(ticket_row, request)
     reason = None if request.reason is None else request.reason.strip()
     resolution = None if request.resolution is None else request.resolution.strip()
@@ -396,6 +428,7 @@ def transition_ticket(
     connection: Connection[Any] | None = None,
 ) -> tuple[TicketRead, MutationResult]:
     transition_id = uuid4()
+    action_kind = "reassign" if request.action == "reassign" else "transition"
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
         ticket_row = get_ticket_for_update(connection, ticket_id)
@@ -436,7 +469,7 @@ def transition_ticket(
             },
         )
         return StateChangeDraft(
-            change_type="ticket.transitioned",
+            change_type=AUDIT_CHANGE_TYPE[action_kind],
             payload_json={
                 "ticket_id": str(ticket_id),
                 "ticket_transition_id": str(transition_id),
@@ -468,9 +501,13 @@ def transition_ticket(
             actor=actor,
             request_surface=f"api:/api/v1/tickets/{ticket_id}/transitions",
         ),
-        action_type="ticket.transition",
+        action_type=AUDIT_ACTION_TYPE[action_kind],
         action_payload=request.model_dump(mode="json"),
-        payload_allowlist=TICKET_TRANSITION_PAYLOAD_ALLOWLIST,
+        payload_allowlist=(
+            set(TICKET_REASSIGN_PAYLOAD_ALLOWLIST)
+            if action_kind == "reassign"
+            else TICKET_TRANSITION_PAYLOAD_ALLOWLIST
+        ),
         mutate_projection=mutate_projection,
         scope_kind=routing_scope["scope_kind"],
         scope_id=routing_scope.get("scope_id"),
