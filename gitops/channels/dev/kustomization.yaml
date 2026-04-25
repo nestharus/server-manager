@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Active control-cluster channel overlay.
+# Channel id: dev (matches infra/channels/dev.yaml)
+
+resources:
+  - ../../bases/flux-system
+  - ../../bases/crossplane
+  - ../../bases/cert-manager
+  - ../../bases/external-dns
+  - ../../bases/cluster-security
+  - ../../secrets/dev
