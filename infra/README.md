@@ -2,11 +2,11 @@
 
 OpenTofu-managed Vultr infrastructure for the Humility platform.
 
-## Prerequisites
+## Local prerequisites
 
-- OpenTofu CLI `1.11.5` for INIT-008 verification. Roots keep
-  `required_version = ">= 1.8.0"` as the feature floor.
-- Python `>=3.10` for the channel resolver and generator scripts.
+- OpenTofu CLI `1.11.5` (the version INIT-008 acceptance was verified against;
+  newer 1.x patch releases should also work, report drift if they do not).
+- Python `3.12` or compatible.
 - `jsonschema` any `4.x`.
 - `PyYAML` any `6.x`.
 
@@ -45,13 +45,20 @@ Local-only channel tooling:
 Per-channel OpenTofu roots. `infra/roots/channels/dev/` is the only active
 channel root in INIT-008.
 
-## Local Validation
+## Local verification
 
 The active no-credential verification surface is the checked-in harness:
 
 ```bash
 bash infra/tests/validate_platform_bootstrap.sh
 ```
+
+The harness is the observable done-surface for INIT-008. It checks the
+OpenTofu CLI version, recursive formatting, bootstrap and active channel root
+validation, schema and channel fixture behavior, generated artifact drift,
+absence of retired environment roots, provider lockfile presence, and absence
+of committed credentials in `.tf`, `.tfbackend`, `.yaml`, and generated active
+channel tfvars files.
 
 ```bash
 cd infra/bootstrap/state-backend

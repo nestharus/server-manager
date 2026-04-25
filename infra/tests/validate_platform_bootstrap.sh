@@ -41,6 +41,23 @@ assert_environments_dir_gone() {
   fi
 }
 
+assert_tofu_version_111() {
+  local first_line
+
+  if ! command -v tofu >/dev/null 2>&1; then
+    fail "OpenTofu CLI is installed"
+    return
+  fi
+
+  tofu version
+  first_line="$(tofu version | head -1)"
+  if grep -Eq '^OpenTofu v1\.11\.[0-9]+' <<<"$first_line"; then
+    pass "OpenTofu major.minor is 1.11"
+  else
+    fail "OpenTofu major.minor is 1.11"
+  fi
+}
+
 assert_grep() {
   local pattern="$1"
   local file="${INFRA_DIR}/$2"
@@ -160,6 +177,14 @@ assert_readme_documents_retirement() {
     pass "README documents channel retirement"
   else
     fail "README documents channel retirement"
+  fi
+}
+
+assert_recursive_fmt_check() {
+  if (cd "$REPO_ROOT" && tofu fmt -check -recursive infra/ >/dev/null); then
+    pass "recursive tofu fmt -check for infra"
+  else
+    fail "recursive tofu fmt -check for infra"
   fi
 }
 
@@ -351,6 +376,85 @@ assert_generated_artifacts_covered() {
   fi
 }
 
+assert_no_committed_credentials_in_tf() {
+  local pattern='\b(access_key|secret_key|password|api_key)\b\s*=\s*"[^"$][^"]*"'
+
+  if rg -n -i --type-add 'tf:*.tf' --type tf "$pattern" "${INFRA_DIR}" >/dev/null; then
+    fail "no committed credential assignments in .tf files"
+  else
+    pass "no committed credential assignments in .tf files"
+  fi
+}
+
+assert_no_committed_credentials_in_tfbackend() {
+  local files=()
+  local path
+
+  while IFS= read -r path; do
+    files+=("$path")
+  done < <(compgen -G "${INFRA_DIR}/roots/channels/*/backend.tfbackend" || true)
+
+  while IFS= read -r path; do
+    files+=("$path")
+  done < <(compgen -G "${INFRA_DIR}/bootstrap/*/backend.tfbackend" || true)
+
+  if [[ "${#files[@]}" -eq 0 ]]; then
+    pass "no committed credentials in .tfbackend files"
+    return
+  fi
+
+  if rg -n -i '(access_key|secret_key)' "${files[@]}" >/dev/null; then
+    fail "no committed credentials in .tfbackend files"
+  else
+    pass "no committed credentials in .tfbackend files"
+  fi
+}
+
+assert_no_committed_credentials_in_yaml() {
+  if rg -n -i '(access_key|secret_key|password|api_key|token)\s*:' \
+    "${INFRA_DIR}/channels" \
+    "${INFRA_DIR}/schemas" >/dev/null; then
+    fail "no committed credential keys in channel or schema YAML"
+  else
+    pass "no committed credential keys in channel or schema YAML"
+  fi
+}
+
+assert_no_committed_credentials_in_active_tfvars() {
+  local files=()
+  local path
+
+  while IFS= read -r path; do
+    files+=("$path")
+  done < <(compgen -G "${INFRA_DIR}/roots/channels/*/channel.auto.tfvars.json" || true)
+
+  if [[ "${#files[@]}" -eq 0 ]]; then
+    fail "active channel tfvars files exist for credential scan"
+    return
+  fi
+
+  if rg -n -i '(access_key|secret_key|password|api_key)' "${files[@]}" >/dev/null; then
+    fail "no committed credentials in active channel tfvars"
+  else
+    pass "no committed credentials in active channel tfvars"
+  fi
+}
+
+assert_active_root_lockfiles_exist() {
+  if [[ -f "${INFRA_DIR}/bootstrap/state-backend/.terraform.lock.hcl" \
+    && -f "${INFRA_DIR}/roots/channels/dev/.terraform.lock.hcl" ]]; then
+    pass "active root lockfiles exist"
+  else
+    fail "active root lockfiles exist"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+section "Toolchain"
+# ---------------------------------------------------------------------------
+
+assert_tofu_version_111
+
 # ---------------------------------------------------------------------------
 section "File existence"
 # ---------------------------------------------------------------------------
@@ -382,11 +486,13 @@ for file in "${FILES[@]}"; do
 done
 
 assert_environments_dir_gone
+assert_active_root_lockfiles_exist
 
 # ---------------------------------------------------------------------------
 section "Formatting checks"
 # ---------------------------------------------------------------------------
 
+assert_recursive_fmt_check
 assert_bootstrap_tofu_validate
 assert_dev_tofu_fmt_check
 
@@ -491,6 +597,11 @@ assert_generated_artifacts_covered
 # ---------------------------------------------------------------------------
 section "Security assertions"
 # ---------------------------------------------------------------------------
+
+assert_no_committed_credentials_in_tf
+assert_no_committed_credentials_in_tfbackend
+assert_no_committed_credentials_in_yaml
+assert_no_committed_credentials_in_active_tfvars
 
 CRED_PATTERNS='(api_key|api_token|secret_key|password|credential)\s*=\s*"[^"$]'
 

@@ -62,6 +62,7 @@ def _fixture_channel_paths(registry: Path) -> list[Path]:
 def _assert_active_resolves(path: Path) -> None:
     channel_id = path.stem
     resolved = resolver.resolve_channel(channel_id)
+    resolver.validate_resolved_channel(resolved, channel_id)
     expected_key = f"channels/{channel_id}/terraform.tfstate"
     actual_key = resolved.get("state", {}).get("key")
     if actual_key != expected_key:
