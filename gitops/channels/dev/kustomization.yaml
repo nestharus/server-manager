@@ -11,3 +11,10 @@ resources:
   - ../../bases/external-dns
   - ../../bases/cluster-security
   - ../../secrets/dev
+
+patches:
+  - path: patches/flux-source-local.yaml
+    target:
+      kind: GitRepository
+      name: server-manager
+      namespace: flux-system

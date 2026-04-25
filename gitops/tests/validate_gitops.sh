@@ -8,6 +8,7 @@ INSTALL_SCRIPT="${GITOPS_DIR}/scripts/install-tools.sh"
 PASS_COUNT=0
 FAIL_COUNT=0
 LAYOUT_ONLY=false
+FLUX_RENDER_ONLY=false
 
 pass() {
   echo "  PASS: $1"
@@ -26,12 +27,13 @@ section() {
 
 usage() {
   cat <<'USAGE'
-Usage: validate_gitops.sh [--layout-only]
+Usage: validate_gitops.sh [--layout-only|--flux-render-only]
 
 Validates the INIT-009 GitOps substrate.
 
 Options:
-  --layout-only  Run only gitops/ layout and Kustomize assertions.
+  --layout-only        Run only gitops/ layout and Kustomize assertions.
+  --flux-render-only   Run only Flux self-management render assertions.
 USAGE
 }
 
@@ -39,6 +41,9 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --layout-only)
       LAYOUT_ONLY=true
+      ;;
+    --flux-render-only)
+      FLUX_RENDER_ONLY=true
       ;;
     -h|--help)
       usage
@@ -52,6 +57,12 @@ while [[ "$#" -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "$LAYOUT_ONLY" == true && "$FLUX_RENDER_ONLY" == true ]]; then
+  echo "ERROR: --layout-only and --flux-render-only are mutually exclusive" >&2
+  usage >&2
+  exit 2
+fi
 
 assert_no_legacy_k8s_dir() {
   if [[ ! -d "${REPO_ROOT}/k8s" ]]; then
@@ -272,13 +283,159 @@ assert_kustomize_build_dev_channel() {
   status=$?
   set -e
 
-  if [[ "$status" -eq 0 ]]; then
+  if [[ "$status" -eq 0 && -s "$output_file" ]]; then
     pass "kubectl kustomize gitops/channels/dev succeeds"
   else
     fail "kubectl kustomize gitops/channels/dev succeeds"
     if [[ -s "$error_file" ]]; then
       sed 's/^/    stderr: /' "$error_file"
     fi
+  fi
+}
+
+assert_flux_components_exist() {
+  local file="${GITOPS_DIR}/bases/flux-system/gotk-components.yaml"
+  local ok=true
+
+  [[ -f "$file" ]] || ok=false
+  grep -q '^# Flux Version: v2\.8\.0$' "$file" || ok=false
+  grep -q '^kind: Namespace$' "$file" || ok=false
+  grep -q '^  name: flux-system$' "$file" || ok=false
+  grep -q 'source-controller' "$file" || ok=false
+  grep -q 'kustomize-controller' "$file" || ok=false
+  grep -q 'helm-controller' "$file" || ok=false
+  grep -q 'notification-controller' "$file" || ok=false
+  grep -q 'image-reflector-controller' "$file" || ok=false
+  grep -q 'image-automation-controller' "$file" || ok=false
+
+  if [[ "$ok" == true ]]; then
+    pass "Flux v2.8.0 components manifest exists"
+  else
+    fail "Flux v2.8.0 components manifest exists"
+  fi
+}
+
+assert_flux_base_kustomize_build_succeeds() {
+  local output_file error_file status
+  output_file="${REPO_ROOT}/.tmp/gitops-kustomize-flux-system.out"
+  error_file="${REPO_ROOT}/.tmp/gitops-kustomize-flux-system.err"
+  mkdir -p "${REPO_ROOT}/.tmp"
+
+  set +e
+  kubectl kustomize "${GITOPS_DIR}/bases/flux-system" >"$output_file" 2>"$error_file"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 && -s "$output_file" ]]; then
+    pass "kubectl kustomize gitops/bases/flux-system succeeds"
+  else
+    fail "kubectl kustomize gitops/bases/flux-system succeeds"
+    if [[ -s "$error_file" ]]; then
+      sed 's/^/    stderr: /' "$error_file"
+    fi
+  fi
+}
+
+assert_gitrepository_interval_1m() {
+  local file="${GITOPS_DIR}/bases/flux-system/source-gitrepository.yaml"
+  local ok=true
+
+  [[ -f "$file" ]] || ok=false
+  grep -q '^kind: GitRepository$' "$file" || ok=false
+  grep -q '^  name: server-manager$' "$file" || ok=false
+  grep -q '^  namespace: flux-system$' "$file" || ok=false
+  grep -q '^  interval: 1m$' "$file" || ok=false
+  grep -q '^    branch: main$' "$file" || ok=false
+
+  if [[ "$ok" == true ]]; then
+    pass "server-manager GitRepository interval is 1m"
+  else
+    fail "server-manager GitRepository interval is 1m"
+  fi
+}
+
+assert_root_kustomization_interval_5m() {
+  local file="${GITOPS_DIR}/bases/flux-system/root-kustomization.yaml"
+  local ok=true
+
+  [[ -f "$file" ]] || ok=false
+  grep -q '^kind: Kustomization$' "$file" || ok=false
+  grep -q '^  name: server-manager-dev$' "$file" || ok=false
+  grep -q '^  namespace: flux-system$' "$file" || ok=false
+  grep -q '^  interval: 5m$' "$file" || ok=false
+  grep -q '^  prune: true$' "$file" || ok=false
+  grep -q '^  wait: true$' "$file" || ok=false
+  grep -q '^  path: ./gitops/channels/dev$' "$file" || ok=false
+
+  if [[ "$ok" == true ]]; then
+    pass "server-manager-dev root Kustomization points at dev"
+  else
+    fail "server-manager-dev root Kustomization points at dev"
+  fi
+}
+
+assert_dev_channel_kustomize_build_succeeds() {
+  local output_file error_file status
+  output_file="${REPO_ROOT}/.tmp/gitops-flux-render-dev.out"
+  error_file="${REPO_ROOT}/.tmp/gitops-flux-render-dev.err"
+  mkdir -p "${REPO_ROOT}/.tmp"
+
+  set +e
+  kubectl kustomize "${GITOPS_DIR}/channels/dev" >"$output_file" 2>"$error_file"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 && -s "$output_file" ]]; then
+    pass "kubectl kustomize gitops/channels/dev renders non-empty output"
+  else
+    fail "kubectl kustomize gitops/channels/dev renders non-empty output"
+    if [[ -s "$error_file" ]]; then
+      sed 's/^/    stderr: /' "$error_file"
+    fi
+  fi
+}
+
+assert_no_forbidden_paths_in_dev_render() {
+  local output_file="${REPO_ROOT}/.tmp/gitops-flux-render-dev.out"
+  local ok=true
+  local forbidden
+  local forbidden_paths=(
+    'k8s/'
+    'gitops/bases/crossplane/'
+    'gitops/bases/cert-manager/'
+    'gitops/bases/external-dns/'
+    'gitops/bases/cluster-security/'
+  )
+
+  if [[ ! -s "$output_file" ]]; then
+    kubectl kustomize "${GITOPS_DIR}/channels/dev" >"$output_file"
+  fi
+
+  for forbidden in "${forbidden_paths[@]}"; do
+    grep -q "$forbidden" "$output_file" && ok=false
+  done
+
+  if [[ "$ok" == true ]]; then
+    pass "dev render does not reference legacy or populated placeholder paths"
+  else
+    fail "dev render does not reference legacy or populated placeholder paths"
+  fi
+}
+
+assert_local_source_patch_present() {
+  local file="${GITOPS_DIR}/channels/dev/patches/flux-source-local.yaml"
+  local ok=true
+
+  [[ -f "$file" ]] || ok=false
+  grep -q '^kind: GitRepository$' "$file" || ok=false
+  grep -q '^  name: server-manager$' "$file" || ok=false
+  grep -q '^  namespace: flux-system$' "$file" || ok=false
+  grep -q 'gitea-local' "$file" || ok=false
+
+  if [[ "$ok" == true ]]; then
+    pass "local Flux source patch is present"
+  else
+    fail "local Flux source patch is present"
   fi
 }
 
@@ -304,9 +461,24 @@ run_tool_checks() {
   assert_no_legacy_k8s_dir
 }
 
-run_layout_checks
+run_flux_render_checks() {
+  section "Flux Self-Management Render"
+  assert_flux_components_exist
+  assert_flux_base_kustomize_build_succeeds
+  assert_gitrepository_interval_1m
+  assert_root_kustomization_interval_5m
+  assert_local_source_patch_present
+  assert_dev_channel_kustomize_build_succeeds
+  assert_no_forbidden_paths_in_dev_render
+}
 
-if [[ "$LAYOUT_ONLY" != true ]]; then
+if [[ "$FLUX_RENDER_ONLY" == true ]]; then
+  run_flux_render_checks
+elif [[ "$LAYOUT_ONLY" == true ]]; then
+  run_layout_checks
+else
+  run_layout_checks
+  run_flux_render_checks
   run_tool_checks
 fi
 

@@ -1,0 +1,14 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: server-manager
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://git.example.invalid/server-manager.git
+  ref:
+    branch: main
+  ignore: |
+    # exclude non-gitops directories
+    /*
+    !/gitops
