@@ -70,21 +70,53 @@ tofu init -backend=false
 tofu validate
 ```
 
+## Provider-backed plan runbook (optional)
+
+This path is optional. INIT-008 baseline verification works without Vultr or
+Object Storage credentials; use the no-credential commands in
+[Local verification](#local-verification) for the required acceptance surface.
+
+Provider-backed planning reads current Vultr API state. It must not be followed
+by `tofu apply` in INIT-008 scope. `tofu apply` is out-of-scope for Phase 5
+entirely and belongs to a separate post-Phase-5 deployment initiative.
+
+```bash
+# Prerequisites:
+#   - Vultr API key in env (VULTR_API_KEY)
+#   - S3-compatible credentials for state backend (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+#     supplied as Vultr Object Storage S3 credentials
+#   - Bucket "humility-tfstate" already created by operator (per
+#     "State Backend Bounded Posture")
+
+cd infra/roots/channels/dev
+
+# Initialize against the committed backend config (provider-backed).
+# Operator supplies the S3 endpoint via -backend-config flag, since the
+# committed backend.tfbackend intentionally omits credentials and endpoint.
+tofu init -backend-config=backend.tfbackend \
+  -backend-config="endpoint=https://${OBJECT_STORAGE_HOSTNAME}" \
+  -backend-config="access_key=${AWS_ACCESS_KEY_ID}" \
+  -backend-config="secret_key=${AWS_SECRET_ACCESS_KEY}"
+
+# Read-only plan against current Vultr API state.
+tofu plan
+```
+
 ## Bootstrap Handoff
 
 The bootstrap root is a local-state handoff point for Vultr Object Storage
 subscription material. It creates the Object Storage subscription only; it does
-not create or manage an Object Storage bucket resource. INIT-008 does not run
-`tofu apply` as verification.
+not create or manage an Object Storage bucket resource. INIT-008 verification
+does not apply infrastructure.
 
 1. Inspect or validate the bootstrap root locally:
    `cd infra/bootstrap/state-backend`
    `tofu init -backend=false`
    `tofu validate`
 
-2. If an operator later performs an out-of-scope bootstrap apply, capture the
-   sensitive handoff outputs locally: `bucket_name`, `s3_hostname`,
-   `s3_access_key`, and `s3_secret_key`.
+2. If an operator later performs an out-of-scope future deployment apply,
+   capture the sensitive handoff outputs locally: `bucket_name`,
+   `s3_hostname`, `s3_access_key`, and `s3_secret_key`.
 
 3. Manually create bucket `humility-tfstate` inside the Object Storage
    subscription through the Vultr UI or aws-CLI-compatible tooling. Enable
@@ -94,10 +126,9 @@ not create or manage an Object Storage bucket resource. INIT-008 does not run
 4. Confirm the bucket name in the resolved channel config matches the actual
    bucket before invoking backend initialization.
 
-5. Initialize a channel root with operator-supplied endpoint and credentials:
-   `cd infra/roots/channels/<id>`
-   `tofu init -backend-config=backend.tfbackend`
-   `tofu validate`
+5. For the optional provider-backed `dev` plan path, initialize the channel
+   root with operator-supplied endpoint and credentials using the runbook
+   above.
 
 The S3 endpoint is supplied at `tofu init` time through backend-config flags or
 the operator's local environment. The channel schema does not carry endpoint

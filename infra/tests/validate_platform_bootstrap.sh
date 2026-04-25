@@ -148,6 +148,14 @@ assert_no_credentials_in_dev_backend() {
   fi
 }
 
+assert_no_endpoint_in_dev_backend() {
+  if rg -n '^endpoint\s*=' "${INFRA_DIR}/roots/channels/dev/backend.tfbackend" >/dev/null; then
+    fail "dev backend contains no endpoint entry"
+  else
+    pass "dev backend contains no endpoint entry"
+  fi
+}
+
 assert_readme_documents_locking_posture() {
   local file="${INFRA_DIR}/README.md"
   if rg -nq 'locking' "$file" \
@@ -158,6 +166,31 @@ assert_readme_documents_locking_posture() {
     pass "README documents bounded locking and restore posture"
   else
     fail "README documents bounded locking and restore posture"
+  fi
+}
+
+assert_readme_documents_optional_provider_plan() {
+  local file="${INFRA_DIR}/README.md"
+  if rg -nq 'Provider-backed plan runbook \(optional\)' "$file" \
+    && rg -nq 'INIT-008 baseline verification works without' "$file" \
+    && rg -nq 'tofu plan' "$file" \
+    && rg -nq 'VULTR_API_KEY' "$file" \
+    && rg -nq 'OBJECT_STORAGE_HOSTNAME' "$file"; then
+    pass "README documents optional provider-backed dev plan runbook"
+  else
+    fail "README documents optional provider-backed dev plan runbook"
+  fi
+}
+
+assert_readme_apply_is_out_of_scope() {
+  local file="${INFRA_DIR}/README.md"
+  if rg -nq 'must not be followed' "$file" \
+    && rg -nq '`tofu apply` in INIT-008 scope' "$file" \
+    && rg -nq '`tofu apply` is out-of-scope for Phase 5' "$file" \
+    && ! rg -nq '`tofu apply` as verification|tofu apply as verification' "$file"; then
+    pass "README frames tofu apply only as out-of-scope"
+  else
+    fail "README frames tofu apply only as out-of-scope"
   fi
 }
 
@@ -642,9 +675,12 @@ fi
 
 assert_dev_backend_key
 assert_no_credentials_in_dev_backend
+assert_no_endpoint_in_dev_backend
 assert_no_endpoint_placeholder
 assert_readme_documents_locking_posture
 assert_readme_documents_retirement
+assert_readme_documents_optional_provider_plan
+assert_readme_apply_is_out_of_scope
 
 # ---------------------------------------------------------------------------
 section "Authority alignment assertions"
