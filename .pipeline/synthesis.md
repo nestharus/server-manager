@@ -1,494 +1,382 @@
-# SLICE-022 Phase 2 Synthesis: Binding Decisions (Compliance Evaluation Loop)
-
-These decisions are binding for the SLICE-022 proposal, hookpoint research,
-risk, test, and implementation phases. The proposal may choose mechanics
-inside these boundaries, but it must not expand scope beyond the four
-work units (WU-039, WU-040A, WU-040B-extract, WU-040B-correct, WU-041A,
-WU-041B), introduce a parallel audit namespace for compliance, reshape the
-existing `roster_entries` / `roster_transitions` aggregates, or short-
-circuit the roster service when applying consequences.
-
-## Inputs
-
-- `.pipeline/research.md` — Phase 1 research report.
-- `product-strategy/tickets/SLICE-022.md` — Acceptance Criteria (AC1–AC4),
-  Work Units, Code Boundary.
-- `AGENTS.md` — Live Server Principle, No Backwards Compatibility,
-  migration discipline, Test/Code Agent separation.
-- `product-strategy/proposal.md` — Activity and Compliance (rule registry,
-  evidence intake, OCR-first pipeline, officer correction, automated
-  evaluation, consequence routing).
-- Existing code in worktree — roster uses `under_review` state (not
-  `probation`); SLICE-020 worker pattern (`services/api/app/tasks/*.py`
-  with root audit context); SLICE-018 roster service; SLICE-014 permission
-  intent reconciliation; SLICE-024 roster transition patterns.
-
-## Acceptance Criteria Reference
-
-- AC1 — Authority-gated compliance rule CRUD (WU-039) with cadence,
-  evidence requirements, and consequence policy; OCC via `aggregate_heads`.
-- AC2 — Evidence submission stores attachment reference in pending state;
-  extraction is a separate, explicit step (WU-040A + WU-040B-extract).
-- AC3 — Officer correction overlays extracted fields while preserving
-  `raw_text` and `attachment_ref`; OCC guarded (WU-040B-correct).
-- AC4 — Scheduled evaluation worker is idempotent per
-  `(member, rule, period)` and routes consequences through the roster
-  service API (WU-041A + WU-041B).
-
-## Decisions
-
-### D1 — Consequence terminology alignment to shipped roster states
-
-**Rationale.** SLICE-022 ticket/proposal use the word "probation"; the
-shipped `roster_entries` aggregate uses `under_review`. Introducing a new
-`probation` state would reshape roster, violate the scope guardrails, and
-create a second parallel substrate for the same concept.
-
-**Binding implications.**
-- `compliance_rules.consequence_kind` is a `Literal["review", "under_review"]`:
-  - `"review"` — operator-flagged manual evaluation review; no automatic
-    roster change; an officer must explicitly approve/override before any
-    downstream consequence.
-  - `"under_review"` — on violation, automatically transition the roster
-    entry to `under_review` via the roster service (see D10).
-- All proposal/ticket text that references `probation` must be read as
-  `under_review` for code-level contracts; no `probation` enum value or
-  column is introduced.
-- Wording in user-facing strings is still owned by the proposal; the
-  contract/DB layer uses `under_review` exclusively.
-
-**Non-goals.** Adding a new roster state; renaming existing roster states;
-supporting both `probation` and `under_review` as aliases.
-
-### D2 — Rule schema is flat + JSONB, versioned via `aggregate_heads`
-
-**Rationale.** SLICE-014/018/020/024 all version aggregates through
-`aggregate_heads` with an `rev` / `version` column and OCC `If-Match`.
-Adding a redundant `version` column on `compliance_rules` would diverge
-from that pattern and require special-case migration/reconciliation.
-Rules vary enough by cadence + evidence + consequence that JSONB params
-are the right flex point.
-
-**Binding implications.** `compliance_rules` table:
-- `id UUID PK`
-- `chapter_id TEXT NOT NULL`
-- `name TEXT NOT NULL`
-- `cadence_kind TEXT NOT NULL CHECK (cadence_kind IN ('weekly','monthly','quarterly'))`
-- `cadence_params JSONB NOT NULL DEFAULT '{}'`
-- `evaluation_window_days INT NOT NULL CHECK (evaluation_window_days > 0)`
-- `evidence_requirements JSONB NOT NULL` — list of
-  `{"type": "...", "required": true|false}`
-- `consequence_kind TEXT NOT NULL CHECK (consequence_kind IN ('review','under_review'))`
-- `consequence_params JSONB NOT NULL DEFAULT '{}'`
-- `active BOOLEAN NOT NULL DEFAULT TRUE`
-- `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
-- `archived_at TIMESTAMPTZ NULL`
-
-Versioning: `aggregate_heads` carries the rule's version; evaluations
-snapshot the head version as `rule_version` (see D7). Partial unique
-index `UNIQUE (chapter_id, name) WHERE archived_at IS NULL` blocks
-duplicate active rules but permits archived names to be re-used.
-
-**Non-goals.** A dedicated `version` column on `compliance_rules`; an
-event-sourced rule history separate from the standard audit projection;
-per-evidence-type validator classes in the schema.
-
-### D3 — Evidence schema keeps OCR output, corrections, and originals separate
-
-**Rationale.** AC3 requires that correction preserves the raw text and
-attachment. The cleanest way is an overlay column: the OCR result is
-never mutated, and corrections write to a sibling JSONB column plus
-correction metadata. Status transitions are CHECK-constrained so a row
-can't claim to be `completed` without the OCR output.
-
-**Binding implications.** `evidence_submissions` table:
-- `id UUID PK`
-- `rule_id UUID NOT NULL REFERENCES compliance_rules(id)`
-- `member_id TEXT NOT NULL`
-- `chapter_id TEXT NOT NULL`
-- `attachment_ref TEXT NOT NULL` — opaque URL/path supplied by operator
-- `raw_text TEXT NULL` — populated by OCR
-- `extracted_fields JSONB NULL` — OCR output, never mutated
-- `extracted_fields_corrected JSONB NULL` — officer overlay
-- `extraction_status TEXT NOT NULL CHECK (extraction_status IN ('pending','running','completed','failed','corrected'))`
-- `extraction_confidence NUMERIC(5,4) NULL` — 0–1
-- `extraction_error TEXT NULL` — required when status='failed'
-- `submitted_by_member_id TEXT NOT NULL`
-- `submitted_at TIMESTAMPTZ NOT NULL DEFAULT now()`
-- `corrected_by_member_id TEXT NULL`
-- `corrected_at TIMESTAMPTZ NULL`
-- `correction_reason TEXT NULL`
-
-CHECK constraints:
-- `extraction_status='completed'` → `raw_text IS NOT NULL AND extracted_fields IS NOT NULL`
-- `extraction_status='failed'` → `extraction_error IS NOT NULL`
-- `extraction_status='corrected'` → `extracted_fields_corrected IS NOT NULL AND corrected_by_member_id IS NOT NULL AND correction_reason IS NOT NULL`
-
-AC2 bind: submission creates row with `extraction_status='pending'`;
-extraction is triggered separately. AC3 bind: correction writes overlay
-and leaves `raw_text` + `attachment_ref` untouched.
-
-**Non-goals.** Per-rule-type evidence sub-tables; mutating OCR output in
-place; storing attachments inline (BYTEA/BLOB); versioning corrections
-as a dedicated history table — history lives in the normal audit
-projection (`activity_state_changes`).
-
-### D4 — OCR provider is a pluggable Protocol with a stub default
-
-**Rationale.** AC2/AC3 require that evidence intake and correction work
-end-to-end, but the proposal explicitly scopes OCR as "extraction
-pipeline" without pinning an engine. Introducing Tesseract / cloud APIs
-inside this slice would drag in operational infrastructure beyond the
-four work units. A Protocol + stub keeps the substrate complete and
-deferred actual extraction to operator wiring.
-
-**Binding implications.** `services/api/app/infrastructure/ocr.py`:
-```python
-class OcrExtractionResult(BaseModel):
-    raw_text: str
-    extracted_fields: dict
-    confidence: Decimal
-
-class OcrProvider(Protocol):
-    async def extract(
-        self, attachment_ref: str, rule_hint: str | None = None
-    ) -> OcrExtractionResult: ...
-
-class StubOcrProvider:
-    async def extract(self, attachment_ref, rule_hint=None):
-        raise NotImplementedError("OCR provider not configured")
-```
-
-- Settings wire a concrete impl in production; tests mock the Protocol.
-- AC2 still passes: evidence row is stored in `pending`; extraction
-  endpoint returns `501 Not Implemented` / `503 Service Unavailable`
-  when no provider is configured (see D5).
-- No OCR libraries (Tesseract, PaddleOCR, cloud SDKs) are added as
-  dependencies in this slice.
-
-**Non-goals.** Shipping a real OCR engine in this slice; classifying
-evidence types via OCR; confidence-based auto-approval.
-
-### D5 — Extraction endpoint is synchronous
-
-**Rationale.** Async extraction would require a new deferred-effect type
-(queue, worker, retry semantics) that does not exist in the substrate
-and is not enumerated in the work units. Synchronous invocation keeps
-the HTTP/service boundary simple and makes AC2 testable without queue
-infrastructure.
-
-**Binding implications.**
-- `POST /evidence/{id}/extract` synchronously calls
-  `OcrProvider.extract(...)` and updates the evidence row to
-  `completed` or `failed` inside the request.
-- Response is `EvidenceExtractionRead` with the final row state.
-- If the provider raises `NotImplementedError` (stub), the endpoint
-  returns `501` so integration tests can assert the "OCR not
-  configured" path.
-- Scaling / long-running OCR is documented as deferred (see D15).
-
-**Non-goals.** Adding a queue, background job, or deferred-effect table;
-chunked/streaming OCR; partial-result streaming to the client.
-
-### D6 — Officer correction preserves originals and is OCC-guarded
-
-**Rationale.** AC3 explicitly requires that correction does not
-overwrite the raw OCR output. Allowing correction while extraction is
-still in-flight would race with the OCR writer and produce a
-`corrected` row without an `extracted_fields` baseline, violating D3's
-CHECK.
-
-**Binding implications.**
-- `POST /evidence/{id}/correct` body:
-  `{"corrected_fields": dict, "correction_reason": str}` (non-blank).
-- `If-Match` required; stale → `412`.
-- Allowed only when `extraction_status IN ('completed','failed','corrected')`;
-  attempts during `pending` or `running` → `409`.
-- Successful correction sets `extracted_fields_corrected`,
-  `corrected_by_member_id`, `corrected_at`, `correction_reason`, and
-  transitions `extraction_status` to `corrected`.
-- `raw_text` and `attachment_ref` are never updated by this endpoint.
-- A follow-up correction overwrites the overlay; the prior overlay is
-  captured in `activity_state_changes` via the standard audit
-  projection — no bespoke history table.
-
-**Non-goals.** Immutable correction history tables; inline markup of
-`raw_text`; multi-field confidence per-correction.
-
-### D7 — Evaluation schema snapshots rule version + consequence lineage
-
-**Rationale.** Evaluations must be reproducible even after a rule is
-updated (AC1 version change). A `rule_version` snapshot lets officers
-see exactly which rule definition produced a result. AC4 idempotency
-depends on a natural key; `(member, rule, period)` is the only
-deterministic candidate. `review_status` + `consequence_applied` split
-the "did we apply automatic consequence" question from "did an officer
-sign off."
-
-**Binding implications.** `compliance_evaluations` table:
-- `id UUID PK`
-- `rule_id UUID NOT NULL REFERENCES compliance_rules(id)`
-- `rule_version BIGINT NOT NULL`
-- `chapter_id TEXT NOT NULL`
-- `member_id TEXT NOT NULL`
-- `period_start DATE NOT NULL`
-- `period_end DATE NOT NULL`
-- `result TEXT NOT NULL CHECK (result IN ('compliant','violation','insufficient_evidence'))`
-- `consequence_applied TEXT NOT NULL CHECK (consequence_applied IN ('none','review_queued','under_review_applied'))`
-- `review_status TEXT NOT NULL CHECK (review_status IN ('pending','approved','overridden','not_required'))`
-- `reviewer_id TEXT NULL`, `review_reason TEXT NULL`, `reviewed_at TIMESTAMPTZ NULL`
-- `evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now()`
-- `evidence_ids JSONB NOT NULL DEFAULT '[]'`
-
-`UNIQUE (member_id, rule_id, period_start, period_end)` — AC4
-idempotency primary constraint.
-
-**Non-goals.** Evaluation state machine beyond the enums above;
-multi-rule composite evaluations; storing the raw evidence payload on
-the evaluation row (use `evidence_ids` references).
-
-### D8 — Scheduled worker mirrors SLICE-020 R2: root audit context + per-rule isolation
-
-**Rationale.** SLICE-020 R2 and SLICE-018's SLA workers already
-establish the "install root audit context, iterate, catch per-entity,
-don't abort batch on individual failure" pattern. Compliance evaluation
-is the same shape (background sweep + mutate via service APIs).
-
-**Binding implications.** `services/api/app/tasks/compliance.py`
-exposes `compliance_evaluation_worker_tick(db, *, now)`:
-1. Install root audit context (service actor `compliance-evaluator`).
-2. For each active rule:
-   - Compute the current evaluation period from `cadence_kind` +
-     `cadence_params` + `evaluation_window_days` (see D9).
-   - Enumerate chapter members in scope.
-   - For each `(member, rule, period)`:
-     - `INSERT ... ON CONFLICT DO NOTHING` into
-       `compliance_evaluations` (idempotency via the UNIQUE key).
-     - On insert: compute `result` from available evidence; record
-       `consequence_applied`, `review_status`.
-     - If `consequence_kind='under_review'` AND `result='violation'`
-       AND policy auto-applies: invoke the roster service to
-       transition the member to `under_review` (see D10).
-3. Catch exceptions per-rule, log as `exception`, continue batch.
-4. `COMPLIANCE_EVALUATION_INTERVAL_SECONDS = 3600` (hourly) — lower
-   churn than SLA/expiry sweeps.
-
-**Non-goals.** Parallel fan-out across rules; cross-chapter
-transactions; event-driven evaluation triggered on evidence submission.
-
-### D9 — Cadence periods are deterministic calendar windows
-
-**Rationale.** AC4 idempotency requires a deterministic `(period_start,
-period_end)` for each tick. Drifting windows (e.g., "last 7 days from
-now") would insert new rows on every tick.
-
-**Binding implications.** Period boundaries:
-- `weekly` — Monday 00:00 UTC → Sunday 23:59:59 UTC (ISO week).
-- `monthly` — 1st of month 00:00 UTC → last day 23:59:59 UTC.
-- `quarterly` — calendar quarter boundaries (Jan–Mar, Apr–Jun,
-  Jul–Sep, Oct–Dec) in UTC.
-
-The "current" period = the period containing
-`now - INTERVAL 'evaluation_window_days'`, i.e., cadence evaluates the
-most recently completed window. `cadence_params` allow fine-grained
-offsets (e.g., `{"week_offset": -1}` to evaluate the prior week
-explicitly). `period_start` / `period_end` are stored on the evaluation
-row so changes to rule params don't retroactively duplicate history.
-
-**Non-goals.** Rolling windows; per-chapter timezone offsets; sub-daily
-cadence.
-
-### D10 — All consequences route through the roster service API
-
-**Rationale.** AC4 specifies consequence routing through the roster
-service. Compliance directly mutating `roster_entries` would bypass
-service-layer authority, duplicate state-machine logic, and break
-audit provenance.
-
-**Binding implications.**
-- The compliance worker/service never mutates `roster_entries`
-  directly; it calls the roster service (e.g.,
-  `roster_service.transition_to_under_review(...)` or equivalent
-  action, modeled on SLICE-024's reassignment pattern).
-- If that exact entry-point does not yet exist in `services/roster.py`,
-  the implementation adds it alongside existing transitions — not as a
-  compliance-specific helper — and it accepts a `reason` (e.g.,
-  `compliance_violation`) for audit.
-- Service actor `compliance-evaluator` holds `roster.transition`
-  scoped per SLICE-008 hierarchy (global grant covers all chapters).
-- On consequence success, the evaluation row records
-  `consequence_applied='under_review_applied'`; on failure, it records
-  the error via the standard audit projection and retries next tick
-  (idempotent).
-
-**Non-goals.** Introducing a new consequence dispatch table; emitting
-Discord-facing events from compliance directly (roster already emits
-its own projections).
-
-### D11 — Authority permissions enumerate compliance + carve out substrate role
-
-**Rationale.** SLICE-014/018/020 establish permissions as opaque strings
-granted via `authority_grants`. Compliance adds both user-facing and
-internal substrate permissions; they must be distinct so officers can
-review without being able to forge evaluations, and the worker can
-write evaluations without being able to override them.
-
-**Binding implications.** New permission strings:
-- `compliance_rule.read`, `compliance_rule.write` — CRUD on rules.
-- `compliance_evidence.submit` — member submission.
-- `compliance_evidence.correct` — officer correction (D6).
-- `compliance_evidence.extract` — trigger OCR (D5).
-- `compliance_evaluation.read` — read evaluation history.
-- `compliance_evaluation.review` — override/approve results.
-
-Service actor `compliance-evaluator` is seeded with:
-- `compliance_rule.read`
-- `compliance_evaluation.write` — internal substrate permission,
-  distinct from `.review`; worker writes, officers review.
-- `roster.transition` at chapter scope (global grant covers all
-  chapters per SLICE-008 hierarchy).
-
-**Non-goals.** Per-rule ACLs; per-evidence-type permissions; Discord
-role mapping in this slice.
-
-### D12 — Migration chain is linear off `wu_038`
-
-**Rationale.** Live Server Principle: migrations chain forward only.
-`wu_038_permission_intent_expiry` is the current head. Three tables +
-an actor grant fit the slice; consolidation vs. split is an
-implementation choice but the chain order is fixed.
-
-**Binding implications.**
-- Chain order:
-  `wu_038_permission_intent_expiry → wu_039_compliance_rules →
-   wu_040a_compliance_evidence → wu_041a_compliance_evaluations`.
-- `wu_041a_compliance_evaluations` seeds the `compliance-evaluator`
-  service actor with the grants from D11.
-- Each downgrade is a no-op (live-server convention).
-- The implementation may collapse these three into a single migration
-  if desired; it must not split them across unrelated migrations.
-
-**Non-goals.** Backfilling rules/evidence from historical data; cross-
-slice migrations that bundle SLICE-022 tables with later slices.
-
-### D13 — Constants-only dispatch for compliance audit actions
-
-**Rationale.** AGENTS.md + every prior slice forbids f-string or
-dynamic action/change types. Compliance adds its own vocabulary; it
-must be declared up front and allowlisted for payload shapes.
-
-**Binding implications.** Action/change type vocabulary (extend
-existing dicts in `app/contracts/audit.py` or add `COMPLIANCE_*`):
-- `compliance_rule.create` / `compliance_rule.created`
-- `compliance_rule.update` / `compliance_rule.updated`
-- `compliance_rule.archive` / `compliance_rule.archived`
-- `evidence_submission.submit` / `evidence_submission.submitted`
-- `evidence_submission.correct` / `evidence_submission.corrected`
-- `evidence_submission.extract` / `evidence_submission.extracted`
-- `evidence_submission.extraction_failed`
-- `compliance_evaluation.create` / `compliance_evaluation.created`
-- `compliance_evaluation.review` / `compliance_evaluation.reviewed`
-- `compliance_evaluation.override` / `compliance_evaluation.overridden`
-- `compliance_evaluation.consequence_applied`
-
-Payload allowlists are narrow per action and declared alongside the
-constant.
-
-**Non-goals.** Free-form metadata dicts; derived action names from
-arguments; shared vocabulary with roster/authority subsystems.
-
-### D14 — Test boundaries are per-WU and each test docstrings the AC
-
-**Rationale.** Test/Code Agent separation requires the test surface
-to be enumerable up front. Each AC maps to a specific test; each WU
-carries its own test file so the code agent can satisfy them in
-isolation.
-
-**Binding implications.** Required tests (one test per bullet; each
-docstring names the AC or guardrail it enforces):
-
-WU-039 `test_compliance_rules`:
-- AC1 — create persists cadence + evidence requirements + consequence.
-- AC1 — update with `If-Match` advances version.
-- AC1 — stale `If-Match` → `412`.
-- Unique `(chapter_id, name) WHERE archived_at IS NULL`.
-- `cadence_kind` CHECK validation.
-- `consequence_kind` CHECK validation (`review` | `under_review`).
-
-WU-040A `test_compliance_evidence`:
-- AC2 — submit creates row with `extraction_status='pending'`.
-- AC2 — GET returns pending state.
-- FK integrity: evidence rule FK to `compliance_rules`.
-- Submission actor covers member and officer paths.
-
-WU-040B-correct `test_compliance_ocr_correct`:
-- AC3 — correction updates `extracted_fields_corrected`.
-- AC3 — correction preserves `raw_text` + `attachment_ref`.
-- AC3 — OCC `412` on stale `If-Match`.
-- Correction rejected during `pending` / `running` → `409`.
-- `correction_reason` required non-blank → `422`.
-
-WU-040B-extract `test_compliance_ocr_extract`:
-- OCR provider invoked; evidence transitions `pending → completed`.
-- OCR failure transitions to `failed` with `extraction_error`.
-- OCR not configured → `501`/`503`.
-- Multiple extractions idempotent (same result).
-
-WU-041A `test_compliance_review_api`:
-- AC1 — review endpoint updates `review_status`.
-- Override advances `consequence_applied` if policy requires.
-- OCC `412` on stale `If-Match`.
-- Authority required (`compliance_evaluation.review`).
-
-WU-041B `test_compliance_evaluation_worker`:
-- AC4 — idempotent per `(member, rule, period)`.
-- AC4 — consequence routes through roster service API.
-- Worker failure in one rule does not abort the batch.
-- Period computation per `cadence_kind`.
-- Insufficient evidence → `result='insufficient_evidence'`,
-  `consequence_applied='none'`.
-
-**Non-goals.** Cross-WU integration tests in this phase; end-to-end
-Discord-triggered compliance tests; property-based tests on cadence
-math.
-
-### D15 — Explicit out-of-scope fence
-
-**Rationale.** Scope creep in compliance is a known risk: OCR, file
-upload, async queues, and trust-signal integration each have proposal
-hooks. Naming them as out-of-scope here prevents the implementation
-phase from expanding the substrate.
-
-**Binding implications.** The following are out of scope for SLICE-022
-and must not land in this slice:
-- OCR engine implementation — pluggable Protocol + stub only (D4).
-- Async extraction queue — synchronous only (D5); scaling deferred.
-- File upload endpoint — `attachment_ref` is an opaque operator-
-  supplied string.
-- Per-rule-type evidence validators — `evidence_requirements` is
-  JSONB; no schema dispatch.
-- Multi-member / batch consequences — consequences are per-evaluation.
-- Evidence deletion / GDPR flows.
-- Discord-triggered evidence submission — HTTP intake only.
-- Trust-signal integration — compliance violations do NOT auto-
-  generate trust signals in this slice.
-
-**Non-goals.** Re-introducing any of the above through back-channels
-(e.g., a hidden `attachment_upload` endpoint, a shadow trust-signal
-write path, or a synchronous "but actually async" extraction hook).
-
-## Guardrails (apply to every decision above)
-
-- Follow SLICE-014, SLICE-018, SLICE-020, SLICE-024 patterns for
-  service-layer authority, OCC via `aggregate_heads`, and audit
-  projection.
-- Service-layer authority checks precede every mutation; no repository-
-  level bypass.
-- Multi-aggregate mutations in a single service op share one
-  connection (existing contract).
-- Constants-only audit dispatch (D13); no f-string vocabulary.
-- Worker installs root audit context (SLICE-020 R2 precedent).
-- Migration chain is linear, one head forward (D12).
-- Roster state vocabulary is `under_review`, not `probation` (D1).
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+# INIT-008 Phase 2 Synthesis — Platform Bootstrap
+
+Purpose: bridge Phase 1 research into a proposal-ready decision surface for
+INIT-008. This document does not choose implementation mechanics. It records
+what the Phase 3 proposal must settle, what defaults already have evidence
+behind them, and what gaps still block a binding proposal.
+
+Primary synthesis inputs:
+
+- `.pipeline/research.md`
+- `plans/platform-decisions-overlay.md`
+- `infra/README.md`
+- `product-strategy/tickets/PHASE_5_INDEX.md`
+- `product-strategy/tickets/INIT-001.md` through `INIT-007.md`
+- `product-strategy/engineering roadmap.md`
+
+Constraint reminders carried forward from the source set:
+
+- Vultr is the locked infrastructure substrate for INIT-008 work; proposal
+  work is not allowed to reopen provider selection. Evidence:
+  `.pipeline/research.md:145-152, 173-185, 196-218`;
+  `infra/README.md:1-3`.
+- INIT-008 is locally verified only. No deployment, no production apply, and
+  no visible environment mutation are in scope for this phase. Evidence:
+  `product-strategy/tickets/PHASE_5_INDEX.md:3-4, 24-30, 32-40`;
+  `.pipeline/research.md:354-433`.
+- The live repo state, not older draft material, is the authoritative starting
+  point for the proposal. Evidence: `.pipeline/research.md:145-152, 194-320,
+  469-476`.
+
+## 1. Initiative framing (INIT-008 ticket sketch)
+
+This section mirrors the existing INIT ticket shape while adapting it to the
+Phase 5 platform-substrate context.
+
+### Strategic Context
+
+**Subsystem:** Deployment Substrate; Platform Bootstrap
+**Phase:** Phase 5 entry initiative; recovery of unticketed Phase 0 substrate
+**Executive priority:** First dependency in the Phase 5 initiative chain; all
+later deployment-substrate initiatives assume a bootstrap contract exists.
+
+Phase 0 foundation was never turned into a dedicated initiative, but the
+product roadmap already shipped INIT-001 through INIT-007 against the implied
+existence of a working platform substrate. The current repo proves partial
+bootstrap intent through checked-in OpenTofu assets, yet still contains split
+authority, incomplete remote-state handoff, and unresolved bootstrap
+acceptance questions. INIT-008 exists to convert that implied substrate into a
+proposal-ready initiative with a bounded local-verification contract. Evidence:
+`product-strategy/tickets/PHASE_5_INDEX.md:1-23`;
+`product-strategy/engineering roadmap.md:5-10, 17-33, 97-117`;
+`.pipeline/research.md:30-164, 322-340, 492-498`.
+
+### Justification Chain
+
+#### Phase 0 Trigger
+
+The engineering roadmap names "deployable service substrate aligned to
+`infra/`" as a Phase 0 deliverable and requires hosting formalization,
+operational secret management, and a functional shared test harness before
+Phase 0 is complete. INIT-008 is the first initiative in Phase 5 precisely
+because the repo already contains `infra/` roots, but not yet a settled
+bootstrap contract. Evidence:
+`product-strategy/engineering roadmap.md:9, 19-33, 97-117`;
+`product-strategy/tickets/PHASE_5_INDEX.md:10-23`.
+
+#### Dependency Chain
+
+Phase 0 must complete before Phase 1 begins, but the feature roadmap already
+contains Phase 1 through Phase 4 tickets. Phase 5 therefore acts as a catch-up
+execution lane for the unticketed foundation. INIT-008 is dependency head for
+the later GitOps, delivery, ingress, data-plane, auth, and workload
+initiatives because those initiatives assume a platform cluster, remote state,
+and environment roots already exist as a clean baseline. Evidence:
+`product-strategy/engineering roadmap.md:119-125`;
+`product-strategy/tickets/PHASE_5_INDEX.md:3-4, 10-23, 32-40`;
+`.pipeline/research.md:181-183, 271-285, 492-498`.
+
+#### Problem Axis
+
+The current repo has a real bootstrap footprint:
+
+- `infra/bootstrap/state-backend` exists and validates locally.
+- `infra/modules/platform-network` and `infra/modules/platform-cluster` exist.
+- `infra/environments/dev`, `staging`, and `production` exist.
+
+The repo does not yet answer the proposal-critical questions that make that
+footprint operationally coherent:
+
+- Which surface formally ratifies Vultr as the authoritative host.
+- How the backend bucket actually comes to exist.
+- How environment state is isolated.
+- Which environment and sizing baseline INIT-008 is validating first.
+- What locking, credential custody, DNS, and public endpoint expectations are
+  actually inside the initiative boundary.
+
+Evidence: `.pipeline/research.md:32-143, 145-193, 334-340, 443-476`.
+
+#### Proposal Mechanism
+
+The proposal does not need to invent a new subsystem. It needs to settle the
+contract around the existing platform-bootstrap surfaces already present in the
+repo:
+
+- bootstrap root
+- remote-state handoff into environment roots
+- shared VPC module
+- shared VKE module
+- environment-root parameterization
+- local verification surface
+
+That mechanism stays explicitly narrower than later Phase 5 initiatives. Flux,
+Buildkite, workload manifests, auth, ingress, database operators, observability,
+and application-cluster composition remain separate initiatives. Evidence:
+`product-strategy/tickets/PHASE_5_INDEX.md:14-22`;
+`.pipeline/research.md:109-119, 181-182, 271-285, 477-490`.
+
+#### Executive Priority
+
+**Pain severity:** structural-gap. The repo has infra intent, but the current
+state is not yet a proposal-grade, authority-clean substrate.
+
+**Competitive position:** not market-driven; this is roadmap debt retirement.
+Its value is internal dependency unlock rather than external differentiation.
+
+**Dependency depth:** 0 within Phase 5 entry. Later platform initiatives depend
+on its output surface.
+
+**Operational risk of delay:** active-harm to roadmap sequencing. The longer
+INIT-008 stays ambiguous, the longer later Phase 5 initiatives inherit split
+authority and stale assumptions.
+
+**Opportunity cost:** Every downstream initiative keeps paying bootstrap
+ambiguity tax instead of treating `infra/` as a settled foundation.
+
+Evidence: `product-strategy/tickets/PHASE_5_INDEX.md:10-23, 32-40`;
+`product-strategy/engineering roadmap.md:9, 97-117, 119-125`;
+`.pipeline/research.md:145-193, 322-340, 492-498`.
+
+#### Engineering Assessment
+
+**Effort:** initiative-level L-XL (leans L) based on the engineering roadmap's
+"deployable service substrate aligned to `infra/`" estimate, narrowed here to
+bootstrap-only scope. Individual candidate slices range from S to L.
+
+**Prototyping:** no separate prototype is currently justified from the source
+set; the open questions are mostly authority, scope, and contract questions
+rather than unknown external behavior. The one implementation-time unknown that
+still needs diligence is VKE/VPC attachment behavior, which research classifies
+as an implementation blocker rather than a proposal blocker.
+
+**Risk:** Medium-high until the proposal settles remote-state completeness,
+state isolation, lock posture, and credential custody.
+
+**Foundation dependencies:** none earlier in Phase 5; INIT-008 is itself a
+foundation initiative for INIT-009 through INIT-016.
+
+Evidence: `product-strategy/engineering roadmap.md:97-100`;
+`.pipeline/research.md:447-452, 458-476, 492-498`.
+
+### Scope (in)
+
+The proposal for INIT-008 should treat the following as in-scope:
+
+- Formalizing the authoritative Vultr/OpenTofu bootstrap record for this
+  initiative so later docs stop conflicting. Evidence:
+  `.pipeline/research.md:147-152, 173-185, 196-208, 458-466, 471-476`.
+- Settling the state-backend bootstrap contract, including required inputs,
+  actual resources, operator outputs, and the unresolved bucket-existence seam.
+  Evidence: `.pipeline/research.md:43-62, 372-389, 405-413, 465, 475`.
+- Settling the remote-state handoff into `backend.tfbackend` files, including
+  placeholder replacement, runtime credentials, and environment state
+  isolation. Evidence:
+  `.pipeline/research.md:120-132, 390-413, 448, 451, 462, 475`.
+- Settling the environment-root baseline for the first validated environment
+  and confirming how `dev`, `staging`, and `production` are normalized against
+  that choice. Evidence:
+  `.pipeline/research.md:88-119, 101-107, 460-462, 487-488`.
+- Freezing the INIT-008 boundary around platform VPC + VKE + object storage +
+  state backend, without absorbing later application-cluster or service-layer
+  concerns. Evidence:
+  `.pipeline/research.md:109-119, 181-182, 271-285, 310-320, 450`.
+- Defining a local verification contract for bootstrap and environment roots
+  that is stronger than ad hoc doc claims and still avoids deployment. Evidence:
+  `.pipeline/research.md:354-433, 488`.
+
+### Scope (out)
+
+The proposal for INIT-008 should treat the following as explicitly deferred:
+
+- Any real Vultr apply or deployment workflow. Evidence:
+  `product-strategy/tickets/PHASE_5_INDEX.md:3-4, 28-29, 40`;
+  `.pipeline/research.md:356-368`.
+- Flux install, GitOps layout, and reconciliation mechanics. Those belong to
+  INIT-009. Evidence:
+  `product-strategy/tickets/PHASE_5_INDEX.md:15`;
+  `.pipeline/research.md:117-118, 177, 275, 450`.
+- Container build pipeline and Buildkite CI/CD. Those belong to INIT-010 and
+  INIT-011. Evidence:
+  `product-strategy/tickets/PHASE_5_INDEX.md:16-17`;
+  `.pipeline/research.md:178, 199, 301`.
+- Ingress, TLS, and broad north-south routing. Those belong to INIT-012 unless
+  the proposal narrowly justifies a minimal bootstrap exception. Evidence:
+  `product-strategy/tickets/PHASE_5_INDEX.md:18`;
+  `.pipeline/research.md:463-464`.
+- Data-plane workloads such as CloudNativePG and deploy-time migrations. Those
+  belong to INIT-013. Evidence:
+  `product-strategy/tickets/PHASE_5_INDEX.md:19`;
+  `.pipeline/research.md:338`.
+- Application workloads and workload manifests. Those belong to INIT-014.
+  Evidence: `product-strategy/tickets/PHASE_5_INDEX.md:20`;
+  `product-strategy/engineering roadmap.md:97-110`.
+- Auth stack decisions or implementation. Those belong to INIT-015 and are
+  already locked separately in the overlay. Evidence:
+  `product-strategy/tickets/PHASE_5_INDEX.md:21`;
+  `plans/platform-decisions-overlay.md:6-13`.
+- Observability stack selection or rollout. That belongs to INIT-016. Evidence:
+  `product-strategy/tickets/PHASE_5_INDEX.md:22`.
+- Crossplane installation or application-cluster compositions. Those belong to
+  the later application-cluster initiative. Evidence:
+  `.pipeline/research.md:118, 181-182, 275, 314-320`.
+
+### Acceptance Criteria
+
+When INIT-008 is complete, the observable outcomes should be:
+
+- [ ] One authoritative decision surface ratifies the Vultr/OpenTofu bootstrap
+      baseline, and no active Phase 5 input still treats hosting as open.
+- [ ] The bootstrap root has an explicit contract covering what it creates, the
+      inputs it requires, the outputs it hands off, and how bucket existence is
+      guaranteed for remote state.
+- [ ] The proposal names the state isolation model for `dev`, `staging`, and
+      `production`, rather than inheriting the current shared-bucket assumption
+      by accident.
+- [ ] The proposal fixes the first validated environment and baseline sizing so
+      environment roots are intentionally parameterized rather than merely
+      checked in.
+- [ ] The proposal defines what INIT-008 claims about locking, credential
+      custody, DNS ownership, and public reachability, and what it explicitly
+      leaves to later initiatives.
+- [ ] A local verification surface exists for the bootstrap root and all three
+      environment roots, with no committed backend credentials and no required
+      deployment step.
+- [ ] The initiative remains bounded to platform bootstrap and does not absorb
+      Flux, CI/CD, ingress, auth, application workloads, or data-plane work.
+
+Evidence for the acceptance framing:
+`.pipeline/research.md:334-340, 356-433, 443-476, 492-498`;
+`product-strategy/tickets/PHASE_5_INDEX.md:14-22, 32-40`.
+
+## 2. Binding decisions (D1–D12)
+
+| ID | Decision | Options surfaced in research | Preferred direction (if any) | Why it's binding now | Traceability |
+| --- | --- | --- | --- | --- | --- |
+| D1 | Name the single authoritative surface that ratifies Vultr for INIT-008. | (a) `DECISIONS.md` canonical with overlay/README aligned; (b) overlay canonical with roadmap revised; (c) split authority persists. | (a) `DECISIONS.md`, because the engineering roadmap explicitly requires it while the repo already behaves as Vultr-specific. | Later Phase 5 proposals cannot inherit a contradiction about whether hosting is settled. | `.pipeline/research.md:147-152, 173-185, 198-208, 334-336, 458-466, 471-476`; `product-strategy/engineering roadmap.md:9, 102-104` |
+| D2 | Commit to the INIT-008 boundary versus later Phase 5 initiatives. | (a) Narrow bootstrap boundary around VPC/VKE/object storage/state backend/env roots; (b) absorb GitOps/ingress/secrets/app-cluster concerns; (c) hybrid boundary. | (a), matching the Phase 5 index and current platform-bootstrap boundary. | Scope control determines acceptance criteria, slice count, and whether INIT-008 remains tractable. | `.pipeline/research.md:109-119, 177-182, 271-285, 310-320, 450, 477-490`; `product-strategy/tickets/PHASE_5_INDEX.md:14-22` |
+| D3 | Choose how the remote-state bucket is guaranteed to exist. | (a) Bucket lifecycle in bootstrap root; (b) bucket lifecycle outside Terraform with bootstrap only emitting connection material; (c) separate root/later slice; (d) keep assuming existence implicitly. | `open` | Environment roots cannot credibly target remote state until the repo stops assuming `humility-tfstate` without a named existence path. | `.pipeline/research.md:52-62, 120-132, 376-380, 405-413, 465, 474-475, 496-497` |
+| D4 | Choose the environment state isolation model. | (a) One bucket with distinct keys; (b) multiple buckets in shared backing; (c) separate object-storage instances per environment; (d) another explicit model. | `open`; current repo only reflects "same bucket, different keys" as an unchecked default. | State isolation is a core bootstrap guarantee and an explicit proposal blocker. | `.pipeline/research.md:122-130, 398-413, 451, 462, 475, 498` |
+| D5 | Name the first validated bootstrap target environment. | `dev`, `staging`, `production`, or simultaneous multi-environment validation. | `dev`, because README already describes it as the always-on iteration environment and Phase 5 verification is local-only. | The proposal cannot write coherent acceptance criteria without naming the first target. | `.pipeline/research.md:103-107, 458-461`; `infra/README.md:35-38` |
+| D6 | Choose whether the checked-in baseline parameters are affirmed or revised. | (a) Preserve current `ewr`, Kubernetes version, and node-count baselines; (b) revise one or more roots; (c) abstract into a new shared parameter model. | (a) has the strongest current evidence, but the proposal still has to affirm or replace it explicitly. | Otherwise the roots remain accidental checked-in state rather than intentional substrate. | `.pipeline/research.md:101-107, 461, 487-488` |
+| D7 | Define INIT-008's bootstrap credential custody boundary. | (a) Bounded operator custody contract inside INIT-008; (b) stronger local secret-handling mechanics now; (c) defer custody to later secrets/GitOps work; (d) leave custody undocumented. | (a), because the repo already exposes sensitive outputs without a secrets platform and the proposal boundary stays narrower than later secrets initiatives. | Credential custody is both a Phase 0 acceptance gap and a proposal blocker. | `.pipeline/research.md:131, 339, 449, 498`; `plans/proposals/platform-bootstrap.md:257-260, 302-315` |
+| D8 | Choose INIT-008's locking and restore posture for remote state. | (a) Claim working locking in the selected backend path; (b) claim a bounded non-locking or alternative-lock posture; (c) change the state-backend contract so locking moves out of the current path. | `open` | Current platform-bootstrap material treats locking and restore procedure as exit criteria, so the proposal cannot stay vague. | `.pipeline/research.md:448, 498`; `plans/proposals/platform-bootstrap.md:252-256, 297-300` |
+| D9 | Choose whether any DNS work belongs to bootstrap. | (a) No DNS in INIT-008; (b) narrow bootstrap DNS exception; (c) broader DNS ownership in bootstrap. | (a), unless the proposal can justify a minimal exception, because the checked-in INIT-008 surface has no DNS resources and ingress is already ticketed later. | DNS ownership changes the initiative boundary and can silently turn bootstrap into ingress work. | `.pipeline/research.md:111-118, 463, 477-490`; `product-strategy/tickets/PHASE_5_INDEX.md:18` |
+| D10 | Choose whether INIT-008 requires only reachability or a reserved public endpoint. | (a) Reachability plus network attachment only; (b) reserve a minimal public endpoint now; (c) broader north-south exposure in bootstrap. | (a), because no dedicated public-endpoint resource exists now and later ingress work is already separated. | This directly affects scope, networking expectations, and whether ingress becomes a hidden dependency. | `.pipeline/research.md:464, 477-490`; `product-strategy/tickets/PHASE_5_INDEX.md:18` |
+| D11 | Define the local verification contract. | (a) Current validation-heavy surface only; (b) validation plus clean `tofu plan` targets for bootstrap and the chosen environment root; (c) broader simulator-heavy verification. | (b), because the Phase 5 index frames INIT-008 around authoring plus `tofu plan`, and research already identifies what clean plan surfaces would target. | Without a named local-verification contract, INIT-008 cannot define observable done-ness while respecting the no-deployment rule. | `.pipeline/research.md:356-433`; `product-strategy/tickets/PHASE_5_INDEX.md:14, 28-29, 37` |
+| D12 | Choose INIT-008's provider/version reproducibility posture. | (a) Keep current `>= 1.8.0` and `~> 2.30` constraints as sufficient; (b) tighten reproducibility expectations with a checked-in lock posture; (c) revise provider expectations before proposal scope is fixed. | (b), because older material drifted against provider behavior and no lockfile is currently committed under `infra/`. | Provider-version ambiguity is one reason stale object-storage material persisted; the proposal should define what counts as reproducible bootstrap state. | `.pipeline/research.md:133-144, 227, 239-241, 250-252, 488`; `infra/README.md:39` |
+
+## 3. Gaps that block proposal writing
+
+Each row below restates a Phase 1 research blocker tagged
+`BLOCKS_PROPOSAL`, with the closure condition and the actor that can close it.
+
+| Gap | What the gap is | What evidence or user decision closes it | Closure path | Traceability |
+| --- | --- | --- | --- | --- |
+| G1 | Hosting formalization source of truth is split across overlay, README, and roadmap requirements. | One authority decision that names the canonical source and aligns the other documents to it. | Proposal can close this by adopting the roadmap's `DECISIONS.md` requirement unless the user wants a different authority model. | `.pipeline/research.md:149-152, 183-185, 203-207, 466, 473, 496`; `product-strategy/engineering roadmap.md:9, 104` |
+| G2 | Environment backends assume `humility-tfstate`, but bootstrap does not currently create a bucket resource. | A proposal-level choice that explicitly names how bucket existence is guaranteed in the supported path. | Proposal must close this; additional research is only needed if current evidence cannot justify an option. | `.pipeline/research.md:52-62, 124-130, 412, 465, 475, 497` |
+| G3 | The repo implies one bucket with per-environment keys, but the proposal has not committed to whether that is the intended isolation model. | A binding choice among the isolation options, with rationale tied to environment ownership and blast radius. | Proposal can close it if the user accepts a default; user call if the tradeoff is considered irreversible. | `.pipeline/research.md:451, 462, 475, 498` |
+| G4 | No proposal-authoritative document names which environment INIT-008 validates first. | A proposal statement naming the first target and why it is first. | Proposal can default to `dev` from repo evidence unless the user wants a different entry posture. | `.pipeline/research.md:460`; `infra/README.md:35-38` |
+| G5 | The repo has concrete region/version/node values checked in, but the proposal still treats the baseline as open. | Either affirm the checked-in values as the intended baseline or revise them before the proposal closes. | Proposal can close it if it adopts current roots; user call only if a different cost/performance posture is desired. | `.pipeline/research.md:103-107, 461` |
+| G6 | Lock acquisition and restore procedure are treated as exit criteria, but the proposal has not yet settled what guarantee INIT-008 is making. | A proposal-level claim about lock support and restore expectations for the chosen backend path. | Additional research may be needed if the current source set cannot justify the claim; the proposal cannot stay silent. | `.pipeline/research.md:448, 498`; `plans/proposals/platform-bootstrap.md:252-256, 297-300` |
+| G7 | Sensitive bootstrap outputs exist, but there is no agreed operational custody story within INIT-008's local-only boundary. | A bounded custody contract that says what operators do with bootstrap outputs and what INIT-008 does not claim to automate yet. | User call if stronger-than-manual handling is required now; otherwise the proposal can define the bounded contract itself. | `.pipeline/research.md:131, 339, 449, 498`; `plans/proposals/platform-bootstrap.md:257-260, 302-315` |
+| G8 | Current code has no DNS resources, but the proposal still has not settled whether bootstrap must own any DNS records. | A direct statement that DNS is out, or a narrowly bounded statement of the exact DNS exception kept in scope. | User call is preferable because bringing DNS in changes initiative scope and dependency boundaries. | `.pipeline/research.md:463` |
+| G9 | Current bootstrap code does not provision a dedicated public endpoint, but the proposal still asks whether bootstrap needs one. | A binding statement that INIT-008 is either reachability-only or reserves a minimal public endpoint. | User call is preferable because this changes scope and could pull ingress concerns forward from INIT-012. | `.pipeline/research.md:464` |
+| G10 | Older object-storage-fix research and proposals still describe a bootstrap bucket resource that no longer exists in the repo. | Explicit displacement of the stale docs in proposal inputs and a proposal statement that live repo state is the operative truth. | Proposal should close this directly; no user call is needed unless the older docs are to remain active authority. | `.pipeline/research.md:150-152, 225-243, 265-280, 292-296, 474, 497` |
+
+## 4. Slice decomposition proposal
+
+Research already suggested a separable decomposition. The refined version below
+keeps the initiative at six candidate slices, which is the high end of the
+requested range. If proposal work discovers a seventh materially independent
+slice, that is a signal INIT-008 itself should split rather than quietly widen.
+
+| Name | Scope summary | Dependencies on other slices | Local-verification surface | Magnitude estimate | Evidence anchor |
+| --- | --- | --- | --- | --- | --- |
+| `SLICE-025: Authority Alignment and Input Reconciliation` | Formalize the authoritative Vultr/OpenTofu record for INIT-008 and displace stale bootstrap inputs that no longer match live repo state. | none | Document diff plus repo-consistency checks, with `infra/tests/validate_platform_bootstrap.sh` still passing against the active code path. | S | `.pipeline/research.md:145-193, 194-320, 471-476, 490-496` |
+| `SLICE-026: State-Backend Bootstrap Contract` | Settle what `infra/bootstrap/state-backend` is responsible for creating, what inputs it requires, what outputs operators receive, and how the bucket-existence seam is characterized. | `SLICE-025` | `cd infra/bootstrap/state-backend && tofu fmt -check && tofu init -backend=false && tofu validate` | M | `.pipeline/research.md:43-62, 372-389, 405-413, 483` |
+| `SLICE-027: Remote-State Handoff and Isolation` | Settle how environment roots consume bootstrap outcomes, replace backend placeholders, isolate state across environments, and define what locking/restore posture INIT-008 claims. | `SLICE-026` | `tofu init -backend=false && tofu validate` for all environment roots, plus a clean `tofu plan` target for the chosen first environment once runtime inputs are supplied locally. | M-L (leans M) | `.pipeline/research.md:120-132, 390-413, 448, 451, 462, 475, 484` |
+| `SLICE-028: Platform Network and VKE Module Baseline` | Freeze the INIT-008 responsibility of the shared VPC and VKE modules, including current outputs, provider/version posture, and the downstream contract later initiatives inherit. | `SLICE-025` | Module assertions in `infra/tests/validate_platform_bootstrap.sh`, plus environment-root `tofu validate` runs that exercise both modules. | M | `.pipeline/research.md:63-119, 133-144, 394-396, 485-488` |
+| `SLICE-029: Environment-Root Normalization` | Align `dev`, `staging`, and `production` roots with the first validated environment choice and intended baseline parameters, so the three roots read as deliberate substrate variants rather than accidental carryover. | `SLICE-027`, `SLICE-028` | `tofu fmt -check`, `tofu init -backend=false`, and `tofu validate` for `dev`, `staging`, and `production`. | M | `.pipeline/research.md:88-132, 356-365, 460-462, 487` |
+| `SLICE-030: Local Verification Harness Hardening` | Raise the checked-in local proof surface so INIT-008 done-ness is demonstrated by repeatable validation and plan targets, not only by repo structure and historical notes. | `SLICE-026`, `SLICE-027`, `SLICE-028`, `SLICE-029` | `infra/tests/validate_platform_bootstrap.sh`, per-root `tofu fmt -check`, per-root `tofu init -backend=false`, per-root `tofu validate`, and the proposal-defined clean `tofu plan` target(s). | M | `.pipeline/research.md:356-433, 488`; `product-strategy/tickets/PHASE_5_INDEX.md:14, 37` |
+
+## 5. Open questions for user
+
+These are the questions most likely to benefit from direct user resolution
+before the proposal phase writes a binding design. Where a safe default already
+has strong repo evidence, the proposal can choose it and record the default.
+
+### MUST_ANSWER
+
+- State isolation posture: Should INIT-008 treat environment isolation as a
+  stronger boundary than the current "same bucket, different keys" pattern, or
+  is that keyed model acceptable as the intended baseline? Traceability:
+  `.pipeline/research.md:451, 462, 475`.
+- DNS/public exposure boundary: Should INIT-008 own any DNS or reserved public
+  endpoint surface now, or should all north-south exposure remain deferred to
+  INIT-012 unless a later initiative proves it necessary? Traceability:
+  `.pipeline/research.md:463-464`;
+  `product-strategy/tickets/PHASE_5_INDEX.md:18`.
+- Credential custody strength: Is a documented operator custody contract
+  sufficient for bootstrap credentials and kubeconfig handoff in INIT-008, or
+  do you want a stronger local secret-handling mechanism required before the
+  proposal can close? Traceability:
+  `.pipeline/research.md:339, 449`;
+  `plans/proposals/platform-bootstrap.md:257-260, 302-315`.
+
+### CAN_DEFAULT
+
+- First validated environment: default to `dev` unless you want `staging` or
+  `production` to be the first target. Traceability:
+  `.pipeline/research.md:460`; `infra/README.md:35-38`.
+- Region and node baseline: default to the checked-in `ewr` and current per-root
+  node counts unless you want INIT-008 to revise those values now. Traceability:
+  `.pipeline/research.md:103-107, 461`.
+- Authority record: default to `DECISIONS.md` as the formal host record, with
+  overlay and README aligned to it. Traceability:
+  `.pipeline/research.md:183-185, 336, 466, 473`;
+  `product-strategy/engineering roadmap.md:9, 104`.
+- Remote-state input authority: default to treating live repo code and
+  `.pipeline/research.md` as authoritative over older object-storage-fix docs.
+  Traceability: `.pipeline/research.md:225-243, 265-280, 292-296, 474`.
+- Bootstrap scope boundary: default to keeping Flux, Buildkite, ingress, auth,
+  workloads, and Crossplane out of INIT-008. Traceability:
+  `.pipeline/research.md:177-182, 271-285, 310-320, 450`;
+  `product-strategy/tickets/PHASE_5_INDEX.md:15-22`.
+
+## 6. Stale material explicitly displaced
+
+The proposal phase should revise or supersede the following stale or partially
+stale materials so INIT-008 stops carrying backward-compatibility assumptions
+in its planning inputs.
+
+| Path | Proposal-phase action | Reason | Traceability |
+| --- | --- | --- | --- |
+| `plans/research/hetzner-vs-vultr.md` | Supersede as active choice input | Useful as historical provider-choice evidence, but hosting is no longer an open proposal question for INIT-008. | `.pipeline/research.md:209-218` |
+| `plans/research/vultr-fix-hookpoints.md` | Supersede | Assumes a bootstrap bucket resource exists and frames the problem as a provider bump; live repo no longer matches that state. | `.pipeline/research.md:220-232, 474` |
+| `plans/research/vultr-object-storage-fix.md` | Supersede | Describes a stale bug state centered on `vultr_object_storage_bucket` that the checked-in repo no longer contains. | `.pipeline/research.md:233-244, 474` |
+| `plans/research/opentofu-providers.md` | Revise for active use | OpenTofu/Vultr conclusions remain useful, but its bucket-resource claims and host-comparison framing are stale for INIT-008 proposal work. | `.pipeline/research.md:245-257` |
+| `plans/research/platform-bootstrap-hookpoints.md` | Revise | Its module and ordering analysis remains useful, but the bucket-resource description is stale and must not be carried forward unchanged. | `.pipeline/research.md:258-270` |
+| `plans/proposals/platform-bootstrap.md` | Revise | This is the closest current proposal ancestor, but it still relies on unresolved authority cleanup and broader remote-state assumptions than live code proves. | `.pipeline/research.md:271-286` |
+| `plans/proposals/vultr-object-storage-fix.md` | Supersede | The live repo already removed the bucket resource instead of taking this proposal's provider-bump path. | `.pipeline/research.md:287-297, 474` |
+| `plans/proposals/phase1-foundation.md` | Supersede | Hetzner, `k3s`, `kube-hetzner`, and bundled Flux/Kong/bootstrap scope are all displaced by the current Vultr-managed Phase 5 split. | `.pipeline/research.md:298-309` |
+| `plans/proposals/app-cluster-provisioning.md` | Revise as boundary input | Its platform/application split remains useful, but it still inherits stale hosting-formalization ambiguity and cannot be treated as clean authority. | `.pipeline/research.md:310-320` |
+
+## Synthesis readout
+
+Proposal writing is ready to proceed once it treats the following as the
+binding synthesis result:
+
+- INIT-008 is not a greenfield substrate invention; it is a contract-cleanup
+  and scope-fix initiative over an already checked-in Vultr/OpenTofu baseline.
+- The proposal's critical work is deciding authority, remote-state completeness,
+  state isolation, first-target baseline, custody, and boundary questions.
+- The initiative should stay at six candidate slices or fewer. If proposal work
+  discovers additional independent slices, the safer interpretation is that the
+  initiative boundary is widening and should be split.
+- The strongest remaining blockers are not missing code surfaces. They are
+  unresolved choices about what the existing code is actually claiming.
+
+Evidence summary:
+`.pipeline/research.md:30-164, 173-193, 322-340, 443-498`;
+`product-strategy/tickets/PHASE_5_INDEX.md:1-40`;
+`product-strategy/engineering roadmap.md:9, 17-33, 97-117`.
