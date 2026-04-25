@@ -120,7 +120,6 @@ gitops/
       README.md
       kustomization.yaml
       gotk-components.yaml
-      gotk-sync.yaml
       source-gitrepository.yaml
       root-kustomization.yaml
     crossplane/
@@ -243,8 +242,9 @@ gitops/bases/flux-system/
 ```
 
 `gotk-components.yaml` contains the Flux controllers needed for the control
-cluster. `gotk-sync.yaml`, `source-gitrepository.yaml`, or equivalent split
-files define the Git source and root Kustomization.
+cluster. Split `source-gitrepository.yaml` and `root-kustomization.yaml` files
+define the Git source and root Kustomization; the conventional `gotk-sync.yaml`
+is intentionally omitted.
 
 Once bootstrapped, Flux reconciles its own install drift from Git. The local
 bootstrap sequence is:
@@ -532,7 +532,6 @@ itself.
 **Files this slice touches:**
 
 - `gitops/bases/flux-system/gotk-components.yaml`
-- `gitops/bases/flux-system/gotk-sync.yaml`
 - `gitops/bases/flux-system/source-gitrepository.yaml`
 - `gitops/bases/flux-system/root-kustomization.yaml`
 - `gitops/bases/flux-system/kustomization.yaml`

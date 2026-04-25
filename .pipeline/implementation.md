@@ -29,10 +29,10 @@ no-exception harness tightening for INIT-008.
 - Added harness assertions for the optional runbook, out-of-scope apply
   wording, and absence of a committed backend endpoint.
 - Deferred Vultr VKE Kubernetes version verification to the post-Phase-5
-  deployment initiative. Vultr's current VKE changelog lists `v1.32.9+3`,
-  `v1.32.9+2`, `v1.32.9+1`, `v1.32.4+1`, `v1.32.2+1`, and `1.32.1+1` for
-  the 1.32 line, so the inherited `v1.32.3+1` value must be rechecked against
-  the live Vultr API before any deployment work.
+  deployment initiative. `infra/channels/dev.yaml` currently uses
+  `v1.32.9+3`; `infra/channels/fixtures/ephemeral-disabled.yaml` keeps the
+  older `v1.32.3+1` fixture value. Recheck the dev channel version against the
+  live Vultr API before any deployment work.
 
 ## Verification
 

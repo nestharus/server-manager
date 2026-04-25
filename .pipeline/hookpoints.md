@@ -51,7 +51,7 @@ Summary:
 | `k8s/clusters/**` | DELETE | Old per-environment, per-cluster Flux roots conflict with channel-aligned dev control root. | 24 tracked files; includes six `gotk-sync.yaml` roots pointing at `./k8s/clusters/...`. |
 | `k8s/overlays/**` | DELETE | Old `dev/staging/production` environment overlays conflict with channel overlays. | 6 tracked files, one per environment/cluster role. |
 | `k8s/tests/test_gitops_foundation.sh` | DELETE | Old harness validates the deleted topology. | Tracked shell test; broad references to `k8s/`, `base`, `overlays`, and `clusters`. |
-| Any non-plan stale test references to `k8s/` | MODIFY/DELETE if found | Acceptance requires no active non-plan references to `k8s/(base|clusters|overlays)`. | Grep found no current active code/test/infra references outside the `k8s/` tree itself. |
+| Any non-plan stale test references to `k8s/` | MODIFY/DELETE if found | Acceptance requires no active non-plan references to `k8s/(base\|clusters\|overlays)`. | Grep found no current active code/test/infra references outside the `k8s/` tree itself. |
 
 Notes:
 
@@ -95,7 +95,7 @@ Notes:
 | Path | Action | Rationale | Existing content notes |
 |---|---|---|---|
 | `gitops/bases/flux-system/gotk-components.yaml` | CREATE | Flux controller install payload for the control cluster. | Missing on disk. Must not introduce app workloads. |
-| `gitops/bases/flux-system/gotk-sync.yaml` | CREATE | Flux bootstrap/self-management sync object, or equivalent split with source/root files. | Missing on disk. Proposal also lists split files below. |
+| `gitops/bases/flux-system/gotk-sync.yaml` | OMIT | Superseded by split `source-gitrepository.yaml` and `root-kustomization.yaml` files. | Intentionally omitted so the source and root reconciliation contracts stay independently testable. |
 | `gitops/bases/flux-system/source-gitrepository.yaml` | CREATE | `GitRepository` named `server-manager`, interval `1m`. | Missing on disk. Must use same repo, local URL patched for kind. |
 | `gitops/bases/flux-system/root-kustomization.yaml` | CREATE | Root `Kustomization` to `./gitops/channels/dev`, interval `5m`, prune/wait true. | Missing on disk. |
 | `gitops/bases/flux-system/kustomization.yaml` | MODIFY | Include Flux component/source/root resources. | Created in SLICE-032. Shared touch with SLICE-032 and SLICE-035. |
@@ -177,7 +177,7 @@ Top-level structure and tracked file counts:
 | `k8s/clusters/` | 24 | Three environments times two cluster roles, with `gotk-sync.yaml` and manifest slots. |
 | `k8s/overlays/` | 6 | `dev`, `staging`, `production` overlays for app/control roles. |
 | `k8s/tests/` | 1 | Old topology acceptance test. |
-| `k8s/` total | 38 | Verified with `git ls-files k8s | wc -l`. |
+| `k8s/` total | 38 | Verified with `git ls-files k8s \| wc -l`. |
 
 Deletion sequence:
 
@@ -219,7 +219,6 @@ gitops/
       README.md
       kustomization.yaml
       gotk-components.yaml
-      gotk-sync.yaml
       source-gitrepository.yaml
       root-kustomization.yaml
     crossplane/

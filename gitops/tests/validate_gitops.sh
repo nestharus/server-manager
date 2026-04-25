@@ -244,7 +244,7 @@ assert_gitops_dirs_exist() {
 assert_each_base_has_readme_and_kustomization() {
   local base_dir rel_path
   while IFS= read -r base_dir; do
-    rel_path="${base_dir#${REPO_ROOT}/}"
+    rel_path="${base_dir#"${REPO_ROOT}"/}"
     assert_file_exists "${rel_path}/README.md"
     assert_file_exists "${rel_path}/kustomization.yaml"
   done < <(find "${GITOPS_DIR}/bases" -mindepth 1 -maxdepth 1 -type d | sort)
@@ -253,7 +253,7 @@ assert_each_base_has_readme_and_kustomization() {
 assert_each_channel_has_readme_and_kustomization() {
   local channel_dir rel_path
   while IFS= read -r channel_dir; do
-    rel_path="${channel_dir#${REPO_ROOT}/}"
+    rel_path="${channel_dir#"${REPO_ROOT}"/}"
     assert_file_exists "${rel_path}/README.md"
     assert_file_exists "${rel_path}/kustomization.yaml"
   done < <(find "${GITOPS_DIR}/channels" -mindepth 1 -maxdepth 1 -type d | sort)
@@ -581,7 +581,7 @@ assert_dev_enc_files_have_sops_metadata() {
 
   while IFS= read -r enc_file; do
     found=true
-    rel_path="${enc_file#${REPO_ROOT}/}"
+    rel_path="${enc_file#"${REPO_ROOT}"/}"
 
     if grep -q '^sops:' "$enc_file"; then
       pass "${rel_path} has SOPS metadata"
@@ -847,7 +847,7 @@ assert_no_active_k8s_references() {
   : >"$matches_file"
 
   while IFS= read -r -d '' file; do
-    rel_path="${file#${REPO_ROOT}/}"
+    rel_path="${file#"${REPO_ROOT}"/}"
 
     case "$rel_path" in
       .git/*|worktrees/*|.pipeline/*|plans/risk/*)
