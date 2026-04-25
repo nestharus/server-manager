@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GITOPS_DIR="${REPO_ROOT}/gitops"
 INSTALL_SCRIPT="${GITOPS_DIR}/scripts/install-tools.sh"
+BOOTSTRAP_SCRIPT="${GITOPS_DIR}/scripts/bootstrap-flux.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -11,6 +12,7 @@ SKIP_COUNT=0
 LAYOUT_ONLY=false
 FLUX_RENDER_ONLY=false
 SOPS_ONLY=false
+CLUSTER_ONLY=false
 
 pass() {
   echo "  PASS: $1"
@@ -39,7 +41,7 @@ section() {
 
 usage() {
   cat <<'USAGE'
-Usage: validate_gitops.sh [--layout-only|--flux-render-only|--sops-only]
+Usage: validate_gitops.sh [--layout-only|--flux-render-only|--sops-only|--cluster]
 
 Validates the INIT-009 GitOps substrate.
 
@@ -47,6 +49,7 @@ Options:
   --layout-only        Run only gitops/ layout and Kustomize assertions.
   --flux-render-only   Run only Flux self-management render assertions.
   --sops-only          Run only SOPS+age per-channel secret assertions.
+  --cluster            Run local kind + Flux bootstrap if required tools exist.
 USAGE
 }
 
@@ -60,6 +63,9 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --sops-only)
       SOPS_ONLY=true
+      ;;
+    --cluster)
+      CLUSTER_ONLY=true
       ;;
     -h|--help)
       usage
@@ -75,14 +81,14 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 MODE_COUNT=0
-for selected_mode in "$LAYOUT_ONLY" "$FLUX_RENDER_ONLY" "$SOPS_ONLY"; do
+for selected_mode in "$LAYOUT_ONLY" "$FLUX_RENDER_ONLY" "$SOPS_ONLY" "$CLUSTER_ONLY"; do
   if [[ "$selected_mode" == true ]]; then
     MODE_COUNT=$((MODE_COUNT + 1))
   fi
 done
 
 if [[ "$MODE_COUNT" -gt 1 ]]; then
-  echo "ERROR: --layout-only, --flux-render-only, and --sops-only are mutually exclusive" >&2
+  echo "ERROR: --layout-only, --flux-render-only, --sops-only, and --cluster are mutually exclusive" >&2
   usage >&2
   exit 2
 fi
@@ -100,6 +106,14 @@ assert_install_script_executable() {
     pass "install-tools.sh is executable"
   else
     fail "install-tools.sh is executable"
+  fi
+}
+
+assert_bootstrap_script_executable() {
+  if [[ -x "$BOOTSTRAP_SCRIPT" ]]; then
+    pass "bootstrap-flux.sh is executable"
+  else
+    fail "bootstrap-flux.sh is executable"
   fi
 }
 
@@ -453,12 +467,27 @@ assert_local_source_patch_present() {
   grep -q '^kind: GitRepository$' "$file" || ok=false
   grep -q '^  name: server-manager$' "$file" || ok=false
   grep -q '^  namespace: flux-system$' "$file" || ok=false
-  grep -q 'gitea-local' "$file" || ok=false
+  grep -q 'git://git-local.git-system.svc.cluster.local/server-manager.git' "$file" || ok=false
 
   if [[ "$ok" == true ]]; then
     pass "local Flux source patch is present"
   else
     fail "local Flux source patch is present"
+  fi
+}
+
+assert_local_source_patch_concrete() {
+  local file="${GITOPS_DIR}/channels/dev/patches/flux-source-local.yaml"
+  local ok=true
+
+  [[ -f "$file" ]] || ok=false
+  grep -Eq '^[[:space:]]*url:[[:space:]]+(git|https?|ssh)://' "$file" || ok=false
+  grep -qi 'placeholder\|replace_with\|todo' "$file" && ok=false
+
+  if [[ "$ok" == true ]]; then
+    pass "local Flux source patch has a concrete URL"
+  else
+    fail "local Flux source patch has a concrete URL"
   fi
 }
 
@@ -528,7 +557,7 @@ assert_dev_bootstrap_secret_exists() {
 }
 
 assert_bootstrap_flux_script_exists() {
-  local file="${GITOPS_DIR}/scripts/bootstrap-flux.sh"
+  local file="$BOOTSTRAP_SCRIPT"
   local ok=true
 
   [[ -x "$file" ]] || ok=false
@@ -561,6 +590,111 @@ assert_dev_enc_files_have_sops_metadata() {
   if [[ "$found" == false ]]; then
     skip "no dev *.enc.yaml files found for SOPS metadata check"
   fi
+}
+
+assert_bootstrap_script_help_works() {
+  local output_file error_file status
+  output_file="${REPO_ROOT}/.tmp/gitops-bootstrap-help.out"
+  error_file="${REPO_ROOT}/.tmp/gitops-bootstrap-help.err"
+  mkdir -p "${REPO_ROOT}/.tmp"
+
+  set +e
+  bash "$BOOTSTRAP_SCRIPT" help >"$output_file" 2>"$error_file"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 ]] \
+    && grep -q 'age-key' "$output_file" \
+    && grep -q 'cluster-up' "$output_file" \
+    && grep -q 'bootstrap' "$output_file" \
+    && grep -q 'teardown' "$output_file"; then
+    pass "bootstrap-flux.sh help exits 0 and lists subcommands"
+  else
+    fail "bootstrap-flux.sh help exits 0 and lists subcommands"
+    if [[ -s "$error_file" ]]; then
+      sed 's/^/    stderr: /' "$error_file"
+    fi
+  fi
+}
+
+assert_bootstrap_script_required_functions() {
+  local ok=true
+  local function_name
+  local functions=(
+    ensure_age_installed
+    ensure_dev_age_key
+    ensure_kind_installed
+    ensure_flux_installed
+    create_kind_cluster
+    flux_check_pre
+    bootstrap_flux
+    verify_reconciled
+    teardown_kind_cluster
+  )
+
+  for function_name in "${functions[@]}"; do
+    grep -Eq "^${function_name}\\(\\)[[:space:]]*\\{" "$BOOTSTRAP_SCRIPT" || ok=false
+  done
+
+  if [[ "$ok" == true ]]; then
+    pass "bootstrap-flux.sh contains required functions"
+  else
+    fail "bootstrap-flux.sh contains required functions"
+  fi
+}
+
+assert_kind_cluster_creation_path_documented() {
+  if grep -q '^create_kind_cluster()' "$BOOTSTRAP_SCRIPT"; then
+    pass "kind cluster creation path is documented in bootstrap-flux.sh"
+  else
+    fail "kind cluster creation path is documented in bootstrap-flux.sh"
+  fi
+}
+
+assert_flux_check_pre_in_bootstrap() {
+  if grep -q 'flux check --pre' "$BOOTSTRAP_SCRIPT"; then
+    pass "bootstrap-flux.sh invokes flux check --pre"
+  else
+    fail "bootstrap-flux.sh invokes flux check --pre"
+  fi
+}
+
+assert_bootstrap_script_idempotent() {
+  if grep -q 'kind get clusters' "$BOOTSTRAP_SCRIPT" \
+    && grep -q 'grep -qx "$cluster_name"' "$BOOTSTRAP_SCRIPT" \
+    && grep -q "already exists" "$BOOTSTRAP_SCRIPT"; then
+    pass "cluster-up idempotency check exists"
+  else
+    fail "cluster-up idempotency check exists"
+  fi
+}
+
+assert_local_git_mechanism_documented() {
+  if grep -q 'git daemon' "$BOOTSTRAP_SCRIPT" \
+    && grep -q 'git://git-local.git-system.svc.cluster.local/server-manager.git' "$BOOTSTRAP_SCRIPT"; then
+    pass "bootstrap-flux.sh documents the local Git mechanism"
+  else
+    fail "bootstrap-flux.sh documents the local Git mechanism"
+  fi
+}
+
+run_cluster_bootstrap_if_tools_present() {
+  local missing=()
+  local tool
+
+  for tool in kind flux kubectl age-keygen git tar; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      missing+=("$tool")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    skip "cluster bootstrap skipped because required tools are missing: ${missing[*]}"
+    return
+  fi
+
+  bash "$BOOTSTRAP_SCRIPT" bootstrap
+  pass "bootstrap-flux.sh bootstrap completed against local kind"
 }
 
 assert_sops_decrypt_works_if_tools_present() {
@@ -655,12 +789,27 @@ run_sops_checks() {
   assert_sops_decrypt_works_if_tools_present
 }
 
+run_cluster_checks() {
+  section "Local kind Verification Harness"
+  assert_bootstrap_script_executable
+  assert_bootstrap_script_help_works
+  assert_bootstrap_script_required_functions
+  assert_kind_cluster_creation_path_documented
+  assert_flux_check_pre_in_bootstrap
+  assert_bootstrap_script_idempotent
+  assert_local_git_mechanism_documented
+  assert_local_source_patch_concrete
+  run_cluster_bootstrap_if_tools_present
+}
+
 if [[ "$FLUX_RENDER_ONLY" == true ]]; then
   run_flux_render_checks
 elif [[ "$LAYOUT_ONLY" == true ]]; then
   run_layout_checks
 elif [[ "$SOPS_ONLY" == true ]]; then
   run_sops_checks
+elif [[ "$CLUSTER_ONLY" == true ]]; then
+  run_cluster_checks
 else
   run_layout_checks
   run_flux_render_checks

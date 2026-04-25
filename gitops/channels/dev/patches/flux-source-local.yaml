@@ -4,6 +4,4 @@ metadata:
   name: server-manager
   namespace: flux-system
 spec:
-  # SLICE-035 will replace this placeholder with the final local source
-  # mechanism used by the kind verification harness.
-  url: http://gitea-local.gitea.svc.cluster.local:3000/server-manager.git
+  url: git://git-local.git-system.svc.cluster.local/server-manager.git

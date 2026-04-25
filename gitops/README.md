@@ -76,6 +76,48 @@ Run the SOPS workflow harness when changing per-channel secrets:
 bash gitops/tests/validate_gitops.sh --sops-only
 ```
 
+## Local Verification
+
+The full local proof runs Flux against a kind cluster and a local Git source:
+
+```bash
+bash gitops/scripts/bootstrap-flux.sh bootstrap
+```
+
+Clean up the kind cluster when finished:
+
+```bash
+bash gitops/scripts/bootstrap-flux.sh teardown
+```
+
+Prerequisites:
+
+- `bash gitops/scripts/install-tools.sh --check` passes, including `kind`,
+  `flux`, `kubectl`, `age-keygen`, `git`, and `tar`.
+- Docker can start a kind cluster cleanly.
+- The current Git commit contains the GitOps state to verify.
+
+The bootstrap creates or reuses the `server-manager-dev` kind cluster, creates
+the local dev age key if needed, installs Flux from
+`bases/flux-system/gotk-components.yaml`, seeds a bare copy of this repository
+into an in-cluster `git daemon`, and reconciles `gitops/channels/dev` from:
+
+```text
+git://git-local.git-system.svc.cluster.local/server-manager.git
+```
+
+This proves the control-cluster GitOps substrate can reconcile locally from the
+repository layout in this tree. It does not prove Vultr provisioning, public
+DNS, GitHub access, application-cluster reconciliation, or any externally
+hosted Git workflow.
+
+The opt-in cluster harness runs the same bootstrap when all required tools are
+present. If they are missing, it exits successfully with a SKIPPED marker:
+
+```bash
+bash gitops/tests/validate_gitops.sh --cluster
+```
+
 Default validation also runs toolchain checks:
 
 ```bash
