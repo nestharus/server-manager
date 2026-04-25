@@ -5,10 +5,10 @@ description = "Local CLI + agent-friendly wrappers around the Discord REST API f
 requires-python = ">=3.12"
 dependencies = [
     "discord.py>=2.3",
-    "jsonschema",
+    "jsonschema>=4.17,<5",
     "python-dotenv",
     "aiohttp",
-    "PyYAML",
+    "PyYAML>=6,<7",
 ]
 
 [dependency-groups]

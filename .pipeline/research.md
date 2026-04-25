@@ -70,7 +70,7 @@ Current-state implication:
 | Resource | One `vultr_vpc.platform` | `infra/modules/platform-network/main.tf:29-34` |
 | Naming | `description = "humility-${var.environment}-platform"` | `infra/modules/platform-network/main.tf:29-34` |
 | Outputs | `vpc_id`, `description`, `v4_subnet`, `v4_subnet_mask` | `infra/modules/platform-network/main.tf:36-50` |
-| Hardcoded environment names inside module logic | None beyond comments | Module takes environment as input; no `dev`/`staging`/`production` literals in resource logic. | `infra/modules/platform-network/main.tf:8-50`, `infra/tests/validate_platform_bootstrap.sh:263-285` |
+| Hardcoded environment names inside module logic | None beyond comments. Module takes environment as input; no `dev`/`staging`/`production` literals in resource logic. | `infra/modules/platform-network/main.tf:8-50`, `infra/tests/validate_platform_bootstrap.sh:263-285` |
 
 #### `infra/modules/platform-cluster/main.tf`
 
