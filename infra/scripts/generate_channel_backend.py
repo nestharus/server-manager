@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from resolve_platform_channel import ChannelError, write_error
+
 
 BACKEND_KEYS = ("bucket", "key", "region")
 
@@ -44,11 +46,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    resolved = _load_resolved(Path(args.resolved))
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_backend(resolved), encoding="utf-8")
-    return 0
+    try:
+        resolved = _load_resolved(Path(args.resolved))
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(render_backend(resolved), encoding="utf-8")
+        return 0
+    except (ValueError, KeyError, json.JSONDecodeError) as exc:
+        write_error(ChannelError("schema_invalid", "resolved", str(exc)))
+        return 1
 
 
 if __name__ == "__main__":

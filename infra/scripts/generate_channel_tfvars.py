@@ -8,9 +8,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from resolve_platform_channel import ChannelError, write_error
+
 
 TFVAR_KEYS = (
     "channel_id",
+    "channel_exposure",
+    "tenant",
     "region",
     "vpc_v4_subnet",
     "vpc_v4_subnet_mask",
@@ -58,6 +62,8 @@ def tfvars_payload(resolved: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "channel_id": resolved["id"],
+        "channel_exposure": resolved["exposure"],
+        "tenant": resolved.get("tenant"),
         "region": platform["region"],
         "vpc_v4_subnet": network["v4_subnet"],
         "vpc_v4_subnet_mask": network["v4_subnet_mask"],
@@ -85,11 +91,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    resolved = _load_resolved(Path(args.resolved))
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_tfvars(resolved), encoding="utf-8")
-    return 0
+    try:
+        resolved = _load_resolved(Path(args.resolved))
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(render_tfvars(resolved), encoding="utf-8")
+        return 0
+    except (ValueError, KeyError, json.JSONDecodeError) as exc:
+        write_error(ChannelError("schema_invalid", "resolved", str(exc)))
+        return 1
 
 
 if __name__ == "__main__":

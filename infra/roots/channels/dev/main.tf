@@ -17,6 +17,8 @@ module "platform_channel" {
   source = "../../../templates/platform-channel"
 
   channel_id                 = var.channel_id
+  channel_exposure           = var.channel_exposure
+  tenant                     = var.tenant
   region                     = var.region
   vpc_v4_subnet              = var.vpc_v4_subnet
   vpc_v4_subnet_mask         = var.vpc_v4_subnet_mask
@@ -31,6 +33,23 @@ module "platform_channel" {
 variable "channel_id" {
   description = "Channel identifier from resolved channel JSON; no default; required"
   type        = string
+}
+
+variable "channel_exposure" {
+  description = "Channel exposure class from resolved channel JSON; no default; required"
+  type        = string
+
+  validation {
+    condition     = contains(["prod", "stage", "dev"], var.channel_exposure)
+    error_message = "channel_exposure must be one of: prod, stage, dev"
+  }
+}
+
+variable "tenant" {
+  description = "Optional tenant identifier from resolved channel JSON"
+  type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "region" {

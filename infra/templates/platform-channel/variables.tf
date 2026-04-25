@@ -3,6 +3,23 @@ variable "channel_id" {
   type        = string
 }
 
+variable "channel_exposure" {
+  type        = string
+  description = "Channel exposure class: prod | stage | dev; sourced from resolved channel JSON; no default; required"
+
+  validation {
+    condition     = contains(["prod", "stage", "dev"], var.channel_exposure)
+    error_message = "channel_exposure must be one of: prod, stage, dev"
+  }
+}
+
+variable "tenant" {
+  type        = string
+  description = "Optional tenant identifier; null for non-tenant-scoped channels."
+  default     = null
+  nullable    = true
+}
+
 variable "region" {
   description = "Vultr region matching ^[a-z]{3}$; no default; required"
   type        = string
