@@ -1009,6 +1009,7 @@ INIT-008 explicitly does not do the following:
 | `plans/proposals/vultr-object-storage-fix.md` | delete | The live repo already moved away from that provider-bump/resource path; INIT-008 must not carry it forward. |
 | `plans/proposals/phase1-foundation.md` | delete | Retired self-managed provider substrate, bundled Flux/Kong/secrets scope, and older substrate assumptions conflict with Phase 5. |
 | `plans/proposals/app-cluster-provisioning.md` | revise | Its two-tier boundary remains relevant, but hosting ambiguity and platform/application split need alignment with the Vultr/channel substrate. |
+
 Disposal semantics:
 - `revise`: update the file so active claims match this proposal.
 - `delete`: remove stale files from the repo rather than parking them.
