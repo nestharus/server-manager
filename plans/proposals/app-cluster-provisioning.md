@@ -1,3 +1,5 @@
+> **Historical context.** Active INIT-008 proposal lives at `.pipeline/proposal.md` (committed on branch `feat/init-008-platform-bootstrap`). This file is preserved only for its platform/app split rationale. Do not treat its hosting assumptions, scope, or design as authoritative for INIT-008; the Vultr / OpenTofu / channel-template platform pivot is ratified in `DECISIONS.md` D7.
+
 # Proposal: Initiative — Application Cluster Provisioning
 
 ## 1. Executive summary

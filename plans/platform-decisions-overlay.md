@@ -1,5 +1,7 @@
 # Platform decisions overlay
 
+Hosting / IaC / channel pattern: ratified in DECISIONS.md D7 (2026-04-25). This file remains for auth/CI/GitOps overlay only.
+
 Corrections and updates to `unified-platform-index.md` based on user
 decisions and research results that landed after the merge.
 
@@ -24,6 +26,4 @@ decisions and research results that landed after the merge.
 
 ## Still open after this overlay
 
-- Hosting decision: `Hetzner` vs `Vultr`
-- `Logto RLS pagination` research still running
-- `OpenTofu providers` research still running
+No auth/CI/GitOps overlay questions are currently tracked here.

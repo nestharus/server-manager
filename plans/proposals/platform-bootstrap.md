@@ -1,3 +1,5 @@
+> **Historical context.** Active INIT-008 proposal lives at `.pipeline/proposal.md` (committed on branch `feat/init-008-platform-bootstrap`). This file is preserved only for its remote-state and bucket-existence rationale. Do not treat its scope or design as authoritative.
+
 # Proposal: Initiative — Platform Bootstrap
 
 ## 1. Executive summary
@@ -249,11 +251,14 @@ The following are explicitly out of scope for Platform Bootstrap:
   verified on a throwaway cluster before committing the per-environment
   network topology — this is a gating pre-implementation task, not
   general diligence.
-- S3-compatible state backing is the right first move. State locking,
-  object versioning, and restore procedures are first-class exit
-  criteria, not assumed defaults. Concurrent applies without working
-  lock acquisition can corrupt state; a corrupted foundation-layer state
-  file is effectively unrecoverable without manual import.
+- S3-compatible state backing is the right first move, bounded by the
+  current INIT-008 local-only scope. Locking is best-effort in the Vultr
+  Object Storage S3-compatible backend and is not load-bearing for Phase
+  5 single-operator verification. Object Storage versioning, the
+  operator-owned object-storage versioning setting, should be enabled at
+  bucket creation time so an operator can manually recover a prior state
+  object if needed. INIT-008 does not own a restore drill; runbook-level
+  restore tooling belongs to the post-Phase-5 deployment initiative.
 - Provider credential custody is a bootstrap-phase concern because no
   secrets platform exists yet. The Vultr API token must have a defined
   storage location, access-control boundary, backup procedure, and
@@ -294,11 +299,14 @@ Platform Bootstrap is complete when all of the following are true:
   application clusters later
 - each declared platform environment has its own `OpenTofu` root and
   isolated remote-state boundary
-- the remote-state backend provides working lock acquisition,
-  demonstrated by an intentional concurrent-plan test
-- object versioning is enabled on the state bucket
-- a documented state-restore procedure exists and has been exercised at
-  least once
+- the remote-state backend uses best-effort locking only, and the
+  INIT-008 verification contract remains bounded to Phase 5
+  single-operator local validation
+- Object Storage versioning is enabled on the state bucket at bucket
+  creation time
+- INIT-008 does not include a restore drill or automated restore
+  tooling; runbook-level restore belongs to the post-Phase-5 deployment
+  initiative
 - a minimum credential-custody procedure is defined as a deliverable:
   where the Vultr API token lives outside Git, who can access it, how it
   is backed up, and whether per-environment tokens are enforced

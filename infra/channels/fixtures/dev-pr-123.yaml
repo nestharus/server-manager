@@ -1,0 +1,7 @@
+schema_version: 1
+id: dev-pr-123
+parent: dev
+exposure: dev
+tenant: pr-123
+allow_ephemeral_children: false
+enabled_platforms: [kubernetes]

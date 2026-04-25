@@ -1,5 +1,6 @@
-# One-time bootstrap: create the Vultr Object Storage bucket for tfstate.
-# This root uses local state only. Run once, then never touch again.
+# One-time bootstrap: create the Vultr Object Storage subscription used for
+# tfstate handoff. This root uses local state only and does not manage the
+# bucket resource; operators create and verify the bucket separately.
 #
 # Usage:
 #   cd infra/bootstrap/state-backend

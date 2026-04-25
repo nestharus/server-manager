@@ -172,3 +172,21 @@ writing.
   track.
 - If any default is later corrected by the user, the proposal must be
   revised and the full risk gate rerun.
+
+---
+
+## D7 — 2026-04-25 — Ratify Vultr / OpenTofu / channel-template platform pivot for Phase 5
+
+**Context**: Phase 0 of the engineering roadmap requires `Hosting decision is formalized in DECISIONS.md`. The repo and `infra/README.md` already operate against Vultr, but the formal hosting decision was split across `infra/README.md` and `plans/platform-decisions-overlay.md` and never landed here. INIT-008 (Phase 5 Platform Bootstrap) closes that authority gap and additionally adopts an environment-template / channel-registry pattern in place of hard `infra/environments/{dev,staging,production}/` roots.
+
+**Decision**:
+1. Hosting target: **Vultr** (VPC + VKE + Object Storage). Earlier provider alternatives are not under consideration for this project.
+2. IaC: **OpenTofu** with the Vultr provider `~> 2.30`. Roots require `>= 1.8.0`; INIT-008 verification version is `1.11.5`.
+3. Environment model: **channel templates with parent inheritance** (modeled on rfqautomation's `release-channels/` pattern), NOT hard dev/staging/production roots. Channel definitions live in `infra/channels/<id>.yaml`; the parameterized template lives in `infra/templates/platform-channel/`; per-channel TF roots live in `infra/roots/channels/<id>/`. The first ratified channel is `dev`; production-class `customer` and operator-class `internal` channels are deferred to a separate initiative opened after Phase 5 converges.
+4. Phase 5 (INIT-008..016) verification is **local-only**. No `tofu apply` against Vultr; verification is `tofu validate` and `tofu plan` (read-only) against the Vultr API where credentials are present.
+
+**Consequences**:
+- `infra/environments/{dev,staging,production}/` directories are removed by SLICE-027; their state contracts move to `infra/roots/channels/dev/` (and successor channel directories when later initiatives open them).
+- `plans/platform-decisions-overlay.md` is reduced to overlay-of-record-only state; the hosting and CI/CD entries that this DECISIONS entry now formalizes are removed there.
+- Stale prior proposals and research that assume retired provider paths or `vultr_object_storage_bucket` are deleted (no archival), per `~/ai/conventions/no-backwards-compatibility.md`.
+- Successor initiatives (INIT-009..016 + the post-Phase-5 deployment initiative) inherit this decision; they do not re-litigate hosting, IaC tool, environment model, or local-only verification.
