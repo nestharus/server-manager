@@ -1,194 +1,447 @@
-# SLICE-013 Phase 5: Hookpoints
+# INIT-009 Phase 5 Hookpoint Research
 
-Inputs used:
-- `.pipeline/proposal.md` revision 3
-- `.pipeline/synthesis.md` D1-D12 binding
-- `plans/risk/slice-013-{audit,scope,shortcut}.md` all LOW
-- `product-strategy/tickets/SLICE-013.md`
+Generated for `worktrees/init-009-gitops-substrate/`.
 
-Implementation rule: this slice replaces the legacy chapter substrate in place. Do not keep compatibility aliases, dual routes, parked in-memory code, or legacy integer id behavior.
+Inputs read:
 
-## Full File List
+- `.pipeline/proposal.md` final, 978 lines.
+- `.pipeline/synthesis.md`, D1-D12.
+- `.pipeline/research.md`, Phase 1 evidence.
+- Existing `k8s/` tree.
+- `plans/proposals/gitops-foundation.md`.
+- `plans/research/gitops-foundation.md`.
+- `plans/research/gitops-foundation-needs.md`.
+- `plans/research/gitops-foundation-hookpoints.md`.
+- `infra/README.md`.
+- `infra/tests/validate_platform_bootstrap.sh`.
+- `plans/risk/init-009-{audit,scope,shortcut}.md`.
 
-| WU | Action | File | Purpose | Specific hook points |
-|---|---|---|---|---|
-| WU-018 | CREATE | `migrations/versions/wu-018_chapter_templates.py` | Add template family lineage to existing `chapter_templates`. | `upgrade()`: `CREATE EXTENSION IF NOT EXISTS pgcrypto`, add nullable `template_family_id`, `version`, backfill each existing row to its own family/version 1, set NOT NULL, create `uq_chapter_templates__family_version` and `ix_chapter_templates__family`. `downgrade()`: drop index/constraint columns in reverse. |
-| WU-019 | CREATE | `migrations/versions/wu-019_chapter_lifecycle.py` | Persist chapters, chapter transitions, and seed Discord provisioner grants. | `upgrade()`: create `chapters`, create `chapter_transitions`, create indexes, insert active global grant for `grantee_id='discord-provisioner'` with `chapter.read`, `chapter.write`, `chapter_template.read`. `downgrade()`: delete that seed grant, drop transition table, drop chapter table. |
-| WU-019 | MODIFY/REPLACE | `services/api/app/contracts/chapters.py` | Replace integer-id/update/archive contract with persisted lifecycle contract. | Delete `ChapterStatus`, `ChapterUpdate`, enum import, `slug`, `discord_*_id` fields. Add `ChapterState`, `ChapterId`, `ChapterDiscordResources`, `ChapterCreate`, `ChapterRead`, `ChapterTransitionRequest`, `ChapterResourcesPatchRequest`, `ChapterTransitionRead`, typed errors. Update `__all__`. |
-| WU-018 | MODIFY | `services/api/app/contracts/chapter_templates.py` | Add immutable versioning contract. | Add `template_family_id`, `version` to `ChapterTemplateRead`; add `ChapterTemplatePatch`; add `ChapterTemplateNotFoundError`, `StaleTemplateVersionError`, `ChapterTemplatePatchEmptyError`; preserve `schema_version`; keep `ChapterTemplateCreate` free of caller-supplied `template_family_id`. |
-| WU-020 | CREATE | `services/discord/app/contracts/chapters.py` | Discord-local provisioning result/step contract. | Public surface: `ProvisioningStep`, `ChapterProvisionResult`, `ChapterProvisioningError` if needed by handler tests. Keep this daemon-local; API chapter contracts remain in `services/api`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/interactions.py` | Add deferred-ack seam to interaction contract. | Extend `InteractionEnvelope` only if needed to carry a raw interaction/ack handle, or add protocol `InteractionAcknowledger`. Keep `InteractionHandler` async. Update `__all__`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/api_transport.py` | Allow actor/If-Match headers on API calls. | Add `headers: dict[str, str] | None = None` to `ApiTransportRequest` so chapter provisioning can send `X-Actor-*` and `If-Match` without raw httpx. |
-| WU-019 | MODIFY/REPLACE | `services/api/app/repositories/chapters.py` | Replace in-memory repository with Postgres accessors. | Delete `ChapterRepository`, `InMemoryChapterRepository`, `ChapterRecord`, `StalePreconditionError`, `replace`, timezone imports, `ChapterStatus` import. Add `fetch_chapter`, `fetch_chapter_for_update`, `insert_chapter`, `_update_chapter_state`, `_merge_chapter_discord_resources`; `ChapterNotFoundError` now takes `str`. |
-| WU-018 | MODIFY | `services/api/app/repositories/chapter_templates.py` | Persist and lock template versions. | Extend `insert_chapter_template` and `fetch_chapter_template` select/insert columns. Add `fetch_chapter_template_for_update`, `fetch_current_template_family_version_for_update`, `insert_template_version`. Use `SELECT ... FOR UPDATE` for family locking. |
-| WU-019 | CREATE | `services/api/app/repositories/chapter_transitions.py` | Query/write chapter transition projection rows. | Public surface: `insert_chapter_transition`, `list_chapter_transitions`, optional `fetch_chapter_transition`. All write calls receive active `Connection`. |
-| WU-019 | MODIFY/REPLACE | `services/api/app/services/chapters.py` | Replace old `ChapterService` class with mutation-backed lifecycle functions. | Delete `ChapterService`, `_heads`, `_format_etag`, `_record_to_payload`, `_compute_diff`, `_check_precondition`, `_to_read`, in-memory store imports. Add `create_chapter`, `read_chapter`, `transition_chapter`, `patch_chapter_discord_resources`, `_verify_transition`, `_verify_provisioning_complete`, `_chapter_from_row`, `_make_mutation_request`, `_enqueue_failed_provisioning_effect`. Use `mutate_entity()`. |
-| WU-018 | MODIFY | `services/api/app/services/chapter_templates.py` | Make template create actor-aware and add PATCH-as-new-version. | Change `_make_request` to accept `ActorIdentity`; change `create_chapter_template(db, request, actor)` to version/family v1; preserve `read_chapter_template`; add `patch_chapter_template(db, template_id, request, actor)`; catch unique-index `IntegrityError` as stale 412. |
-| WU-019 | MODIFY/REPLACE | `services/api/app/api/v1/endpoints/chapters.py` | Replace legacy chapter routes with lifecycle routes. | Delete `list_chapters`, `update_chapter`, `archive_chapter`, `ChapterUpdate`, `ChapterService`, `get_chapter_service`, integer `chapter_id`. Add `_parse_if_match`, `_db`, `_set_etag`, typed error mapper. Routes: `POST ""`, `GET "/{chapter_id}"`, `POST "/{chapter_id}/transitions"`, `PATCH "/{chapter_id}/discord-resources"`. Add `RequireAuthority` and `get_current_actor`. |
-| WU-018 | CREATE | `services/api/app/api/v1/endpoints/chapter_templates.py` | Template create/read/patch HTTP API. | Public surface: `router`; helpers `_db`, `_map_template_error`. Routes: `POST /api/v1/chapter-templates`, `GET /api/v1/chapter-templates/{template_id}`, `PATCH /api/v1/chapter-templates/{template_id}`. Use `RequireAuthority` and actor dependency. |
-| WU-018 | MODIFY | `services/api/app/api/v1/router.py` | Mount chapter template routes. | Import `chapter_templates`; add `router.include_router(chapter_templates.router, tags=["chapter-templates"])`. Keep existing `chapters` include but it now points to replacement lifecycle router. |
-| WU-019 | MODIFY | `services/api/app/core/factory.py` | Remove legacy in-memory chapter wiring. | Delete imports of `InMemoryActionStore`, `InMemoryStateChangeStore`, `ChapterRepository`, `InMemoryChapterRepository`, `ChapterService`. Remove `chapter_repository`, `action_store`, `state_change_store` parameters. Remove `app.state.activity_action_store`, `app.state.activity_state_change_store`, `app.state.chapter_service` unless another non-legacy test still requires them. Keep `app.state.db` and scheduler wiring. |
-| WU-019 | MODIFY | `services/api/app/core/dependencies.py` | Remove in-memory service dependency. | Delete `ChapterService` import and `get_chapter_service`. Keep `get_current_actor` and `RequireAuthority`. |
-| WU-020 | CREATE | `services/discord/app/commands/chapters.py` | Register `provision_chapter` command handler. | Public surface: `PROVISION_CHAPTER_COMMAND`, `register_chapter_commands(bot)`. Calls `bot.register_interaction_handler("provision_chapter", provision_chapter_handler)`. |
-| WU-020 | MODIFY | `services/discord/app/commands/__init__.py` | Export chapter registration. | Import/export `register_chapter_commands` if tests import from `app.commands`. Preserve `InteractionRegistry` export. |
-| WU-020 | CREATE | `services/discord/app/handlers/chapters.py` | Sequential Discord provisioning workflow. | Public surface: `provision_chapter_handler`, `check_required_bot_permissions`, `derive_resource_names`/slug helper if test needs it. Handler: ack deferred before API calls, GET chapter, transition to `provisioning`, create/reuse category/roles/channels, PATCH resources after each success, transition to `active`, on failure transition to `provisioning_failed`. |
-| WU-020 | MODIFY | `services/discord/app/handlers/__init__.py` | Export chapter handler symbols if tests import package-level handlers. | Add `provision_chapter_handler` and permission helper to `__all__` only if needed. |
-| WU-020 | MODIFY | `services/discord/app/infrastructure/api_client.py` | Propagate actor and precondition headers. | In `ApiClient.call`, merge `request.headers` with correlation/causation headers. Caller-supplied `X-Correlation-Id` must not override ambient correlation. Actor headers are supplied by WU-020 calls. |
-| WU-020 | MODIFY | `services/discord/app/core/bot.py` | Support deferred acknowledgement and command registration context. | `HumilityBot.dispatch_interaction`: expose raw interaction response/defer path to handler through envelope or an ack protocol; do not send a second immediate response if already deferred and follow-up path is used. Existing `register_interaction_handler` remains. |
-| WU-020 | MODIFY | `services/discord/app/__main__.py` | Install chapter command registration before sync/start. | `build_bot_with_registry`: create `HumilityBot`, call `register_chapter_commands(bot)`, return bot. Keep `sync_command_tree` behavior. |
-| WU-020 | MODIFY | `services/discord/app/contracts/runtime_settings.py` | Document required bot permissions in read contract. | Add `required_bot_permissions: tuple[str, ...] = ("MANAGE_ROLES", "MANAGE_CHANNELS", "VIEW_CHANNEL")` to `DiscordSettingsRead`. No new env var. |
-| WU-020 | MODIFY | `services/discord/app/core/settings.py` | Populate runtime settings read model. | `Settings.to_read()` passes the default required permission tuple through `DiscordSettingsRead`. |
+Summary:
 
-## 1. Migrations
+- The legacy `k8s/` tree exists and has exactly 38 tracked files.
+- No `gitops/` directory exists yet.
+- No active code in `daemon/`, `services/`, `infra/tests/`, or migrations
+  points at `k8s/` or `gitops/`.
+- `infra/README.md` is still environment-root shaped and needs a cross-link
+  to the GitOps layer after INIT-008 channel wording lands.
+- `infra/tests/validate_platform_bootstrap.sh` is independent and should be
+  preserved; the GitOps harness belongs under `gitops/tests/`.
+- `flux`, `kind`, `sops`, `age`, and `age-keygen` are missing locally.
+- `kubectl` is installed at `v1.34.1`; embedded Kustomize is `v5.7.1`.
+- `BLOCKS_IMPLEMENTATION`: this worktree does not contain INIT-008's
+  `infra/channels/dev.yaml`; SLICE-032 must consume that branch dependency
+  before implementing the D12 channel contract, not copy a static fixture.
 
-| WU | Action | File | Hook points |
+## 1. Per-Slice File Map
+
+### SLICE-031 - Toolchain Preinstall And Legacy `k8s/` Disposal
+
+| Path | Action | Rationale | Existing content notes |
 |---|---|---|---|
-| WU-018 | CREATE | `migrations/versions/wu-018_chapter_templates.py` | `revision = "wu_018_chapter_templates"`, `down_revision = "wu_014_authority_api"`. Use Alembic `op.add_column`, SQL backfill via `gen_random_uuid()`, `op.alter_column`, `op.create_index`. |
-| WU-019 | CREATE | `migrations/versions/wu-019_chapter_lifecycle.py` | `revision = "wu_019_chapter_lifecycle"`, `down_revision = "wu_018_chapter_templates"`. Use Postgres JSONB and UUID types. Seed grant using actual `authority_grants` columns: `id`, `grantee_id`, `scope_kind`, `scope_id`, `permissions`, `expires_at`, `revoked_at`, `revoked_by`, `revocation_reason`, `predecessor_grant_id`. |
+| `gitops/scripts/install-tools.sh` | CREATE | Entry point for idempotent Linux-first install/check of `flux`, `kind`, `sops`, `age`, `age-keygen`, `kubectl`, and embedded Kustomize. | Missing on disk; parent `gitops/` is missing. Must be executable. |
+| `gitops/tests/validate_gitops.sh` | CREATE | Initial harness entry point for layout/tool checks; later slices extend it. | Missing on disk. Placement mirrors `infra/tests/validate_platform_bootstrap.sh` but remains GitOps-owned. |
+| `k8s/` | DELETE | Proposal D5/Q2 deletes old environment-shaped GitOps authority with no alias, wrapper, symlink, or compatibility path. | Exists on disk with 38 tracked files under `base/`, `clusters/`, `overlays/`, and `tests/`. |
+| `k8s/base/controllers/kustomization.yaml` | DELETE | Part of stale old base tree. | Contains old controller-contract ConfigMap. |
+| `k8s/base/kustomization.yaml` | DELETE | Part of stale old base tree. | Composes `controllers`, `namespaces`, `platform`, and `policies`. |
+| `k8s/base/namespaces/kustomization.yaml` | DELETE | Part of stale old base tree. | Generates namespace resources for old base. |
+| `k8s/base/namespaces/platform-system.yaml` | DELETE | Part of stale old base tree. | Namespace manifest. |
+| `k8s/base/namespaces/workloads.yaml` | DELETE | Part of stale old base tree. | Namespace manifest. |
+| `k8s/base/platform/kustomization.yaml` | DELETE | Part of stale old base tree. | Old metadata uses `clusterTopology=control-and-app`. |
+| `k8s/base/policies/kustomization.yaml` | DELETE | Part of stale old base tree. | Old Buildkite boundary metadata, useful concept but stale path. |
+| `k8s/clusters/**` | DELETE | Old per-environment, per-cluster Flux roots conflict with channel-aligned dev control root. | 24 tracked files; includes six `gotk-sync.yaml` roots pointing at `./k8s/clusters/...`. |
+| `k8s/overlays/**` | DELETE | Old `dev/staging/production` environment overlays conflict with channel overlays. | 6 tracked files, one per environment/cluster role. |
+| `k8s/tests/test_gitops_foundation.sh` | DELETE | Old harness validates the deleted topology. | Tracked shell test; broad references to `k8s/`, `base`, `overlays`, and `clusters`. |
+| Any non-plan stale test references to `k8s/` | MODIFY/DELETE if found | Acceptance requires no active non-plan references to `k8s/(base|clusters|overlays)`. | Grep found no current active code/test/infra references outside the `k8s/` tree itself. |
 
-Migration tests must prove:
-- Upgrade creates lineage columns and backfills existing templates as version 1.
-- `(template_family_id, version)` uniqueness exists.
-- `chapters` and `chapter_transitions` exist with the four-state check only.
-- `discord-provisioner` grant is active and global with exactly the permissions needed for WU-020.
+Notes:
 
-## 2. Contracts
+- This slice owns the deletion. No later slice should keep `k8s/` live.
+- Shell metadata applies to `install-tools.sh` and `validate_gitops.sh`.
+- Implementation note: installer acquisition sources/checksums are not listed
+  in the proposal; shortcut risk SH-1 requires the implementation to pin
+  official URLs plus SHA256s in the script header.
 
-| WU | Action | File | Public surface / hook points |
+### SLICE-032 - `gitops/` Directory And Kustomize Layout
+
+| Path | Action | Rationale | Existing content notes |
 |---|---|---|---|
-| WU-019 | MODIFY/REPLACE | `services/api/app/contracts/chapters.py` | Export `ChapterState = Literal["proposed", "provisioning", "active", "provisioning_failed"]`, `ChapterId = str`, `ChapterDiscordResources`, `ChapterCreate`, `ChapterRead`, `ChapterTransitionRequest`, `ChapterResourcesPatchRequest`, `ChapterTransitionRead`, `ChapterNotFoundError`, `InvalidChapterTransitionError`, `IncompleteProvisioningError`. No `ChapterStatus`, `ChapterUpdate`, integer ids, `slug`, or archive shapes. |
-| WU-018 | MODIFY | `services/api/app/contracts/chapter_templates.py` | `ChapterTemplateRead` gains `template_family_id: UUID`, `version: int`. `ChapterTemplatePatch` has `expected_current_version` plus optional `name`, `channel_structure`, `role_structure`, `default_permission_intents`; validator rejects empty patch and wrong `schema_version`. Export typed errors. |
-| WU-020 | CREATE | `services/discord/app/contracts/chapters.py` | Export daemon-local provisioning result contract used by handler tests. Suggested symbols: `ProvisioningStep`, `ChapterProvisionResult`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/interactions.py` | Add only the minimum deferred-ack contract needed by handler/bot. Suggested symbols if used: `InteractionAcknowledger` protocol with `defer(ephemeral: bool = True)`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/api_transport.py` | `ApiTransportRequest` adds optional `headers` field. Existing response/error public surface remains unchanged. |
+| `gitops/README.md` | CREATE | Root layout and channel-overlay overview. | Missing on disk. Later slices also modify. |
+| `gitops/bases/flux-system/README.md` | CREATE | Documents active Flux base ownership. | Missing on disk. |
+| `gitops/bases/flux-system/kustomization.yaml` | CREATE | Empty/initial Kustomize base that SLICE-033 populates. | Missing on disk; later modified by SLICE-033 and SLICE-035. |
+| `gitops/bases/crossplane/README.md` | CREATE | Empty handoff base for INIT-017. | Missing on disk. README must name owner and empty-base rule. |
+| `gitops/bases/crossplane/kustomization.yaml` | CREATE | Empty placeholder base for INIT-017. | Missing on disk. Must remain resource-empty until INIT-017. |
+| `gitops/bases/cert-manager/README.md` | CREATE | Empty handoff base for INIT-018. | Missing on disk. |
+| `gitops/bases/cert-manager/kustomization.yaml` | CREATE | Empty placeholder base for INIT-018. | Missing on disk. Must remain resource-empty. |
+| `gitops/bases/external-dns/README.md` | CREATE | Empty handoff base for INIT-018. | Missing on disk. |
+| `gitops/bases/external-dns/kustomization.yaml` | CREATE | Empty placeholder base for INIT-018. | Missing on disk. Must remain resource-empty. |
+| `gitops/bases/cluster-security/README.md` | CREATE | Empty handoff base for INIT-019. | Missing on disk. |
+| `gitops/bases/cluster-security/kustomization.yaml` | CREATE | Empty placeholder base for INIT-019. | Missing on disk. Must remain resource-empty. |
+| `gitops/channels/dev/README.md` | CREATE | Documents active dev control-cluster channel overlay. | Missing on disk. |
+| `gitops/channels/dev/kustomization.yaml` | CREATE | Active channel composition root. | Missing on disk. Must compose Flux base, empty downstream bases, and `../../secrets/dev`. |
+| `gitops/secrets/dev/README.md` | CREATE | Initial per-channel secrets docs; SLICE-034 expands custody details. | Missing on disk. |
+| `gitops/tests/validate_gitops.sh` | MODIFY | Adds `--layout-only` assertions. | Missing until SLICE-031 creates it. |
+| `infra/channels/dev.yaml` | READ/DEPENDENCY | D12 says implementation consumes INIT-008 `dev` channel input. | Missing in this worktree; research cites sibling `worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml`. |
 
-## 3. Repositories
+Notes:
 
-| WU | Action | File | Hook points |
+- `BLOCKS_IMPLEMENTATION`: the INIT-008 channel registry is absent from this
+  worktree. Rebase/merge the INIT-008 branch before SLICE-032, or record a
+  new decision. Do not create a parked copy as a compatibility fixture.
+- Scope risk SCP-003 and shortcut risk SH-7 require layout validation to fail
+  if empty downstream bases contain resources before their owning initiatives.
+
+### SLICE-033 - Flux Self-Management Manifests And Dev Root
+
+| Path | Action | Rationale | Existing content notes |
 |---|---|---|---|
-| WU-019 | MODIFY/REPLACE | `services/api/app/repositories/chapters.py` | Functions: `insert_chapter(connection, row)`, `fetch_chapter(connection, chapter_id)`, `fetch_chapter_for_update(connection, chapter_id)`, `_update_chapter_state(connection, chapter_id, state)`, `_merge_chapter_discord_resources(connection, chapter_id, resources)`. Use `Jsonb`. No classes or protocols. |
-| WU-018 | MODIFY | `services/api/app/repositories/chapter_templates.py` | Modify `insert_chapter_template` and `fetch_chapter_template`; create `fetch_chapter_template_for_update`, `fetch_current_template_family_version_for_update`, `insert_template_version`. |
-| WU-019 | CREATE | `services/api/app/repositories/chapter_transitions.py` | Public surface: `insert_chapter_transition(connection, row)`, `list_chapter_transitions(connection, chapter_id)`. Projection only; `activity_actions` remains authoritative. |
+| `gitops/bases/flux-system/gotk-components.yaml` | CREATE | Flux controller install payload for the control cluster. | Missing on disk. Must not introduce app workloads. |
+| `gitops/bases/flux-system/gotk-sync.yaml` | CREATE | Flux bootstrap/self-management sync object, or equivalent split with source/root files. | Missing on disk. Proposal also lists split files below. |
+| `gitops/bases/flux-system/source-gitrepository.yaml` | CREATE | `GitRepository` named `server-manager`, interval `1m`. | Missing on disk. Must use same repo, local URL patched for kind. |
+| `gitops/bases/flux-system/root-kustomization.yaml` | CREATE | Root `Kustomization` to `./gitops/channels/dev`, interval `5m`, prune/wait true. | Missing on disk. |
+| `gitops/bases/flux-system/kustomization.yaml` | MODIFY | Include Flux component/source/root resources. | Created in SLICE-032. Shared touch with SLICE-032 and SLICE-035. |
+| `gitops/channels/dev/flux-system.yaml` | CREATE | Channel-level Flux composition or Kustomization glue. | Missing on disk. |
+| `gitops/channels/dev/patches/flux-source-local.yaml` | CREATE | Local-only source URL patch used by the kind harness. | Missing on disk. Shared with SLICE-035. |
+| `gitops/tests/validate_gitops.sh` | MODIFY | Adds `--flux-render-only` checks for GitRepository/Kustomization properties and forbidden paths. | Shared with all implementation slices. |
 
-## 4. Services
+Notes:
 
-| WU | Action | File | Hook points |
+- Current old `k8s/clusters/*/gotk-sync.yaml` files are not modified; they are
+  deleted by SLICE-031.
+- Scope risk SCP-010 asks implementation/docs to clarify whether the local
+  source patch is always composed or split into a local-only Kustomization.
+
+### SLICE-034 - SOPS+age Per-Channel Secrets Workflow
+
+| Path | Action | Rationale | Existing content notes |
 |---|---|---|---|
-| WU-019 | MODIFY/REPLACE | `services/api/app/services/chapters.py` | Functions: `create_chapter(db, request, actor) -> tuple[ChapterRead, MutationResult]`, `read_chapter(db, chapter_id) -> tuple[ChapterRead, str]`, `transition_chapter(db, chapter_id, request, actor, expected_version) -> tuple[ChapterRead, MutationResult]`, `patch_chapter_discord_resources(db, chapter_id, request, actor, expected_version) -> tuple[ChapterRead, MutationResult]`. Helpers: `_verify_provisioning_complete`, `_build_template_snapshot`, `_chapter_from_row`, `_make_mutation_request`, `_enqueue_failed_provisioning_effect`, `_merge_resources`. |
-| WU-018 | MODIFY | `services/api/app/services/chapter_templates.py` | Functions affected: `_make_request`, `create_chapter_template`, `read_chapter_template`. New `patch_chapter_template`. `create_chapter_template` now receives actor and stores `template_family_id = template_id`, `version = 1`. |
+| `gitops/secrets/dev/.sops.yaml` | CREATE | Per-channel SOPS creation rules with committed public age recipient. | Missing on disk. Must not contain literal `age1...`. |
+| `gitops/secrets/dev/bootstrap-creds.enc.yaml` | CREATE | Encrypted sample secret proving SOPS+age decrypt path. | Missing on disk. Shortcut risk SH-5 recommends renaming to `sample-secret.enc.yaml` or `verification-fixture.enc.yaml`; proposal still names bootstrap-creds. |
+| `gitops/secrets/dev/README.md` | MODIFY | Documents private-key custody and add/remove/rotate runbook contract. | Created in SLICE-032. |
+| `gitops/scripts/bootstrap-flux.sh` | CREATE | Generates/uses local age key and exports `SOPS_AGE_KEY_FILE` for validation. | Missing on disk. Also owned by SLICE-035. |
+| `gitops/tests/validate_gitops.sh` | MODIFY | Adds `--sops-only` decrypt verification. | Shared harness. |
+| `gitops/README.md` | MODIFY | Adds SOPS+age custody model and local-only private-key guidance. | Created in SLICE-032; also modified in SLICE-035/036. |
 
-Chapter service invariants:
-- All writes go through `mutate_entity`.
-- `transition_chapter(... to_state="active")` must call `_verify_provisioning_complete` before writing transition or state.
-- Failed transition uses repository-level `enqueue_effect(connection, ...)` on the same active connection.
-- Payload allowlists are explicit for create, transition, and resource patch.
+Notes:
 
-## 5. Endpoints
+- There are currently no `.sops.yaml`, `*.sops.yaml`, `*.age`, or encrypted
+  SOPS fixtures in the repo.
+- Shortcut risk SH-4 requires the committed `.sops.yaml` to carry a real
+  recipient generated or supplied during implementation.
 
-| WU | Action | File | Hook points |
+### SLICE-035 - Local kind Verification Harness
+
+| Path | Action | Rationale | Existing content notes |
 |---|---|---|---|
-| WU-019 | MODIFY/REPLACE | `services/api/app/api/v1/endpoints/chapters.py` | Route functions: `create_chapter`, `get_chapter`, `transition_chapter_endpoint`, `patch_chapter_discord_resources_endpoint`. Delete legacy route functions `list_chapters`, `update_chapter`, `archive_chapter`. Imports change from `get_chapter_service`/`ChapterService` to `PostgresDatabase`, `get_current_actor`, `RequireAuthority`, lifecycle service functions. |
-| WU-018 | CREATE | `services/api/app/api/v1/endpoints/chapter_templates.py` | Route functions: `create_chapter_template_endpoint`, `get_chapter_template`, `patch_chapter_template_endpoint`. Maps stale version to 412, not-found to 404, empty patch to 422 or 400, schema mismatch to existing explicit error behavior. |
-| WU-018 | MODIFY | `services/api/app/api/v1/router.py` | Import `chapter_templates`; include router. |
+| `gitops/scripts/bootstrap-flux.sh` | MODIFY/CREATE | End-to-end local kind bootstrap, Flux install/reconcile, local Git source, SOPS proof. | Missing on disk. Created by SLICE-034 or here; sequential integration avoids conflict. |
+| `gitops/tests/validate_gitops.sh` | MODIFY | Completes full `--cluster` validation and boundary checks. | Shared with SLICE-031..034 and SLICE-036. |
+| `gitops/channels/dev/patches/flux-source-local.yaml` | MODIFY | Wires local/in-cluster Git source URL for kind. | Created in SLICE-033. |
+| `gitops/bases/flux-system/*` | MODIFY | May adjust Flux manifests for bootstrap details. | Created/populated in SLICE-032/033. |
+| `gitops/README.md` | MODIFY | Documents local bootstrap commands and proof boundaries. | Created in SLICE-032. |
 
-Endpoint policy:
-- Template POST/PATCH: `RequireAuthority("chapter_template.write", "global")`
-- Template GET: `RequireAuthority("chapter_template.read", "global")`
-- Chapter POST/transition/resource patch: `RequireAuthority("chapter.write", "global")`
-- Chapter GET: `RequireAuthority("chapter.read", "global")`
-- Transition/resource patch require `If-Match`; missing 428, stale 412.
+Notes:
 
-## 6. Factory and Dependencies
+- `infra/tests/validate_platform_bootstrap.sh` stays in place and should still
+  pass; do not fold it into the GitOps harness.
+- Shortcut risks SH-2, SH-6, SH-8, and SH-10 are concentrated here.
 
-| WU | Action | File | Hook points |
+### SLICE-036 - Documentation And Handoff
+
+| Path | Action | Rationale | Existing content notes |
 |---|---|---|---|
-| WU-019 | MODIFY | `services/api/app/core/factory.py` | `create_api_app` signature removes chapter repository and in-memory stores. It only accepts `settings` and optional `db`. App state keeps `settings`, `db`, scheduler. Delete `app.state.chapter_service`, `app.state.activity_action_store`, `app.state.activity_state_change_store` if no non-legacy caller remains. |
-| WU-019 | MODIFY | `services/api/app/core/dependencies.py` | Delete `get_chapter_service` and `ChapterService` import. Leave authority dependencies unchanged. |
+| `gitops/README.md` | MODIFY | Final authority for layout, channel overlays, self-managing Flux, SOPS+age, and local verification. | Missing today; created earlier. |
+| `infra/README.md` | MODIFY | Cross-link from infra substrate/channel model to `gitops/` root. | Exists; currently documents `infra/environments/{dev,staging,production}` and no `gitops/` link. |
+| `plans/proposals/gitops-foundation.md` | DELETE or REWRITE | Old proposal is active-looking but environment-shaped and says it does not write Flux manifests. | Exists, 321 lines. Default disposal is delete unless concepts are rewritten without contradictions. |
+| `plans/research/gitops-foundation.md` | DELETE or SUPERSEDE | Old research preserves Flux/Kustomize concepts but includes stale SealedSecrets and old `k8s/` implementation summary. | Exists, 205 lines. Useful evidence is already embedded in `.pipeline/research.md`. |
+| `plans/research/gitops-foundation-needs.md` | DELETE or REWRITE | Old needs map points directly at `k8s/base`, `k8s/overlays`, and `k8s/clusters`. | Exists, 167 lines. Default delete unless reduced to evergreen needs. |
+| `plans/research/gitops-foundation-hookpoints.md` | DELETE | Old hookpoints assume greenfield `k8s/` and SealedSecrets. | Exists, 148 lines. Proposal explicitly says current hookpoints must replace it. |
+| Local index/planning notes naming `k8s/` as active | MODIFY if in active docs; otherwise leave historical docs with explicit stale status | Prevents stale references from acting as live authority. | `product-strategy/engineering research.md` also names `k8s/` as existing infra; not in proposal file list but grep flagged it. |
+| `gitops/tests/validate_gitops.sh` | MODIFY | Adds `--docs-only` stale-reference checks. | Shared harness. |
 
-Tests currently reading `app.state.activity_action_store` or `app.state.activity_state_change_store` must be rewritten to query Postgres `activity_actions` / `activity_state_changes`, or deleted if they only prove the legacy chapter proof-of-concept.
+Notes:
 
-## 7. Discord Service
+- Scope risk SCP-002: do not rewrite INIT-008 channel-registry content in
+  `infra/README.md`; only remove stale environment-root guidance and add a
+  one-line GitOps cross-link.
+- Shortcut risk SH-9: a banner alone is not enough if contradictory old
+  sections remain. Delete or physically remove contradictions.
 
-| WU | Action | File | Hook points |
-|---|---|---|---|
-| WU-020 | CREATE | `services/discord/app/commands/chapters.py` | `register_chapter_commands(bot)` registers `provision_chapter`. No Discord-visible mutation happens at registration. |
-| WU-020 | MODIFY | `services/discord/app/commands/__init__.py` | Re-export registration only if needed by startup/tests. |
-| WU-020 | CREATE | `services/discord/app/handlers/chapters.py` | Handler owns ack, permission preflight, API sequencing, Discord resource creation/reuse, resource PATCH, success/failure transitions. Do not create raw `httpx` clients. |
-| WU-020 | MODIFY | `services/discord/app/handlers/__init__.py` | Optional export hook. |
-| WU-020 | MODIFY | `services/discord/app/infrastructure/api_client.py` | Merge request headers into outbound call. This is the actual existing path; do not create `services/discord/app/api_client.py` as a shim. |
-| WU-020 | MODIFY | `services/discord/app/core/bot.py` | Support deferred ack/follow-up contract without breaking existing registry dispatch tests. |
-| WU-020 | MODIFY | `services/discord/app/__main__.py` | `build_bot_with_registry` installs chapter commands before `sync_command_tree`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/runtime_settings.py` | Add required permissions tuple to read model. |
-| WU-020 | MODIFY | `services/discord/app/core/settings.py` | Include required permissions in `Settings.to_read()`. |
+## 2. `k8s/` Deletion Plan
 
-Discord handler API call order:
-1. Ack deferred.
-2. `GET /api/v1/chapters/{chapter_id}` with `X-Actor-Kind: service`, `X-Actor-Id: discord-provisioner`.
-3. `POST /api/v1/chapters/{chapter_id}/transitions` to `provisioning` with `If-Match`.
-4. For each discovered/created category/role/channel: `PATCH /api/v1/chapters/{chapter_id}/discord-resources` with latest ETag.
-5. On complete resources: transition to `active`.
-6. On failure: persist known resources if API reachable, then transition to `provisioning_failed`; API enqueues the deferred effect.
+Owner: SLICE-031.
 
-## 8. Tests
+Top-level structure and tracked file counts:
 
-| WU | Action | File | Purpose / hook points |
-|---|---|---|---|
-| WU-019 | DELETE | `services/api/tests/test_chapters.py` | Legacy integer-id, direct PATCH, list, archive, and in-memory ETag tests. Replace coverage in `test_chapter_lifecycle.py`. |
-| WU-019 | DELETE | `services/api/tests/test_contracts_chapters.py` | Legacy `ChapterStatus`, slug, update contract tests. Replace coverage in `test_contracts_chapter_lifecycle.py`. |
-| WU-018 | CREATE | `services/api/tests/test_chapter_templates.py` | Endpoint/service tests for POST, GET, PATCH new-version behavior, stale 412, concurrent PATCH race, authority guard. |
-| WU-019 | CREATE | `services/api/tests/test_chapter_lifecycle.py` | Chapter create/read, transitions, resource patch merge, active completeness, optimistic locking, failed transition deferred effect, seeded service-actor grants. |
-| WU-019 | CREATE | `services/api/tests/test_contracts_chapter_lifecycle.py` | Contract tests for `ChapterState`, UUID-string `ChapterId`, `ChapterCreate`, `ChapterRead`, `ChapterTransitionRequest`, `ChapterResourcesPatchRequest`, `ChapterDiscordResources`. |
-| WU-018/WU-019 | CREATE | `services/api/tests/test_chapter_migrations.py` | Migration assertions for WU-018 lineage columns/indexes and WU-019 chapter tables/grant seed. |
-| WU-020 | CREATE | `services/discord/tests/test_chapter_provisioning.py` | Handler success, deferred ack before API calls, permission preflight, name rediscovery after failed PATCH, partial failure, actor/originating-user headers/body. |
-| WU-018 | MODIFY | `services/api/tests/test_chapter_template_foundation.py` | Add `version` and `template_family_id` to `ChapterTemplateRead` fixtures and DB assertions; keep no-in-place-update assertion but allow `patch_chapter_template` as create-new-version surface. |
-| WU-019 | MODIFY | `services/api/tests/conftest.py` | Add `chapters` and `chapter_transitions` to `GOVERNANCE_TABLES` reset list after migrations create them. |
-| WU-019 | MODIFY | `services/api/tests/test_endpoints_chapters_stubs.py` | Replace expected routes with lifecycle routes; remove `GET /api/v1/chapters`, `PATCH /api/v1/chapters/{chapter_id}`, `/archive`; add transitions and discord-resources paths. |
-| WU-019 | MODIFY | `services/api/tests/test_conftest.py` | Replace reachability checks for legacy chapter routes with new guarded lifecycle route expectations or remove chapter-specific reachability from generic fixture tests. |
-| WU-019 | MODIFY | `services/api/tests/test_activity_model.py` | Remove or rewrite the old "chapters-as-first-aggregate" proof-of-concept section that depends on in-memory stores, direct update, archive, slug, and integer ids. New assertions should query persisted mutation tables if retained. |
-| WU-019 | MODIFY | `services/api/tests/test_authority_enforcement.py` | Rename test-only route/permission away from `/archive` and `chapter.archive` if final grep invariant uses broad `/archive`/`chapter.archive` zero-count. Use `chapter.write` on a neutral test route. |
-| WU-019 | MODIFY | `services/api/tests/test_authority_override_audit.py` | Same neutral-route rename as authority enforcement tests. |
-| WU-020 | MODIFY | `services/discord/tests/test_api_transport.py` | Add coverage that request headers are sent with correlation headers and cannot override correlation. |
-| WU-020 | MODIFY | `services/discord/tests/test_api_context.py` | Add end-to-end assertion for service actor headers where `ApiTransportRequest.headers` includes `X-Actor-Kind`/`X-Actor-Id`. |
-| WU-020 | MODIFY | `services/discord/tests/test_interaction_framework.py` | Adjust dispatch tests for deferred ack/follow-up behavior while preserving registry audit context. |
-| WU-020 | MODIFY | `services/discord/tests/test_bot.py` | Add bot-level test for deferred response seam if implemented in `HumilityBot`. |
-| WU-020 | MODIFY | `services/discord/tests/test_main.py` | Assert `build_bot_with_registry` registers chapter command handlers before sync. |
-| WU-020 | MODIFY | `services/discord/tests/test_settings.py` | Assert `DiscordSettingsRead.required_bot_permissions` default and no new env var. |
-| WU-020 | MODIFY | `services/discord/tests/conftest.py` | Extend mock interaction/guild/Discord objects for deferred ack, permission bits, categories, roles, channels, and creation calls. |
+| Path | File count | Notes |
+|---|---:|---|
+| `k8s/base/` | 7 | Old shared Kustomize base: controllers, namespaces, platform metadata, policies. |
+| `k8s/clusters/` | 24 | Three environments times two cluster roles, with `gotk-sync.yaml` and manifest slots. |
+| `k8s/overlays/` | 6 | `dev`, `staging`, `production` overlays for app/control roles. |
+| `k8s/tests/` | 1 | Old topology acceptance test. |
+| `k8s/` total | 38 | Verified with `git ls-files k8s | wc -l`. |
 
-## 9. Legacy Deletions
+Deletion sequence:
 
-These are not standalone file deletions except for the two legacy test files above. They are required removals inside replacement files:
-
-| WU | Location | Delete |
-|---|---|---|
-| WU-019 | `services/api/app/contracts/chapters.py` | `ChapterStatus`, `ChapterUpdate`, integer `id`, `slug`, `discord_category_id`, `discord_officer_role_id`, `discord_member_role_id`, archived status. |
-| WU-019 | `services/api/app/repositories/chapters.py` | `ChapterRepository`, `InMemoryChapterRepository`, `ChapterRecord`, in-memory dict, `_next_id`, `archive`. |
-| WU-019 | `services/api/app/services/chapters.py` | `ChapterService`, in-memory stores, `_heads`, `list_chapters`, `update_chapter`, `archive_chapter`, direct action/state-store append logic. |
-| WU-019 | `services/api/app/api/v1/endpoints/chapters.py` | `GET /api/v1/chapters`, `PATCH /api/v1/chapters/{chapter_id}`, `POST /api/v1/chapters/{chapter_id}/archive`, integer path params. |
-| WU-019 | `services/api/app/core/factory.py` | `chapter_repository`, `action_store`, `state_change_store`, `app.state.chapter_service`, legacy activity stores if only used by chapter proof tests. |
-| WU-019 | `services/api/app/core/dependencies.py` | `get_chapter_service`. |
-
-Rationale: revision 3 requires atomic replacement. Keeping the legacy substrate would create duplicate route semantics, incompatible id types, duplicate chapter state owners, and mixed `aggregate_type="chapter"` id forms.
-
-## 10. Final Grep Invariants
-
-After implementation, these commands must return zero matches:
+1. Create `gitops/scripts/install-tools.sh` and initial
+   `gitops/tests/validate_gitops.sh` so the new validation entrypoint exists.
+2. Delete `k8s/tests/test_gitops_foundation.sh`; its assertions are not
+   reusable as active tests because they validate old environment roots.
+3. Delete `k8s/clusters/**`; this removes old Flux roots that point at
+   `./k8s/clusters/...`.
+4. Delete `k8s/overlays/**`; this removes old environment/cluster-role
+   overlays.
+5. Delete `k8s/base/**`; concepts may be re-expressed under `gitops/bases/`,
+   but no file or path compatibility remains.
+6. Remove empty `k8s/` directories.
+7. Run:
 
 ```bash
-rg -n "InMemoryChapterRepository|class ChapterRecord|ChapterStatus|ChapterUpdate" services/api
-rg -n "class ChapterService|get_chapter_service|app\\.state\\.chapter_service" services/api
-rg -n "archive_chapter|/archive|chapter\\.archive" services/api
-rg -n "chapter_id: int|dict\\[int, ChapterRecord\\]|discord_category_id|discord_officer_role_id|discord_member_role_id" services/api
-test ! -e services/discord/app/api_client.py
+test ! -e k8s
+rg 'k8s/(base|clusters|overlays)' . --glob '!plans/**' --glob '!.pipeline/**' && exit 1 || true
 ```
 
-Allowed nonzero legacy-adjacent strings:
-- `slug` in root-level historical daemon tests and config code outside `services/api` is unrelated to the SLICE-013 API chapter contract.
-- `InMemoryActionStore` and `InMemoryStateChangeStore` may remain in the activity substrate if still used outside the legacy chapter service. They must not be imported by `services/api/app/services/chapters.py` or wired for chapter service state in `factory.py`.
+Current code references:
 
-## 11. Implementation Order
+- No `daemon/`, `services/`, `infra/tests/`, migrations, or root runtime files
+  reference `k8s/` or `gitops/`.
+- The only active on-disk code references are inside the soon-deleted `k8s/`
+  tree itself.
+- Planning/doc references exist and are handled by SLICE-036.
 
-1. WU-018 tests/contracts/migration/repository/service/endpoint/router.
-2. WU-019 tests/contracts/migration/repositories/service/endpoint/factory/dependencies, deleting legacy tests and legacy code in the same commit slice.
-3. WU-020 Discord contracts/api transport/handler/command/startup/settings/tests.
-4. Run grep invariants, then targeted API and Discord test suites.
+## 3. New `gitops/` Directory Layout
+
+Full target skeleton:
+
+```text
+gitops/
+  README.md
+  bases/
+    flux-system/
+      README.md
+      kustomization.yaml
+      gotk-components.yaml
+      gotk-sync.yaml
+      source-gitrepository.yaml
+      root-kustomization.yaml
+    crossplane/
+      README.md
+      kustomization.yaml
+    cert-manager/
+      README.md
+      kustomization.yaml
+    external-dns/
+      README.md
+      kustomization.yaml
+    cluster-security/
+      README.md
+      kustomization.yaml
+  channels/
+    dev/
+      README.md
+      kustomization.yaml
+      flux-system.yaml
+      patches/
+        flux-source-local.yaml
+  secrets/
+    dev/
+      .sops.yaml
+      README.md
+      bootstrap-creds.enc.yaml
+  scripts/
+    install-tools.sh
+    bootstrap-flux.sh
+  tests/
+    validate_gitops.sh
+```
+
+Placeholder base requirements:
+
+- `gitops/bases/crossplane/` is owned by INIT-017.
+- `gitops/bases/cert-manager/` is owned by INIT-018.
+- `gitops/bases/external-dns/` is owned by INIT-018.
+- `gitops/bases/cluster-security/` is owned by INIT-019.
+- Each placeholder contains only `README.md` and an empty
+  `kustomization.yaml` until its owning initiative lands.
+- `validate_gitops.sh --layout-only` should enforce the empty-base rule.
+
+Harness placement:
+
+- `gitops/tests/validate_gitops.sh` is the GitOps harness.
+- `infra/tests/validate_platform_bootstrap.sh` remains the infra harness.
+- The two harnesses can be called independently; INIT-009 acceptance requires
+  the infra harness to keep passing but not to move.
+
+## 4. Cross-Reference Grep
+
+Repo-wide `k8s/` references:
+
+- `k8s/**`: expected current implementation references; all deleted in
+  SLICE-031.
+- `plans/research/gitops-foundation.md`: old implementation summary and
+  `k8s/` source list; delete/supersede in SLICE-036.
+- `plans/research/gitops-foundation-needs.md`: old `k8s/base`,
+  `k8s/overlays`, and `k8s/clusters` needs; delete/rewrite in SLICE-036.
+- `plans/research/gitops-foundation-hookpoints.md`: old hookpoint map;
+  delete in SLICE-036.
+- `product-strategy/engineering research.md`: says `infra/` and `k8s/`
+  exist as infrastructure foundations. If treated as current strategy input,
+  revise or annotate as superseded by INIT-009.
+- `plans/research/buildkite-capabilities.md`: URL contains
+  `agent-stack-k8s`; unrelated to repo path and can stay.
+- `plans/risk/init-009-*`: current risk evidence; can stay as historical
+  pipeline material.
+- `.tmp/gitops-foundation-*`: scratch/review material; not active authority.
+
+Current `gitops/` references outside `.pipeline/`:
+
+- Prior GitOps planning and risk files reference `gitops-foundation.md`, not a
+  root `gitops/` directory.
+- No current active `gitops/` tree exists.
+- `plans/risk/platform-bootstrap-*` references `gitops-foundation.md` as a
+  handoff; not a root directory reference but stale after SLICE-036 disposal.
+
+Tool/documentation contradictions:
+
+- `plans/research/gitops-foundation.md` discusses SealedSecrets; contradicts
+  INIT-009 SOPS+age and should be deleted/superseded.
+- `plans/research/gitops-foundation.md` uses Kustomization interval `10m`;
+  proposal pins root Kustomization `5m`.
+- Old proposal/research use `base -> overlays -> clusters/<env>`; proposal
+  replaces that with `gitops/bases`, `gitops/channels/<channel>`, and
+  `gitops/secrets/<channel>`.
+- `plans/proposals/platform-bootstrap.md` stops before Flux and still names
+  environment roots; treat as pre-channel where it conflicts with INIT-008.
+- `plans/platform-decisions-overlay.md` says Flux replaces Argo CD; this
+  supports INIT-009 and does not contradict the new layout.
+- `plans/research/buildkite-capabilities.md` says Buildkite plus Flux should
+  replace custom CI/CD choreography; supports the boundary.
+
+## 5. Toolchain Prerequisite Verification
+
+Local verification result:
+
+| Tool | Installed? | Version/status | Required by proposal | Install command to document in installer |
+|---|---:|---|---|---|
+| `flux` | N | Missing | `>= 2.8.0` | Download official Flux release tarball for `v2.8.0`, verify SHA256, install `flux` to `/usr/local/bin`. |
+| `kind` | N | Missing | `>= 0.31.0` | `curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64`; verify SHA256; install executable. |
+| `sops` | N | Missing | `>= 3.10.0` | Download official `getsops/sops` `v3.10.0` Linux amd64 binary, verify SHA256, install executable. |
+| `age` | N | Missing | `>= 1.3.0` | Download official `FiloSottile/age` `v1.3.0` Linux amd64 tarball, verify SHA256, install `age`. |
+| `age-keygen` | N | Missing | `>= 1.3.0` | Same `age` tarball; install bundled `age-keygen`. |
+| `kubectl` | Y | `/usr/local/bin/kubectl`, client `v1.34.1` | `>= 1.31.0` | Already satisfies requirement; installer can skip or verify official `dl.k8s.io` release if absent. |
+| embedded Kustomize | Y | `kubectl` reports `kustomizeVersion: v5.7.1` | `v5.7.1` | No standalone install required. Validate via `kubectl version --client -o yaml`. |
+| standalone `kustomize` | N | Missing | Not required | Do not require; proposal accepts embedded Kustomize. |
+
+Idempotent installer expectations:
+
+- `--check` prints every installed version and exits non-zero for missing or
+  below-minimum tools.
+- Installer must not use arbitrary `curl | bash`.
+- Installer header should list exact official release URLs and SHA256s.
+- Installer may use official release artifacts, Linux package manager, or
+  pinned module proxy as allowed by shortcut risk SH-1.
+
+## 6. Stale Material Disposal
+
+Default under no-backwards-compatibility: delete stale active materials unless
+they are rewritten to remove contradictions.
+
+| Path | Recommendation | Why |
+|---|---|---|
+| `plans/proposals/gitops-foundation.md` | DELETE or full rewrite; prefer DELETE if `gitops/README.md` carries surviving concepts. | Active-looking proposal is environment-shaped, says INIT-009 does not write Flux manifests, and conflicts with channel layout. |
+| `plans/research/gitops-foundation.md` | DELETE/supersede. | Useful Flux/Kustomize evidence is embedded in pipeline docs; SealedSecrets and `k8s/` summary are stale. |
+| `plans/research/gitops-foundation-needs.md` | DELETE unless reduced to evergreen principles. | Current file maps needs to `k8s/` paths and old environment separation. |
+| `plans/research/gitops-foundation-hookpoints.md` | DELETE. | It is explicitly invalid after current risk gate and assumes old `k8s/`. |
+| `product-strategy/engineering research.md` | Consider a narrow supersession note if it remains active planning input. | Grep flags `infra/` + `k8s/` as existing foundations. Not in proposal's required stale list, so track for SLICE-036. |
+
+## 7. Implementation Order And Shared Files
+
+Recomputed order:
+
+1. SLICE-031: create tool/harness entrypoints, delete `k8s/`.
+2. SLICE-032: create `gitops/` skeleton and empty downstream bases.
+3. SLICE-033: add active Flux manifests and dev channel root.
+4. SLICE-034: add SOPS+age policy and encrypted fixture.
+5. SLICE-035: integrate full local kind bootstrap/reconcile harness.
+6. SLICE-036: finalize docs, infra cross-link, and stale-material disposal.
+
+Parallelism:
+
+- SLICE-033 and SLICE-034 are conceptually parallel after SLICE-032, but both
+  touch `gitops/tests/validate_gitops.sh` and `gitops/README.md`.
+- To avoid merge conflicts, run all slices sequentially in this worktree.
+
+Shared file conflict map:
+
+| Path | Slices | Conflict note |
+|---|---|---|
+| `gitops/tests/validate_gitops.sh` | 031, 032, 033, 034, 035, 036 | Highest-conflict file; sequential edits only. |
+| `gitops/README.md` | 032, 034, 035, 036 | Docs accumulate; sequential edits. |
+| `gitops/bases/flux-system/kustomization.yaml` | 032, 033, 035 | Created empty, then populated/tuned. |
+| `gitops/channels/dev/patches/flux-source-local.yaml` | 033, 035 | Created for render, then wired for kind source. |
+| `gitops/scripts/bootstrap-flux.sh` | 034, 035 | Secret key setup and cluster bootstrap must be integrated. |
+| `gitops/secrets/dev/README.md` | 032, 034 | Initial README then custody details. |
+| `infra/README.md` | 036 only | Avoid changing INIT-008 content beyond cross-link/stale removal. |
+| stale `plans/**/gitops-foundation*` | 036 only | Delete/rewrite after GitOps docs are authoritative. |
+
+Per-slice action count, using actual on-disk legacy deletion count:
+
+| Slice | CREATE | MODIFY | DELETE | Conditional/Dependency |
+|---|---:|---:|---:|---|
+| SLICE-031 | 2 | 0 | 38 | 0 active non-plan `k8s/` refs found. |
+| SLICE-032 | 14 | 1 | 0 | Requires INIT-008 `infra/channels/dev.yaml`, currently absent. |
+| SLICE-033 | 6 | 2 | 0 | None. |
+| SLICE-034 | 3 | 3 | 0 | Fixture filename may need proposal note if renamed. |
+| SLICE-035 | 0 | 5 | 0 | `bootstrap-flux.sh` created in SLICE-034, completed here. |
+| SLICE-036 | 0 | 4 | 4 | Delete is preferred stale-material disposal; rewrite only if contradictions are physically removed. |
+
+## 8. Risk-Deferred LOW Observations To Honor
+
+Audit risk:
+
+| Observation | Slice | Handling |
+|---|---|---|
+| No audit checklist findings. | Track only | `plans/risk/init-009-audit.md` is LOW with no findings. |
+
+Scope risk:
+
+| ID | Observation | Slice | Handling |
+|---|---|---|---|
+| SCP-001 | Anti-scope should explicitly enumerate INIT-015, INIT-016, INIT-020. | SLICE-036 | Add to docs/anti-scope or successor handoff. |
+| SCP-002 | `infra/README.md` must not rewrite INIT-008 channel registry content. | SLICE-036 | Limit change to stale environment removal plus `gitops/` cross-link. |
+| SCP-003 | Empty downstream bases need programmatic validation. | SLICE-032 | Add `--layout-only` checks for no `resources:` entries and owner READMEs. |
+| SCP-004 | INIT-018 may later collapse/rename cert-manager and ExternalDNS bases. | SLICE-036 | Note INIT-018 owns future restructuring; current bases remain empty. |
+| SCP-010 | Local source patch inside channel overlay may confuse future deployment. | SLICE-033/036 | Document whether always composed or local-only split; track for future deployment initiative if unchanged. |
+
+Shortcut risk:
+
+| ID | Observation | Slice | Handling |
+|---|---|---|---|
+| SH-1 | Tool downloads need official sources and SHA256s. | SLICE-031 | Pin URLs/checksums in installer header. |
+| SH-2 | Reusing kind clusters can mask stale Flux objects. | SLICE-035 | Fresh cluster by default; require `--reuse` and extra assertions. |
+| SH-3 | Do not copy INIT-008 `dev` channel fixture. | SLICE-032 | Consume branch dependency or mark transient fixture with delete-on-merge invariant. Currently blocks. |
+| SH-4 | Do not commit literal `age1...`. | SLICE-034 | Generate/use real recipient and prove decrypt. |
+| SH-5 | `bootstrap-creds.enc.yaml` name may invite real creds. | SLICE-034 | Prefer rename if allowed; otherwise document fixture-only loudly. Proposal names old path, so changing name may require proposal note. |
+| SH-6 | Empty-base reconcile can fake completion. | SLICE-035 | Assert applied revision/source SHA, not just green status. |
+| SH-7 | Empty downstream bases need enforcement. | SLICE-032 | Same as SCP-003; fail on resources before owner initiative. |
+| SH-8 | Local Git source mechanism must be locked. | SLICE-035 | Prefer in-kind `gitserver` fed by `git bundle`; forbid public hosts. |
+| SH-9 | Banner-only stale disposal is insufficient. | SLICE-036 | Delete old docs or remove contradictory sections physically. |
+| SH-10 | Flux branch must match worktree branch/commit. | SLICE-035 | Derive branch from `git rev-parse --abbrev-ref HEAD`; assert Flux revision equals `git rev-parse HEAD`. |
+
+## 9. Implementation Prerequisites Table
+
+| Prerequisite | Status | Carry-forward |
+|---|---|---|
+| INIT-008 channel registry in this worktree | MISSING | `BLOCKS_IMPLEMENTATION` for SLICE-032 D12. Rebase/merge INIT-008 or record new decision. |
+| `flux` CLI | MISSING | Install in SLICE-031 before Flux render/bootstrap checks. |
+| `kind` CLI | MISSING | Install in SLICE-031 before SLICE-035. |
+| `sops` CLI | MISSING | Install in SLICE-031 before SLICE-034 decrypt checks. |
+| `age` and `age-keygen` | MISSING | Install in SLICE-031 before SLICE-034 key generation. |
+| `kubectl` | PRESENT | `/usr/local/bin/kubectl`, `v1.34.1`. |
+| embedded Kustomize | PRESENT | `v5.7.1` through `kubectl`. |
+| Local-only constraint | ACTIVE | Harness must not call Vultr/Cloudflare, run `tofu apply`, push images, deploy workloads, or depend on public Git. |
+| Discord-visible writes | NOT APPLICABLE | INIT-009 is local file/tooling work only; no Tier 3 Discord action is involved. |
+
+## 10. BLOCKS_IMPLEMENTATION
+
+| Flag | Affected slice | Evidence | Required resolution |
+|---|---|---|---|
+| `BLOCKS_IMPLEMENTATION: INIT-008_CHANNEL_REGISTRY_ABSENT` | SLICE-032 | This worktree has only `infra/environments/{dev,staging,production}`. Research cites sibling `worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml`; no `infra/channels/dev.yaml` exists here. | Rebase/merge the INIT-008 branch before implementation, or record a new decision changing D12. Do not copy a static channel fixture as a compatibility shim. |
