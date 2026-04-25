@@ -1,0 +1,7 @@
+schema_version: 1
+id: e2e-pr-1234
+parent: e2e-from-dev
+exposure: dev
+tenant: pr-1234
+allow_ephemeral_children: false
+enabled_platforms: [kubernetes]

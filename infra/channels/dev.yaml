@@ -1,0 +1,20 @@
+schema_version: 1
+id: dev
+parent: null
+exposure: dev
+tenant: null
+allow_ephemeral_children: true
+enabled_platforms: [kubernetes]
+platform:
+  region: ewr
+cluster:
+  label: humility-dev-platform
+  kubernetes_version: v1.32.3+1
+  node_pools:
+    - name: default
+      count: 2
+      plan: vc2-2c-4gb
+state:
+  bucket: humility-tfstate
+  key: channels/dev/terraform.tfstate
+  region: ewr

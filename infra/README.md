@@ -7,29 +7,48 @@ OpenTofu-managed Vultr infrastructure for the Humility platform.
 - OpenTofu CLI `1.11.5` for INIT-008 verification. Roots keep
   `required_version = ">= 1.8.0"` as the feature floor.
 - Python `>=3.10` for the channel resolver and generator scripts.
-- Python packages: `jsonschema` and `PyYAML`.
+- `jsonschema` any `4.x`.
+- `PyYAML` any `6.x`.
 
 ## Structure
 
-Current SLICE-025 state still contains the pre-channel roots. The intended
-future-state layout, as of after SLICE-029, is:
+Current SLICE-026 state introduces the channel registry contract while keeping
+the old environment roots temporarily intact for SLICE-027 deletion.
 
-    infra/
-    ├── bootstrap/
-    │   └── state-backend/       # Local-state Object Storage subscription handoff
-    ├── channels/
-    │   ├── dev.yaml             # First active platform channel
-    │   └── fixtures/            # Resolver/spawn validation fixtures only
-    ├── modules/
-    │   ├── platform-network/    # Shared VPC module
-    │   └── platform-cluster/    # Shared VKE module
-    ├── roots/
-    │   └── channels/
-    │       └── dev/             # First active per-channel OpenTofu root
-    ├── schemas/                 # Source and resolved channel contracts
-    ├── scripts/                 # Channel resolver/generator validation tools
-    └── templates/
-        └── platform-channel/    # Parameterized root module
+    infra/schemas/
+      platform-channel.schema.json
+      platform-channel-resolved.schema.json
+
+Source and resolved JSON Schemas for platform channel files. The source schema
+validates checked-in YAML. The resolved schema validates the inherited JSON that
+later generators and OpenTofu roots consume.
+
+    infra/channels/<id>.yaml
+
+Active channel declarations. `dev.yaml` is the only active channel in INIT-008.
+
+    infra/channels/fixtures/
+
+Resolver and spawner fixtures. These are test material only and are not shipped
+as active platform channels.
+
+    infra/scripts/
+
+Local-only channel tooling:
+
+- `resolve_platform_channel.py` resolves a channel and validates the result.
+- `spawn_platform_channel.py` writes an ephemeral child channel under `.tmp/`.
+- `validate_platform_channels.py` validates the active registry and fixtures.
+
+    infra/roots/channels/<id>/
+
+Per-channel OpenTofu roots. These are created in SLICE-027.
+
+    infra/environments/{dev,staging,production}/
+
+The old hard environment roots still exist during SLICE-026 so the existing
+OpenTofu validation harness remains green. They are deleted in SLICE-027 after
+the `infra/roots/channels/dev/` replacement lands.
 
 ## Local Validation
 

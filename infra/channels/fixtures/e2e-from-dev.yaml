@@ -1,0 +1,11 @@
+schema_version: 1
+id: e2e-from-dev
+parent: dev
+exposure: dev
+tenant: null
+allow_ephemeral_children: true
+enabled_platforms: [kubernetes]
+cluster:
+  label: humility-e2e-from-dev-platform
+state:
+  key: channels/e2e-from-dev/terraform.tfstate

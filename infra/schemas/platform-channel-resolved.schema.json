@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://humility.local/schemas/platform-channel-resolved.schema.json",
+  "title": "Resolved Humility platform channel",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "exposure",
+    "allow_ephemeral_children",
+    "enabled_platforms",
+    "platform",
+    "cluster",
+    "state"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/channelId"
+    },
+    "exposure": {
+      "type": "string",
+      "enum": ["prod", "stage", "dev"]
+    },
+    "tenant": {
+      "$ref": "#/$defs/channelId"
+    },
+    "allow_ephemeral_children": {
+      "type": "boolean"
+    },
+    "enabled_platforms": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["docker", "kubernetes"]
+      },
+      "uniqueItems": true
+    },
+    "platform": {
+      "$ref": "#/$defs/platform"
+    },
+    "cluster": {
+      "$ref": "#/$defs/cluster"
+    },
+    "state": {
+      "$ref": "#/$defs/state"
+    }
+  },
+  "$defs": {
+    "channelId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{3}$"
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["region"],
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/region"
+        }
+      }
+    },
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "kubernetes_version", "node_pools"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kubernetes_version": {
+          "type": "string",
+          "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(\\+[0-9]+)?$"
+        },
+        "node_pools": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nodePool"
+          }
+        }
+      }
+    },
+    "nodePool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "count", "plan"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "plan": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "key", "region"],
+      "properties": {
+        "bucket": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^channels/[a-z0-9-]+/terraform\\.tfstate$"
+        },
+        "region": {
+          "$ref": "#/$defs/region"
+        }
+      }
+    }
+  }
+}

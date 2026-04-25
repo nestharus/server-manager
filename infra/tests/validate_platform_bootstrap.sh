@@ -92,6 +92,31 @@ assert_decisions_d7_present() {
   fi
 }
 
+assert_json_value() {
+  local file="$1"
+  local dotted_path="$2"
+  local expected="$3"
+  local label="$4"
+
+  if python3 - "$file" "$dotted_path" "$expected" <<'PY'
+import json
+import sys
+
+path, dotted_path, expected = sys.argv[1:]
+with open(path, "r", encoding="utf-8") as handle:
+    value = json.load(handle)
+for part in dotted_path.split("."):
+    value = value[part]
+if str(value) != expected:
+    raise SystemExit(f"{dotted_path}: expected {expected!r}, got {value!r}")
+PY
+  then
+    pass "$label"
+  else
+    fail "$label"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 section "File existence"
 # ---------------------------------------------------------------------------
@@ -369,6 +394,120 @@ section "Authority alignment assertions"
 
 assert_no_active_retired_provider_references
 assert_decisions_d7_present
+
+# ---------------------------------------------------------------------------
+section "Channel registry assertions"
+# ---------------------------------------------------------------------------
+
+mkdir -p "${REPO_ROOT}/.tmp"
+
+if [[ -f "${INFRA_DIR}/schemas/platform-channel.schema.json" \
+  && -f "${INFRA_DIR}/schemas/platform-channel-resolved.schema.json" ]]; then
+  pass "channel schemas present"
+else
+  fail "channel schemas present"
+fi
+
+if python3 "${INFRA_DIR}/scripts/validate_platform_channels.py" >/dev/null; then
+  pass "platform channels validate"
+else
+  fail "platform channels validate"
+fi
+
+DEV_RESOLVED="${REPO_ROOT}/.tmp/dev.resolved.json"
+if python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" \
+  --channel dev \
+  --out "$DEV_RESOLVED" \
+  && python3 -m json.tool "$DEV_RESOLVED" >/dev/null; then
+  pass "dev channel resolves to JSON"
+else
+  fail "dev channel resolves to JSON"
+fi
+
+E2E_RESOLVED="${REPO_ROOT}/.tmp/e2e-from-dev.resolved.json"
+if python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" \
+  --channel e2e-from-dev \
+  --out "$E2E_RESOLVED"; then
+  assert_json_value "$E2E_RESOLVED" "platform.region" "ewr" \
+    "e2e-from-dev inherits platform.region"
+  assert_json_value "$E2E_RESOLVED" "cluster.label" "humility-e2e-from-dev-platform" \
+    "e2e-from-dev overrides cluster.label"
+else
+  fail "e2e-from-dev resolves"
+  fail "e2e-from-dev inherits platform.region"
+  fail "e2e-from-dev overrides cluster.label"
+fi
+
+E2E_PR_RESOLVED="${REPO_ROOT}/.tmp/e2e-pr-1234.resolved.json"
+if python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" \
+  --channel e2e-pr-1234 \
+  --out "$E2E_PR_RESOLVED"; then
+  assert_json_value "$E2E_PR_RESOLVED" "platform.region" "ewr" \
+    "e2e-pr-1234 inherits platform.region from dev"
+  assert_json_value "$E2E_PR_RESOLVED" "cluster.label" "humility-e2e-from-dev-platform" \
+    "e2e-pr-1234 inherits cluster.label from e2e-from-dev"
+  assert_json_value "$E2E_PR_RESOLVED" "tenant" "pr-1234" \
+    "e2e-pr-1234 applies tenant override"
+else
+  fail "e2e-pr-1234 resolves"
+  fail "e2e-pr-1234 inherits platform.region from dev"
+  fail "e2e-pr-1234 inherits cluster.label from e2e-from-dev"
+  fail "e2e-pr-1234 applies tenant override"
+fi
+
+MISSING_PARENT_ERR="${REPO_ROOT}/.tmp/missing-parent.err"
+if ! python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" \
+  --channel missing-parent \
+  --out "${REPO_ROOT}/.tmp/missing-parent.resolved.json" \
+  2>"$MISSING_PARENT_ERR" \
+  && grep -q '"code": "missing_parent"' "$MISSING_PARENT_ERR"; then
+  pass "missing-parent fails with missing_parent"
+else
+  fail "missing-parent fails with missing_parent"
+fi
+
+CIRCULAR_PARENT_ERR="${REPO_ROOT}/.tmp/circular-parent.err"
+if ! python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" \
+  --channel circular-a \
+  --out "${REPO_ROOT}/.tmp/circular-a.resolved.json" \
+  2>"$CIRCULAR_PARENT_ERR" \
+  && grep -q '"code": "circular_parent"' "$CIRCULAR_PARENT_ERR"; then
+  pass "circular-a fails with circular_parent"
+else
+  fail "circular-a fails with circular_parent"
+fi
+
+SPAWN_DIR="${REPO_ROOT}/.tmp/platform-channels/dev-pr-123"
+rm -rf "$SPAWN_DIR"
+if python3 "${INFRA_DIR}/scripts/spawn_platform_channel.py" \
+  --parent dev \
+  --suffix pr-123 \
+  --out "$SPAWN_DIR" \
+  && [[ -f "${SPAWN_DIR}/channel.yaml" ]]; then
+  pass "spawn succeeds on dev under .tmp"
+else
+  fail "spawn succeeds on dev under .tmp"
+fi
+
+SPAWN_DISABLED_ERR="${REPO_ROOT}/.tmp/spawn-disabled.err"
+if ! python3 "${INFRA_DIR}/scripts/spawn_platform_channel.py" \
+  --parent ephemeral-disabled \
+  --suffix pr-123 \
+  --out "${REPO_ROOT}/.tmp/platform-channels/ephemeral-disabled-pr-123" \
+  2>"$SPAWN_DISABLED_ERR" \
+  && grep -q '"code": "ephemeral_children_disabled"' "$SPAWN_DISABLED_ERR"; then
+  pass "spawn blocked on disabled parent"
+else
+  fail "spawn blocked on disabled parent"
+fi
+
+if find "${INFRA_DIR}/channels" \
+  \( -name customer.yaml -o -name internal.yaml -o -name e2e.yaml \) \
+  -print -quit | grep -q .; then
+  fail "forbidden channel files absent"
+else
+  pass "forbidden channel files absent"
+fi
 
 # ---------------------------------------------------------------------------
 section "Summary"

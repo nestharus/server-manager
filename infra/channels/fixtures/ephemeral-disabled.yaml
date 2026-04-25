@@ -1,0 +1,20 @@
+schema_version: 1
+id: ephemeral-disabled
+parent: null
+exposure: dev
+tenant: null
+allow_ephemeral_children: false
+enabled_platforms: [kubernetes]
+platform:
+  region: ewr
+cluster:
+  label: humility-ephemeral-disabled-platform
+  kubernetes_version: v1.32.3+1
+  node_pools:
+    - name: default
+      count: 1
+      plan: vc2-2c-4gb
+state:
+  bucket: humility-tfstate
+  key: channels/ephemeral-disabled/terraform.tfstate
+  region: ewr

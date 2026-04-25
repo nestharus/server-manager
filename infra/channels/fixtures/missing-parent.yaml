@@ -1,0 +1,7 @@
+schema_version: 1
+id: missing-parent
+parent: nonexistent-parent
+exposure: dev
+tenant: null
+allow_ephemeral_children: false
+enabled_platforms: [kubernetes]
