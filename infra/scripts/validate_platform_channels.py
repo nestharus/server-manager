@@ -59,11 +59,20 @@ def _fixture_channel_paths(registry: Path) -> list[Path]:
     return sorted(path for path in fixtures.glob("*.yaml") if path.is_file())
 
 
+def _expected_state_key(source: dict, channel_id: str) -> str:
+    parent_id = source.get("parent")
+    suffix = source.get("tenant")
+    if isinstance(parent_id, str) and isinstance(suffix, str):
+        return f"channels/{parent_id}/ephemeral/{suffix}/terraform.tfstate"
+    return f"channels/{channel_id}/terraform.tfstate"
+
+
 def _assert_active_resolves(path: Path) -> None:
     channel_id = path.stem
+    source = _load_yaml(path)
     resolved = resolver.resolve_channel(channel_id)
     resolver.validate_resolved_channel(resolved, channel_id)
-    expected_key = f"channels/{channel_id}/terraform.tfstate"
+    expected_key = _expected_state_key(source, channel_id)
     actual_key = resolved.get("state", {}).get("key")
     if actual_key != expected_key:
         raise ChannelError(

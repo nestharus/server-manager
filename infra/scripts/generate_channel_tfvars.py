@@ -37,14 +37,12 @@ def _required_mapping(value: Any, name: str) -> dict[str, Any]:
     return value
 
 
-def _default_node_pool(cluster: dict[str, Any]) -> dict[str, Any]:
+def _single_node_pool(cluster: dict[str, Any]) -> dict[str, Any]:
     node_pools = cluster.get("node_pools")
     if not isinstance(node_pools, list) or not node_pools:
-        raise ValueError("cluster.node_pools must contain at least one pool")
-
-    for pool in node_pools:
-        if isinstance(pool, dict) and pool.get("name") == "default":
-            return pool
+        raise ValueError("cluster.node_pools must contain exactly one pool")
+    if len(node_pools) != 1:
+        raise ValueError("cluster.node_pools must contain exactly one pool")
 
     first = node_pools[0]
     if not isinstance(first, dict):
@@ -56,7 +54,7 @@ def tfvars_payload(resolved: dict[str, Any]) -> dict[str, Any]:
     platform = _required_mapping(resolved.get("platform"), "platform")
     network = _required_mapping(platform.get("network"), "platform.network")
     cluster = _required_mapping(resolved.get("cluster"), "cluster")
-    node_pool = _default_node_pool(cluster)
+    node_pool = _single_node_pool(cluster)
 
     return {
         "channel_id": resolved["id"],

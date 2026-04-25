@@ -151,6 +151,14 @@ def _deep_merge(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
+def _is_ephemeral_child(data: dict[str, Any]) -> bool:
+    return isinstance(data.get("parent"), str) and isinstance(data.get("tenant"), str)
+
+
+def _ephemeral_state_key(parent_id: str, suffix: str) -> str:
+    return f"channels/{parent_id}/ephemeral/{suffix}/terraform.tfstate"
+
+
 def _resolve_unvalidated(channel_id: str, stack: list[str]) -> dict[str, Any]:
     if channel_id in stack or len(stack) >= MAX_PARENT_DEPTH:
         raise ChannelError(
@@ -165,7 +173,10 @@ def _resolve_unvalidated(channel_id: str, stack: list[str]) -> dict[str, Any]:
         return copy.deepcopy(data)
 
     parent_data = _resolve_unvalidated(str(parent), [*stack, channel_id])
-    return _deep_merge(parent_data, data)
+    resolved = _deep_merge(parent_data, data)
+    if _is_ephemeral_child(data):
+        resolved.setdefault("state", {})["key"] = _ephemeral_state_key(str(parent), str(data["tenant"]))
+    return resolved
 
 
 def resolve_channel(channel_id: str) -> dict[str, Any]:

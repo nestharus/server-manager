@@ -144,11 +144,13 @@
         },
         "kubernetes_version": {
           "type": "string",
-          "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(\\+[0-9]+)?$"
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+\\+[0-9]+$"
         },
         "node_pools": {
           "type": "array",
+          "description": "INIT-008 platform-channel template supports one node pool; multi-pool support is deferred to a future channel template.",
           "minItems": 1,
+          "maxItems": 1,
           "items": {
             "$ref": "#/$defs/nodePool"
           }
@@ -190,7 +192,7 @@
         },
         "key": {
           "type": "string",
-          "pattern": "^channels/[a-z0-9-]+/terraform\\.tfstate$"
+          "pattern": "^channels/[a-z0-9-]+(/ephemeral/[a-z0-9-]+)?/terraform\\.tfstate$"
         },
         "region": {
           "$ref": "#/$defs/region"

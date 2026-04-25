@@ -143,6 +143,8 @@ Top-level source fields:
 - `exposure`: required enum string; `prod`, `stage`, or `dev`.
 - `tenant`: required string-or-null; non-null value uses `^[a-z0-9][a-z0-9-]*$`.
 - `allow_ephemeral_children`: required boolean.
+- `enabled_platforms`: required array; items are enum strings `docker` or
+  `kubernetes`; `uniqueItems: true`. INIT-008 only uses `kubernetes`.
 - `platform`: optional object on child fixtures and required on root active channels.
 
 `platform` fields:
@@ -151,12 +153,18 @@ Top-level source fields:
 - `network.v4_subnet_mask`: required integer, min `16`, max `28`.
 - `cluster.label`: required string, `^[a-z0-9][a-z0-9-]*$`.
 - `cluster.kubernetes_version`: required string, `^v[0-9]+\\.[0-9]+\\.[0-9]+\\+[0-9]+$`.
-- `cluster.node_plan`: required string, `^[a-z0-9][a-z0-9-]*$`.
-- `cluster.node_quantity`: required integer, min `1`, max `10`.
+- `cluster.node_pools`: required array of node-pool objects, exactly one item
+  for INIT-008 (`minItems: 1`, `maxItems: 1`). Multi-pool channel support is
+  deferred to a future channel template.
+- `cluster.node_pools[].name`: required string.
+- `cluster.node_pools[].plan`: required string.
+- `cluster.node_pools[].count`: required integer, min `1`.
 - `cluster.ha_controlplanes`: required boolean.
 - `cluster.enable_firewall`: required boolean.
 - `state.bucket`: required string, `^[a-z0-9][a-z0-9.-]*$`.
-- `state.key`: required string matching active keys `^channels/[a-z0-9][a-z0-9-]*/terraform\\.tfstate$` or ephemeral keys `^channels/ephemeral/[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*/terraform\\.tfstate$`.
+- `state.key`: required string matching active keys
+  `channels/<id>/terraform.tfstate` or ephemeral keys
+  `channels/<parent>/ephemeral/<suffix>/terraform.tfstate`.
 - `state.region`: required string matching the same region pattern.
 
 Schema versioning contract:
@@ -186,26 +194,29 @@ parent: null
 exposure: dev
 tenant: null
 allow_ephemeral_children: true
+enabled_platforms: [kubernetes]
 platform:
   region: ewr
   network:
     v4_subnet: 10.40.0.0
     v4_subnet_mask: 20
-  cluster:
-    label: humility-dev-platform
-    kubernetes_version: v1.32.3+1
-    node_plan: vc2-2c-4gb
-    node_quantity: 2
-    ha_controlplanes: true
-    enable_firewall: true
-  state:
-    bucket: humility-tfstate
-    key: channels/dev/terraform.tfstate
-    region: ewr
+cluster:
+  label: humility-dev-platform
+  kubernetes_version: v1.32.9+3
+  node_pools:
+    - name: default
+      count: 2
+      plan: vc2-2c-4gb
+  ha_controlplanes: true
+  enable_firewall: true
+state:
+  bucket: humility-tfstate
+  key: channels/dev/terraform.tfstate
+  region: ewr
 ```
 This preserves the checked-in `dev` baseline from the old environment root:
-region `ewr`, subnet `10.40.0.0/20`, Kubernetes version `v1.32.3+1`, node plan
-`vc2-2c-4gb`, node quantity `2`, HA control planes enabled, and managed
+region `ewr`, subnet `10.40.0.0/20`, Kubernetes version `v1.32.9+3`, node plan
+`vc2-2c-4gb`, node quantity `2` through the single node-pool entry, HA control planes enabled, and managed
 firewall enabled. That closes D5 and D6.
 Production-class `customer`, operator-class `internal`, and named e2e channels
 are not active INIT-008 channels and are not Phase 5 deliverables. They are
@@ -283,6 +294,11 @@ infra/scripts/generate_channel_backend.py
 ```text
 infra/scripts/generate_channel_tfvars.py
 ```
+For INIT-008, that generator flattens the single resolved
+`cluster.node_pools[0]` entry into the template's `node_plan` and
+`node_quantity` variables. The source schema keeps the array-shaped channel
+contract, but the schema caps it at one pool until a future channel template
+supports multiple pools.
 Generated root artifacts are not hand-edited. Every generated artifact in
 `infra/roots/channels/<id>/` must have regeneration drift-detection
 acceptance. For INIT-008 that list is:
@@ -357,7 +373,7 @@ Expected behavior:
 - Emits a transient child YAML with id `dev-pr-123`.
 - Emits resolved tfvars for that child.
 - Emits a transient backend config using key
-  `channels/ephemeral/dev/dev-pr-123/terraform.tfstate`.
+  `channels/dev/ephemeral/pr-123/terraform.tfstate`.
 - Does not write into `infra/channels/` or `infra/roots/`.
 - Does not run `tofu apply`.
 The script exists to prove the schema's `allow_ephemeral_children` field is
@@ -379,7 +395,7 @@ channels/dev/terraform.tfstate
 ```
 Ephemeral key pattern:
 ```text
-channels/ephemeral/<parent>/<child>/terraform.tfstate
+channels/<parent>/ephemeral/<suffix>/terraform.tfstate
 ```
 Bootstrap root:
 ```text
