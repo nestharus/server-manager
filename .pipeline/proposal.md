@@ -2,13 +2,11 @@
 ## Binding sources
 - `.pipeline/research.md` - Phase 1 evidence over current `infra/` state.
 - `.pipeline/synthesis.md` - D1-D12, stale-material disposition, and six candidate slices.
-- `/home/nes/projects/server-manager/product-strategy/tickets/PHASE_5_INDEX.md` - Phase 5 local-only deployment-substrate framing.
+- Phase 5 local-only deployment-substrate framing, quoted inline in Sections 2.1 and 7.
 - `product-strategy/tickets/INIT-001.md` - initiative/ticket shape.
-- `/home/nes/work/rfqautomation-linux/worktrees/supervisor-e2e/release-channels/schemas/channel.schema.json` - channel registry schema reference.
-- `/home/nes/work/rfqautomation-linux/worktrees/supervisor-e2e/release-channels/dev.yaml` - root development channel reference.
-- `/home/nes/work/rfqautomation-linux/worktrees/supervisor-e2e/release-channels/customer.yaml` - production-class channel reference.
-- `/home/nes/work/rfqautomation-linux/worktrees/supervisor-e2e/release-channels/internal.yaml` - operator/stage channel reference.
-- `/home/nes/work/rfqautomation-linux/worktrees/supervisor-e2e/release-channels/e2e.yaml` - child-channel inheritance reference.
+- Channel-template memory reference `channel-template-pattern.md` - schema shape,
+  root development channel, production-class channel, operator/stage channel,
+  and child-channel inheritance patterns.
 This proposal is bound to synthesis decisions D1-D12. The user decisions
 from 2026-04-25 replace the old hard environment triad with a channel
 registry plus parameterized platform template. The old
@@ -134,7 +132,7 @@ infra/schemas/platform-channel.schema.json
 ```
 It is modeled on the rfqautomation schema at:
 ```text
-/home/nes/work/rfqautomation-linux/worktrees/supervisor-e2e/release-channels/schemas/channel.schema.json
+channel-template-pattern.md memory reference, schema section
 ```
 Both channel schemas are executable contracts, not presence markers. Every object in both schemas uses `additionalProperties: false` unless explicitly documented open; INIT-008 has no deliberately open objects. Every field defines required-vs-optional status, type, enum values where applicable, regex patterns where applicable, numeric min/max where applicable, and nullable handling through explicit `["string", "null"]` or equivalent JSON Schema syntax.
 

@@ -79,13 +79,13 @@ def validate_registry(registry: Path) -> None:
 
     original_channels_dir = resolver.CHANNELS_DIR
     original_fixtures_dir = resolver.FIXTURES_DIR
-    resolver.CHANNELS_DIR = registry
-    resolver.FIXTURES_DIR = registry / "fixtures"
-
-    _assert_no_forbidden_files(registry)
-    active_paths = _active_channel_paths(registry)
-    fixture_paths = _fixture_channel_paths(registry)
     try:
+        resolver.CHANNELS_DIR = registry
+        resolver.FIXTURES_DIR = registry / "fixtures"
+
+        _assert_no_forbidden_files(registry)
+        active_paths = _active_channel_paths(registry)
+        fixture_paths = _fixture_channel_paths(registry)
         _validate_source_files([*active_paths, *fixture_paths])
 
         for path in active_paths:

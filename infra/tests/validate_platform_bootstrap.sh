@@ -95,10 +95,21 @@ assert_rg_no_match() {
   local pattern="$1"
   local path="${INFRA_DIR}/$2"
   local label="$3"
-  if rg -n "$pattern" "$path" >/dev/null; then
+  local status
+  if [[ ! -e "$path" ]]; then
+    fail "${label} (path does not exist: ${path})"
+    return
+  fi
+  set +e
+  rg -n "$pattern" "$path" >/dev/null
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
     fail "$label"
-  else
+  elif [[ "$status" -eq 1 ]]; then
     pass "$label"
+  else
+    fail "${label} (rg failed with status ${status})"
   fi
 }
 
@@ -508,6 +519,8 @@ FILES=(
   "roots/channels/dev/backend.tfbackend"
   "roots/channels/dev/channel.auto.tfvars.json"
   "roots/channels/dev/.terraform.lock.hcl"
+  "modules/platform-network/versions.tf"
+  "modules/platform-cluster/versions.tf"
   "scripts/resolve_platform_channel.py"
   "scripts/validate_platform_channels.py"
   "scripts/generate_channel_backend.py"
@@ -573,18 +586,22 @@ else
 fi
 
 MODULES=(
-  "modules/platform-network/main.tf"
-  "modules/platform-cluster/main.tf"
+  "modules/platform-network"
+  "modules/platform-cluster"
 )
 
 for mod in "${MODULES[@]}"; do
-  mod_file="${INFRA_DIR}/${mod}"
-  mod_short="${mod%/main.tf}"
+  mod_file="${INFRA_DIR}/${mod}/main.tf"
+  mod_versions="${mod}/versions.tf"
+  mod_short="${mod}"
 
-  assert_no_grep '^terraform\s*\{' "$mod" \
-    "${mod_short}: no terraform {} block"
+  assert_grep 'source\s*=\s*"vultr/vultr"' "$mod_versions" \
+    "${mod_short}: declares vultr/vultr provider source"
 
-  assert_no_grep '^provider\s+' "$mod" \
+  assert_no_grep '^backend\s+' "$mod_versions" \
+    "${mod_short}: no backend block"
+
+  assert_no_grep '^provider\s+' "${mod}/main.tf" \
     "${mod_short}: no provider block"
 
   if grep -n '"dev"\|"staging"\|"production"' "$mod_file" | grep -vE '^\s*#' >/dev/null; then

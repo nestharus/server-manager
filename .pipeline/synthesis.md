@@ -290,6 +290,11 @@ keeps the initiative at six candidate slices, which is the high end of the
 requested range. If proposal work discovers a seventh materially independent
 slice, that is a signal INIT-008 itself should split rather than quietly widen.
 
+Note: `.pipeline/proposal.md` supersedes the slice names below. The evidence
+anchors remain valid, but the final names are `SLICE-026: Channel Contract and
+Registry Skeleton`, `SLICE-027: Platform Template and Dev Channel Root`, and
+`SLICE-028: State-Backend and Remote-State Handoff Contract`.
+
 | Name | Scope summary | Dependencies on other slices | Local-verification surface | Magnitude estimate | Evidence anchor |
 | --- | --- | --- | --- | --- | --- |
 | `SLICE-025: Authority Alignment and Input Reconciliation` | Formalize the authoritative Vultr/OpenTofu record for INIT-008 and displace stale bootstrap inputs that no longer match live repo state. | none | Document diff plus repo-consistency checks, with `infra/tests/validate_platform_bootstrap.sh` still passing against the active code path. | S | `.pipeline/research.md:145-193, 194-320, 471-476, 490-496` |

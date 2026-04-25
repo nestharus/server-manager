@@ -35,6 +35,12 @@ Current repo summary:
 BLOCKS_IMPLEMENTATION flags:
 - `BLOCKS_IMPLEMENTATION-DOC-DISPOSAL`: this prompt says stale docs should be deleted, not parked. The proposal Section 8 still uses `supersede` and `leave-as-historical` semantics for several stale planning files. Implementation can proceed only if SLICE-025 interprets `supersede` as `DELETE`, keeps only explicitly still-authoritative docs as `MODIFY`, and does not move stale files into an archive directory. If that interpretation is rejected, the proposal needs revision.
 
+Pass-1 closure note: SLICE-025 used DELETE semantics, not archival semantics.
+The stale `phase1-foundation*`, `vultr-fix-hookpoints*`,
+`vultr-object-storage-fix*`, `platform-bootstrap-hookpoints*`, and
+`hetzner-vs-vultr*` plan artifacts are absent from `plans/`; no `archived/`
+parking path was introduced for those files.
+
 ## 1. Per-Slice File Map
 
 ### SLICE-025 - Authority Alignment and Stale Input Disposal

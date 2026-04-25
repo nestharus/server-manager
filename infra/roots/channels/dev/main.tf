@@ -29,43 +29,53 @@ module "platform_channel" {
 }
 
 variable "channel_id" {
-  type = string
+  description = "Channel identifier from resolved channel JSON; no default; required"
+  type        = string
 }
 
 variable "region" {
-  type = string
+  description = "Vultr region from resolved channel JSON; no default; required"
+  type        = string
 }
 
 variable "vpc_v4_subnet" {
-  type = string
+  description = "VPC IPv4 subnet from resolved channel JSON; no default; required"
+  type        = string
 }
 
 variable "vpc_v4_subnet_mask" {
-  type = number
+  description = "VPC IPv4 subnet mask from resolved channel JSON; no default; required"
+  type        = number
 }
 
 variable "cluster_label" {
-  type = string
+  description = "VKE cluster label from resolved channel JSON; no default; required"
+  type        = string
 }
 
 variable "cluster_kubernetes_version" {
-  type = string
+  description = "VKE Kubernetes version from resolved channel JSON; no default; required"
+  type        = string
 }
 
 variable "node_plan" {
-  type = string
+  description = "Default node pool plan from resolved channel JSON; no default; required"
+  type        = string
 }
 
 variable "node_quantity" {
-  type = number
+  description = "Default node pool size from resolved channel JSON; no default; required"
+  type        = number
 }
 
 variable "ha_controlplanes" {
-  type = bool
+  description = "HA control plane flag from resolved channel JSON; no default; required"
+  type        = bool
 }
 
 variable "enable_firewall" {
-  type = bool
+  description = "Managed firewall flag from resolved channel JSON; no default; required"
+  type        = bool
 }
 
 output "vpc_id" {
