@@ -7,6 +7,9 @@ allow_ephemeral_children: false
 enabled_platforms: [kubernetes]
 platform:
   region: ewr
+  network:
+    v4_subnet: 10.40.48.0
+    v4_subnet_mask: 20
 cluster:
   label: humility-ephemeral-disabled-platform
   kubernetes_version: v1.32.3+1
@@ -14,6 +17,8 @@ cluster:
     - name: default
       count: 1
       plan: vc2-2c-4gb
+  ha_controlplanes: true
+  enable_firewall: true
 state:
   bucket: humility-tfstate
   key: channels/ephemeral-disabled/terraform.tfstate

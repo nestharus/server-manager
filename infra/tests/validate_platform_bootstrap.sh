@@ -6,6 +6,8 @@ INFRA_DIR="${REPO_ROOT}/infra"
 
 PASS_COUNT=0
 FAIL_COUNT=0
+BACKEND_DRIFT_OK=false
+TFVARS_DRIFT_OK=false
 
 pass() {
   echo "  PASS: $1"
@@ -24,11 +26,19 @@ section() {
 
 assert_file_exists() {
   local file="$1"
-  if [[ ! -f "${INFRA_DIR}/${file}" ]]; then
-    fail "File missing: ${file}"
-    return 1
+  if [[ -f "${INFRA_DIR}/${file}" ]]; then
+    pass "exists: ${file}"
+  else
+    fail "exists: ${file}"
   fi
-  return 0
+}
+
+assert_environments_dir_gone() {
+  if [[ ! -d "${INFRA_DIR}/environments" ]]; then
+    pass "infra/environments removed"
+  else
+    fail "infra/environments removed"
+  fi
 }
 
 assert_grep() {
@@ -50,6 +60,53 @@ assert_no_grep() {
     fail "$label"
   else
     pass "$label"
+  fi
+}
+
+assert_rg_match() {
+  local pattern="$1"
+  local path="${INFRA_DIR}/$2"
+  local label="$3"
+  if rg -n "$pattern" "$path" >/dev/null; then
+    pass "$label"
+  else
+    fail "$label"
+  fi
+}
+
+assert_rg_no_match() {
+  local pattern="$1"
+  local path="${INFRA_DIR}/$2"
+  local label="$3"
+  if rg -n "$pattern" "$path" >/dev/null; then
+    fail "$label"
+  else
+    pass "$label"
+  fi
+}
+
+assert_json_value() {
+  local file="$1"
+  local dotted_path="$2"
+  local expected="$3"
+  local label="$4"
+
+  if python3 - "$file" "$dotted_path" "$expected" <<'PY'
+import json
+import sys
+
+path, dotted_path, expected = sys.argv[1:]
+with open(path, "r", encoding="utf-8") as handle:
+    value = json.load(handle)
+for part in dotted_path.split("."):
+    value = value[part]
+if str(value) != expected:
+    raise SystemExit(f"{dotted_path}: expected {expected!r}, got {value!r}")
+PY
+  then
+    pass "$label"
+  else
+    fail "$label"
   fi
 }
 
@@ -92,28 +149,116 @@ assert_decisions_d7_present() {
   fi
 }
 
-assert_json_value() {
-  local file="$1"
-  local dotted_path="$2"
-  local expected="$3"
-  local label="$4"
+assert_dev_tofu_fmt_check() {
+  if (cd "${INFRA_DIR}/roots/channels/dev" && tofu fmt -check >/dev/null); then
+    pass "dev channel root tofu fmt -check"
+  else
+    fail "dev channel root tofu fmt -check"
+  fi
+}
 
-  if python3 - "$file" "$dotted_path" "$expected" <<'PY'
+assert_tofu_root_validates() {
+  local root="$1"
+  local preserve_lockfile="${2:-false}"
+  local root_dir="${INFRA_DIR}/${root}"
+
+  if (cd "$root_dir" && tofu init -backend=false >/dev/null); then
+    pass "tofu init -backend=false: ${root}"
+  else
+    fail "tofu init -backend=false: ${root}"
+    return
+  fi
+
+  if (cd "$root_dir" && tofu validate >/dev/null); then
+    pass "tofu validate: ${root}"
+  else
+    fail "tofu validate: ${root}"
+  fi
+
+  rm -rf "${root_dir}/.terraform"
+  if [[ "$preserve_lockfile" != true ]]; then
+    rm -f "${root_dir}/.terraform.lock.hcl"
+  fi
+}
+
+assert_template_variables_documented() {
+  if python3 - "${INFRA_DIR}/templates/platform-channel/variables.tf" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+blocks = re.findall(r'variable\s+"([^"]+)"\s*\{(.*?)\n\}', text, re.S)
+if not blocks:
+    raise SystemExit("no variable blocks found")
+
+missing = []
+for name, body in blocks:
+    has_type = re.search(r'^\s*type\s*=', body, re.M) is not None
+    has_default = re.search(r'^\s*default\s*=', body, re.M) is not None
+    has_required_description = re.search(
+        r'^\s*description\s*=\s*"[^"]*no default; required"\s*$',
+        body,
+        re.M,
+    ) is not None
+    if not has_type or not (has_default or has_required_description):
+        missing.append(name)
+
+if missing:
+    raise SystemExit(", ".join(missing))
+PY
+  then
+    pass "template variables have type and default-or-required contract"
+  else
+    fail "template variables have type and default-or-required contract"
+  fi
+}
+
+assert_backend_drift_check() {
+  local resolved="${REPO_ROOT}/.tmp/dev.resolved.json"
+  local generated="${REPO_ROOT}/.tmp/dev.backend.tfbackend"
+
+  if python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel dev --out "$resolved" \
+    && python3 "${INFRA_DIR}/scripts/generate_channel_backend.py" --resolved "$resolved" --out "$generated" \
+    && cmp -s "$generated" "${INFRA_DIR}/roots/channels/dev/backend.tfbackend"; then
+    BACKEND_DRIFT_OK=true
+    pass "backend.tfbackend regenerates byte-identically"
+  else
+    fail "backend.tfbackend regenerates byte-identically"
+  fi
+}
+
+assert_tfvars_drift_check() {
+  local resolved="${REPO_ROOT}/.tmp/dev.resolved.json"
+  local generated="${REPO_ROOT}/.tmp/dev.channel.auto.tfvars.json"
+  local committed="${INFRA_DIR}/roots/channels/dev/channel.auto.tfvars.json"
+
+  if python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel dev --out "$resolved" \
+    && python3 "${INFRA_DIR}/scripts/generate_channel_tfvars.py" --resolved "$resolved" --out "$generated" \
+    && python3 - "$generated" "$committed" <<'PY'
 import json
 import sys
 
-path, dotted_path, expected = sys.argv[1:]
-with open(path, "r", encoding="utf-8") as handle:
-    value = json.load(handle)
-for part in dotted_path.split("."):
-    value = value[part]
-if str(value) != expected:
-    raise SystemExit(f"{dotted_path}: expected {expected!r}, got {value!r}")
+with open(sys.argv[1], "r", encoding="utf-8") as generated_handle:
+    generated = json.load(generated_handle)
+with open(sys.argv[2], "r", encoding="utf-8") as committed_handle:
+    committed = json.load(committed_handle)
+if generated != committed:
+    raise SystemExit("generated tfvars differ from committed tfvars")
 PY
   then
-    pass "$label"
+    TFVARS_DRIFT_OK=true
+    pass "channel.auto.tfvars.json regenerates structurally identically"
   else
-    fail "$label"
+    fail "channel.auto.tfvars.json regenerates structurally identically"
+  fi
+}
+
+assert_generated_artifacts_covered() {
+  if [[ "$BACKEND_DRIFT_OK" == true && "$TFVARS_DRIFT_OK" == true ]]; then
+    pass "all dev generated artifacts have drift checks"
+  else
+    fail "all dev generated artifacts have drift checks"
   fi
 }
 
@@ -125,130 +270,41 @@ FILES=(
   "bootstrap/state-backend/main.tf"
   "modules/platform-network/main.tf"
   "modules/platform-cluster/main.tf"
-  "environments/dev/main.tf"
-  "environments/dev/backend.tfbackend"
+  "schemas/platform-channel.schema.json"
+  "schemas/platform-channel-resolved.schema.json"
+  "channels/dev.yaml"
+  "templates/platform-channel/main.tf"
+  "templates/platform-channel/variables.tf"
+  "templates/platform-channel/outputs.tf"
+  "templates/platform-channel/versions.tf"
+  "roots/channels/dev/main.tf"
+  "roots/channels/dev/backend.tfbackend"
+  "roots/channels/dev/channel.auto.tfvars.json"
+  "roots/channels/dev/.terraform.lock.hcl"
+  "scripts/resolve_platform_channel.py"
+  "scripts/validate_platform_channels.py"
+  "scripts/generate_channel_backend.py"
+  "scripts/generate_channel_tfvars.py"
 )
 
-ALL_EXIST=true
-for f in "${FILES[@]}"; do
-  if assert_file_exists "$f"; then
-    pass "exists: ${f}"
-  else
-    ALL_EXIST=false
-  fi
+for file in "${FILES[@]}"; do
+  assert_file_exists "$file"
 done
 
-if [[ "$ALL_EXIST" != true ]]; then
-  echo ""
-  echo "ABORT: required files missing — remaining checks would be meaningless."
-  exit 1
-fi
+assert_environments_dir_gone
 
 # ---------------------------------------------------------------------------
 section "Formatting checks"
 # ---------------------------------------------------------------------------
 
-FMT_TOOL=""
-if command -v tofu &>/dev/null; then
-  FMT_TOOL="tofu"
-elif command -v terraform &>/dev/null; then
-  FMT_TOOL="terraform"
-fi
-
-if [[ -n "$FMT_TOOL" ]]; then
-  if $FMT_TOOL fmt -check -recursive "${INFRA_DIR}/" &>/dev/null; then
-    pass "fmt check (${FMT_TOOL} fmt -check -recursive)"
-  else
-    fail "fmt check (${FMT_TOOL} fmt -check -recursive)"
-  fi
-else
-  echo "  INFO: tofu/terraform not found — falling back to heuristic indentation checks"
-
-  FMT_HEURISTIC_OK=true
-  for f in "${FILES[@]}"; do
-    filepath="${INFRA_DIR}/${f}"
-    [[ "$f" != *.tf ]] && continue
-
-    if grep -Pn '^\t' "$filepath" &>/dev/null; then
-      fail "heuristic fmt: tabs found in ${f} (HCL uses spaces)"
-      FMT_HEURISTIC_OK=false
-    fi
-
-    if grep -Pn '^ {1,1}[^ ]' "$filepath" &>/dev/null; then
-      fail "heuristic fmt: 1-space indentation in ${f} (expect 2)"
-      FMT_HEURISTIC_OK=false
-    fi
-
-    if grep -Pn '^ {3}[^ ]' "$filepath" &>/dev/null; then
-      fail "heuristic fmt: 3-space indentation in ${f} (expect 2)"
-      FMT_HEURISTIC_OK=false
-    fi
-  done
-
-  if [[ "$FMT_HEURISTIC_OK" == true ]]; then
-    pass "heuristic fmt: indentation looks consistent across .tf files"
-  fi
-fi
+assert_dev_tofu_fmt_check
 
 # ---------------------------------------------------------------------------
-section "Structural validation (tofu validate)"
+section "Structural validation"
 # ---------------------------------------------------------------------------
 
-VALIDATE_TOOL=""
-if command -v tofu &>/dev/null; then
-  VALIDATE_TOOL="tofu"
-elif command -v terraform &>/dev/null; then
-  VALIDATE_TOOL="terraform"
-fi
-
-VALIDATE_ROOTS=(
-  "bootstrap/state-backend"
-  "environments/dev"
-)
-
-if [[ -n "$VALIDATE_TOOL" ]]; then
-  for root in "${VALIDATE_ROOTS[@]}"; do
-    root_dir="${INFRA_DIR}/${root}"
-    pushd "$root_dir" >/dev/null
-
-    if $VALIDATE_TOOL init -backend=false &>/dev/null; then
-      if $VALIDATE_TOOL validate &>/dev/null; then
-        pass "${VALIDATE_TOOL} validate: ${root}"
-      else
-        fail "${VALIDATE_TOOL} validate: ${root}"
-      fi
-    else
-      fail "${VALIDATE_TOOL} init -backend=false: ${root}"
-    fi
-
-    rm -rf .terraform .terraform.lock.hcl 2>/dev/null || true
-    popd >/dev/null
-  done
-else
-  echo "  INFO: tofu/terraform not found — falling back to structural grep checks"
-
-  for root in "${VALIDATE_ROOTS[@]}"; do
-    tf_file="${INFRA_DIR}/${root}/main.tf"
-
-    if grep -qE '^terraform\s*\{' "$tf_file"; then
-      pass "structural: terraform block found in ${root}/main.tf"
-    else
-      fail "structural: terraform block missing in ${root}/main.tf"
-    fi
-
-    if grep -qE 'required_providers' "$tf_file"; then
-      pass "structural: required_providers found in ${root}/main.tf"
-    else
-      fail "structural: required_providers missing in ${root}/main.tf"
-    fi
-
-    if grep -qE '^provider\s+"vultr"' "$tf_file"; then
-      pass "structural: provider vultr declared in ${root}/main.tf"
-    else
-      fail "structural: provider vultr missing in ${root}/main.tf"
-    fi
-  done
-fi
+assert_tofu_root_validates "bootstrap/state-backend" false
+assert_tofu_root_validates "roots/channels/dev" true
 
 # ---------------------------------------------------------------------------
 section "Content assertions: bootstrap/state-backend/main.tf"
@@ -269,19 +325,14 @@ assert_grep 'required_version\s*=\s*">= 1\.8\.0"' "$BS" \
   "OpenTofu version constraint >= 1.8.0"
 
 # ---------------------------------------------------------------------------
-section "Content assertions: modules/platform-network/main.tf"
+section "Content assertions: modules"
 # ---------------------------------------------------------------------------
 
 NET="modules/platform-network/main.tf"
+CL="modules/platform-cluster/main.tf"
 
 assert_grep 'resource\s+"vultr_vpc"' "$NET" \
   "declares vultr_vpc resource"
-
-# ---------------------------------------------------------------------------
-section "Content assertions: modules/platform-cluster/main.tf"
-# ---------------------------------------------------------------------------
-
-CL="modules/platform-cluster/main.tf"
 
 assert_grep 'resource\s+"vultr_kubernetes"' "$CL" \
   "declares vultr_kubernetes resource"
@@ -292,40 +343,6 @@ if grep -A2 'output\s*"kube_config"' "$KUBE_CONFIG_FILE" | grep -q 'sensitive\s*
 else
   fail "kube_config output marked sensitive"
 fi
-
-# ---------------------------------------------------------------------------
-section "Content assertions: environments/dev/main.tf"
-# ---------------------------------------------------------------------------
-
-DEV="environments/dev/main.tf"
-
-assert_grep 'backend\s+"s3"\s*\{\}' "$DEV" \
-  "uses backend \"s3\" {}"
-
-assert_grep '../../modules/platform-network' "$DEV" \
-  "references ../../modules/platform-network"
-
-assert_grep '../../modules/platform-cluster' "$DEV" \
-  "references ../../modules/platform-cluster"
-
-assert_grep 'version\s*=\s*"~>\s*2\.30"' "$DEV" \
-  "provider version constraint ~> 2.30"
-
-assert_grep 'required_version\s*=\s*">= 1\.8\.0"' "$DEV" \
-  "OpenTofu version constraint >= 1.8.0"
-
-# ---------------------------------------------------------------------------
-section "Content assertions: environments/dev/backend.tfbackend"
-# ---------------------------------------------------------------------------
-
-BE="environments/dev/backend.tfbackend"
-
-assert_grep 'bucket\s*=\s*"humility-tfstate"' "$BE" \
-  "bucket = humility-tfstate"
-
-# ---------------------------------------------------------------------------
-section "Module isolation assertions"
-# ---------------------------------------------------------------------------
 
 MODULES=(
   "modules/platform-network/main.tf"
@@ -342,12 +359,45 @@ for mod in "${MODULES[@]}"; do
   assert_no_grep '^provider\s+' "$mod" \
     "${mod_short}: no provider block"
 
-  if grep -n '"dev"\|"staging"\|"production"' "$mod_file" | grep -vE '^\s*#' &>/dev/null; then
+  if grep -n '"dev"\|"staging"\|"production"' "$mod_file" | grep -vE '^\s*#' >/dev/null; then
     fail "${mod_short}: no hardcoded environment names"
   else
     pass "${mod_short}: no hardcoded environment names"
   fi
 done
+
+# ---------------------------------------------------------------------------
+section "Content assertions: platform template and dev root"
+# ---------------------------------------------------------------------------
+
+assert_rg_match 'module "network"|module "cluster"' "templates/platform-channel" \
+  "template calls network and cluster modules"
+
+assert_rg_no_match 'backend "s3"' "templates/platform-channel" \
+  "template has no backend block"
+
+assert_rg_match 'backend "s3"' "roots/channels/dev/main.tf" \
+  "dev root has backend block"
+
+assert_grep '../../../templates/platform-channel' "roots/channels/dev/main.tf" \
+  "dev root references platform-channel template"
+
+assert_grep 'version\s*=\s*"~>\s*2\.30"' "roots/channels/dev/main.tf" \
+  "dev root provider version constraint ~> 2.30"
+
+assert_grep 'required_version\s*=\s*">= 1\.8\.0"' "roots/channels/dev/main.tf" \
+  "dev root OpenTofu version constraint >= 1.8.0"
+
+assert_template_variables_documented
+
+# ---------------------------------------------------------------------------
+section "Generated artifact drift checks"
+# ---------------------------------------------------------------------------
+
+mkdir -p "${REPO_ROOT}/.tmp"
+assert_backend_drift_check
+assert_tfvars_drift_check
+assert_generated_artifacts_covered
 
 # ---------------------------------------------------------------------------
 section "Security assertions"
@@ -358,7 +408,7 @@ CRED_PATTERNS='(api_key|api_token|secret_key|password|credential)\s*=\s*"[^"$]'
 SECURITY_OK=true
 while IFS= read -r -d '' tf_file; do
   rel="${tf_file#"${INFRA_DIR}/"}"
-  if grep -iE "$CRED_PATTERNS" "$tf_file" | grep -vE '^\s*#' &>/dev/null; then
+  if grep -iE "$CRED_PATTERNS" "$tf_file" | grep -vE '^\s*#' >/dev/null; then
     fail "no hardcoded credentials in ${rel}"
     SECURITY_OK=false
   fi
@@ -381,11 +431,11 @@ else
   fail "s3_secret_key output marked sensitive"
 fi
 
-BACKEND_FILE="${INFRA_DIR}/environments/dev/backend.tfbackend"
-if grep -iE '(access_key|secret_key)\s*=\s*"[^"]*[A-Za-z0-9]{10,}' "$BACKEND_FILE" &>/dev/null; then
-  fail "backend.tfbackend contains no actual credentials"
+BACKEND_FILE="${INFRA_DIR}/roots/channels/dev/backend.tfbackend"
+if grep -iE '(access_key|secret_key)\s*=\s*"[^"]*[A-Za-z0-9]{10,}' "$BACKEND_FILE" >/dev/null; then
+  fail "dev backend.tfbackend contains no actual credentials"
 else
-  pass "backend.tfbackend contains no actual credentials"
+  pass "dev backend.tfbackend contains no actual credentials"
 fi
 
 # ---------------------------------------------------------------------------
@@ -398,15 +448,6 @@ assert_decisions_d7_present
 # ---------------------------------------------------------------------------
 section "Channel registry assertions"
 # ---------------------------------------------------------------------------
-
-mkdir -p "${REPO_ROOT}/.tmp"
-
-if [[ -f "${INFRA_DIR}/schemas/platform-channel.schema.json" \
-  && -f "${INFRA_DIR}/schemas/platform-channel-resolved.schema.json" ]]; then
-  pass "channel schemas present"
-else
-  fail "channel schemas present"
-fi
 
 if python3 "${INFRA_DIR}/scripts/validate_platform_channels.py" >/dev/null; then
   pass "platform channels validate"
@@ -423,6 +464,15 @@ if python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" \
 else
   fail "dev channel resolves to JSON"
 fi
+
+assert_json_value "$DEV_RESOLVED" "platform.region" "ewr" \
+  "dev channel region is ewr"
+assert_json_value "$DEV_RESOLVED" "platform.network.v4_subnet" "10.40.0.0" \
+  "dev channel VPC subnet is preserved"
+assert_json_value "$DEV_RESOLVED" "cluster.ha_controlplanes" "True" \
+  "dev channel HA control planes are preserved"
+assert_json_value "$DEV_RESOLVED" "cluster.enable_firewall" "True" \
+  "dev channel firewall setting is preserved"
 
 E2E_RESOLVED="${REPO_ROOT}/.tmp/e2e-from-dev.resolved.json"
 if python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" \

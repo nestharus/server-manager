@@ -79,10 +79,16 @@
         "required": ["platform", "cluster", "state"],
         "properties": {
           "platform": {
-            "required": ["region"]
+            "required": ["region", "network"]
           },
           "cluster": {
-            "required": ["label", "kubernetes_version", "node_pools"]
+            "required": [
+              "label",
+              "kubernetes_version",
+              "node_pools",
+              "ha_controlplanes",
+              "enable_firewall"
+            ]
           },
           "state": {
             "required": ["bucket", "key", "region"]
@@ -106,6 +112,25 @@
       "properties": {
         "region": {
           "$ref": "#/$defs/region"
+        },
+        "network": {
+          "$ref": "#/$defs/network"
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v4_subnet", "v4_subnet_mask"],
+      "properties": {
+        "v4_subnet": {
+          "type": "string",
+          "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$"
+        },
+        "v4_subnet_mask": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 28
         }
       }
     },
@@ -127,6 +152,12 @@
           "items": {
             "$ref": "#/$defs/nodePool"
           }
+        },
+        "ha_controlplanes": {
+          "type": "boolean"
+        },
+        "enable_firewall": {
+          "type": "boolean"
         }
       }
     },
