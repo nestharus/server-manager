@@ -7,8 +7,10 @@ INSTALL_SCRIPT="${GITOPS_DIR}/scripts/install-tools.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
+SKIP_COUNT=0
 LAYOUT_ONLY=false
 FLUX_RENDER_ONLY=false
+SOPS_ONLY=false
 
 pass() {
   echo "  PASS: $1"
@@ -20,6 +22,16 @@ fail() {
   FAIL_COUNT=$((FAIL_COUNT + 1))
 }
 
+skip() {
+  echo "  SKIPPED: $1"
+  SKIP_COUNT=$((SKIP_COUNT + 1))
+}
+
+placeholder() {
+  echo "  PLACEHOLDER: $1"
+  SKIP_COUNT=$((SKIP_COUNT + 1))
+}
+
 section() {
   echo ""
   echo "=== $1 ==="
@@ -27,13 +39,14 @@ section() {
 
 usage() {
   cat <<'USAGE'
-Usage: validate_gitops.sh [--layout-only|--flux-render-only]
+Usage: validate_gitops.sh [--layout-only|--flux-render-only|--sops-only]
 
 Validates the INIT-009 GitOps substrate.
 
 Options:
   --layout-only        Run only gitops/ layout and Kustomize assertions.
   --flux-render-only   Run only Flux self-management render assertions.
+  --sops-only          Run only SOPS+age per-channel secret assertions.
 USAGE
 }
 
@@ -44,6 +57,9 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --flux-render-only)
       FLUX_RENDER_ONLY=true
+      ;;
+    --sops-only)
+      SOPS_ONLY=true
       ;;
     -h|--help)
       usage
@@ -58,8 +74,15 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
-if [[ "$LAYOUT_ONLY" == true && "$FLUX_RENDER_ONLY" == true ]]; then
-  echo "ERROR: --layout-only and --flux-render-only are mutually exclusive" >&2
+MODE_COUNT=0
+for selected_mode in "$LAYOUT_ONLY" "$FLUX_RENDER_ONLY" "$SOPS_ONLY"; do
+  if [[ "$selected_mode" == true ]]; then
+    MODE_COUNT=$((MODE_COUNT + 1))
+  fi
+done
+
+if [[ "$MODE_COUNT" -gt 1 ]]; then
+  echo "ERROR: --layout-only, --flux-render-only, and --sops-only are mutually exclusive" >&2
   usage >&2
   exit 2
 fi
@@ -439,6 +462,155 @@ assert_local_source_patch_present() {
   fi
 }
 
+dev_sops_file() {
+  printf '%s\n' "${GITOPS_DIR}/secrets/dev/.sops.yaml"
+}
+
+dev_bootstrap_secret_file() {
+  printf '%s\n' "${GITOPS_DIR}/secrets/dev/bootstrap-creds.enc.yaml"
+}
+
+has_real_dev_age_recipient() {
+  grep -Eq 'age1[a-z0-9]{58}' "$(dev_sops_file)"
+}
+
+has_placeholder_dev_age_recipient() {
+  grep -q '<REPLACE_WITH_REAL_RECIPIENT_BEFORE_USE>' "$(dev_sops_file)"
+}
+
+assert_dev_sops_yaml_exists() {
+  if [[ -f "$(dev_sops_file)" ]]; then
+    pass "dev .sops.yaml exists"
+  else
+    fail "dev .sops.yaml exists"
+  fi
+}
+
+assert_dev_sops_yaml_has_creation_rule() {
+  local file
+  file="$(dev_sops_file)"
+  local ok=true
+
+  [[ -f "$file" ]] || ok=false
+  grep -q '^creation_rules:' "$file" || ok=false
+  grep -q 'path_regex: gitops/secrets/dev/.*\\.enc\\.yaml' "$file" || ok=false
+  grep -q 'encrypted_regex: \^(data|stringData)\$' "$file" || ok=false
+  grep -q '^    age:' "$file" || ok=false
+
+  if [[ "$ok" == true ]]; then
+    pass "dev .sops.yaml has a creation_rules block"
+  else
+    fail "dev .sops.yaml has a creation_rules block"
+  fi
+}
+
+assert_dev_sops_yaml_has_recipient() {
+  if [[ ! -f "$(dev_sops_file)" ]]; then
+    fail "dev .sops.yaml lists an age recipient"
+    return
+  fi
+
+  if has_real_dev_age_recipient; then
+    pass "dev .sops.yaml lists a real age recipient"
+  elif has_placeholder_dev_age_recipient; then
+    placeholder "dev .sops.yaml has REPLACE-before-use age recipient because age-keygen is unavailable"
+  else
+    fail "dev .sops.yaml lists an age recipient"
+  fi
+}
+
+assert_dev_bootstrap_secret_exists() {
+  if [[ -f "$(dev_bootstrap_secret_file)" ]]; then
+    pass "bootstrap-creds.enc.yaml exists"
+  else
+    fail "bootstrap-creds.enc.yaml exists"
+  fi
+}
+
+assert_bootstrap_flux_script_exists() {
+  local file="${GITOPS_DIR}/scripts/bootstrap-flux.sh"
+  local ok=true
+
+  [[ -x "$file" ]] || ok=false
+  grep -q 'age-keygen' "$file" || ok=false
+  grep -q 'DEV_AGE_KEY' "$file" || ok=false
+
+  if [[ "$ok" == true ]]; then
+    pass "bootstrap-flux.sh includes executable dev age-key generation"
+  else
+    fail "bootstrap-flux.sh includes executable dev age-key generation"
+  fi
+}
+
+assert_dev_enc_files_have_sops_metadata() {
+  local enc_file rel_path found=false
+
+  while IFS= read -r enc_file; do
+    found=true
+    rel_path="${enc_file#${REPO_ROOT}/}"
+
+    if grep -q '^sops:' "$enc_file"; then
+      pass "${rel_path} has SOPS metadata"
+    elif grep -q 'PLACEHOLDER' "$enc_file"; then
+      placeholder "${rel_path} is a documented placeholder until sops/age are installed"
+    else
+      fail "${rel_path} has SOPS metadata"
+    fi
+  done < <(find "${GITOPS_DIR}/secrets/dev" -maxdepth 1 -name '*.enc.yaml' -type f | sort)
+
+  if [[ "$found" == false ]]; then
+    skip "no dev *.enc.yaml files found for SOPS metadata check"
+  fi
+}
+
+assert_sops_decrypt_works_if_tools_present() {
+  local sample output_file error_file status key_file
+  sample="$(dev_bootstrap_secret_file)"
+  output_file="${REPO_ROOT}/.tmp/gitops-sops-decrypt.out"
+  error_file="${REPO_ROOT}/.tmp/gitops-sops-decrypt.err"
+  key_file="${SOPS_AGE_KEY_FILE:-${HOME}/.config/sops/age/dev.txt}"
+  mkdir -p "${REPO_ROOT}/.tmp"
+
+  if ! command -v sops >/dev/null 2>&1; then
+    skip "sops decrypt verification skipped because sops is not installed"
+    return
+  fi
+
+  if ! command -v age >/dev/null 2>&1; then
+    skip "sops decrypt verification skipped because age is not installed"
+    return
+  fi
+
+  if [[ ! -f "$(dev_sops_file)" ]] || ! has_real_dev_age_recipient; then
+    skip "sops decrypt verification skipped because dev .sops.yaml has no real age recipient"
+    return
+  fi
+
+  if [[ ! -f "$key_file" ]]; then
+    skip "sops decrypt verification skipped because private key is missing: ${key_file}"
+    return
+  fi
+
+  if [[ ! -f "$sample" ]] || ! grep -q '^sops:' "$sample"; then
+    skip "sops decrypt verification skipped because bootstrap-creds.enc.yaml is not SOPS-encrypted"
+    return
+  fi
+
+  set +e
+  SOPS_AGE_KEY_FILE="$key_file" sops --decrypt "$sample" >"$output_file" 2>"$error_file"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 && -s "$output_file" ]]; then
+    pass "sops decrypt succeeds for bootstrap-creds.enc.yaml"
+  else
+    fail "sops decrypt succeeds for bootstrap-creds.enc.yaml"
+    if [[ -s "$error_file" ]]; then
+      sed 's/^/    stderr: /' "$error_file"
+    fi
+  fi
+}
+
 run_layout_checks() {
   section "GitOps Layout"
   assert_gitops_dirs_exist
@@ -472,20 +644,34 @@ run_flux_render_checks() {
   assert_no_forbidden_paths_in_dev_render
 }
 
+run_sops_checks() {
+  section "SOPS+age Secrets"
+  assert_dev_sops_yaml_exists
+  assert_dev_sops_yaml_has_creation_rule
+  assert_dev_sops_yaml_has_recipient
+  assert_dev_bootstrap_secret_exists
+  assert_bootstrap_flux_script_exists
+  assert_dev_enc_files_have_sops_metadata
+  assert_sops_decrypt_works_if_tools_present
+}
+
 if [[ "$FLUX_RENDER_ONLY" == true ]]; then
   run_flux_render_checks
 elif [[ "$LAYOUT_ONLY" == true ]]; then
   run_layout_checks
+elif [[ "$SOPS_ONLY" == true ]]; then
+  run_sops_checks
 else
   run_layout_checks
   run_flux_render_checks
+  run_sops_checks
   run_tool_checks
 fi
 
 section "Summary"
 TOTAL=$((PASS_COUNT + FAIL_COUNT))
 echo ""
-echo "Results: ${PASS_COUNT}/${TOTAL} passed, ${FAIL_COUNT} failed"
+echo "Results: ${PASS_COUNT}/${TOTAL} passed, ${FAIL_COUNT} failed, ${SKIP_COUNT} skipped"
 
 if [[ "$FAIL_COUNT" -gt 0 ]]; then
   echo "STATUS: FAILED"

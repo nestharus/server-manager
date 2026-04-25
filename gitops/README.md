@@ -36,6 +36,19 @@ base plus the per-channel secrets directory at `secrets/dev`.
 `secrets/dev/` is the per-channel secret root. SLICE-034 adds the SOPS+age
 custody workflow and encrypted fixtures.
 
+## Secrets
+
+Secrets use SOPS+age with per-channel recipients per the Q4 lock on
+2026-04-25. Each channel under `gitops/secrets/<channel>/` owns its own
+`.sops.yaml`, public age recipients, and custody runbook.
+
+Private age keys stay operator-local. For the `dev` channel, the expected key
+path is `~/.config/sops/age/dev.txt`, exposed to SOPS with
+`SOPS_AGE_KEY_FILE=~/.config/sops/age/dev.txt`.
+
+See `gitops/secrets/dev/README.md` for add, remove, rotate, and verification
+commands.
+
 ## Placeholder Bases
 
 The downstream control-cluster systems are scheduled in later initiatives:
@@ -55,6 +68,12 @@ Run the layout-only harness when changing the Kustomize tree:
 
 ```bash
 bash gitops/tests/validate_gitops.sh --layout-only
+```
+
+Run the SOPS workflow harness when changing per-channel secrets:
+
+```bash
+bash gitops/tests/validate_gitops.sh --sops-only
 ```
 
 Default validation also runs toolchain checks:
