@@ -85,6 +85,95 @@ assert_rg_no_match() {
   fi
 }
 
+assert_bootstrap_no_bucket_resource() {
+  local bucket_resource_pattern
+  bucket_resource_pattern="$(printf '%s%s' 'vultr_object_storage_' 'bucket')"
+  if rg -n "$bucket_resource_pattern" \
+    "${INFRA_DIR}/bootstrap/state-backend" \
+    "${INFRA_DIR}/tests" >/dev/null; then
+    fail "bootstrap and harness contain no managed object-storage bucket resource"
+  else
+    pass "bootstrap and harness contain no managed object-storage bucket resource"
+  fi
+}
+
+assert_bootstrap_outputs_sensitive() {
+  local file="${INFRA_DIR}/bootstrap/state-backend/main.tf"
+  local ok=true
+
+  if ! grep -A4 'output\s*"s3_access_key"' "$file" | grep -q 'sensitive\s*=\s*true'; then
+    ok=false
+  fi
+  if ! grep -A4 'output\s*"s3_secret_key"' "$file" | grep -q 'sensitive\s*=\s*true'; then
+    ok=false
+  fi
+
+  if [[ "$ok" == true ]]; then
+    pass "bootstrap S3 access and secret outputs are sensitive"
+  else
+    fail "bootstrap S3 access and secret outputs are sensitive"
+  fi
+}
+
+assert_dev_backend_key() {
+  if rg -n 'channels/dev/terraform\.tfstate' "${INFRA_DIR}/roots/channels/dev/backend.tfbackend" >/dev/null; then
+    pass "dev backend key is channels/dev/terraform.tfstate"
+  else
+    fail "dev backend key is channels/dev/terraform.tfstate"
+  fi
+}
+
+assert_no_credentials_in_dev_backend() {
+  if rg -n 'access_key|secret_key' "${INFRA_DIR}/roots/channels/dev/backend.tfbackend" >/dev/null; then
+    fail "dev backend contains no access_key or secret_key entries"
+  else
+    pass "dev backend contains no access_key or secret_key entries"
+  fi
+}
+
+assert_readme_documents_locking_posture() {
+  local file="${INFRA_DIR}/README.md"
+  if rg -nq 'locking' "$file" \
+    && rg -nq 'restore' "$file" \
+    && rg -nq 'single-operator|single operator' "$file" \
+    && rg -nq 'object-storage versioning|Object Storage versioning' "$file" \
+    && rg -nq 'post-Phase-5 deployment initiative' "$file"; then
+    pass "README documents bounded locking and restore posture"
+  else
+    fail "README documents bounded locking and restore posture"
+  fi
+}
+
+assert_no_endpoint_placeholder() {
+  if rg -n 'endpoint placeholder|REPLACE_AFTER_BOOTSTRAP' \
+    "${INFRA_DIR}/channels" \
+    "${INFRA_DIR}/schemas" \
+    "${INFRA_DIR}/roots" >/dev/null; then
+    fail "no endpoint placeholder remains under channels, schemas, or roots"
+  else
+    pass "no endpoint placeholder remains under channels, schemas, or roots"
+  fi
+}
+
+assert_readme_documents_retirement() {
+  if rg -nq 'retire|retirement' "${INFRA_DIR}/README.md"; then
+    pass "README documents channel retirement"
+  else
+    fail "README documents channel retirement"
+  fi
+}
+
+assert_bootstrap_tofu_validate() {
+  if (cd "${INFRA_DIR}/bootstrap/state-backend" && tofu fmt -check >/dev/null); then
+    pass "bootstrap tofu fmt -check"
+  else
+    fail "bootstrap tofu fmt -check"
+    return
+  fi
+
+  assert_tofu_root_validates "bootstrap/state-backend" true
+}
+
 assert_json_value() {
   local file="$1"
   local dotted_path="$2"
@@ -270,6 +359,7 @@ FILES=(
   "bootstrap/state-backend/main.tf"
   "modules/platform-network/main.tf"
   "modules/platform-cluster/main.tf"
+  "bootstrap/state-backend/.terraform.lock.hcl"
   "schemas/platform-channel.schema.json"
   "schemas/platform-channel-resolved.schema.json"
   "channels/dev.yaml"
@@ -297,13 +387,13 @@ assert_environments_dir_gone
 section "Formatting checks"
 # ---------------------------------------------------------------------------
 
+assert_bootstrap_tofu_validate
 assert_dev_tofu_fmt_check
 
 # ---------------------------------------------------------------------------
 section "Structural validation"
 # ---------------------------------------------------------------------------
 
-assert_tofu_root_validates "bootstrap/state-backend" false
 assert_tofu_root_validates "roots/channels/dev" true
 
 # ---------------------------------------------------------------------------
@@ -315,8 +405,7 @@ BS="bootstrap/state-backend/main.tf"
 assert_grep 'resource\s+"vultr_object_storage"' "$BS" \
   "declares vultr_object_storage resource"
 
-assert_no_grep 'resource\s+"vultr_object_storage_bucket"' "$BS" \
-  "no vultr_object_storage_bucket resource (not in provider)"
+assert_bootstrap_no_bucket_resource
 
 assert_grep 'version\s*=\s*"~>\s*2\.30"' "$BS" \
   "provider version constraint ~> 2.30"
@@ -431,12 +520,20 @@ else
   fail "s3_secret_key output marked sensitive"
 fi
 
+assert_bootstrap_outputs_sensitive
+
 BACKEND_FILE="${INFRA_DIR}/roots/channels/dev/backend.tfbackend"
 if grep -iE '(access_key|secret_key)\s*=\s*"[^"]*[A-Za-z0-9]{10,}' "$BACKEND_FILE" >/dev/null; then
   fail "dev backend.tfbackend contains no actual credentials"
 else
   pass "dev backend.tfbackend contains no actual credentials"
 fi
+
+assert_dev_backend_key
+assert_no_credentials_in_dev_backend
+assert_no_endpoint_placeholder
+assert_readme_documents_locking_posture
+assert_readme_documents_retirement
 
 # ---------------------------------------------------------------------------
 section "Authority alignment assertions"

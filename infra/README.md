@@ -12,8 +12,8 @@ OpenTofu-managed Vultr infrastructure for the Humility platform.
 
 ## Structure
 
-Current SLICE-026 state introduces the channel registry contract while keeping
-the old environment roots temporarily intact for SLICE-027 deletion.
+INIT-008 uses a channel registry plus one active `dev` channel root. The old
+hard environment roots were retired by the channel pivot.
 
     infra/schemas/
       platform-channel.schema.json
@@ -42,25 +42,16 @@ Local-only channel tooling:
 
     infra/roots/channels/<id>/
 
-Per-channel OpenTofu roots. These are created in SLICE-027.
-
-    infra/environments/{dev,staging,production}/
-
-The old hard environment roots still exist during SLICE-026 so the existing
-OpenTofu validation harness remains green. They are deleted in SLICE-027 after
-the `infra/roots/channels/dev/` replacement lands.
+Per-channel OpenTofu roots. `infra/roots/channels/dev/` is the only active
+channel root in INIT-008.
 
 ## Local Validation
 
-SLICE-025 does not create channel files or roots yet. The active verification
-surface remains the checked-in harness:
+The active no-credential verification surface is the checked-in harness:
 
 ```bash
 bash infra/tests/validate_platform_bootstrap.sh
 ```
-
-Later INIT-008 slices move validation to `infra/roots/channels/dev/` and keep
-the baseline local-only:
 
 ```bash
 cd infra/bootstrap/state-backend
@@ -75,7 +66,9 @@ tofu validate
 ## Bootstrap Handoff
 
 The bootstrap root is a local-state handoff point for Vultr Object Storage
-subscription material. INIT-008 does not run `tofu apply` as verification.
+subscription material. It creates the Object Storage subscription only; it does
+not create or manage an Object Storage bucket resource. INIT-008 does not run
+`tofu apply` as verification.
 
 1. Inspect or validate the bootstrap root locally:
    `cd infra/bootstrap/state-backend`
@@ -83,13 +76,57 @@ subscription material. INIT-008 does not run `tofu apply` as verification.
    `tofu validate`
 
 2. If an operator later performs an out-of-scope bootstrap apply, capture the
-   sensitive handoff outputs locally and verify bucket `humility-tfstate`
-   exists in the Object Storage subscription.
+   sensitive handoff outputs locally: `bucket_name`, `s3_hostname`,
+   `s3_access_key`, and `s3_secret_key`.
 
-3. Initialize a channel root only after the later channel-root slices land:
+3. Manually create bucket `humility-tfstate` inside the Object Storage
+   subscription through the Vultr UI or aws-CLI-compatible tooling. Enable
+   Object Storage versioning at bucket creation time so prior state versions
+   are recoverable.
+
+4. Confirm the bucket name in the resolved channel config matches the actual
+   bucket before invoking backend initialization.
+
+5. Initialize a channel root with operator-supplied endpoint and credentials:
    `cd infra/roots/channels/<id>`
    `tofu init -backend-config=backend.tfbackend`
    `tofu validate`
+
+The S3 endpoint is supplied at `tofu init` time through backend-config flags or
+the operator's local environment. The channel schema does not carry endpoint
+prose fields, and resolved channel JSON does not require a concrete endpoint.
+
+## State Backend Bounded Posture
+
+INIT-008 uses a single remote-state bucket, `humility-tfstate`, with
+per-channel state keys at `channels/<id>/terraform.tfstate`. The active `dev`
+key is `channels/dev/terraform.tfstate`.
+
+INIT-008 does not claim distributed locking. The Vultr Object Storage backend's
+S3-compatible locking is best-effort; for Phase 5 single-operator local
+verification, locking is not load-bearing.
+
+INIT-008 has no automated restore tooling. Operators can manually pull a prior
+versioned state object if needed, relying on Object Storage versioning, the
+operator-owned object-storage versioning setting enabled at bucket creation
+time. The post-Phase-5 deployment initiative owns runbook-level restore tooling.
+
+Bootstrap outputs `s3_access_key` and `s3_secret_key` are sensitive. The
+operator captures them locally and supplies them through backend init flags or
+environment variables. INIT-008 does not commit credentials; SOPS/age is
+INIT-009's concern.
+
+## Channel Retirement
+
+Removing `infra/channels/<id>.yaml` retires the channel. The resolver refuses
+to resolve a retired id, so a retired channel is no longer an active
+OpenTofu target.
+
+Per-channel roots such as `infra/roots/channels/<id>/` may remain or be
+deleted; the harness handles both states. Remote state files for retired
+channels are retained until an explicit operator cleanup. INIT-008 ships no
+`cleanup-state` tooling; state-cleanup automation is post-Phase-5 deployment
+scope.
 
 ## Notes
 
