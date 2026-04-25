@@ -2,7 +2,7 @@
 
 Date: 2026-04-14
 Reviewer: claude-opus (CodeRabbit-equivalent)
-Scope: `k8s/base/`, `k8s/overlays/`, `k8s/clusters/`, `k8s/tests/`
+Scope: `legacy base path/`, `legacy overlay path/`, `legacy cluster path/`, `legacy test path/`
 
 ## Overall assessment: APPROVE with minor observations
 
@@ -16,7 +16,7 @@ issues found.
 
 ## File-by-file review
 
-### k8s/base/ (7 files)
+### legacy base path/ (7 files)
 
 **base/kustomization.yaml**
 - Clean orchestration of platform, controllers, namespaces, policies
@@ -42,7 +42,7 @@ issues found.
   `buildkiteClusterMutation=disallowed`, `promotionModel=path-based-git-change`
 - Matches proposal §3 hard CI/CD boundary
 
-### k8s/overlays/ (6 files)
+### legacy overlay path/ (6 files)
 
 All six overlays follow identical pattern:
 - Reference `../../../base/` as resource
@@ -58,7 +58,7 @@ All six overlays follow identical pattern:
 `../../../base/`. Path depth is correct for `overlays/<env>/<role>/`
 → `base/`.
 
-### k8s/clusters/ (24 files)
+### legacy cluster path/ (24 files)
 
 **gotk-sync.yaml × 6** (one per cluster root)
 
@@ -67,7 +67,7 @@ All six follow the same template:
   `url: ssh://git@example.com/humility/discord.git`
 - `Kustomization` with `interval: 10m0s`, `prune: true`, `wait: true`,
   `timeout: 5m0s`
-- Path correctly scoped to `./k8s/clusters/<env>/<role>/manifests`
+- Path correctly scoped to `./legacy cluster path/<env>/<role>/manifests`
 - Names are `<env>-<role>-root` (e.g., `dev-app-cluster-root`)
 
 **Finding C-1 — Placeholder Git URL** (INFO)
@@ -107,7 +107,7 @@ version pinning.
   `singleSecretPathRequired=true`
 - Correct topology slot for Crossplane claims
 
-### k8s/tests/test_gitops_foundation.sh (1 file)
+### legacy test path/test_gitops_foundation.sh (1 file)
 
 - 256 lines, `set -euo pipefail`
 - Validates: layering structure, environment paths, two-tier model,

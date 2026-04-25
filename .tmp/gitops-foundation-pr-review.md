@@ -13,7 +13,7 @@ Implementation: 38 files under `k8s/` (P0670-P0679)
 | 3. Proposal | `plans/proposals/gitops-foundation.md` | PRESENT (pre-existing) |
 | 4. Risk (3×) | `plans/risk/gitops-foundation-{audit,scope,shortcut}.md` | PRESENT — all LOW |
 | 5. Hookpoints | `plans/research/gitops-foundation-hookpoints.md` | PRESENT |
-| 6. Tests | `k8s/tests/test_gitops_foundation.sh` | PRESENT (256 lines) |
+| 6. Tests | `legacy test path/test_gitops_foundation.sh` | PRESENT (256 lines) |
 | 7. Code | `k8s/{base,overlays,clusters}/` (38 files) | PRESENT |
 | 8. CodeRabbit | `.tmp/gitops-foundation-coderabbit-review.md` | PRESENT — APPROVED |
 
