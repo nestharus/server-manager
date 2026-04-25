@@ -13,6 +13,7 @@ LAYOUT_ONLY=false
 FLUX_RENDER_ONLY=false
 SOPS_ONLY=false
 CLUSTER_ONLY=false
+DOCS_ONLY=false
 
 pass() {
   echo "  PASS: $1"
@@ -41,7 +42,7 @@ section() {
 
 usage() {
   cat <<'USAGE'
-Usage: validate_gitops.sh [--layout-only|--flux-render-only|--sops-only|--cluster]
+Usage: validate_gitops.sh [--layout-only|--flux-render-only|--sops-only|--cluster|--docs-only]
 
 Validates the INIT-009 GitOps substrate.
 
@@ -50,6 +51,7 @@ Options:
   --flux-render-only   Run only Flux self-management render assertions.
   --sops-only          Run only SOPS+age per-channel secret assertions.
   --cluster            Run local kind + Flux bootstrap if required tools exist.
+  --docs-only          Run only documentation and stale-reference assertions.
 USAGE
 }
 
@@ -67,6 +69,9 @@ while [[ "$#" -gt 0 ]]; do
     --cluster)
       CLUSTER_ONLY=true
       ;;
+    --docs-only)
+      DOCS_ONLY=true
+      ;;
     -h|--help)
       usage
       exit 0
@@ -81,14 +86,14 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 MODE_COUNT=0
-for selected_mode in "$LAYOUT_ONLY" "$FLUX_RENDER_ONLY" "$SOPS_ONLY" "$CLUSTER_ONLY"; do
+for selected_mode in "$LAYOUT_ONLY" "$FLUX_RENDER_ONLY" "$SOPS_ONLY" "$CLUSTER_ONLY" "$DOCS_ONLY"; do
   if [[ "$selected_mode" == true ]]; then
     MODE_COUNT=$((MODE_COUNT + 1))
   fi
 done
 
 if [[ "$MODE_COUNT" -gt 1 ]]; then
-  echo "ERROR: --layout-only, --flux-render-only, --sops-only, and --cluster are mutually exclusive" >&2
+  echo "ERROR: --layout-only, --flux-render-only, --sops-only, --cluster, and --docs-only are mutually exclusive" >&2
   usage >&2
   exit 2
 fi
@@ -745,6 +750,127 @@ assert_sops_decrypt_works_if_tools_present() {
   fi
 }
 
+assert_gitops_readme_authoritative() {
+  local file="${GITOPS_DIR}/README.md"
+  local ok=true
+  local section
+  local sections=(
+    "Overview"
+    "Layout"
+    "Channel overlays"
+    "Self-managing Flux"
+    "SOPS+age secrets"
+    "Local verification"
+    "Placeholder bases"
+    "Anti-scope"
+  )
+
+  [[ -f "$file" ]] || ok=false
+
+  for section in "${sections[@]}"; do
+    grep -Fxq "## ${section}" "$file" || ok=false
+  done
+
+  grep -q 'Flux CD source tree' "$file" || ok=false
+  grep -q 'gitops/channels/dev' "$file" || ok=false
+  grep -q 'gitops/secrets/dev/README.md' "$file" || ok=false
+  grep -q 'bash gitops/tests/validate_gitops.sh --docs-only' "$file" || ok=false
+
+  if [[ "$ok" == true ]]; then
+    pass "gitops/README.md is the authoritative layout document"
+  else
+    fail "gitops/README.md is the authoritative layout document"
+  fi
+}
+
+assert_infra_readme_links_gitops() {
+  local file="${REPO_ROOT}/infra/README.md"
+
+  if [[ -f "$file" ]] \
+    && grep -q 'GitOps source for the control cluster lives in `gitops/`' "$file" \
+    && grep -q 'gitops/README.md' "$file"; then
+    pass "infra/README.md links to gitops/README.md"
+  else
+    fail "infra/README.md links to gitops/README.md"
+  fi
+}
+
+assert_no_stale_gitops_foundation_proposal() {
+  if [[ ! -f "${REPO_ROOT}/plans/proposals/gitops-foundation.md" ]]; then
+    pass "stale gitops-foundation proposal is deleted"
+  else
+    fail "stale gitops-foundation proposal is deleted"
+  fi
+}
+
+assert_no_stale_gitops_research() {
+  local ok=true
+  local file
+  local files=(
+    plans/research/gitops-foundation.md
+    plans/research/gitops-foundation-needs.md
+    plans/research/gitops-foundation-hookpoints.md
+  )
+
+  for file in "${files[@]}"; do
+    [[ ! -f "${REPO_ROOT}/${file}" ]] || ok=false
+  done
+
+  if [[ "$ok" == true ]]; then
+    pass "stale gitops-foundation research files are deleted"
+  else
+    fail "stale gitops-foundation research files are deleted"
+  fi
+}
+
+is_excluded_k8s_reference_file() {
+  local rel_path="$1"
+  local abs_path="${REPO_ROOT}/${rel_path}"
+
+  case "$rel_path" in
+    ./.pipeline/*|.pipeline/*|./plans/risk/*|plans/risk/*)
+      return 0
+      ;;
+  esac
+
+  if grep -q 'Historical INIT-009 note:.*pre-INIT-009 state' "$abs_path"; then
+    return 0
+  fi
+
+  return 1
+}
+
+assert_no_active_k8s_references() {
+  local matches_file="${REPO_ROOT}/.tmp/gitops-active-k8s-references.txt"
+  local file rel_path
+  mkdir -p "${REPO_ROOT}/.tmp"
+  : >"$matches_file"
+
+  while IFS= read -r -d '' file; do
+    rel_path="${file#${REPO_ROOT}/}"
+
+    case "$rel_path" in
+      .git/*|worktrees/*|.pipeline/*|plans/risk/*)
+        continue
+        ;;
+    esac
+
+    if grep -Eq 'k8s/(base|clusters|overlays|tests)' "$file"; then
+      if is_excluded_k8s_reference_file "$rel_path"; then
+        continue
+      fi
+      printf '%s\n' "$rel_path" >>"$matches_file"
+    fi
+  done < <(find "$REPO_ROOT" -type f \( -name '*.md' -o -name '*.yaml' \) -print0)
+
+  if [[ ! -s "$matches_file" ]]; then
+    pass "active docs have no live k8s/base, k8s/clusters, k8s/overlays, or k8s/tests references"
+  else
+    fail "active docs have no live k8s/base, k8s/clusters, k8s/overlays, or k8s/tests references"
+    sed 's/^/    match: /' "$matches_file"
+  fi
+}
+
 run_layout_checks() {
   section "GitOps Layout"
   assert_gitops_dirs_exist
@@ -802,6 +928,15 @@ run_cluster_checks() {
   run_cluster_bootstrap_if_tools_present
 }
 
+run_docs_checks() {
+  section "Documentation Handoff"
+  assert_gitops_readme_authoritative
+  assert_infra_readme_links_gitops
+  assert_no_stale_gitops_foundation_proposal
+  assert_no_stale_gitops_research
+  assert_no_active_k8s_references
+}
+
 if [[ "$FLUX_RENDER_ONLY" == true ]]; then
   run_flux_render_checks
 elif [[ "$LAYOUT_ONLY" == true ]]; then
@@ -810,11 +945,14 @@ elif [[ "$SOPS_ONLY" == true ]]; then
   run_sops_checks
 elif [[ "$CLUSTER_ONLY" == true ]]; then
   run_cluster_checks
+elif [[ "$DOCS_ONLY" == true ]]; then
+  run_docs_checks
 else
   run_layout_checks
   run_flux_render_checks
   run_sops_checks
   run_tool_checks
+  run_docs_checks
 fi
 
 section "Summary"

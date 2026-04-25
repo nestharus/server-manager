@@ -84,6 +84,10 @@
 
 ### Infrastructure (`infra/`, `k8s/`)
 
+Historical INIT-009 note: this section records the pre-INIT-009 state. The
+`k8s/` tree was deleted in INIT-009 SLICE-031 and is no longer live
+infrastructure; current control-cluster GitOps authority is `gitops/`.
+
 **OpenTofu modules and environments (`infra/`):**
 - `infra/bootstrap/state-backend/main.tf`: one-time Vultr Object Storage bootstrap for OpenTofu remote state.
 - `infra/modules/platform-network/main.tf`: per-environment Vultr VPC module.

@@ -45,6 +45,8 @@ Local-only channel tooling:
 Per-channel OpenTofu roots. `infra/roots/channels/dev/` is the only active
 channel root in INIT-008.
 
+GitOps source for the control cluster lives in `gitops/`; see `gitops/README.md` for the Flux + SOPS + channel-overlay layout.
+
 ## Local verification
 
 The active no-credential verification surface is the checked-in harness:
