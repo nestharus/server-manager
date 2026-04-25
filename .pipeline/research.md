@@ -6,7 +6,7 @@ Primary source set read in the requested order:
 
 1. `infra/README.md`
 2. `plans/platform-decisions-overlay.md`
-3. `plans/research/hetzner-vs-vultr.md`
+3. deleted provider-comparison research file
 4. `plans/research/vultr-fix-hookpoints.md`
 5. `plans/research/vultr-object-storage-fix.md`
 6. `plans/research/opentofu-providers.md`
@@ -146,7 +146,7 @@ Local observation:
 
 | Topic | Live repo state | Older material | Status |
 | --- | --- | --- | --- |
-| Hosting record | `infra/README.md` already describes Vultr-managed infra | `plans/platform-decisions-overlay.md` still lists `Hetzner` vs `Vultr` as open | Documentation conflict |
+| Hosting record | `infra/README.md` already describes Vultr-managed infra | `plans/platform-decisions-overlay.md` still lists hosting as open | Documentation conflict |
 | Bootstrap bucket creation | Bootstrap root creates only `vultr_object_storage` | Older hookpoint/research/proposal docs discuss `vultr_object_storage_bucket` in bootstrap | Stale material |
 | Test script expectation | `infra/tests/validate_platform_bootstrap.sh` asserts there is **no** `vultr_object_storage_bucket` resource | Older Vultr object-storage fix docs assume test needed updating the other direction | Stale material |
 | Formal decision log | Engineering roadmap still requires hosting formalization in `DECISIONS.md` | Live infra and platform-bootstrap proposal already assume Vultr | Formalization gap |
@@ -200,22 +200,22 @@ Decision-log state:
   - Flux as reconciler direction. [`plans/platform-decisions-overlay.md:17-23`]
   - Provider-native object storage preferred before self-hosted S3. [`plans/platform-decisions-overlay.md:17-23`]
 - Stale/displaced:
-  - The overlay still lists hosting as `Hetzner` vs `Vultr` open. [`plans/platform-decisions-overlay.md:25-29`]
+  - The overlay still lists hosting as open. [`plans/platform-decisions-overlay.md:25-29`]
   - That is stale relative to the current `infra/` tree already being Vultr-specific. [`infra/README.md:1-3`]
 - Open questions it still leaves:
   - Hosting formalization is still unresolved at the overlay level. [`plans/platform-decisions-overlay.md:25-29`]
   - OpenTofu provider research is still listed as running, even though `infra/` already exists. [`plans/platform-decisions-overlay.md:25-29`]
 
-### 3.2 `plans/research/hetzner-vs-vultr.md`
+### 3.2 Deleted provider-comparison research file
 
 - Maps cleanly onto current state:
-  - Recommends Vultr as the stronger managed-Kubernetes host. [`plans/research/hetzner-vs-vultr.md:5-14`, `72-80`]
-  - Highlights VKE as the first-party managed Kubernetes path and better fit for this platform. [`plans/research/hetzner-vs-vultr.md:17-30`, `53-61`]
+  - Recommends Vultr as the stronger managed-Kubernetes host.
+  - Highlights VKE as the first-party managed Kubernetes path and better fit for this platform.
 - Stale/displaced:
-  - It is comparison research, so the only stale part is that the decision it informed is no longer supposed to be open for proposal work. [`plans/research/hetzner-vs-vultr.md:72-80`; compare `infra/README.md:1-3`]
+  - It is comparison research, so the only stale part is that the decision it informed is no longer supposed to be open for proposal work.
 - Open questions that survive:
-  - VKE/VPC attachment ambiguity remains a live diligence item. [`plans/research/hetzner-vs-vultr.md:13-14`, `plans/research/hetzner-vs-vultr.md:39-41`, `plans/research/hetzner-vs-vultr.md:63-70`, `plans/research/hetzner-vs-vultr.md:80`]
-  - Stateful-service backup/restore design remains outside the provider choice itself. [`plans/research/hetzner-vs-vultr.md:49-51`, `63-70`]
+  - VKE/VPC attachment ambiguity remains a live diligence item.
+  - Stateful-service backup/restore design remains outside the provider choice itself.
 
 ### 3.3 `plans/research/vultr-fix-hookpoints.md`
 
@@ -250,7 +250,7 @@ Decision-log state:
 - Stale/displaced:
   - The document says Vultr’s current resource set includes `vultr_object_storage_bucket`. [`plans/research/opentofu-providers.md:56-65`]
   - That may now be true provider-side, but the repo no longer consumes that resource in bootstrap. [`infra/bootstrap/state-backend/main.tf:46-67`]
-  - The Hetzner path discussion is now mainly superseded for INIT-008. [`plans/research/opentofu-providers.md:25-55`; compare `infra/README.md:1-3`]
+  - The old host-comparison path discussion is now mainly superseded for INIT-008. [`plans/research/opentofu-providers.md:25-55`; compare `infra/README.md:1-3`]
 - Open questions that survive:
   - VKE networking caveat around legacy VPC vs newer networking remains live. [`plans/research/opentofu-providers.md:78-87`, `123-124`]
   - Extra node-pool / managed-service scope choices remain implementation-time questions. [`plans/research/opentofu-providers.md:62-76`, `84-86`]
@@ -301,9 +301,9 @@ Decision-log state:
   - Buildkite/Flux separation remains conceptually aligned with later overlay decisions. [`plans/proposals/phase1-foundation.md:107-121`, `191-205`; `plans/platform-decisions-overlay.md:17-23`]
   - Provider-native object storage before self-hosted S3 remains directionally aligned, but provider and implementation details are displaced. [`plans/proposals/phase1-foundation.md:158-173`; compare `plans/platform-decisions-overlay.md:17-23`]
 - Stale/displaced:
-  - Hetzner hosting, self-managed `k3s`, and `kube-hetzner` substrate are displaced by the Vultr-managed path. [`plans/proposals/phase1-foundation.md:5-18`, `61-67`, `92-105`, `276-296`]
+  - Retired hosting, self-managed Kubernetes, and retired module substrate are displaced by the Vultr-managed path. [`plans/proposals/phase1-foundation.md:5-18`, `61-67`, `92-105`, `276-296`]
   - Installs Flux, SOPS, and Kong as part of the same bootstrap phase; current three-initiative split explicitly keeps Platform Bootstrap narrower. [`plans/proposals/phase1-foundation.md:31-53`, `107-156`, `191-207`; compare `plans/proposals/platform-bootstrap.md:221-238`]
-  - Assumes Hetzner Object Storage. [`plans/proposals/phase1-foundation.md:158-173`, `289-291`]
+  - Assumes retired provider Object Storage. [`plans/proposals/phase1-foundation.md:158-173`, `289-291`]
 - Open questions that survive:
   - None that should control INIT-008 proposal work directly; this doc is substrate-stale and should be treated as superseded input, not active design authority.
 
@@ -444,7 +444,7 @@ Tag meanings:
 
 | Risk | Source | Urgency | Why it matters to INIT-008 |
 | --- | --- | --- | --- |
-| VKE/VPC attachment ambiguity | `plans/research/hetzner-vs-vultr.md:13-14`, `plans/research/hetzner-vs-vultr.md:39-41`, `plans/research/hetzner-vs-vultr.md:63-70`, `plans/research/hetzner-vs-vultr.md:80`; `plans/proposals/platform-bootstrap.md:247-250`, `307-308` | `BLOCKS_IMPLEMENTATION` | Network topology and environment isolation depend on supported VKE/VPC behavior. |
+| VKE/VPC attachment ambiguity | deleted provider-comparison research; `plans/proposals/platform-bootstrap.md:247-250`, `307-308` | `BLOCKS_IMPLEMENTATION` | Network topology and environment isolation depend on supported VKE/VPC behavior. |
 | State locking on S3-compatible backend is unresolved | `plans/proposals/platform-bootstrap.md:252-256`, `297-300` | `BLOCKS_PROPOSAL` | Exit criteria explicitly gate on working lock acquisition and restore procedure. |
 | Credential custody for bootstrap token / kubeconfig handoff | `plans/proposals/platform-bootstrap.md:257-260`, `302-315` | `BLOCKS_PROPOSAL` | Bootstrap has no secrets platform yet; proposal needs a bounded deliverable for custody. |
 | Scope creep into Flux / identity / CI / platform services | `plans/proposals/platform-bootstrap.md:244-246`, `221-238` | `INFORMATIONAL` | Important boundary discipline, but already well stated. |

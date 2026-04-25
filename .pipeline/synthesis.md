@@ -351,14 +351,14 @@ in its planning inputs.
 
 | Path | Proposal-phase action | Reason | Traceability |
 | --- | --- | --- | --- |
-| `plans/research/hetzner-vs-vultr.md` | Supersede as active choice input | Useful as historical provider-choice evidence, but hosting is no longer an open proposal question for INIT-008. | `.pipeline/research.md:209-218` |
+| deleted provider-comparison research file | Supersede as active choice input | Useful as historical provider-choice evidence, but hosting is no longer an open proposal question for INIT-008. | `.pipeline/research.md:209-218` |
 | `plans/research/vultr-fix-hookpoints.md` | Supersede | Assumes a bootstrap bucket resource exists and frames the problem as a provider bump; live repo no longer matches that state. | `.pipeline/research.md:220-232, 474` |
 | `plans/research/vultr-object-storage-fix.md` | Supersede | Describes a stale bug state centered on `vultr_object_storage_bucket` that the checked-in repo no longer contains. | `.pipeline/research.md:233-244, 474` |
 | `plans/research/opentofu-providers.md` | Revise for active use | OpenTofu/Vultr conclusions remain useful, but its bucket-resource claims and host-comparison framing are stale for INIT-008 proposal work. | `.pipeline/research.md:245-257` |
 | `plans/research/platform-bootstrap-hookpoints.md` | Revise | Its module and ordering analysis remains useful, but the bucket-resource description is stale and must not be carried forward unchanged. | `.pipeline/research.md:258-270` |
 | `plans/proposals/platform-bootstrap.md` | Revise | This is the closest current proposal ancestor, but it still relies on unresolved authority cleanup and broader remote-state assumptions than live code proves. | `.pipeline/research.md:271-286` |
 | `plans/proposals/vultr-object-storage-fix.md` | Supersede | The live repo already removed the bucket resource instead of taking this proposal's provider-bump path. | `.pipeline/research.md:287-297, 474` |
-| `plans/proposals/phase1-foundation.md` | Supersede | Hetzner, `k3s`, `kube-hetzner`, and bundled Flux/Kong/bootstrap scope are all displaced by the current Vultr-managed Phase 5 split. | `.pipeline/research.md:298-309` |
+| `plans/proposals/phase1-foundation.md` | Supersede | Retired provider, self-managed Kubernetes, retired module substrate, and bundled Flux/Kong/bootstrap scope are all displaced by the current Vultr-managed Phase 5 split. | `.pipeline/research.md:298-309` |
 | `plans/proposals/app-cluster-provisioning.md` | Revise as boundary input | Its platform/application split remains useful, but it still inherits stale hosting-formalization ambiguity and cannot be treated as clean authority. | `.pipeline/research.md:310-320` |
 
 ## Synthesis readout

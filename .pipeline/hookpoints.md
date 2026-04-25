@@ -19,7 +19,7 @@ Inputs read:
 Verification commands run:
 - `find infra -maxdepth 4 -type f | sort`
 - `rg -n "infra/environments" . --glob '!.git/**'`
-- `rg -n "Hetzner|kube-hetzner|k3s" . --glob '!.git/**'`
+- `rg -n "retired-provider|legacy-self-managed" . --glob '!.git/**'`
 - `rg -n "humility-tfstate|dev\.yaml|customer\.yaml|internal\.yaml|e2e\.yaml" . --glob '!.git/**'`
 - `bash infra/tests/validate_platform_bootstrap.sh`
 - local prerequisite checks for `python3`, Python packages, `tofu`, `jq`, `yq`, `uv`, and `pip`
@@ -44,17 +44,17 @@ BLOCKS_IMPLEMENTATION flags:
 | `DECISIONS.md` | MODIFY | Add ratified Vultr/OpenTofu/channel-pivot decision. | Exists. Current D1-D6 stop at app architecture/OCR; no Phase 5 hosting/channel decision. |
 | `infra/README.md` | MODIFY | Replace old environment-triad bootstrap instructions with channel-root/runbook prerequisites. | Exists. Still documents `infra/environments/{dev,staging,production}` and `tofu apply`. |
 | `.pipeline/proposal.md` | MODIFY | Keep final proposal as active authority; reconcile stale-doc disposal wording if needed. | Exists. Already updated to channel pivot; Section 8 disposal wording conflicts with delete-not-park rule. |
-| `plans/platform-decisions-overlay.md` | MODIFY | Close hosting as Vultr and OpenTofu; remove open Hetzner-vs-Vultr entry. | Exists. Still says hosting decision is `Hetzner` vs `Vultr` and providers research is open. |
-| `plans/proposals/platform-bootstrap.md` | MODIFY | Revise as active ancestor or delete if treated as stale replacement by `.pipeline/proposal.md`. | Exists. Contains older Phase 5 framing and Hetzner comparison context. |
+| `plans/platform-decisions-overlay.md` | MODIFY | Close hosting as Vultr and OpenTofu; remove open hosting entry. | Exists. Still says hosting decision is open and providers research is open. |
+| `plans/proposals/platform-bootstrap.md` | MODIFY | Revise as active ancestor or delete if treated as stale replacement by `.pipeline/proposal.md`. | Exists. Contains older Phase 5 framing and provider comparison context. |
 | `plans/proposals/vultr-object-storage-fix.md` | DELETE | Superseded provider-bump/bucket-resource fix path. | Exists. Assumes `vultr_object_storage_bucket` bug and provider release path. |
-| `plans/proposals/phase1-foundation.md` | DELETE | Hetzner/k3s/kube-hetzner proposal conflicts with Vultr/VKE direction. | Exists. Many active-sounding Hetzner foundation claims. |
-| `plans/proposals/app-cluster-provisioning.md` | MODIFY | Preserve two-tier boundary but align hosting/channel language. | Exists. Still mentions Vultr vs Hetzner branch and app-cluster boundary. |
-| `plans/research/hetzner-vs-vultr.md` | MODIFY_OR_DELETE | Proposal says leave historical; prompt says stale docs delete. If kept, must be clearly non-authority evidence. | Exists. Provider comparison; not an active INIT-008 design if Vultr is ratified. |
+| `plans/proposals/phase1-foundation.md` | DELETE | Retired provider/self-managed proposal conflicts with Vultr/VKE direction. | Exists. Many active-sounding retired-provider foundation claims. |
+| `plans/proposals/app-cluster-provisioning.md` | MODIFY | Preserve two-tier boundary but align hosting/channel language. | Exists. Still mentions provider branch ambiguity and app-cluster boundary. |
+| deleted provider-comparison research file | MODIFY_OR_DELETE | Proposal says leave historical; prompt says stale docs delete. If kept, must be clearly non-authority evidence. | Exists. Provider comparison; not an active INIT-008 design if Vultr is ratified. |
 | `plans/research/vultr-fix-hookpoints.md` | DELETE | Superseded by no-bucket-resource, operator bucket verification decision. | Exists. Describes stale `vultr_object_storage_bucket` hookpoint. |
 | `plans/research/vultr-object-storage-fix.md` | DELETE | Superseded research for stale bucket-resource bug state. | Exists. No longer matches live bootstrap root or D3. |
-| `plans/research/opentofu-providers.md` | MODIFY | Keep OpenTofu/Vultr provider research while removing stale bucket-resource/host-comparison authority. | Exists. Useful Vultr/OpenTofu evidence plus stale Hetzner comparison sections. |
+| `plans/research/opentofu-providers.md` | MODIFY | Keep OpenTofu/Vultr provider research while removing stale bucket-resource/host-comparison authority. | Exists. Useful Vultr/OpenTofu evidence plus stale provider comparison sections. |
 | `plans/research/platform-bootstrap-hookpoints.md` | DELETE_OR_REPLACE | Old hookpoint research assumes hard environment triad. This file replaces it for INIT-008. | Exists. References `infra/environments/dev` and old backend placeholder flow. |
-| `plans/proposals/phase1-foundation-prompt.md` | DELETE | Not in proposal file list, but grep surfaced active Hetzner/k3s prompt material. | Exists. Prompt-only artifact with old Hetzner/k3s premise. |
+| `plans/proposals/phase1-foundation-prompt.md` | DELETE | Not in proposal file list, but grep surfaced active retired-provider prompt material. | Exists. Prompt-only artifact with old provider/self-managed premise. |
 
 SLICE-025 notes:
 - The proposal file list did not mention `plans/proposals/phase1-foundation-prompt.md`; grep found it.
@@ -236,24 +236,24 @@ Risk docs:
 Pipeline docs:
 - `.pipeline/research.md` and `.pipeline/proposal.md` mention old roots as inputs/history and planned deletion; keep as current pipeline evidence.
 
-### `Hetzner`, `kube-hetzner`, `k3s`
+### Retired provider and self-managed cluster terms
 
 Active authority concern:
-- `plans/platform-decisions-overlay.md:27` still says hosting is open between Hetzner and Vultr.
+- `plans/platform-decisions-overlay.md:27` still says hosting is open.
 - `product-strategy/engineering research.md:108,327` still says hosting is not settled.
-- `plans/proposals/phase1-foundation.md` remains a full old Hetzner proposal.
-- `plans/proposals/phase1-foundation-prompt.md` remains a full old Hetzner prompt.
+- `plans/proposals/phase1-foundation.md` remains a full old provider proposal.
+- `plans/proposals/phase1-foundation-prompt.md` remains a full old provider prompt.
 
 Historical/provider research:
-- `plans/research/hetzner-vs-vultr.md` is useful evidence if clearly non-authoritative.
-- `plans/research/opentofu-providers.md` contains useful OpenTofu/Vultr evidence plus Hetzner comparison.
-- `plans/research/self-hosted-s3.md` includes Hetzner as object-storage comparison.
+- The deleted provider-comparison research is useful evidence if clearly non-authoritative.
+- `plans/research/opentofu-providers.md` contains useful OpenTofu/Vultr evidence plus stale provider comparison.
+- `plans/research/self-hosted-s3.md` includes old provider object-storage comparison.
 
 Non-infra docs:
-- `docs/DAEMON_DESIGN.md:178` mentions Hetzner CX22 as old cost note. Not an infra bootstrap authority, but should be removed or marked historical if SLICE-025 sweeps all hosting ambiguity.
+- `docs/DAEMON_DESIGN.md:178` mentions an old VPS cost note. Not an infra bootstrap authority, but should be removed or marked historical if SLICE-025 sweeps all hosting ambiguity.
 
 Risk docs:
-- Many `plans/risk/phase1-*`, `platform-bootstrap-*`, and app-cluster risk files mention Hetzner as historical risk evidence. Do not edit unless SLICE-025 chooses a broader stale-doc deletion.
+- Many `plans/risk/phase1-*`, `platform-bootstrap-*`, and app-cluster risk files mention old provider history as risk evidence. Do not edit unless SLICE-025 chooses a broader stale-doc deletion.
 
 ### `humility-tfstate`
 
@@ -416,7 +416,7 @@ Prior proposals:
 - `plans/proposals/vultr-object-storage-fix.md`: DELETE. It is stale and no longer matches D3/no bucket-resource path.
 - `plans/proposals/app-cluster-provisioning.md`: MODIFY. Boundary remains useful; hosting/channel assumptions need alignment.
 - `plans/proposals/phase1-foundation.md`: DELETE. Conflicts directly with Vultr/VKE channel substrate.
-- `plans/proposals/phase1-foundation-prompt.md`: DELETE. Grep surfaced old Hetzner prompt not listed by proposal.
+- `plans/proposals/phase1-foundation-prompt.md`: DELETE. Grep surfaced old provider prompt not listed by proposal.
 
 Prior hookpoint/research docs:
 - `plans/research/platform-bootstrap-hookpoints.md`: DELETE_OR_REPLACE. This artifact replaces it for INIT-008.
@@ -424,7 +424,7 @@ Prior hookpoint/research docs:
 - `plans/research/vultr-object-storage-fix.md`: DELETE.
 - `plans/research/opentofu-providers.md`: MODIFY if retained as current provider research; strip stale bucket-resource claims and hosting-open framing.
 - `plans/research/database-stack.md`: no direct INIT-008 hookpoint. It does not need INIT-008 deletion unless grep later finds infra authority drift.
-- `plans/research/hetzner-vs-vultr.md`: MODIFY_OR_DELETE per doc-disposal blocker; if kept, mark as historical evidence only.
+- Deleted provider-comparison research file: MODIFY_OR_DELETE per doc-disposal blocker; if kept, mark as historical evidence only.
 
 Dangling stale-doc risk:
 - If SLICE-025 only adds "superseded" banners, stale assumptions remain grep-visible as quasi-authority.
@@ -442,7 +442,7 @@ Dangling stale-doc risk:
 | `docs/PATTERNS_FROM_SLICES.md` | no | none | Missing. Channel pattern can live in `DECISIONS.md` and `infra/README.md`. |
 | `plans/platform-decisions-overlay.md` | yes | 025 | Close hosting/OpenTofu open items. |
 | `product-strategy/engineering research.md` | yes | 025 | Update or mark stale old infra characterization. |
-| `docs/DAEMON_DESIGN.md` | yes | 025 optional | Contains old Hetzner VPS cost note; remove if sweeping hosting ambiguity. |
+| `docs/DAEMON_DESIGN.md` | yes | 025 optional | Contains old VPS cost note; remove if sweeping hosting ambiguity. |
 | `k8s/overlays/{dev,staging,production}` | yes | defer | Not INIT-008. INIT-009 must align Kustomize with channels. |
 | `k8s/clusters/{dev,staging,production}` | yes | defer | Not INIT-008. Mention as future GitOps/channel alignment. |
 
@@ -610,7 +610,7 @@ Reusable:
 Parallel/stale:
 - `infra/environments/{dev,staging,production}/` is a parallel system after the channel root exists; delete in SLICE-027.
 - `plans/proposals/vultr-object-storage-fix.md` and matching research/hookpoints are stale.
-- Hetzner/k3s/kube-hetzner docs are stale as active authority after D7+ decision.
+- Retired provider/self-managed cluster docs are stale as active authority after D7+ decision.
 
 Create-heavy areas:
 - Channel schemas.
@@ -622,4 +622,3 @@ Create-heavy areas:
 
 Main implementation caution:
 - The harness is a shared integration file across all slices. Keep slice order linear and make each intermediate allowed-failure state explicit.
-

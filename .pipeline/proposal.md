@@ -67,7 +67,7 @@ or the Vultr substrate are named, validated, or handed off.
 OpenTofu/Vultr VPC, VKE, Object Storage, and state-backend substrate and
 ends at local authoring plus `tofu plan`, with no apply. Phase 1 research
 found the repo already contains a partial substrate, but it also found split
-authority, stale Hetzner/provider-fix material, an implicit shared-bucket
+authority, stale provider-fix material, an implicit shared-bucket
 state model, missing bucket-existence contract, and inconsistent local
 verification. This proposal binds those open seams without widening the
 initiative.
@@ -505,13 +505,13 @@ not infrastructure implementation.
 - `plans/proposals/vultr-object-storage-fix.md`
 - `plans/proposals/phase1-foundation.md`
 - `plans/proposals/app-cluster-provisioning.md`
-- `plans/research/hetzner-vs-vultr.md`
+- deleted provider-comparison research file
 - `plans/research/vultr-fix-hookpoints.md`
 - `plans/research/vultr-object-storage-fix.md`
 - `plans/research/opentofu-providers.md`
 - `plans/research/platform-bootstrap-hookpoints.md`
 **Local-verification acceptance criteria:**
-- `rg -n "Hetzner|kube-hetzner|k3s" infra plans/platform-decisions-overlay.md`
+- `rg -n "retired-provider|legacy-self-managed" infra plans/platform-decisions-overlay.md`
   returns no active INIT-008 authority claim.
 - `rg -n "INIT-008|Vultr|OpenTofu" DECISIONS.md infra/README.md` shows Vultr
   and OpenTofu as ratified for platform bootstrap.
@@ -687,7 +687,7 @@ does not declare. It closes D3, D4, D7, and D8.
   shows the bounded locking and restore posture is documented, including that
   INIT-008 has no restore drill and that the post-Phase-5 deployment initiative
   owns the runbook-level restore procedure.
-- `rg -n "endpoint_placeholder|REPLACE_AFTER_BOOTSTRAP" infra/channels infra/schemas infra/roots`
+- `rg -n "endpoint placeholder|REPLACE_AFTER_BOOTSTRAP" infra/channels infra/schemas infra/roots`
   returns no match.
 - `infra/README.md` documents that the S3 endpoint is supplied through
   backend init flags or the operator's local environment after bootstrap.
@@ -1002,20 +1002,18 @@ INIT-008 explicitly does not do the following:
 ## 8. Stale material disposal
 | Path | Action | Reason |
 | --- | --- | --- |
-| `plans/research/hetzner-vs-vultr.md` | leave-as-historical | Useful provider-choice evidence, but INIT-008 is Vultr-locked by D1 and the user decision. It must not be used to reopen provider selection. |
-| `plans/research/vultr-fix-hookpoints.md` | supersede | Assumes `vultr_object_storage_bucket` exists in bootstrap and frames the fix as a provider bump. Live repo and D3 choose explicit operator bucket verification instead. |
-| `plans/research/vultr-object-storage-fix.md` | supersede | Describes a stale bucket-resource bug state. It remains historical context only. |
+| deleted provider-comparison research file | delete | Historical provider comparison only; INIT-008 is Vultr-locked by D1 and the user decision, so this file is removed rather than parked. |
+| `plans/research/vultr-fix-hookpoints.md` | delete | Assumes `vultr_object_storage_bucket` exists in bootstrap and frames the fix as a provider bump. Live repo and D3 choose explicit operator bucket verification instead. |
+| `plans/research/vultr-object-storage-fix.md` | delete | Describes a stale bucket-resource bug state. The file is removed rather than retained as historical context. |
 | `plans/research/opentofu-providers.md` | revise | OpenTofu/Vultr direction remains useful, but bucket-resource and host-comparison framing must be updated to the channel-root proposal and D12 lockfile posture. |
-| `plans/research/platform-bootstrap-hookpoints.md` | revise | Module and ordering analysis remains useful, but the old environment triad and bucket-resource assumptions must be replaced by channel hookpoints. |
+| `plans/research/platform-bootstrap-hookpoints.md` | delete | Old hookpoint research is replaced by `.pipeline/hookpoints.md` and still assumes the pre-channel root shape. |
 | `plans/proposals/platform-bootstrap.md` | revise | Closest ancestor proposal, but it predates the channel pivot and keeps unresolved state/custody questions that this proposal closes. |
-| `plans/proposals/vultr-object-storage-fix.md` | supersede | The live repo already moved away from that provider-bump/resource path; INIT-008 must not carry it forward. |
-| `plans/proposals/phase1-foundation.md` | supersede | Hetzner, k3s, kube-hetzner, bundled Flux/Kong/secrets scope, and older substrate assumptions conflict with Phase 5. |
+| `plans/proposals/vultr-object-storage-fix.md` | delete | The live repo already moved away from that provider-bump/resource path; INIT-008 must not carry it forward. |
+| `plans/proposals/phase1-foundation.md` | delete | Retired self-managed provider substrate, bundled Flux/Kong/secrets scope, and older substrate assumptions conflict with Phase 5. |
 | `plans/proposals/app-cluster-provisioning.md` | revise | Its two-tier boundary remains relevant, but hosting ambiguity and platform/application split need alignment with the Vultr/channel substrate. |
 Disposal semantics:
 - `revise`: update the file so active claims match this proposal.
-- `supersede`: mark as historical and not authoritative for INIT-008.
-- `leave-as-historical`: keep unchanged except for any index note that it is
-  historical evidence, not active design input.
+- `delete`: remove stale files from the repo rather than parking them.
 ---
 ## Risk-gate focus
 The three biggest tradeoffs the risk gate should validate are:
@@ -1053,7 +1051,7 @@ The three biggest tradeoffs the risk gate should validate are:
 LOW findings folded in:
 - **A3:** SLICE-027 requires each `variables.tf` variable to specify a type and either a default or explicit "no default; required" contract.
 - **H4:** Section 2.7 and SLICE-027 require `backend.tfbackend` to be generated from resolved channel JSON and byte-identical when regenerated.
-- **H5:** Sections 2.3, 2.4, and SLICE-028 remove `endpoint_placeholder`; endpoint handling is documentation-only through backend init flags.
+- **H5:** Sections 2.3, 2.4, and SLICE-028 remove the endpoint placeholder field; endpoint handling is documentation-only through backend init flags.
 - **H7:** SLICE-025 and SLICE-029 require `infra/README.md` prerequisites: OpenTofu CLI `1.11.5`, Python major `3.12`, and `jq` only if used.
 - **H8:** SLICE-025 enumerates temporary harness failures; SLICE-030 requires no allowed exceptions after the final slice lands.
 

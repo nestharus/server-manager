@@ -1,3 +1,5 @@
+> **Historical context.** Active INIT-008 proposal lives at `.pipeline/proposal.md` (committed on branch `feat/init-008-platform-bootstrap`). This file is preserved only for its remote-state and bucket-existence rationale. Do not treat its scope or design as authoritative.
+
 # Proposal: Initiative — Platform Bootstrap
 
 ## 1. Executive summary

@@ -53,6 +53,45 @@ assert_no_grep() {
   fi
 }
 
+assert_no_active_retired_provider_references() {
+  local label="active docs contain no retired provider/self-managed cluster references"
+  local pattern
+  pattern="$(printf '%s|%s|%s' 'He''tz''ner' 'kube-''he''tz''ner' 'k''3''s')"
+  local files=(
+    "${REPO_ROOT}/DECISIONS.md"
+    "${REPO_ROOT}/plans/platform-decisions-overlay.md"
+    "${REPO_ROOT}/.pipeline/proposal.md"
+    "${REPO_ROOT}/infra/README.md"
+  )
+
+  local found=false
+  for file in "${files[@]}"; do
+    if [[ -f "$file" ]] && grep -qiE "$pattern" "$file"; then
+      found=true
+    fi
+  done
+
+  while IFS= read -r -d '' file; do
+    if grep -qiE "$pattern" "$file"; then
+      found=true
+    fi
+  done < <(find "${INFRA_DIR}" -type f -print0)
+
+  if [[ "$found" == true ]]; then
+    fail "$label"
+  else
+    pass "$label"
+  fi
+}
+
+assert_decisions_d7_present() {
+  if grep -q '## D7 — 2026-04-25 — Ratify Vultr' "${REPO_ROOT}/DECISIONS.md"; then
+    pass "DECISIONS.md contains D7 Vultr/OpenTofu/channel pivot"
+  else
+    fail "DECISIONS.md contains D7 Vultr/OpenTofu/channel pivot"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 section "File existence"
 # ---------------------------------------------------------------------------
@@ -323,6 +362,13 @@ if grep -iE '(access_key|secret_key)\s*=\s*"[^"]*[A-Za-z0-9]{10,}' "$BACKEND_FIL
 else
   pass "backend.tfbackend contains no actual credentials"
 fi
+
+# ---------------------------------------------------------------------------
+section "Authority alignment assertions"
+# ---------------------------------------------------------------------------
+
+assert_no_active_retired_provider_references
+assert_decisions_d7_present
 
 # ---------------------------------------------------------------------------
 section "Summary"
