@@ -1,0 +1,6 @@
+FROM busybox:1.37.0
+
+RUN adduser -D -u 1000 app
+USER 1000:1000
+
+CMD ["sh", "-c", "echo INIT-108 registry smoke container running; sleep 3600"]
