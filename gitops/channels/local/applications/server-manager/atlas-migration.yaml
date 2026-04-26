@@ -1,0 +1,19 @@
+apiVersion: db.atlasgo.io/v1alpha1
+kind: AtlasMigration
+metadata:
+  name: server-manager-atlas-guard
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager
+    platform.humility.gg/init: "113"
+spec:
+  urlFrom:
+    secretKeyRef:
+      key: url
+      name: server-manager-postgres-url
+  dir:
+    configMapRef:
+      name: server-manager-atlas-guard-migrations
+  revisionsSchema: atlas_schema_revisions
+  backoffLimit: 5
+

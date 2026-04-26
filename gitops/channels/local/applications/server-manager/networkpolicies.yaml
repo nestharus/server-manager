@@ -1,0 +1,283 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager
+    platform.humility.gg/init: "113"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager
+    platform.humility.gg/init: "113"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-from-kong-and-discord
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    platform.humility.gg/init: "113"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: server-manager-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kong-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kong
+              app.kubernetes.io/instance: kong
+              app.kubernetes.io/component: app
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server-manager-discord
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-egress
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    platform.humility.gg/init: "113"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: server-manager-api
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: server-manager-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: minio-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: minio
+              app.kubernetes.io/component: object-storage
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-discord-egress
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-discord
+    platform.humility.gg/init: "113"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: server-manager-discord
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server-manager-api
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-migrations-egress
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    app.kubernetes.io/component: migrations
+    platform.humility.gg/init: "113"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: migrations
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: server-manager-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-ingress
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-postgres
+    platform.humility.gg/init: "113"
+spec:
+  podSelector:
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: Exists
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: atlas-operator
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: atlas-operator
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server-manager-api
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: migrations
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: server-manager-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-egress
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-postgres
+    platform.humility.gg/init: "113"
+spec:
+  podSelector:
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: Exists
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: minio-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: minio
+              app.kubernetes.io/component: object-storage
+      ports:
+        - protocol: TCP
+          port: 9000
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.1/32
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: 172.28.0.0/16
+      ports:
+        - protocol: TCP
+          port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-server-manager-bucket-job
+  namespace: minio-system
+  labels:
+    app.kubernetes.io/name: server-manager
+    app.kubernetes.io/component: object-storage-bootstrap
+    platform.humility.gg/init: "113"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: server-manager
+      app.kubernetes.io/component: object-storage-bootstrap
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: minio
+              app.kubernetes.io/component: object-storage
+      ports:
+        - protocol: TCP
+          port: 9000

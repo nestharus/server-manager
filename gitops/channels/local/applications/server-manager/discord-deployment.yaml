@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server-manager-discord
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-discord
+    platform.humility.gg/init: "113"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: server-manager-discord
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: server-manager-discord
+        platform.humility.gg/init: "113"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: discord
+          image: k3d-humility-local:5000/local/server-manager-discord:init-113-local
+          imagePullPolicy: Always
+          env:
+            - name: API_BASE_URL
+              value: http://server-manager-api.server-manager.svc.cluster.local:8000
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: DISCORD_BOT_TOKEN
+            - name: DISCORD_GUILD_ID
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: DISCORD_GUILD_ID
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
