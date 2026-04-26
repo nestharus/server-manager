@@ -2765,7 +2765,281 @@ assert_k3d_registry_port_contract() {
   assert_file_contains "modules/platform-cluster-k3d/variables.tf" 'variable "registry_port"' "k3d module exposes registry_port input"
   assert_file_contains "modules/platform-cluster-k3d/main.tf" '--registry-create "$REGISTRY_NAME:0.0.0.0:$REGISTRY_PORT"' "k3d module pins registry host port"
   assert_file_contains "modules/platform-cluster-k3d/outputs.tf" "value       = var.registry_port" "k3d module reports configured registry port"
-  assert_file_contains "scripts/bring-up-local-channel.sh" '--registry-create "${registry_name}:0.0.0.0:${K3D_REGISTRY_PORT}"' "bring-up pins registry host port"
+  assert_file_contains "scripts/bring-up-local-channel.sh" '--publish "${K3D_REGISTRY_PORT}:5000"' "bring-up pins registry host port"
+}
+
+assert_image_registry_channel_schema() {
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/image-registry-channel"
+  local local_resolved="${tmp_dir}/local.resolved.json"
+  local dev_resolved="${tmp_dir}/dev.resolved.json"
+  local registry="${tmp_dir}/channels"
+  local py_bin
+
+  if ! py_bin="$(python_bin)"; then
+    fail "python interpreter available for image registry channel validation"
+    return
+  fi
+
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel local --out "$local_resolved" \
+    && "$py_bin" - "$local_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+registry = data.get("image_registry")
+expected_mirrors = {
+    ("docker.io", "humility-local-cache-docker", 5001, "https://registry-1.docker.io"),
+    ("quay.io", "humility-local-cache-quay", 5002, "https://quay.io"),
+    ("ghcr.io", "humility-local-cache-ghcr", 5003, "https://ghcr.io"),
+}
+actual_mirrors = {
+    (item.get("registry"), item.get("cache_name"), item.get("host_port"), item.get("remote_url"))
+    for item in registry.get("pull_through_cache", {}).get("mirrors", [])
+}
+expected = {
+    "provider": "local-docker-registry",
+    "registry_url": "k3d-humility-local:5000",
+    "push_url": "localhost:5000",
+    "pull_url": "k3d-humility-local:5000",
+    "repository_prefix": "local",
+    "credentials": {"required": False},
+    "sample": {"app": "registry-smoke", "tag": "init-108", "namespace": "registry-smoke"},
+}
+for key, value in expected.items():
+    if registry.get(key) != value:
+        raise SystemExit(f"local image_registry {key} mismatch: {registry!r}")
+cache = registry.get("pull_through_cache", {})
+if cache.get("enabled") is not True or cache.get("implementation") != "distribution-proxy":
+    raise SystemExit(f"local cache mismatch: {cache!r}")
+if actual_mirrors != expected_mirrors:
+    raise SystemExit(f"local cache mirrors mismatch: {actual_mirrors!r}")
+PY
+  then
+    pass "local channel resolves with k3d image_registry and pull-through cache"
+  else
+    fail "local channel resolves with k3d image_registry and pull-through cache"
+  fi
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel dev --out "$dev_resolved" \
+    && "$py_bin" - "$dev_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+registry = data.get("image_registry")
+if registry.get("provider") != "vultr-container-registry":
+    raise SystemExit(registry)
+if registry.get("registry_url") != "ewr.vultrcr.com/humility":
+    raise SystemExit(registry)
+credentials = registry.get("credentials", {})
+expected = {
+    "required": True,
+    "secret_name": "vultr-cr-credentials",
+    "secret_namespace": "app-runtime",
+    "dockerconfigjson_key": ".dockerconfigjson",
+    "infisical_project": "platform-registry",
+    "infisical_path": "/registry/dev",
+}
+if credentials != expected:
+    raise SystemExit(credentials)
+cache = registry.get("pull_through_cache", {})
+if cache != {"enabled": False, "implementation": "none", "mirrors": []}:
+    raise SystemExit(cache)
+PY
+  then
+    pass "dev channel resolves with Vultr image registry Infisical credential contract"
+  else
+    fail "dev channel resolves with Vultr image registry Infisical credential contract"
+  fi
+
+  if "$py_bin" - "${INFRA_DIR}/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import resolve_platform_channel as resolver
+
+resolved = resolver.resolve_channel("local-child")
+if resolved.get("image_registry", {}).get("sample", {}).get("app") != "registry-smoke":
+    raise SystemExit(f"local-child did not inherit image_registry: {resolved.get('image_registry')!r}")
+PY
+  then
+    pass "local child channel inherits image_registry block"
+  else
+    fail "local child channel inherits image_registry block"
+  fi
+
+  rm -rf "$registry"
+  cp -R "${INFRA_DIR}/channels" "$registry"
+  if "$py_bin" - "${registry}/local.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data.pop("image_registry", None)
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+  then
+    if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+      fail "local k3d channel without image_registry fails schema validation"
+    else
+      pass "local k3d channel without image_registry fails schema validation"
+    fi
+  else
+    fail "local k3d channel without image_registry fails schema validation"
+  fi
+
+  for alias in container_registry docker_registry registry image_mirror; do
+    rm -rf "$registry"
+    cp -R "${INFRA_DIR}/channels" "$registry"
+    if "$py_bin" - "${registry}/local.yaml" "$alias" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+alias = sys.argv[2]
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data[alias] = {"rejected": True}
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+    then
+      if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+        fail "image_registry alias ${alias} is rejected"
+      else
+        pass "image_registry alias ${alias} is rejected"
+      fi
+    else
+      fail "image_registry alias ${alias} is rejected"
+    fi
+  done
+}
+
+assert_image_registry_local_contracts() {
+  local local_dir="${REPO_ROOT}/gitops/channels/local/image-registry"
+  local remote_dir="${REPO_ROOT}/gitops/contracts/remote/image-registry"
+  local local_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/image-registry-local.yaml"
+  local remote_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/image-registry-remote.yaml"
+  local print_output
+  local py_bin
+
+  for file in \
+    "scripts/build-channel-image.sh" \
+    "tests/validate_container_delivery_local.sh"; do
+    assert_file_exists "$file"
+    assert_executable "$file"
+  done
+
+  for file in \
+    "gitops/channels/local/image-registry/kustomization.yaml" \
+    "gitops/channels/local/image-registry/channel-registry-config.yaml" \
+    "gitops/contracts/remote/image-registry/kustomization.yaml" \
+    "gitops/contracts/remote/image-registry/vultr-cr-token-infisicalsecret.yaml" \
+    "containers/samples/registry-smoke/Containerfile"; do
+    assert_repo_file_exists "$file"
+  done
+
+  if bash "${INFRA_DIR}/scripts/build-channel-image.sh" --help >/dev/null \
+    && bash "${INFRA_DIR}/tests/validate_container_delivery_local.sh" --help >/dev/null; then
+    pass "image registry build and validation script help"
+  else
+    fail "image registry build and validation script help"
+  fi
+
+  if print_output="$(bash "${INFRA_DIR}/scripts/build-channel-image.sh" \
+      --channel local \
+      --app registry-smoke \
+      --tag init-108 \
+      --context "${REPO_ROOT}/containers/samples/registry-smoke" \
+      --file "${REPO_ROOT}/containers/samples/registry-smoke/Containerfile" \
+      --print-only)" \
+    && grep -q 'PUSH_IMAGE=localhost:5000/local/registry-smoke:init-108' <<<"$print_output" \
+    && grep -q 'PULL_IMAGE=k3d-humility-local:5000/local/registry-smoke:init-108' <<<"$print_output"; then
+    pass "build-channel-image prints channel-scoped push and pull image names"
+  else
+    fail "build-channel-image prints channel-scoped push and pull image names"
+  fi
+
+  if grep -q -- 'REGISTRY_PROXY_REMOTEURL' "${INFRA_DIR}/scripts/bring-up-local-channel.sh" \
+    && grep -q -- '--registry-config "$REGISTRY_CONFIG_PATH"' "${INFRA_DIR}/scripts/bring-up-local-channel.sh" \
+    && grep -q -- 'connect_local_registry_to_cluster_network' "${INFRA_DIR}/scripts/bring-up-local-channel.sh" \
+    && grep -q -- 'docker network connect "$network_name" "$container_name"' "${INFRA_DIR}/scripts/bring-up-local-channel.sh" \
+    && grep -q 'delete_registry_caches' "${INFRA_DIR}/scripts/delete-local-channel.sh"; then
+    pass "local bring-up wires registry caches into k3d containerd mirrors"
+  else
+    fail "local bring-up wires registry caches into k3d containerd mirrors"
+  fi
+
+  if command -v kubectl >/dev/null 2>&1 \
+    && kubectl kustomize "$local_dir" >"$local_rendered" \
+    && kubectl kustomize "$remote_dir" >"$remote_rendered"; then
+    pass "kubectl kustomize image registry local and remote contracts"
+  else
+    fail "kubectl kustomize image registry local and remote contracts"
+    return
+  fi
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(HelmRelease|OCIRepository|HelmRepository)[[:space:]]*$' "$local_dir" "$remote_dir"; then
+    fail "image registry contracts exclude helm-controller resources"
+  else
+    pass "image registry contracts exclude helm-controller resources"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "image registry manifest contract"
+  elif "$py_bin" - "$local_rendered" "$remote_rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+local_docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+remote_docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[2]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+local = {
+    (doc.get("kind"), doc.get("metadata", {}).get("namespace"), doc.get("metadata", {}).get("name")): doc
+    for doc in local_docs
+}
+remote = {
+    (doc.get("kind"), doc.get("metadata", {}).get("namespace"), doc.get("metadata", {}).get("name")): doc
+    for doc in remote_docs
+}
+local_config = local.get(("ConfigMap", "image-registry-system", "channel-image-registry"))
+if local_config is None:
+    raise SystemExit("local image registry ConfigMap missing")
+local_data = local_config.get("data", {})
+if local_data.get("pushUrl") != "localhost:5000" or local_data.get("pullUrl") != "k3d-humility-local:5000":
+    raise SystemExit(local_data)
+for key in ("mirror.docker.io", "mirror.quay.io", "mirror.ghcr.io"):
+    if key not in local_data:
+        raise SystemExit(f"local registry mirror {key} missing")
+remote_config = remote.get(("ConfigMap", "app-runtime", "channel-image-registry"))
+if remote_config is None:
+    raise SystemExit("remote image registry ConfigMap missing")
+remote_data = remote_config.get("data", {})
+if remote_data.get("provider") != "vultr-container-registry":
+    raise SystemExit(remote_data)
+secret = remote.get(("InfisicalSecret", "app-runtime", "vultr-cr-credentials"))
+if secret is None:
+    raise SystemExit("Vultr CR InfisicalSecret missing")
+scope = secret.get("spec", {}).get("authentication", {}).get("universalAuth", {}).get("secretsScope", {})
+if scope.get("projectSlug") != "platform-registry" or scope.get("secretsPath") != "/registry/dev":
+    raise SystemExit(scope)
+managed = secret.get("spec", {}).get("managedSecretReference", {})
+if managed.get("secretType") != "kubernetes.io/dockerconfigjson":
+    raise SystemExit(managed)
+PY
+  then
+    pass "image registry manifest contract"
+  else
+    fail "image registry manifest contract"
+  fi
 }
 
 assert_delete_missing_local_cluster() {
@@ -3980,6 +4254,16 @@ echo ""
 echo "=== Slice 104.01 object-storage channel schema validation ==="
 
 assert_object_storage_channel_schema
+
+echo ""
+echo "=== Slice 108.01 image registry channel schema validation ==="
+
+assert_image_registry_channel_schema
+
+echo ""
+echo "=== Slice 108.02 local image registry and remote contract validation ==="
+
+assert_image_registry_local_contracts
 
 echo ""
 echo "=== Slice 105.01 TLS/DNS channel schema validation ==="
