@@ -1,0 +1,57 @@
+fullnameOverride: authentik
+authentik:
+  existingSecret:
+    secretName: authentik-config
+  log_level: info
+  postgresql:
+    host: authentik-postgres-rw.auth-system.svc.cluster.local
+    name: authentik
+    user: authentik
+    port: 5432
+postgresql:
+  enabled: false
+server:
+  replicas: 1
+  ingress:
+    enabled: false
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+worker:
+  replicas: 1
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+

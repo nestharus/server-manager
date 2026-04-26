@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: authenticate
+  namespace: local
+  labels:
+    app.kubernetes.io/name: pomerium-authenticate-ingress-alias
+    platform.humility.gg/init: "114"
+spec:
+  type: ExternalName
+  externalName: kong-kong-proxy.kong-system.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: protected-api
+  namespace: local
+  labels:
+    app.kubernetes.io/name: protected-api-ingress-alias
+    platform.humility.gg/init: "114"
+spec:
+  type: ExternalName
+  externalName: kong-kong-proxy.kong-system.svc.cluster.local
+

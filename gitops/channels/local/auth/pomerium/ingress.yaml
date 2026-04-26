@@ -1,0 +1,60 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pomerium-authenticate
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: pomerium
+    platform.humility.gg/init: "114"
+  annotations:
+    cert-manager.io/issuer: humility-local-step-ca
+    cert-manager.io/issuer-kind: StepClusterIssuer
+    cert-manager.io/issuer-group: certmanager.step.sm
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - authenticate.local.humility.local
+      secretName: pomerium-authenticate-local-ingress-tls
+  rules:
+    - host: authenticate.local.humility.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pomerium-proxy
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: protected-api
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: pomerium
+    platform.humility.gg/init: "114"
+  annotations:
+    cert-manager.io/issuer: humility-local-step-ca
+    cert-manager.io/issuer-kind: StepClusterIssuer
+    cert-manager.io/issuer-group: certmanager.step.sm
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - protected-api.local.humility.local
+      secretName: protected-api-local-ingress-tls
+  rules:
+    - host: protected-api.local.humility.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pomerium-proxy
+                port:
+                  number: 80
+

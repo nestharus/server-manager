@@ -1,0 +1,530 @@
+---
+# Source: pomerium/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pomerium-authenticate
+  labels:
+    app.kubernetes.io/name: pomerium-authenticate
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/component: authenticate
+  annotations:
+---
+# Source: pomerium/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pomerium-authorize
+  labels:
+    app.kubernetes.io/name: pomerium-authorize
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/component: authorize
+  annotations:
+---
+# Source: pomerium/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pomerium-databroker
+  labels:
+    app.kubernetes.io/name: pomerium-databroker
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/component: databroker
+  annotations:
+---
+# Source: pomerium/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pomerium-proxy
+  labels:
+    app.kubernetes.io/name: pomerium-proxy
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/component: proxy
+  annotations:
+---
+# Source: pomerium/templates/databroker-tls-secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pomerium-databroker-client-tls
+  labels:
+    app.kubernetes.io/name: pomerium
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+type: Opaque
+data:
+  tls.crt: ""
+  tls.key: ""
+  ca.crt: ""
+---
+# Source: pomerium/templates/authenticate-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pomerium-authenticate
+  labels:
+    app.kubernetes.io/name: pomerium-authenticate
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: authenticate
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+    - name: metrics
+      port: 9090
+      protocol: TCP
+      targetPort: metrics
+  selector:
+    app.kubernetes.io/name: pomerium-authenticate
+    app.kubernetes.io/instance: pomerium
+---
+# Source: pomerium/templates/authorize-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pomerium-authorize
+  labels:
+    app.kubernetes.io/name: pomerium-authorize
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: authorize
+spec:
+  clusterIP: None
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - name: metrics
+      port: 9090
+      protocol: TCP
+      targetPort: metrics
+  selector:
+    app.kubernetes.io/name: pomerium-authorize
+    app.kubernetes.io/instance: pomerium
+---
+# Source: pomerium/templates/databroker-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pomerium-databroker
+  labels:
+    app.kubernetes.io/name: pomerium-databroker
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: databroker
+spec:
+  clusterIP: None
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - name: metrics
+      port: 9090
+      protocol: TCP
+      targetPort: metrics
+  selector:
+    app.kubernetes.io/name: pomerium-databroker
+    app.kubernetes.io/instance: pomerium
+---
+# Source: pomerium/templates/proxy-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pomerium-proxy
+  labels:
+    app.kubernetes.io/name: pomerium-proxy
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: proxy
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: pomerium-proxy
+    app.kubernetes.io/instance: pomerium
+---
+# Source: pomerium/templates/authenticate-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium-authenticate
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/component: authenticate
+  name: pomerium-authenticate
+  annotations:
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pomerium-authenticate
+      app.kubernetes.io/instance: pomerium
+  template:
+    metadata:
+      annotations:
+        checksum: d0b2950d6ee2a5858815890cf46376a92952a69ef14d0ae8ff4781d07c513cdc
+      labels:
+        app.kubernetes.io/name: pomerium-authenticate
+        helm.sh/chart: pomerium-34.0.1
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/instance: pomerium
+    spec:
+      containers:
+      - name: pomerium
+        image: pomerium/pomerium:v0.22.1
+        imagePullPolicy: IfNotPresent
+        args:
+          - --config=/etc/pomerium/config.yaml
+        env:
+        - name: SERVICES
+          value: authenticate
+        - name: SIGNING_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pomerium-signing-key
+              key: signing-key
+        - name: AUTHENTICATE_INTERNAL_SERVICE_URL
+          value: http://pomerium-authenticate.auth-system.svc.cluster.local        
+        envFrom:
+          - secretRef:
+              name: pomerium-shared-secret
+        ports:
+          - containerPort: 80
+            name: http
+            protocol: TCP
+          - containerPort: 9090
+            name: metrics
+            protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /ping
+            port: http
+            scheme: HTTP
+        readinessProbe:
+          httpGet:
+            path: /ping
+            port: http
+            scheme: HTTP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        volumeMounts:
+          - mountPath: /etc/pomerium/
+            name: config
+          - mountPath: /pomerium/tls
+            name: service-tls
+          - mountPath: /pomerium/ca
+            name: ca-tls
+      serviceAccountName: pomerium-authenticate
+      volumes:
+        - name: config
+          secret:
+            secretName: pomerium-config
+        - name: ca-tls
+          secret:
+            secretName: pomerium-ca-tls
+            optional: true
+        - name: service-tls
+          secret:
+            secretName: pomerium-authenticate-tls
+            optional: true
+---
+# Source: pomerium/templates/authorize-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium-authorize
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/component: authorize
+  name: pomerium-authorize
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pomerium-authorize
+      app.kubernetes.io/instance: pomerium
+  template:
+    metadata:
+      annotations:
+        checksum: d0b2950d6ee2a5858815890cf46376a92952a69ef14d0ae8ff4781d07c513cdc
+      labels:
+        app.kubernetes.io/name: pomerium-authorize
+        helm.sh/chart: pomerium-34.0.1
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/instance: pomerium
+    spec:
+      containers:
+      - name: pomerium
+        image: pomerium/pomerium:v0.22.1
+        imagePullPolicy: IfNotPresent
+        args:
+          - --config=/etc/pomerium/config.yaml
+        env:
+        - name: SERVICES
+          value: authorize
+        - name: SIGNING_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pomerium-signing-key
+              key: signing-key        
+        envFrom:
+          - secretRef:
+              name: pomerium-shared-secret
+        ports:
+          - containerPort: 80
+            name: grpc
+            protocol: TCP
+          - containerPort: 9090
+            name: metrics
+            protocol: TCP
+        livenessProbe:
+          tcpSocket:
+            port: grpc
+          initialDelaySeconds: 15
+        readinessProbe:
+          tcpSocket:
+            port: grpc
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        volumeMounts:
+          - mountPath: /etc/pomerium/
+            name: config
+          - mountPath: /pomerium/tls
+            name: service-tls
+          - mountPath: /pomerium/ca
+            name: ca-tls
+      serviceAccountName: pomerium-authorize
+      volumes:
+        - name: config
+          secret:
+            secretName: pomerium-config
+        - name: ca-tls
+          secret:
+            secretName: pomerium-ca-tls
+            optional: true
+        - name: service-tls
+          secret:
+            secretName: pomerium-authorize-tls
+            optional: true
+---
+# Source: pomerium/templates/databroker-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium-databroker
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/component: databroker
+  name: pomerium-databroker
+  annotations:
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pomerium-databroker
+      app.kubernetes.io/instance: pomerium
+  template:
+    metadata:
+      annotations:
+        checksum: d0b2950d6ee2a5858815890cf46376a92952a69ef14d0ae8ff4781d07c513cdc
+      labels:
+        app.kubernetes.io/name: pomerium-databroker
+        helm.sh/chart: pomerium-34.0.1
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/instance: pomerium
+    spec:
+      containers:
+      - name: pomerium
+        image: pomerium/pomerium:v0.22.1
+        imagePullPolicy: IfNotPresent
+        args:
+          - --config=/etc/pomerium/config.yaml
+        env:
+        - name: SERVICES
+          value: databroker
+        - name: DATABROKER_STORAGE_TYPE
+          value: memory                
+        envFrom:
+          - secretRef:
+              name: pomerium-shared-secret
+        ports:
+          - containerPort: 80
+            name: grpc
+            protocol: TCP
+          - containerPort: 9090
+            name: metrics
+            protocol: TCP
+        livenessProbe:
+          tcpSocket:
+            port: grpc
+          initialDelaySeconds: 15
+        readinessProbe:
+          tcpSocket:
+            port: grpc
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        volumeMounts:
+          - mountPath: /pomerium/databroker-client-tls
+            name: databroker-client-tls
+          - mountPath: /etc/pomerium/
+            name: config
+          - mountPath: /pomerium/tls
+            name: service-tls
+          - mountPath: /pomerium/ca
+            name: ca-tls
+      serviceAccountName: pomerium-databroker
+      volumes:
+        - name: databroker-client-tls
+          secret:
+            secretName: pomerium-databroker-client-tls
+        - name: config
+          secret:
+            secretName: pomerium-config
+        - name: ca-tls
+          secret:
+            secretName: pomerium-ca-tls
+            optional: true
+        - name: service-tls
+          secret:
+            secretName: pomerium-databroker-tls
+            optional: true
+---
+# Source: pomerium/templates/proxy-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: pomerium-proxy
+    helm.sh/chart: pomerium-34.0.1
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: pomerium
+    app.kubernetes.io/component: proxy
+  name: pomerium-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pomerium-proxy
+      app.kubernetes.io/instance: pomerium
+  template:
+    metadata:
+      annotations:
+        checksum: d0b2950d6ee2a5858815890cf46376a92952a69ef14d0ae8ff4781d07c513cdc
+      labels:
+        app.kubernetes.io/name: pomerium-proxy
+        helm.sh/chart: pomerium-34.0.1
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/instance: pomerium
+    spec:
+      containers:
+      - name: pomerium
+        image: pomerium/pomerium:v0.22.1
+        imagePullPolicy: IfNotPresent
+        args:
+          - --config=/etc/pomerium/config.yaml
+        env:
+        - name: INSECURE_SERVER
+          value: "true"
+        - name: ADDRESS
+          value: :80
+        - name: SERVICES
+          value: proxy
+        - name: SIGNING_KEY
+          valueFrom:
+            secretKeyRef:
+              name: pomerium-signing-key
+              key: signing-key        
+        envFrom:
+          - secretRef:
+              name: pomerium-shared-secret
+        ports:
+          - containerPort: 80
+            name: http
+            protocol: TCP
+          - containerPort: 9090
+            name: metrics
+            protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /ping
+            port: http
+            scheme: HTTP
+        readinessProbe:
+          httpGet:
+            path: /ping
+            port: http
+            scheme: HTTP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        volumeMounts:
+          - mountPath: /etc/pomerium/
+            name: config
+          - mountPath: /pomerium/tls
+            name: service-tls
+          - mountPath: /pomerium/ca
+            name: ca-tls
+      serviceAccountName: pomerium-proxy
+      volumes:
+        - name: config
+          secret:
+            secretName: pomerium-config
+        - name: ca-tls
+          secret:
+            secretName: pomerium-ca-tls
+            optional: true
+        - name: service-tls
+          secret:
+            secretName: pomerium-proxy-tls
+            optional: true

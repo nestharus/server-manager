@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cedar-sample-policy-bootstrap
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: opal-cedar
+    app.kubernetes.io/component: policy-bootstrap
+    platform.humility.gg/init: "114"
+spec:
+  backoffLimit: 12
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opal-cedar
+        app.kubernetes.io/component: policy-bootstrap
+        platform.humility.gg/init: "114"
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: curl
+          image: curlimages/curl:8.16.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until curl -fsS http://opal-client:7000/healthcheck; do
+                sleep 2
+              done
+              curl -fsS -X PUT \
+                -H 'Content-Type: application/json' \
+                --data-binary @/policy/policies.json \
+                http://opal-client:8180/v1/policies
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: policy
+              mountPath: /policy
+              readOnly: true
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: policy
+          configMap:
+            name: cedar-sample-policy

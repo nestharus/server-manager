@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: authentik
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: authentik
+    platform.humility.gg/init: "114"
+  annotations:
+    cert-manager.io/issuer: humility-local-step-ca
+    cert-manager.io/issuer-kind: StepClusterIssuer
+    cert-manager.io/issuer-group: certmanager.step.sm
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - auth.local.humility.local
+      secretName: authentik-local-ingress-tls
+  rules:
+    - host: auth.local.humility.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: authentik-server
+                port:
+                  number: 80
+

@@ -1,0 +1,50 @@
+server:
+  replicas: 1
+  uvicornWorkers: 1
+  broadcastPgsql: false
+  policyRepoUrl: https://github.com/permitio/opal-example-policy-repo
+  extraEnv:
+    OPAL_POLICY_REPO_POLICY_EXTENSIONS: '[".cedar"]'
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+client:
+  replicas: 1
+  opaPort: 8180
+  extraEnv:
+    OPAL_POLICY_STORE_TYPE: cedar
+    OPAL_POLICY_STORE_URL: http://localhost:8180
+    OPAL_POLICY_STORE_AUTH_TYPE: none
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+image:
+  server:
+    registry: docker.io
+    repository: permitio/opal-server
+    tag: 0.7.12
+  client:
+    registry: docker.io
+    repository: permitio/opal-client-cedar
+    tag: 0.7.12
+

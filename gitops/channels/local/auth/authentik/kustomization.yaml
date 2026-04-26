@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: auth-system
+resources:
+  - namespace.yaml
+  - secrets-infisicalsecret.yaml
+  - postgres-cluster.yaml
+  - rendered/authentik-2026.2.2.yaml
+  - ingress.yaml
+  - local-dns-alias.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: authentik-server
+    patch: |-
+      - op: add
+        path: /spec/template/spec/automountServiceAccountToken
+        value: false
+  - target:
+      kind: Deployment
+      name: authentik-worker
+    patch: |-
+      - op: add
+        path: /spec/template/spec/automountServiceAccountToken
+        value: false
+
