@@ -1,0 +1,23 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY alembic.ini /app/alembic.ini
+COPY migrations /app/migrations
+COPY services/api /app/services/api
+
+RUN pip install --upgrade pip \
+    && pip install /app/services/api
+
+WORKDIR /app/services/api
+
+USER 10001:10001
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.core.factory:create_api_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+
