@@ -323,6 +323,89 @@ assert_gitops_flux_components() {
   fi
 }
 
+assert_infisical_server_raw_manifests() {
+  local server_dir="${REPO_ROOT}/gitops/channels/local/infisical/server"
+  local rendered="${server_dir}/rendered/infisical-standalone-1.8.0.yaml"
+  local before
+  local after
+  local render_output
+  local render_status
+  local py_bin
+
+  assert_repo_file_exists "gitops/channels/local/infisical/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/server/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/server/namespace.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/server/render-values.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/server/rendered/infisical-standalone-1.8.0.yaml"
+  assert_file_exists "scripts/render-infisical-manifests.sh"
+  assert_executable "scripts/render-infisical-manifests.sh"
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(HelmRelease|OCIRepository)[[:space:]]*$' "$server_dir"; then
+    fail "Infisical server raw manifests exclude HelmRelease and OCIRepository"
+  else
+    pass "Infisical server raw manifests exclude HelmRelease and OCIRepository"
+  fi
+
+  if grep -R -Eq '(meta\.helm\.sh|helm\.sh/hook|updatedAt|app\.kubernetes\.io/managed-by:[[:space:]]*Helm|heritage:[[:space:]]*Helm)' "$server_dir"; then
+    fail "Infisical server raw manifests exclude Helm ownership metadata"
+  else
+    pass "Infisical server raw manifests exclude Helm ownership metadata"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "Infisical server image pins"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+expected = {
+    "infisical/infisical:v0.151.0",
+    "mirror.gcr.io/bitnamilegacy/postgresql:16.2.0-debian-11-r16",
+    "mirror.gcr.io/bitnamilegacy/redis:7.2.4-debian-11-r18",
+}
+found = set()
+
+
+def walk(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "image" and isinstance(child, str):
+                found.add(child)
+            walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            walk(child)
+
+
+for document in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")):
+    walk(document)
+
+if found != expected:
+    raise SystemExit(f"image set mismatch: found={sorted(found)!r}")
+PY
+  then
+    pass "Infisical server image pins"
+  else
+    fail "Infisical server image pins"
+  fi
+
+  before="$(find "$server_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
+  set +e
+  render_output="$(bash "${INFRA_DIR}/scripts/render-infisical-manifests.sh" 2>&1)"
+  render_status=$?
+  set -e
+  after="$(find "$server_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
+
+  if [[ "$render_status" -eq 0 && "$before" == "$after" ]]; then
+    pass "Infisical server render is byte-identical on rerun"
+  else
+    echo "$render_output"
+    fail "Infisical server render is byte-identical on rerun"
+  fi
+}
+
 python_bin() {
   if command -v python &>/dev/null; then
     command -v python
@@ -964,6 +1047,11 @@ assert_repo_file_exists "gitops/sources/local/git-daemon.yaml"
 assert_file_exists "scripts/render-gitops-source.py"
 assert_executable "scripts/render-gitops-source.py"
 assert_gitops_channel_schema_rendering
+
+echo ""
+echo "=== Slice 103.02 Infisical server raw manifest validation ==="
+
+assert_infisical_server_raw_manifests
 
 echo ""
 echo "=== Slice 102.03 SOPS+age bootstrap sentinel validation ==="

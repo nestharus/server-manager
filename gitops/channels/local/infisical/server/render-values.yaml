@@ -1,0 +1,45 @@
+infisical:
+  replicaCount: 1
+  image:
+    repository: infisical/infisical
+    tag: v0.151.0
+    pullPolicy: IfNotPresent
+  kubeSecretRef: infisical-server-bootstrap
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: 350m
+    limits:
+      memory: 1000Mi
+  autoBootstrap:
+    enabled: false
+ingress:
+  enabled: false
+  nginx:
+    enabled: false
+postgresql:
+  enabled: true
+  fullnameOverride: postgresql
+  image:
+    registry: mirror.gcr.io
+    repository: bitnamilegacy/postgresql
+    tag: 16.2.0-debian-11-r16
+  auth:
+    username: infisical
+    password: root
+    postgresPassword: root
+    database: infisicalDB
+  primary:
+    persistence:
+      size: 8Gi
+redis:
+  enabled: true
+  fullnameOverride: redis
+  image:
+    registry: mirror.gcr.io
+    repository: bitnamilegacy/redis
+    tag: 7.2.4-debian-11-r18
+  master:
+    persistence:
+      size: 8Gi
