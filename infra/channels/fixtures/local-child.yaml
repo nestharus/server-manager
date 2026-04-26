@@ -1,0 +1,7 @@
+schema_version: 1
+id: local-child
+parent: local
+exposure: dev
+tenant: local-child
+allow_ephemeral_children: true
+enabled_platforms: [kubernetes]

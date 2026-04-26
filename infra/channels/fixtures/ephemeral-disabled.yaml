@@ -1,0 +1,19 @@
+schema_version: 1
+id: ephemeral-disabled
+parent: null
+exposure: dev
+tenant: null
+allow_ephemeral_children: false
+enabled_platforms: [kubernetes]
+cluster:
+  distribution: k3s
+  k3s_version: v1.32.13+k3s1
+  target: k3d-local
+  k3d:
+    servers: 1
+    agents: 0
+    registry_name: humility-ephemeral-disabled
+state:
+  bucket: humility-tfstate
+  key: channels/ephemeral-disabled/terraform.tfstate
+  region: ewr

@@ -1,19 +1,20 @@
 # Infrastructure
 
-OpenTofu-managed Vultr infrastructure for the Humility platform.
+OpenTofu-managed infrastructure for the Humility platform.
 
 ## Structure
 
     infra/
     ├── bootstrap/
     │   └── state-backend/    # One-time: create Object Storage for tfstate
+    ├── channels/
+    │   ├── local.yaml        # Local k3d channel declaration
+    │   └── dev.yaml          # Vultr VM k3s channel declaration
+    ├── schemas/              # Platform channel JSON schemas
+    ├── scripts/              # Channel resolution and validation tools
     ├── modules/
-    │   ├── platform-network/ # Shared VPC module
-    │   └── platform-cluster/ # Shared VKE module
-    └── environments/
-        ├── dev/              # Persistent dev platform root
-        ├── staging/          # On-demand validation root
-        └── production/       # Persistent production root
+    │   └── platform-network/ # Shared VPC module
+    └── tests/
 
 ## Bootstrap
 
@@ -22,18 +23,15 @@ OpenTofu-managed Vultr infrastructure for the Humility platform.
    `tofu init`
    `tofu apply -var="object_storage_cluster_id=<cluster-id>" -var="object_storage_tier_id=<tier-id>"`
 
-2. Capture the `s3_hostname` output and replace `REPLACE_AFTER_BOOTSTRAP`
-   in the target environment's `backend.tfbackend`.
+2. Capture the `s3_hostname` output for later channel-root backend
+   generation.
 
-3. Initialize and apply an environment root:
-   `cd infra/environments/dev`
-   `tofu init -backend-config=backend.tfbackend`
-   `tofu apply`
+3. Validate channel definitions:
+   `python infra/scripts/validate_platform_channels.py`
 
 ## Notes
 
-- `dev` is the always-on platform environment for fast iteration.
-- `staging` uses production-equivalent sizing but is intended to be spun
-  up only for release validation.
-- `production` is the persistent user-facing environment.
-- All roots pin OpenTofu `>= 1.8.0` and Vultr provider `~> 2.30`.
+- `local` is the local k3d target for first deployment work.
+- `dev` is the remote Vultr VM k3s channel declaration.
+- Later INIT-101 slices add channel roots, k3d bring-up, and Vultr VM
+  plan surfaces.

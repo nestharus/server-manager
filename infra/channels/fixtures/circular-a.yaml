@@ -1,0 +1,7 @@
+schema_version: 1
+id: circular-a
+parent: circular-b
+exposure: dev
+tenant: circular-a
+allow_ephemeral_children: true
+enabled_platforms: [kubernetes]

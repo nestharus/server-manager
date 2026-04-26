@@ -1,0 +1,23 @@
+schema_version: 1
+id: dev
+parent: null
+exposure: dev
+tenant: null
+allow_ephemeral_children: true
+enabled_platforms: [kubernetes]
+cluster:
+  distribution: k3s
+  k3s_version: v1.32.13+k3s1
+  target: vultr-vms
+  vultr_vms:
+    region: ewr
+    servers:
+      count: 1
+      plan: vc2-2c-4gb
+    agents:
+      count: 0
+      plan: vc2-1c-2gb
+state:
+  bucket: humility-tfstate
+  key: channels/dev/terraform.tfstate
+  region: ewr
