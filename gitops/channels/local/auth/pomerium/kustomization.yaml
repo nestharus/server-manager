@@ -14,4 +14,10 @@ patches:
       - op: add
         path: /spec/template/spec/automountServiceAccountToken
         value: false
-
+  - target:
+      kind: Service
+      labelSelector: app.kubernetes.io/instance=pomerium
+    patch: |-
+      - op: add
+        path: /spec/publishNotReadyAddresses
+        value: true
