@@ -1,0 +1,115 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: appcluster-k3d-local
+  labels:
+    platform.humility.gg/app-cluster-target: k3d-local
+spec:
+  compositeTypeRef:
+    apiVersion: platform.humility.gg/v1alpha1
+    kind: XAppCluster
+  resources:
+    - name: nested-k3d-job
+      base:
+        apiVersion: kubernetes.crossplane.io/v1alpha2
+        kind: Object
+        metadata:
+          name: appcluster-k3d-local
+        spec:
+          providerConfigRef:
+            name: in-cluster
+          readiness:
+            policy: DeriveFromObject
+          forProvider:
+            manifest:
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                name: provision-appcluster-local
+                namespace: app-cluster-system
+                labels:
+                  app.kubernetes.io/name: appcluster-provisioner
+                  platform.humility.gg/app-cluster-target: k3d-local
+              spec:
+                backoffLimit: 1
+                template:
+                  metadata:
+                    labels:
+                      app.kubernetes.io/name: appcluster-provisioner
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: k3d
+                        image: docker:29.0.4-cli
+                        imagePullPolicy: IfNotPresent
+                        env:
+                          - name: APP_CLUSTER_NAME
+                            value: humility-local-app
+                          - name: K3S_VERSION
+                            value: v1.32.13+k3s1
+                          - name: SERVERS
+                            value: "1"
+                          - name: AGENTS
+                            value: "0"
+                          - name: K3D_VERSION
+                            value: v5.8.3
+                        command:
+                          - /bin/sh
+                          - -ec
+                          - |
+                            apk add --no-cache curl ca-certificates
+                            curl -fsSL "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64" -o /usr/local/bin/k3d
+                            chmod +x /usr/local/bin/k3d
+                            if k3d cluster get "${APP_CLUSTER_NAME}" >/dev/null 2>&1; then
+                              echo "nested app cluster ${APP_CLUSTER_NAME} already exists"
+                              exit 0
+                            fi
+                            image_tag="$(printf '%s' "${K3S_VERSION}" | tr '+' '-')"
+                            k3d cluster create "${APP_CLUSTER_NAME}" \
+                              --image "rancher/k3s:${image_tag}" \
+                              --servers "${SERVERS}" \
+                              --agents "${AGENTS}" \
+                              --kubeconfig-update-default=false \
+                              --wait
+                            k3d kubeconfig get "${APP_CLUSTER_NAME}" >/tmp/appcluster-kubeconfig.yaml
+                            k3d cluster list "${APP_CLUSTER_NAME}"
+                        volumeMounts:
+                          - name: docker-sock
+                            mountPath: /var/run/docker.sock
+                    volumes:
+                      - name: docker-sock
+                        hostPath:
+                          path: /var/run/docker.sock
+                          type: Socket
+      patches:
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: metadata.name
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: spec.forProvider.manifest.metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: provision-%s
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: spec.forProvider.manifest.spec.template.spec.containers[0].env[0].value
+        - fromFieldPath: spec.parameters.k3sVersion
+          toFieldPath: spec.forProvider.manifest.spec.template.spec.containers[0].env[1].value
+        - fromFieldPath: spec.parameters.local.servers
+          toFieldPath: spec.forProvider.manifest.spec.template.spec.containers[0].env[2].value
+          transforms:
+            - type: string
+              string:
+                fmt: "%d"
+        - fromFieldPath: spec.parameters.local.agents
+          toFieldPath: spec.forProvider.manifest.spec.template.spec.containers[0].env[3].value
+          transforms:
+            - type: string
+              string:
+                fmt: "%d"
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: status.clusterName
+          type: ToCompositeFieldPath
+      readinessChecks:
+        - type: MatchInteger
+          fieldPath: status.atProvider.manifest.status.succeeded
+          matchInteger: 1

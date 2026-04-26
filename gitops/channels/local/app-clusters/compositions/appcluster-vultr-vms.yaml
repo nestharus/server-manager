@@ -1,0 +1,89 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: appcluster-vultr-vms
+  labels:
+    platform.humility.gg/app-cluster-target: vultr-vms
+spec:
+  compositeTypeRef:
+    apiVersion: platform.humility.gg/v1alpha1
+    kind: XAppCluster
+  resources:
+    - name: server
+      base:
+        apiVersion: vultr.vultr.upbound.io/v1alpha1
+        kind: Instance
+        metadata:
+          name: appcluster-vultr-server
+          labels:
+            platform.humility.gg/app-cluster-target: vultr-vms
+        spec:
+          providerConfigRef:
+            name: default
+          forProvider:
+            region: ewr
+            plan: vc2-2c-4gb
+            osId: 1743
+            label: humility-appcluster-server-1
+            hostname: humility-appcluster-server-1
+            tags:
+              - app-cluster
+              - k3s
+              - server
+            userData: |
+              #cloud-config
+              hostname: humility-appcluster-server-1
+              manage_etc_hosts: true
+              write_files:
+                - path: /etc/k3s-install-marker
+                  content: "pending"
+                  permissions: '0644'
+              runcmd:
+                - bash -c 'if grep -q "complete" /etc/k3s-install-marker 2>/dev/null; then echo "k3s already installed; skipping"; exit 0; fi'
+                - bash -c 'set -euo pipefail; if grep -q "complete" /etc/k3s-install-marker 2>/dev/null; then echo "k3s already installed; skipping"; exit 0; fi; curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.32.13+k3s1 INSTALL_K3S_EXEC="server --cluster-init" sh -s -; systemctl is-active --quiet k3s.service; mkdir -p /root; install -m 0600 /etc/rancher/k3s/k3s.yaml /root/humility-k3s.yaml; echo "complete" > /etc/k3s-install-marker'
+      patches:
+        - fromFieldPath: spec.parameters.channel
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-server-1"
+        - fromFieldPath: spec.parameters.vultr.region
+          toFieldPath: spec.forProvider.region
+        - fromFieldPath: spec.parameters.vultr.serverPlan
+          toFieldPath: spec.forProvider.plan
+        - fromFieldPath: spec.parameters.channel
+          toFieldPath: spec.forProvider.label
+          transforms:
+            - type: string
+              string:
+                fmt: "humility-%s-app-server-1"
+        - fromFieldPath: spec.parameters.channel
+          toFieldPath: spec.forProvider.hostname
+          transforms:
+            - type: string
+              string:
+                fmt: "humility-%s-app-server-1"
+        - fromFieldPath: spec.parameters.k3sVersion
+          toFieldPath: spec.forProvider.userData
+          transforms:
+            - type: string
+              string:
+                fmt: |
+                  #cloud-config
+                  hostname: humility-appcluster-server-1
+                  manage_etc_hosts: true
+                  write_files:
+                    - path: /etc/k3s-install-marker
+                      content: "pending"
+                      permissions: '0644'
+                  runcmd:
+                    - bash -c 'if grep -q "complete" /etc/k3s-install-marker 2>/dev/null; then echo "k3s already installed; skipping"; exit 0; fi'
+                    - bash -c 'set -euo pipefail; if grep -q "complete" /etc/k3s-install-marker 2>/dev/null; then echo "k3s already installed; skipping"; exit 0; fi; curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=%s INSTALL_K3S_EXEC="server --cluster-init" sh -s -; systemctl is-active --quiet k3s.service; mkdir -p /root; install -m 0600 /etc/rancher/k3s/k3s.yaml /root/humility-k3s.yaml; echo "complete" > /etc/k3s-install-marker'
+        - fromFieldPath: spec.parameters.channel
+          toFieldPath: status.clusterName
+          type: ToCompositeFieldPath
+          transforms:
+            - type: string
+              string:
+                fmt: "humility-%s-app"
