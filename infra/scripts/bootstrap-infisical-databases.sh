@@ -28,6 +28,7 @@ DB_USERNAME="sample_app"
 DB_DATABASE="sample_app"
 DB_HOST="sample-app-postgres-rw.sample-app-db.svc.cluster.local"
 DB_PORT="5432"
+DB_SSL_MODE="${DB_SSL_MODE:-}"
 DB_SECRET_NAMESPACE="sample-app-db"
 DB_APP_SECRET_NAME="sample-app-postgres-app"
 DB_URL_SECRET_NAME="sample-app-postgres-url"
@@ -47,8 +48,8 @@ stop_port_forward() {
 
 cleanup() {
   stop_port_forward
-  if [[ "${#TEMP_FILES[@]}" -gt 0 ]]; then
-    rm -f "${TEMP_FILES[@]}"
+  if [[ ${#TEMP_FILES[@]} -gt 0 ]]; then
+    rm -f "${TEMP_FILES[@]+"${TEMP_FILES[@]}"}"
   fi
 }
 
@@ -113,12 +114,20 @@ need_command() {
 }
 
 kubectl_cmd() {
-  kubectl "${KUBECONFIG_ARG[@]}" "$@"
+  if [[ ${#KUBECONFIG_ARG[@]} -gt 0 ]]; then
+    kubectl "${KUBECONFIG_ARG[@]}" "$@"
+  else
+    kubectl "$@"
+  fi
 }
 
 json_field() {
   local expression="$1"
   jq -er "$expression"
+}
+
+urlencode() {
+  python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
 }
 
 secret_value() {
@@ -181,6 +190,14 @@ resolve_channel_databases() {
   UA_SECRET_NAME="$(jq -er '.infisical.universal_auth_secret_name' "$resolved")"
   UA_SECRET_NAMESPACE="$(jq -er '.infisical.universal_auth_secret_namespace' "$resolved")"
   SERVER_NAMESPACE="$(jq -er '.infisical.operator_namespace' "$resolved")"
+
+  if [[ -z "$DB_SSL_MODE" ]]; then
+    if [[ "$ENVIRONMENT_SLUG" == "local" ]]; then
+      DB_SSL_MODE="disable"
+    else
+      DB_SSL_MODE="require"
+    fi
+  fi
 }
 
 wait_for_server() {
@@ -356,6 +373,7 @@ ensure_secret_folder() {
   local current="/"
   local segment
   local parent_path
+  local encoded_path
   local folders
   local exists
   local body
@@ -367,7 +385,8 @@ ensure_secret_folder() {
   IFS='/' read -r -a segments <<<"$normalized"
   for segment in "${segments[@]}"; do
     parent_path="$current"
-    folders="$(api_request GET "/api/v2/folders?projectId=${PROJECT_ID}&environment=${ENVIRONMENT_SLUG}&path=${parent_path}&recursive=false")"
+    encoded_path="$(urlencode "$parent_path")"
+    folders="$(api_request GET "/api/v2/folders?projectId=${PROJECT_ID}&environment=${ENVIRONMENT_SLUG}&path=${encoded_path}&recursive=false")"
     exists="$(jq -er --arg name "$segment" '.folders[]? | select(.name == $name) | .id' <<<"$folders" 2>/dev/null || true)"
     if [[ -z "$exists" ]]; then
       body="$(jq -n \
@@ -509,6 +528,7 @@ set_secret_if_absent "password" "$(generate_password)"
 
 DB_PASSWORD="$(secret_value_or_empty password)"
 [[ -n "$DB_PASSWORD" ]] || die "database password was not readable after bootstrap"
-set_secret_if_absent "url" "postgres://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_DATABASE}?sslmode=disable"
+DB_PASSWORD_ENCODED="$(urlencode "$DB_PASSWORD")"
+set_secret_if_absent "url" "postgres://${DB_USERNAME}:${DB_PASSWORD_ENCODED}@${DB_HOST}:${DB_PORT}/${DB_DATABASE}?sslmode=${DB_SSL_MODE}"
 
 log "Infisical project ${PROJECT_SLUG} path ${SECRETS_PATH} is bootstrapped for channel ${CHANNEL}"

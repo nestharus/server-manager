@@ -14,9 +14,15 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: atlas-operator
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: atlas-operator
         - podSelector:
             matchLabels:
               cnpg.io/cluster: sample-app-postgres
@@ -62,8 +68,18 @@ spec:
         - protocol: TCP
           port: 9000
     - to:
+        # Local k3s service CIDR default: Service/kubernetes ClusterIP.
+        # Remote channels must template this from their cluster service CIDR.
         - ipBlock:
             cidr: 10.43.0.1/32
       ports:
         - protocol: TCP
           port: 443
+    - to:
+        # k3d DNATs Service/kubernetes to the server container endpoint.
+        # This is local-only and must be replaced by remote cluster policy.
+        - ipBlock:
+            cidr: 172.28.0.0/16
+      ports:
+        - protocol: TCP
+          port: 6443
