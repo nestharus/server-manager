@@ -1,927 +1,1059 @@
-# INIT-101 Phase 3 Proposal: Self-Managed k3s Control Cluster
-## Binding sources
-- `.pipeline/research.md` - Phase 1 evidence for replacing the archived
-  VKE-shaped INIT-008 substrate with k3s/k3d/Vultr-VMs.
-- `.pipeline/synthesis.md` - Phase 2 synthesis, D1-D12, stale-material
-  disposition, and six implementation slices.
-- `worktrees/phase-5-replan/.pipeline/replan.md` - Section 5, INIT-101
-  corrected Phase 5 scope.
-- `DECISIONS.md` D8 - environment-agnostic Phase 5 reset:
-  local-as-first-deployment and self-managed k3s everywhere.
-- `memory/environment-agnostic-stack.md` - local is a deployment target, not a
-  dry-run or simulation.
-- `memory/two-tier-cluster-architecture.md` - control cluster hosts platform
-  controllers; application workloads wait for app clusters.
-- `memory/channel-template-pattern.md` - channels replace hard
-  `dev/staging/production` roots and carry provider/endpoint config.
-- `memory/platform-stack.md` - Vultr, OpenTofu, Vultr Object Storage remote
-  state, Buildkite, and Flux remain locked; VKE is superseded by D8.
-- `worktrees/init-008-platform-bootstrap/.pipeline/proposal.md` - closest
-  proposal shape precedent and source for salvage/discard boundaries.
-- `worktrees/init-008-platform-bootstrap/infra/` - reference copy of the
-  VKE-shaped substrate to salvage structurally or discard.
-- `product-strategy/tickets/INIT-001.md` - ticket-ready initiative framing
-  shape.
-- `~/ai/conventions/no-backwards-compatibility.md` - old VKE field/module/root
-  shape is deleted, not adapted.
-- `~/ai/conventions/no-deferred-stubs.md` - postponed work must be explicit
-  anti-scope with a named successor, not a placeholder.
-This proposal is bound to synthesis decisions D1-D12:
-- D1: k3s is pinned to `v1.32.13+k3s1`.
-- D2: k3d is pinned to `v5.8.3`.
-- D3: local k3d cluster names are `humility-<channel_id>`.
-- D4: local topology is one k3d server and one k3d agent.
-- D5: remote INIT-101 topology is a single k3s server.
-- D6: remote server plan default is `vc2-2c-4gb`.
-- D7: Vultr provider constraint remains `~> 2.30`.
-- D8: channel schema is replaced with k3s-shaped fields.
-- D9: remote bootstrap is cloud-init plus the official k3s installer.
-- D10: kubeconfig retrieval is channel-scoped.
-- D11: Vultr Object Storage state-backend bootstrap is reused unchanged.
-- D12: active VKE-shaped INIT-008 artifacts are deleted in this branch.
-No proposal section may preserve VKE compatibility, substitute dry-runs for
-the real local cluster, or turn future remote work into checked-in stubs.
----
-## 1. Executive summary
-INIT-101 establishes the self-managed k3s control-cluster substrate for Phase
-5. The local channel runs k3d, which is k3s in Docker, and remote channels are
-represented as OpenTofu-managed Vultr Cloud Compute VMs bootstrapped by
-cloud-init using the standard `curl -sfL https://get.k3s.io | sh -` install
-path. This is the replacement for INIT-008's VKE-shaped substrate. The done
-state is concrete: a real local k3d cluster is up, a channel-scoped kubeconfig
-is retrieved, and the harness proves `kubectl get nodes` succeeds against that
-kubeconfig.
-The proposal keeps the pieces of INIT-008 that matched the corrected
-architecture and discards the pieces that encoded VKE. Salvageable structure
-includes the channel-template directory layout, the channel resolver/generator
-script shape, the Vultr Object Storage state-backend bootstrap module, the
-Vultr VPC/network module concept, and the validation harness pattern. VKE
-cluster code, VKE-shaped channel fields, VKE-shaped generated tfvars, hard
-environment roots, and render-only completion criteria are deleted rather than
-wrapped.
-Ticket-ready framing mirrors INIT-001. **Subsystem:** Deployment substrate;
-control-cluster bootstrap. **Phase:** Phase 5 reset successor, replacing
-archived INIT-008. **Executive priority:** critical path for INIT-102 through
-INIT-117. Flux, Infisical, Crossplane, DNS/TLS, app workloads, and later
-control-plane operations all depend on an environment-agnostic control-cluster
-contract that works locally first and can be parameterized for remote channels
-later. **Proposal mechanism:** use the same k3s distribution family locally
-and remotely, express the target through channel config, and verify the local
-deployment with a real cluster before any remote apply exists.
-This initiative intentionally stops short of remote deployment. The remote
-Vultr VM/cloud-init path must validate and plan, but INIT-101 does not spend
-Vultr resources or fetch a remote kubeconfig. That boundary is not a dry-run
-substitute for local work: local k3d is the first deployment target and must
-come up as the completion proof. Remote apply, remote HA, Flux, Crossplane,
-Infisical, DNS, TLS, and application workloads are named successor work.
----
-## 2. Architecture
-### 2.1 Control-cluster boundary
-INIT-101 owns the control-cluster substrate only.
-The control cluster is the platform cluster that later hosts:
-- Flux, installed by INIT-102.
-- Infisical runtime secret store, installed by INIT-103.
-- Crossplane, installed by INIT-106.
-- Control-plane DNS/TLS/security/observability components from later INITs.
-It does not host application workloads in INIT-101. The API service, Discord
-daemon, data plane, app ingress, app auth, and workload observability wait for
-application clusters and later Phase 5 initiatives. This preserves the
-two-tier architecture while updating the old memory's VKE references to D8's
-k3s-on-k3d/Vultr-VM substrate.
-### 2.2 Repo layout after INIT-101
-The implementation leaves `infra/` in this shape:
+# INIT-102 Phase 3 Proposal: GitOps Substrate
+
+## Binding Sources
+- `.pipeline/research.md` - Phase 1 evidence for Flux, Kustomize channel
+  overlays, SOPS+age bootstrap-only secrets, local Git source options, and
+  missing toolchain pieces.
+- `.pipeline/synthesis.md` - Phase 2 synthesis and D1 through D11 decisions.
+- `../init-101-k3s-control-cluster/.pipeline/proposal.md` - binding
+  channel-template and k3s/k3d/Vultr-VM substrate contract.
+- `../init-101-k3s-control-cluster/DECISIONS.md` D8 - environment-agnostic
+  Phase 5 reset: local-as-first-deployment and self-managed k3s everywhere.
+- `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md`
+  - local is a real deployment target, not a dry run.
+- `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md`
+  - channel ids and inheritance replace hard environment roots.
+- `~/ai/conventions/no-backwards-compatibility.md` - no shims, no dual trees,
+  no transitional compatibility.
+
+This proposal operationalizes synthesis D1 through D11. The binding result is
+a local k3d control cluster with Flux reconciling a channel overlay from a
+local in-cluster Git source, plus a working SOPS+age bootstrap-decryption path.
+Nothing in this proposal uses `flux bootstrap`, `kind`, VKE, MinIO-backed Flux
+sources, runtime secrets in SOPS, hard `dev/staging/production` Kubernetes
+roots, or render-only verification.
+
+## 1. Scope Summary
+INIT-102 ships the GitOps substrate for the Phase 5 local control cluster. It
+adds a root-level `gitops/` tree, vendors Flux v2.8.6 controller manifests
+generated by `flux install --export`, installs only `source-controller` and
+`kustomize-controller`, adds channel-aligned Kustomize bases and the `local`
+overlay, extends channel YAML with a `gitops` block, wires a post-install
+script into local channel bring-up, runs an in-cluster anonymous-read
+`git daemon` service for the local Flux `GitRepository`, and proves real Flux
+reconciliation plus SOPS decryption in local k3d.
+
+INIT-102 does not ship application workloads, Crossplane, Infisical runtime
+secrets, object storage, cert-manager, DNS, TLS, ingress, container delivery,
+CI/CD, data-plane services, backup, auth, access policy, tenant isolation, or
+observability. It also does not install Flux on the remote `dev` Vultr-VM
+channel. Those concerns are named successor initiatives in Section 14. INIT-102
+is the local GitOps substrate only, but it is not local-special: the same
+channel schema and GitOps layout become the later remote-channel path.
+
+## 2. Module/File Surface
+The INIT-101 baseline already contains `infra/`, channel schemas, active
+`local` and `dev` channel declarations, channel-template roots, k3d/k3s
+bring-up scripts, and the local verification harness. INIT-102 modifies that
+surface and replaces the stale top-level `k8s/` tree with `gitops/`.
+
+| Path | Type | Purpose | New vs modified |
+|---|---|---|---|
+| `.pipeline/proposal.md` | proposal | Binding Phase 3 design for INIT-102. | Modified; replaces stale INIT-101 text. |
+| `gitops/` | directory | Root GitOps source tree for Flux-managed manifests and SOPS bootstrap secrets. | New. |
+| `gitops/README.md` | doc | Documents layout, channel ownership, bootstrap-only SOPS boundary, and local reseed flow. | New. |
+| `gitops/flux-system/` | directory | Vendored Flux controller installation artifact. | New. |
+| `gitops/flux-system/gotk-components.yaml` | manifest | Output of pinned `flux install --export --components=source-controller,kustomize-controller`. | New. |
+| `gitops/flux-system/kustomization.yaml` | manifest | Kustomize entrypoint for applying the vendored Flux components. | New. |
+| `gitops/bases/` | directory | Reusable Kustomize bases shared by channel overlays. | New. |
+| `gitops/bases/gitops-sentinel/` | directory | Minimal target manifest proving Flux applied channel content. | New. |
+| `gitops/bases/gitops-sentinel/namespace.yaml` | manifest | Creates namespace `humility-gitops-sentinel`. | New. |
+| `gitops/bases/gitops-sentinel/configmap.yaml` | manifest | Creates `ConfigMap/gitops-sentinel` with `data.channel=base`. | New. |
+| `gitops/bases/gitops-sentinel/kustomization.yaml` | manifest | Kustomize base that packages the sentinel namespace and ConfigMap. | New. |
+| `gitops/channels/` | directory | Channel overlays keyed by channel id. | New. |
+| `gitops/channels/local/` | directory | Local channel overlay reconciled by Flux in local k3d. | New. |
+| `gitops/channels/local/kustomization.yaml` | manifest | Includes sentinel base and encrypted bootstrap secret for local channel. | New. |
+| `gitops/channels/local/patches/gitops-sentinel-channel.yaml` | manifest | Patches sentinel `ConfigMap` to `data.channel=local`. | New. |
+| `gitops/secrets/` | directory | Bootstrap-tier SOPS encrypted manifests, grouped by channel id. | New. |
+| `gitops/secrets/local/` | directory | Local channel bootstrap-tier encrypted material and SOPS creation rule. | New. |
+| `gitops/secrets/local/.sops.yaml` | schema/config | SOPS creation rule for local bootstrap encrypted YAML. | New. |
+| `gitops/secrets/local/gitops-sops-sentinel.enc.yaml` | manifest | Encrypted Secret used only to prove Flux SOPS decryption works. | New. |
+| `gitops/sources/` | directory | Rendered Flux source/sync CRs applied after controllers are installed. | New. |
+| `gitops/sources/local/` | directory | Local channel Flux `GitRepository` and root `Kustomization`. | New. |
+| `gitops/sources/local/gitrepository.yaml` | manifest | `GitRepository/humility-local` pointing at in-cluster Git daemon. | New. |
+| `gitops/sources/local/kustomization.yaml` | manifest | Flux `Kustomization/humility-local` pointing at `./gitops/channels/local` with SOPS decryption. | New. |
+| `gitops/sources/local/kustomization.kustomize.yaml` | manifest | Kustomize entrypoint for source/sync CR application by script. | New. |
+| `gitops/local-git-server/` | directory | Kubernetes manifests for the local in-cluster `git daemon`. | New. |
+| `gitops/local-git-server/namespace.yaml` | manifest | Creates namespace `git-system`. | New. |
+| `gitops/local-git-server/pvc.yaml` | manifest | Persists the local bare Git repository across `git-local` Pod restarts (addresses SC-007). | New. |
+| `gitops/local-git-server/deployment.yaml` | manifest | Runs one `git daemon` Pod serving `/srv/git/server-manager.git`. | New. |
+| `gitops/local-git-server/service.yaml` | manifest | ClusterIP Service `git-local` on TCP 9418. | New. |
+| `gitops/local-git-server/kustomization.yaml` | manifest | Kustomize entrypoint for local Git server install. | New. |
+| `infra/channels/local.yaml` | schema data | Adds concrete `gitops` block for local k3d target. | Modified. |
+| `infra/channels/dev.yaml` | schema data | Remains Vultr-VM plan channel; `gitops` block stays absent in INIT-102. | Unmodified unless schema fixtures require explicit absence. |
+| `infra/schemas/platform-channel.schema.json` | schema | Adds optional top-level `gitops` object with strict inner fields. | Modified. |
+| `infra/schemas/platform-channel-resolved.schema.json` | schema | Adds resolved `gitops` object; required when `cluster.target=k3d-local`. | Modified. |
+| `infra/scripts/resolve_platform_channel.py` | script | Preserves/inherits `gitops` values and validates target-specific requirement. | Modified. |
+| `infra/scripts/generate_channel_tfvars.py` | script | Does not emit `gitops` into OpenTofu tfvars; Flux is script-owned. | Modified only if tests need explicit exclusion. |
+| `infra/scripts/validate_platform_channels.py` | script | Fails local root channels without valid `gitops` fields. | Modified. |
+| `infra/scripts/install-cluster-tools.sh` | script | Installs/verifies pinned `flux`, `sops`, `age`, and `age-keygen` in addition to k3d. | Modified. |
+| `infra/scripts/bring-up-local-channel.sh` | script | Calls Flux post-install path after k3d cluster is ready unless `--cluster-only` is set. | Modified. |
+| `infra/scripts/delete-local-channel.sh` | script | Deletes Flux-created local Git server namespace and sentinel namespace before deleting k3d when reachable. | Modified. |
+| `infra/scripts/install-flux-for-channel.sh` | script | Idempotent post-install entrypoint for Flux, age Secret, Git server, source CRs, and reconcile. | New. |
+| `infra/scripts/bootstrap-sops-age-key.sh` | script | Generates or verifies local age key outside the repo and writes public recipient to `.sops.yaml`. | New. |
+| `infra/scripts/render-gitops-source.py` | script | Renders `gitops/sources/<channel>/` from resolved channel `gitops` fields. | New. |
+| `infra/scripts/seed-local-git-source.sh` | script | Creates a snapshot bare Git repo from `gitops/`, copies it into the in-cluster Git server, and optionally reconciles Flux. | New. |
+| `infra/tests/validate_gitops_substrate.sh` | test | End-to-end local proof for Flux readiness, source readiness, sentinel apply, SOPS secret, and idempotency. | New. |
+| `infra/tests/test_platform_channel_gitops.py` | test | Schema/resolver tests for `gitops` block, target interaction, inheritance, and invalid values. | New. |
+| `infra/tests/test_gitops_rendering.py` | test | Verifies rendered Flux CR names, refs, paths, intervals, and decryption secret fields. | New. |
+| `k8s/` | stale tree | Hard environment Kubernetes tree from prior work; deleted in full. | Deleted. |
+| `k8s/tests/test_gitops_foundation.sh` | stale test | Render-only hard-env GitOps test; deleted with `k8s/`. | Deleted. |
+
+### `gitops/` Layout
+The final layout after INIT-102 is:
+
 ```text
-infra/
+gitops/
   README.md
-  schemas/
-    platform-channel.schema.json
-    platform-channel-resolved.schema.json
+  flux-system/
+    gotk-components.yaml
+    kustomization.yaml
+  bases/
+    gitops-sentinel/
+      namespace.yaml
+      configmap.yaml
+      kustomization.yaml
   channels/
-    local.yaml
-    dev.yaml
-    fixtures/
-      local-child.yaml
-      dev-child.yaml
-      ephemeral-disabled.yaml
-      missing-parent.yaml
-      circular-a.yaml
-      circular-b.yaml
-  templates/
-    platform-channel/
-      main.tf
-      variables.tf
-      outputs.tf
-      versions.tf
-  roots/
-    channels/
-      local/
-        main.tf
-        backend.tfbackend
-        channel.auto.tfvars.json
-      dev/
-        main.tf
-        backend.tfbackend
-        channel.auto.tfvars.json
-  bootstrap/
-    state-backend/
-      main.tf
-      versions.tf
-  modules/
-    platform-network/
-      main.tf
-      versions.tf
-    platform-cluster-k3d/
-      main.tf
-      variables.tf
-      outputs.tf
-      versions.tf
-    platform-cluster-vms/
-      main.tf
-      variables.tf
-      outputs.tf
-      versions.tf
-      cloud-init/
-        k3s-server.yaml.tftpl
-  scripts/
-    resolve_platform_channel.py
-    spawn_platform_channel.py
-    generate_channel_backend.py
-    generate_channel_tfvars.py
-    validate_platform_channels.py
-    bring-up-local-channel.sh
-    delete-local-channel.sh
-  tests/
-    validate_platform_bootstrap.sh
+    local/
+      kustomization.yaml
+      patches/
+        gitops-sentinel-channel.yaml
+  secrets/
+    local/
+      .sops.yaml
+      gitops-sops-sentinel.enc.yaml
+  sources/
+    local/
+      gitrepository.yaml
+      kustomization.yaml
+      kustomization.kustomize.yaml
+  local-git-server/
+    namespace.yaml
+    pvc.yaml
+    deployment.yaml
+    service.yaml
+    kustomization.yaml
 ```
-The old roots and module are removed:
-```text
-infra/environments/dev/
-infra/environments/staging/
-infra/environments/production/
-infra/modules/platform-cluster/
-```
-No `legacy/`, `archived/`, symlink, forwarding module, deprecated alias, or
-dual schema reader remains. The reference copy is the
-`feat/init-008-platform-bootstrap` branch and its worktree, not an active
-directory in this branch.
-### 2.3 Channel schema
-The source schema remains:
-```text
-infra/schemas/platform-channel.schema.json
-```
-The resolved schema remains:
-```text
-infra/schemas/platform-channel-resolved.schema.json
-```
-The schema version remains `1`, but the field shape is a clean replacement.
-This follows D8 and the no-backwards-compatibility rule: there is no old VKE
-reader for `schema_version: 1`, because the wrong-shaped work never becomes
-the accepted main-path contract.
-Top-level source fields stay channel-shaped: `schema_version`, `id`, `parent`,
-`exposure`, `tenant`, `allow_ephemeral_children`, `enabled_platforms`,
-`platform`, `cluster`, and `state`. `schema_version` accepts only `1`;
-channel ids use `^[a-z0-9][a-z0-9-]*$`; `exposure` is `prod`, `stage`, or
-`dev`; `enabled_platforms` accepts `kubernetes` for INIT-101.
-The required k3s replacement fields are:
-- `platform.provider: local | vultr`, plus provider-specific region, network,
-  and object-storage endpoint fields.
-- `cluster.distribution: k3s`.
-- `cluster.target: k3d-local | vultr-vms`.
-- `cluster.k3s_version`, matching `vX.Y.Z+k3sN`.
-- `cluster.kubeconfig_path`, always channel-scoped.
-- For `k3d-local`: `k3d.cluster_name`, `servers`, `agents`,
-  `registry_name`, `api_port`, `port_mappings`, and `volumes`.
-- For `vultr-vms`: `vultr.region`, network, firewall, `servers.count`,
-  `servers.plan`, `agents.count`, `agents.plan`, `ssh_key_ids`, and
-  `bootstrap` with install version, remote kubeconfig path, and token input.
-- `state.backend: local | s3-compatible`, with bucket/key/region/endpoint
-  fields appropriate to that backend.
-Resolved channels must contain concrete inherited values, no unresolved parent
-links for OpenTofu consumption, and `additionalProperties: false` everywhere
-unless a field is explicitly documented open. Generated tfvars consume the
-resolved schema only.
-### 2.4 Initial channels
-INIT-101 ships two active channel declarations:
-```text
-infra/channels/local.yaml
-infra/channels/dev.yaml
-```
-`local.yaml` is the done-state channel: `provider: local`,
-`cluster.target: k3d-local`, `cluster.k3s_version: v1.32.13+k3s1`,
-`cluster.kubeconfig_path: infra/channels/local/.generated/kubeconfig.yaml`,
-`k3d.cluster_name: humility-local`, `k3d.servers: 1`, `k3d.agents: 1`, local
-state, and optional local registry/API-port/port/volume fields.
-`dev.yaml` is the remote Vultr VM plan channel: `provider: vultr`,
-`region: ewr`, `network: 10.40.0.0/20`, `cluster.target: vultr-vms`,
-`cluster.k3s_version: v1.32.13+k3s1`, single server plan `vc2-2c-4gb`, zero
-agents by default, cloud-init bootstrap with remote kubeconfig path
-`/root/humility-k3s.yaml`, and Vultr Object Storage state key
-`channels/dev/terraform.tfstate`.
-Remote values that would cause real mutation, such as SSH key IDs and allowed
-SSH CIDRs, are accepted only as plan inputs where OpenTofu can validate the
-root. They are not runtime stubs; remote apply is explicitly anti-scope.
-### 2.5 `platform-cluster-k3d` module
-New module:
-```text
-infra/modules/platform-cluster-k3d/
-```
-This module is the local target surface. It does not call the Vultr provider.
-It may use the `null` provider and `local-exec` only if the implementation
-keeps the command path deterministic and validates inputs before execution.
-The preferred local bring-up path is the script in Section 2.10, with the
-module exposing generated outputs consumed by the channel root. The module
-owns:
-- k3d cluster name.
-- k3s image/version value derived from D1.
-- server count `1`.
-- agent count `1`.
-- optional local registry name.
-- optional API port.
-- optional port and volume mappings.
-- channel-scoped kubeconfig path.
-- outputs for cluster name, kubeconfig path, server count, and agent count.
-The module must not fall back to kind, Docker Compose Kubernetes, minikube, or
-the operator's global kubeconfig. It must not silently reduce the topology to a
-single node if the agent cannot start. A failed two-node local topology is a
-failure to fix, not a downgrade.
 
-Variable contract for `infra/modules/platform-cluster-k3d/variables.tf`:
+The `dev` overlay is intentionally absent. `dev` is a remote Vultr-VM channel
+and INIT-102 does not install remote Flux.
 
-| Variable | Type | Default | Description |
-|---|---:|---|---|
-| `channel_id` | `string` | no default; required | Channel identifier used for labels and generated paths. No default; required. |
-| `cluster_name` | `string` | no default; required | k3d cluster name resolved from `k3d.cluster_name`. No default; required. |
-| `k3s_version` | `string` | no default; required | Pinned k3s version used for the local k3d node image. No default; required. |
-| `server_count` | `number` | `1` | Number of k3d server nodes; INIT-101 expects one. Default: `1`. |
-| `agent_count` | `number` | `1` | Number of k3d agent nodes; INIT-101 expects one. Default: `1`. |
-| `kubeconfig_path` | `string` | no default; required | Channel-scoped generated kubeconfig path. No default; required. |
-| `registry_name` | `string` | `null` | Optional local k3d registry name. Default: `null`. |
-| `api_port` | `string` | `null` | Optional host API-port binding passed to k3d. Default: `null`. |
-| `port_mappings` | `list(string)` | `[]` | Optional k3d port mappings. Default: `[]`. |
-| `volume_mappings` | `list(string)` | `[]` | Optional k3d volume mappings. Default: `[]`. |
-### 2.6 `platform-cluster-vms` module
-New module:
-```text
-infra/modules/platform-cluster-vms/
-```
-This replaces the VKE module:
-```text
-infra/modules/platform-cluster/
-```
-The new module provisions remote plan-surface resources only:
-- One `vultr_instance` server by default.
-- Optional future agent instances from `agents.count`, default `0`.
-- VPC attachment through the existing `platform-network` output.
-- Firewall group/rules sufficient for the single-server plan surface.
-- SSH key IDs as required inputs for apply-capable remote channels.
-- `user_data` rendered from cloud-init.
-- Outputs for server label, server IP, remote kubeconfig path, and cluster
-  version.
-The module must not use `vultr_kubernetes`. It must not preserve VKE variables
-such as `cluster_kubernetes_version`, `node_plan`, `node_quantity`,
-`ha_controlplanes`, or `enable_firewall` as compatibility aliases.
+### Flux Base Manifest Surface
+`gitops/flux-system/gotk-components.yaml` is generated, committed, and treated
+as a lockfile. The generating command is:
 
-Variable contract for `infra/modules/platform-cluster-vms/variables.tf`:
-
-| Variable | Type | Default | Description |
-|---|---:|---|---|
-| `channel_id` | `string` | no default; required | Channel identifier used for names, tags, and labels. No default; required. |
-| `region` | `string` | no default; required | Vultr region resolved from the channel. No default; required. |
-| `vpc_id` | `string` | no default; required | Existing Vultr VPC identifier from `platform-network`. No default; required. |
-| `k3s_version` | `string` | no default; required | Pinned k3s version exported to the installer. No default; required. |
-| `server_count` | `number` | `1` | Number of remote server VMs for INIT-101. Default: `1`. |
-| `server_plan` | `string` | `"vc2-2c-4gb"` | Vultr plan for server VMs. Default: `"vc2-2c-4gb"`. |
-| `agent_count` | `number` | `0` | Number of remote agent VMs for INIT-101. Default: `0`. |
-| `agent_plan` | `string` | `"vc2-2c-4gb"` | Vultr plan for future agent VMs. Default: `"vc2-2c-4gb"`. |
-| `ssh_key_ids` | `list(string)` | no default; required | Vultr SSH key IDs for apply-capable remote channels. No default; required. |
-| `allowed_ssh_cidrs` | `list(string)` | no default; required | CIDRs allowed to reach SSH on remote VMs. No default; required. |
-| `remote_kubeconfig_path` | `string` | `"/root/humility-k3s.yaml"` | Path where cloud-init copies the server kubeconfig. Default: `"/root/humility-k3s.yaml"`. |
-| `firewall_name` | `string` | `null` | Optional explicit firewall group name. Default: `null`. |
-### 2.7 Cloud-init template
-Cloud-init lives at:
-```text
-infra/modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl
+```bash
+flux install \
+  --export \
+  --components=source-controller,kustomize-controller \
+  > gitops/flux-system/gotk-components.yaml
 ```
-The template writes a k3s config and installs the pinned version:
+
+The CLI version used for generation must be `flux v2.8.6`. The expected
+resource count from that exact export is 22 resources:
+
+| Kind | Count | Names |
+|---|---:|---|
+| `Namespace` | 1 | `flux-system` |
+| `ResourceQuota` | 1 | `critical-pods-flux-system` |
+| `CustomResourceDefinition` | 7 | listed below |
+| `ServiceAccount` | 2 | `source-controller`, `kustomize-controller` |
+| `ClusterRole` | 3 | `crd-controller-flux-system`, `flux-edit-flux-system`, `flux-view-flux-system` |
+| `ClusterRoleBinding` | 2 | `cluster-reconciler-flux-system`, `crd-controller-flux-system` |
+| `Service` | 1 | `source-controller` |
+| `Deployment` | 2 | `source-controller`, `kustomize-controller` |
+| `NetworkPolicy` | 3 | `allow-egress`, `allow-scraping`, `allow-webhooks` |
+
+The committed Flux CRDs are:
+
+- `buckets.source.toolkit.fluxcd.io`
+- `externalartifacts.source.toolkit.fluxcd.io`
+- `gitrepositories.source.toolkit.fluxcd.io`
+- `helmcharts.source.toolkit.fluxcd.io`
+- `helmrepositories.source.toolkit.fluxcd.io`
+- `ocirepositories.source.toolkit.fluxcd.io`
+- `kustomizations.kustomize.toolkit.fluxcd.io`
+
+The CRD set is broader than INIT-102's used source kind because the Flux
+source-controller install manifest owns all source CRDs. INIT-102 still uses
+only `GitRepository` and `Kustomization` CRs.
+
+## 3. Schema Changes
+The source channel schema and resolved channel schema both gain a top-level
+`gitops` object. The object is optional at the source-schema top level so
+remote plan channels can exist before remote Flux installation. Inside the
+object, every field is required. In the resolved schema, `gitops` is required
+when `cluster.target` is `k3d-local`; it is optional when `cluster.target` is
+`vultr-vms` until a remote GitOps initiative binds remote installation.
+
+`schema_version` remains `1` for INIT-102 because the `gitops` block is an
+additive extension and existing valid `vultr-vms` channels remain valid without
+it. Any breaking change to `gitops` required fields or semantics requires
+`schema_version: 2` and a coordinated channel re-render (addresses AUDIT-001).
+
+The source-schema addition is:
+
+```json
+{
+  "properties": {
+    "gitops": {
+      "$ref": "#/$defs/gitops"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "cluster": {
+            "properties": {
+              "target": {
+                "const": "k3d-local"
+              }
+            },
+            "required": ["target"]
+          }
+        },
+        "required": ["cluster"]
+      },
+      "then": {
+        "required": ["gitops"]
+      }
+    }
+  ],
+  "$defs": {
+    "gitops": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_kind",
+        "git_url",
+        "git_ref",
+        "path",
+        "interval_source",
+        "interval_kustomization",
+        "flux_version",
+        "sops_age_secret_name",
+        "decryption_secret_namespace"
+      ],
+      "properties": {
+        "source_kind": {
+          "type": "string",
+          "enum": ["git"]
+        },
+        "git_url": {
+          "type": "string",
+          "pattern": "^(git|ssh|https)://[^\\s]+$"
+        },
+        "git_ref": {
+          "type": "string",
+          "pattern": "^(refs/heads/[A-Za-z0-9._/-]+|refs/tags/[A-Za-z0-9._/-]+|[A-Za-z0-9._/-]+)$"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^\\./gitops/channels/[a-z0-9][a-z0-9-]*$"
+        },
+        "interval_source": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(s|m|h)$"
+        },
+        "interval_kustomization": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(s|m|h)$"
+        },
+        "flux_version": {
+          "type": "string",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "sops_age_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "default": "sops-age"
+        },
+        "decryption_secret_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "default": "flux-system"
+        }
+      }
+    }
+  }
+}
+```
+
+The resolved schema uses the same `gitops` definition and must contain
+inherited concrete values. The resolver may not leave defaults implicit in
+resolved JSON: `sops_age_secret_name` resolves to `sops-age`, and
+`decryption_secret_namespace` resolves to `flux-system`.
+
+`infra/channels/local.yaml` gains:
+
 ```yaml
-#cloud-config
-write_files:
-  - path: /etc/rancher/k3s/config.yaml
-    owner: root:root
-    permissions: "0600"
-    content: |
-      write-kubeconfig-mode: "0600"
-      node-name: ${node_name}
-runcmd:
-  - export INSTALL_K3S_VERSION="${k3s_version}"
-  - curl -sfL https://get.k3s.io | sh -
-  - cp /etc/rancher/k3s/k3s.yaml ${remote_kubeconfig_path}
-  - chmod 0600 ${remote_kubeconfig_path}
+gitops:
+  source_kind: git
+  git_url: git://git-local.git-system.svc.cluster.local:9418/server-manager.git
+  git_ref: refs/heads/main
+  path: ./gitops/channels/local
+  interval_source: 1m
+  interval_kustomization: 1m
+  flux_version: v2.8.6
+  sops_age_secret_name: sops-age
+  decryption_secret_namespace: flux-system
 ```
-The actual implementation may add strict shell flags, file existence checks,
-and token handling. It may not switch to k3sup, the Vultr Marketplace k3s app,
-or an unpinned installer.
 
-Cloud-init idempotency is part of the plan contract even though remote apply is
-anti-scope in INIT-101:
-- k3s installation runs at most once per VM, guarded by
-  `/var/lib/k3s-installed` or by checking for an existing k3s systemd unit.
-- Config and kubeconfig writes are in `runcmd` steps with prerequisite checks;
-  they do not overwrite an existing valid config or valid kubeconfig copy.
-- Given the same resolved channel inputs, the rendered `user_data` payload is
-  byte-identical between harness runs.
-### 2.8 Channel template
-The template remains:
-```text
-infra/templates/platform-channel/
-```
-`main.tf` is rewritten to dispatch by `cluster.target`:
-- `k3d-local` calls `infra/modules/platform-cluster-k3d`.
-- `vultr-vms` calls `infra/modules/platform-network` and
-  `infra/modules/platform-cluster-vms`.
-Because OpenTofu module counts/for_each have static-shape implications, the
-implementation can use explicit conditional module `count` blocks or split
-target-specific locals, but it must keep one channel template directory and one
-generated root shape. It must not revive hard environment roots or create a
-parallel "local-only" template that bypasses the channel contract.
-Generated tfvars must contain only the k3s-shaped payload:
-- `channel_id`
-- `exposure`
-- `cluster_distribution`
-- `cluster_target`
-- `cluster_k3s_version`
-- `cluster_kubeconfig_path`
-- `k3d_*` fields for local targets
-- `vultr_*` fields for remote targets
-- `state_*` fields
-No generated tfvars may contain `kubernetes_version`, `node_pools`,
-`ha_controlplanes`, `enable_firewall` as VKE managed-cluster fields, or
-`vultr_kubernetes`-oriented names.
-### 2.9 Kubeconfig retrieval
-Local kubeconfig:
-```text
-infra/channels/local/.generated/kubeconfig.yaml
-```
-Local retrieval command:
+`infra/channels/dev.yaml` does not receive `gitops` in INIT-102. Its
+`cluster.target` is `vultr-vms`, and remote Flux install/source wiring is out
+of scope. The schema accepts this absence for `vultr-vms`; the validator must
+still reject `gitops.source_kind` values other than `git`.
+
+The `gitops` block is not emitted into OpenTofu tfvars. Flux is installed by a
+post-install script after the cluster exists and kubeconfig is known. The
+channel resolver is the source of truth for both OpenTofu and script surfaces,
+but cluster mutation remains script-owned per D8.
+
+## 4. Channel Template Module Changes
+D8 binds INIT-102 to a post-install script, not a Terraform/OpenTofu module.
+There is no `infra/modules/platform-flux/` module in INIT-102.
+
+### Rejected TF Module Shape
+The following module is explicitly not created:
+
+| Would-be path | Reason rejected |
+|---|---|
+| `infra/modules/platform-flux/` | Flux install depends on kubeconfig and CRD ordering after cluster creation; putting Kubernetes mutations inside the channel OpenTofu root adds provider-order coupling that INIT-101 avoided. |
+
+### Post-Install Script Signature
+The script entrypoint is:
+
 ```bash
-k3d kubeconfig get humility-local > infra/channels/local/.generated/kubeconfig.yaml
+infra/scripts/install-flux-for-channel.sh \
+  --channel local \
+  [--kubeconfig infra/channels/local/.generated/kubeconfig.yaml] \
+  [--skip-reconcile]
 ```
-The harness uses:
-```bash
-KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes
-```
-Remote kubeconfig, for post-INIT-101 remote deployment:
-```text
-/root/humility-k3s.yaml
-```
-Remote retrieval is an operator SSH copy after remote apply exists. INIT-101
-does not implement or exercise that copy path because no remote cluster is
-created.
-Generated kubeconfigs and any generated local channel artifacts are ignored by
-git:
-```text
-infra/channels/*/.generated/
-```
-### 2.10 Provider and version pins
-OpenTofu:
-- Required version: `>= 1.8.0`.
-- Verified INIT-101 CLI version: `1.11.5`.
-The `terraform { required_version = ">= 1.8.0" }` floor may remain in module
-and root blocks for runtime compatibility, but the proposal, harness, and
-operator docs verify OpenTofu `1.11.5` for INIT-101.
-Providers:
-- `vultr/vultr` or the project-standard Vultr provider source already used by
-  the repo, constrained to `~> 2.30` per D7 and platform-stack memory.
-- `hashicorp/local`, `hashicorp/null`, and `hashicorp/random` only if needed
-  for generated local artifacts or remote token plan inputs.
-Runtime tools:
-- k3s: `v1.32.13+k3s1`.
-- k3d: `v5.8.3`.
-- kubectl: existing local tool is acceptable if it can talk to the created
-  cluster.
-- Docker: required by k3d.
-Tool installer:
-```text
-infra/scripts/install-cluster-tools.sh
-```
-The installer pins k3d to `v5.8.3`, the current stable GitHub release at this
-revision, and owns any future cluster-tier tool pins. It is idempotent and
-supports `--check`, which exits nonzero if any required tool is missing or at
-the wrong version. It may install k3d through the documented `TAG=v5.8.3`
-installer path, but it must not install floating `latest`.
-### 2.11 Local bring-up scripts
-Primary script:
-```text
-infra/scripts/bring-up-local-channel.sh
-```
-Responsibilities:
-- Resolve `infra/channels/local.yaml`.
-- Generate backend and tfvars for `infra/roots/channels/local/`.
-- Check Docker, kubectl, OpenTofu, and k3d.
-- Ensure k3d is `v5.8.3` or install/check that exact tag.
-- Create `humility-local` with one server and one agent.
-- Use the pinned k3s image/version corresponding to `v1.32.13+k3s1`.
-- Write `infra/channels/local/.generated/kubeconfig.yaml`.
-- Run `kubectl get nodes` through that kubeconfig.
-- Print the kubeconfig path and cluster name.
+
+Arguments:
+
+| Argument | Required | Purpose |
+|---|---:|---|
+| `--channel <id>` | no, default `local` | Resolves `infra/channels/<id>.yaml` and requires `cluster.target=k3d-local` in INIT-102. |
+| `--kubeconfig <path>` | no | Overrides resolved kubeconfig path; default comes from the local channel resolver. |
+| `--skip-reconcile` | no | Installs/applies resources but does not call `flux reconcile`; used only by tests that assert pre-reconcile state. |
+
+The script performs these steps in order:
+
+1. Resolve channel JSON using `infra/scripts/resolve_platform_channel.py`.
+2. Require `cluster.target == "k3d-local"`.
+3. Verify `flux`, `sops`, `age`, `age-keygen`, `kubectl`, `k3d`, and Docker
+   toolchain pins through `install-cluster-tools.sh --check`.
+4. Apply `gitops/flux-system/gotk-components.yaml`.
+5. Wait for CRDs and the `source-controller` and `kustomize-controller`
+   Deployments.
+6. Run `bootstrap-sops-age-key.sh --channel local --kubeconfig <path>`.
+7. Apply `gitops/local-git-server/`.
+8. Run `seed-local-git-source.sh --channel local --kubeconfig <path>`.
+9. Render and apply `gitops/sources/local/` from resolved channel values.
+10. Reconcile `GitRepository/humility-local` and
+    `Kustomization/humility-local`, unless `--skip-reconcile` is present.
+
 Idempotency contract:
-- If `humility-local` already exists and matches the channel contract, succeed
-  without re-creating it.
-- If `humility-local` already exists and does not match the channel contract,
-  fail with a clear message unless an explicit `--recreate` flag is supplied.
-- A no-op second bring-up must leave generated backend, tfvars, and kubeconfig
-  material byte-identical.
-Companion script:
+
+- Reapplying Flux components must be server-side idempotent through
+  `kubectl apply`.
+- Existing `sops-age` Secret is replaced only when the local age key file
+  content changes.
+- Existing Git daemon Deployment/Service are applied, not recreated.
+- Reseeding overwrites the served bare repository atomically in the Pod:
+  copy to `/srv/git/.incoming/server-manager.git`, then rename to
+  `/srv/git/server-manager.git`.
+- Existing `GitRepository` and `Kustomization` CRs are applied, not deleted.
+- A second successful run must leave the cluster Ready and must not change
+  resource names.
+
+Invocation point:
+
+`infra/scripts/bring-up-local-channel.sh` calls
+`install-flux-for-channel.sh --channel local` after INIT-101 has verified that
+the k3d cluster exists, the kubeconfig is written, and all expected nodes are
+Ready. A new `--cluster-only` flag may be added to `bring-up-local-channel.sh`
+for INIT-101-style substrate-only diagnostics, but the default path for
+INIT-102 includes Flux installation.
+
+## 5. Local Git Source Mechanism
+D4 binds the local source to an in-cluster `git daemon`. INIT-102 uses a
+single-replica Deployment and ClusterIP Service in namespace `git-system`.
+
+### Deployment Shape
+Kubernetes resources:
+
+| Resource | Name | Namespace | Count/port |
+|---|---|---|---|
+| `Namespace` | `git-system` | n/a | 1 |
+| `PersistentVolumeClaim` | `git-local-data` | `git-system` | `ReadWriteOnce`; restart recovery (addresses SC-007) |
+| `Deployment` | `git-local` | `git-system` | replicas `1` |
+| `Service` | `git-local` | `git-system` | TCP `9418` named `git` |
+
+Container:
+
+| Field | Value |
+|---|---|
+| Image | `docker.io/alpine/git:2.49.1` |
+| Linux amd64 digest | `sha256:53a6239398162098fed2f49a46512f9cbba9e3f31b9f2cea4fa90129ee069a99` |
+| Command | `git daemon --verbose --export-all --reuseaddr --base-path=/srv/git /srv/git` |
+| Volume | PVC `git-local-data` mounted at `/srv/git` |
+| Security | non-root where image permits; no host networking; ClusterIP only |
+
+The Deployment and Pod template carry label `app=git-daemon` so the harness can
+delete the serving Pod without selecting unrelated resources (addresses SC-007).
+
+The Service DNS name is:
+
 ```text
-infra/scripts/delete-local-channel.sh
+git-local.git-system.svc.cluster.local
 ```
-Responsibilities:
-- Delete `humility-local`.
-- Remove the channel `.generated/` kubeconfig.
-- Leave checked-in channel declarations and roots intact.
-Idempotency contract:
-- If `humility-local` does not exist, succeed without error.
-- If generated local channel material is already absent, succeed without error.
-- A no-op second tear-down must not modify checked-in files.
-### 2.12 Harness extensions
-Existing harness shape is preserved:
+
+The Flux URL is:
+
 ```text
-infra/tests/validate_platform_bootstrap.sh
+git://git-local.git-system.svc.cluster.local:9418/server-manager.git
 ```
-INIT-101 extends it to check:
-- No active VKE artifacts remain.
-- Channel schemas reject VKE-shaped fields.
-- Channel resolver/generator output is drift-free.
-- `tofu fmt -check` passes for `infra/`.
-- `tofu init -backend=false` and `tofu validate` pass for
-  `infra/bootstrap/state-backend`.
-- `tofu init -backend=false` and `tofu validate` pass for
-  `infra/roots/channels/local`.
-- `tofu init -backend=false` and `tofu validate` pass for
-  `infra/roots/channels/dev`.
-- Provider lockfiles are drift-free: `.terraform.lock.hcl` is committed for
-  every root that runs `tofu init`, regenerated with `tofu init -backend=false`,
-  and byte-identical to the committed file.
-- Modules do not carry `.terraform.lock.hcl` files because they are not
-  independently initialized.
-- `tofu plan` for the dev channel root is supported when required Vultr
-  environment variables are present; otherwise the harness records a skipped
-  remote plan with an explicit credential-missing message.
-- Real local k3d cluster creation succeeds.
-- Double bring-up succeeds as an idempotent no-op when the cluster already
-  matches the channel contract.
-- `KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes`
-  returns at least one node and, under the default topology, one server and one
-  agent node.
-- Double tear-down succeeds when the cluster and generated kubeconfig are
-  already absent.
-- Cloud-init `user_data` render is byte-identical between runs with the same
-  resolved channel inputs.
-Skipping remote plan for missing credentials is allowed because remote apply is
-anti-scope. Skipping local cluster creation is not allowed because local is the
-INIT-101 done state.
----
-## 3. Slice decomposition
-INIT-101 uses INIT-specific slice numbering: `SLICE-101.01` through
-`SLICE-101.06`. This keeps the corrected Phase 5 work visibly separate from
-the archived INIT-008 `SLICE-030` series and the Phase 5 reset's INIT-100
-work.
-### SLICE-101.01 - Discard VKE substrate and introduce k3s channel contract
-**Scope:** Remove or rewrite the wrong-shaped INIT-008 substrate in this
-branch and introduce the k3s-shaped channel schema plus `local` and `dev`
-channel declarations. This slice implements D8 and D12 first so later slices
-cannot accidentally build on VKE names or VKE-generated payloads.
-**Files touched:**
-- `infra/schemas/platform-channel.schema.json`
-- `infra/schemas/platform-channel-resolved.schema.json`
-- `infra/channels/local.yaml`
-- `infra/channels/dev.yaml`
-- `infra/channels/fixtures/*.yaml`
-- `infra/scripts/resolve_platform_channel.py`
-- `infra/scripts/validate_platform_channels.py`
-- `infra/modules/platform-cluster/` deleted
-- `infra/environments/` deleted
-- `infra/README.md`
-- `.gitignore`
-**Local-verification acceptance commands:**
+
+### Seeding Mechanism
+The binding seeding mechanism is a host-side snapshot script, not a sidecar
+sync loop and not a k3d hostPath volume. `infra/scripts/seed-local-git-source.sh`
+builds a temporary bare Git repository containing only the root `gitops/`
+directory, then copies it into the running `git-local` Pod.
+
+Script signature:
+
 ```bash
-python infra/scripts/validate_platform_channels.py
-python infra/scripts/resolve_platform_channel.py infra/channels/local.yaml > /tmp/local-channel.json
-python infra/scripts/resolve_platform_channel.py infra/channels/dev.yaml > /tmp/dev-channel.json
-rg -n "vultr_kubernetes|kubernetes_version|node_pools|ha_controlplanes|enable_firewall" infra && exit 1 || true
+infra/scripts/seed-local-git-source.sh \
+  --channel local \
+  [--kubeconfig infra/channels/local/.generated/kubeconfig.yaml] \
+  [--reconcile]
 ```
-**Acceptance criteria:** no active schema accepts VKE
-`cluster.kubernetes_version`, `node_pools`, `ha_controlplanes`, or VKE-only
-fields; `local` resolves to `distribution: k3s`, `target: k3d-local`, and
-`k3s_version: v1.32.13+k3s1`; `dev` resolves to `distribution: k3s`,
-`target: vultr-vms`, and the single-server remote defaults.
-**Dependencies:** INIT-100.
-**Magnitude:** M.
-**Anti-scope:** no OpenTofu module implementation, no k3d cluster creation, no
-remote VM resources, no VKE compatibility adapter, no archived copy of
-INIT-008 inside this branch.
-### SLICE-101.02 - k3d local cluster module, scripts, and reachability harness
-**Scope:** Add the local k3d creation surface using D1-D4 and D10. This slice
-owns pinned k3d version checking, local cluster create/delete wrappers,
-channel-scoped kubeconfig generation, and the first reachability check against
-the local API server.
-**Files touched:**
-- `infra/modules/platform-cluster-k3d/main.tf`
-- `infra/modules/platform-cluster-k3d/variables.tf`
-- `infra/modules/platform-cluster-k3d/outputs.tf`
-- `infra/modules/platform-cluster-k3d/versions.tf`
-- `infra/scripts/install-cluster-tools.sh`
-- `infra/scripts/bring-up-local-channel.sh`
-- `infra/scripts/delete-local-channel.sh`
-- `infra/tests/validate_platform_bootstrap.sh`
-- `infra/README.md`
-- `.gitignore`
-**Local-verification acceptance commands:**
+
+Algorithm:
+
+1. Resolve the channel and require `gitops.source_kind == "git"`.
+2. Create a temporary work repo under `.tmp/gitops-source/<channel>/work`.
+3. Copy the current worktree's `gitops/` directory into that temporary repo,
+   excluding `.sops.yaml` private-key material by path and excluding any
+   unencrypted `*.secret.yaml`.
+4. Write a generated marker manifest into the temporary snapshot at
+   `gitops/channels/local/generated/gitops-snapshot-marker.yaml`:
+   `ConfigMap/gitops-snapshot-marker` in namespace
+   `humility-gitops-sentinel` with `data.source_sha` equal to
+   `git rev-parse --short HEAD`, then include that generated directory from
+   the temporary channel kustomization (addresses SC-001).
+5. Run `git init`, `git add gitops`, and commit with fixed local metadata:
+   `author=Humility GitOps Local <gitops-local@humility.local>`.
+6. Record the temporary snapshot commit SHA and source short SHA in
+   `.tmp/gitops-source/<channel>/last-seed.json`.
+7. Create branch `main`.
+8. Clone that temp repo as a bare repo named `server-manager.git`.
+9. `kubectl cp` the bare repo to the `git-local` Pod as
+   `/srv/git/.incoming/server-manager.git`.
+10. `kubectl exec` the Pod to atomically replace `/srv/git/server-manager.git`.
+11. If `--reconcile` is passed, run
+   `flux reconcile source git humility-local -n flux-system` and
+   `flux reconcile kustomization humility-local -n flux-system --with-source`.
+
+This deliberately snapshots current local files instead of requiring a GitHub
+push. It also deliberately snapshots only `gitops/`, because Flux does not
+need the whole application repository for INIT-102.
+
+### Ref and Cadence
+Flux uses:
+
+```yaml
+ref:
+  branch: main
+```
+
+The channel YAML stores the ref as `refs/heads/main`; the renderer converts it
+to Flux's branch field. Re-seed cadence is manual: the operator or harness runs
+`seed-local-git-source.sh --reconcile` after changing local GitOps manifests.
+There is no sidecar resync loop and no scheduled polling from the host. Flux
+still polls the in-cluster Git server every `gitops.interval_source`, but it
+can only see the last seeded snapshot.
+
+Failure mode:
+
+- If the worktree changes but the Git server has not been reseeded, Flux
+  remains Ready against the previous snapshot. The harness prints the served
+  snapshot commit SHA and the current local snapshot SHA to make divergence
+  explicit.
+- If the Git daemon Pod restarts, the PVC must retain
+  `/srv/git/server-manager.git`. The harness deletes the Pod selected by
+  `app=git-daemon`, waits for the Deployment to recreate it, verifies the bare
+  repo is still present, and reconciles Flux again (addresses SC-007).
+- If the Git server has invalid content, `source-controller` reports
+  `GitOperationFailed` or artifact build failure, and the harness fails on
+  `GitRepository Ready`.
+
+## 6. SOPS+age Bootstrap Flow
+SOPS+age is bootstrap-only. INIT-102 encrypts exactly one file:
+
+```text
+gitops/secrets/local/gitops-sops-sentinel.enc.yaml
+```
+
+The decrypted manifest is a Kubernetes Secret:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitops-sops-sentinel
+  namespace: humility-gitops-sentinel
+type: Opaque
+stringData:
+  channel: local
+  sentinel: sops-local-ready
+```
+
+This is intentionally a non-runtime sentinel. It proves Flux can decrypt
+SOPS-managed bootstrap-tier YAML. It is not a Discord token, database
+password, API key, Infisical runtime secret, or user-facing credential.
+
+`.sops.yaml` location:
+
+```text
+gitops/secrets/local/.sops.yaml
+```
+
+Creation rule:
+
+```yaml
+creation_rules:
+  - path_regex: gitops/secrets/local/.*\.enc\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    age: ["<local-channel-public-age-recipient>"]
+```
+
+The public recipient is committed. The private key is never committed.
+
+The bootstrap-only boundary is a failing invariant, not review convention:
+`infra/tests/validate_gitops_substrate.sh` scans the encrypted file glob
+`gitops/**/*.enc.yaml` and fails unless the only match is
+`gitops/secrets/local/gitops-sops-sentinel.enc.yaml`. The same lint decrypts
+the allowlisted file and fails on runtime-secret-shaped keys or paths,
+including case-insensitive `infisical*`, `discord*token`, database passwords,
+application config, or encrypted files outside INIT-102's bootstrap SOPS
+allowlist (addresses SC-006).
+
+Age key file on the operator machine:
+
+```text
+~/.config/sops/age/local.txt
+```
+
+Permissions:
+
+```text
+0600
+```
+
+The local operator bootstrap step is:
+
 ```bash
-bash infra/scripts/install-cluster-tools.sh --check
-bash infra/scripts/bring-up-local-channel.sh
-bash infra/scripts/bring-up-local-channel.sh
-k3d version
-k3d cluster list humility-local
-test -f infra/channels/local/.generated/kubeconfig.yaml
-KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes
-bash infra/scripts/delete-local-channel.sh
-bash infra/scripts/delete-local-channel.sh
+infra/scripts/bootstrap-sops-age-key.sh --channel local
 ```
-**Acceptance criteria:** k3d is exactly `v5.8.3`; cluster name is
-`humility-local`; the cluster uses one server and one agent; kubeconfig is
-written under `infra/channels/local/.generated/`; double bring-up and double
-tear-down are idempotent; no command relies on the operator's global current
-kubectl context.
-**Dependencies:** SLICE-101.01.
-**Magnitude:** L.
-**Anti-scope:** no Flux bootstrap, no app workloads, no hidden single-node
-downgrade, no kind/minikube fallback, no remote apply.
-### SLICE-101.03 - Vultr VM module and cloud-init k3s bootstrap plan surface
-**Scope:** Replace the VKE module with a Vultr VM/cloud-init remote
-control-cluster plan surface. This slice owns the `vultr_instance` resources,
-single-server defaults, VPC/firewall inputs, cloud-init template, pinned k3s
-installer environment, and known remote kubeconfig path.
-**Files touched:**
-- `infra/modules/platform-cluster-vms/main.tf`
-- `infra/modules/platform-cluster-vms/variables.tf`
-- `infra/modules/platform-cluster-vms/outputs.tf`
-- `infra/modules/platform-cluster-vms/versions.tf`
-- `infra/modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl`
-- `infra/modules/platform-network/main.tf`
-- `infra/modules/platform-network/versions.tf`
-- `infra/templates/platform-channel/*.tf`
-- `infra/roots/channels/dev/*`
-- `infra/tests/validate_platform_bootstrap.sh`
-**Local-verification acceptance commands:**
+
+The script:
+
+1. Creates `~/.config/sops/age/local.txt` with `age-keygen` if missing.
+2. Sets file mode `0600`.
+3. Extracts the public recipient.
+4. Writes or verifies `gitops/secrets/local/.sops.yaml` with that recipient.
+5. Encrypts `gitops/secrets/local/gitops-sops-sentinel.enc.yaml` if the file
+   is plaintext or missing SOPS metadata.
+6. Creates or updates the cluster Secret after Flux namespace exists:
+
 ```bash
-tofu -chdir=infra/modules/platform-cluster-vms fmt -check
-tofu -chdir=infra/roots/channels/dev init -backend=false
-git diff --exit-code -- infra/roots/channels/dev/.terraform.lock.hcl
-tofu -chdir=infra/roots/channels/dev validate
-rg -n "vultr_kubernetes" infra && exit 1 || true
+kubectl create secret generic sops-age \
+  --namespace flux-system \
+  --from-file=age.agekey="${HOME}/.config/sops/age/local.txt" \
+  --dry-run=client \
+  -o yaml \
+  | kubectl apply -f -
 ```
-When credentials and required variables are present:
+
+Cluster Secret:
+
+| Field | Value |
+|---|---|
+| Name | `sops-age` |
+| Namespace | `flux-system` |
+| Data key | `age.agekey` |
+| Referenced by | `Kustomization/humility-local.spec.decryption.secretRef.name` |
+
+Age key rotation, custody, and break-glass recovery are not implemented in
+INIT-102; INIT-115 owns that successor policy because it binds access policy,
+break-glass, and service identity (addresses SC-002).
+
+The Flux root `Kustomization` includes:
+
+```yaml
+decryption:
+  provider: sops
+  secretRef:
+    name: sops-age
+```
+
+Harness verification:
+
+- `kubectl --namespace humility-gitops-sentinel get secret gitops-sops-sentinel`
+  must succeed.
+- Decoded `.data.channel` must equal `local`.
+- Decoded `.data.sentinel` must equal `sops-local-ready`.
+- The encrypted file must contain `sops:` metadata and must not contain the
+  plaintext `sops-local-ready` string.
+
+## 7. Flux Installation
+D1 binds installation to `flux install --export`, not `flux bootstrap`.
+`gitops/flux-system/gotk-components.yaml` is generated once with pinned CLI
+`flux v2.8.6` and committed to the repo.
+
+Component subset from D2:
+
+| Component | Included | Reason |
+|---|---:|---|
+| `source-controller` | yes | Fetches Git artifacts for `GitRepository`. |
+| `kustomize-controller` | yes | Applies channel overlay via Flux `Kustomization`. |
+| `helm-controller` | no | No `HelmRelease` in INIT-102. |
+| `notification-controller` | no | Observability/notifications belong to INIT-117. |
+| `image-reflector-controller` | no | Image automation belongs to INIT-108. |
+| `image-automation-controller` | no | Image automation belongs to INIT-108. |
+
+Controller images generated by Flux v2.8.6:
+
+| Controller | Image tag | Linux amd64 digest used for local proof |
+|---|---|---|
+| `source-controller` | `ghcr.io/fluxcd/source-controller:v1.8.3` | `sha256:3ba32981657eb14b6c7143531e56c2a11f093534b9d3201ff246abca1644e477` |
+| `kustomize-controller` | `ghcr.io/fluxcd/kustomize-controller:v1.8.4` | `sha256:7a52dc41992243371ede235f6b96850c0b6638535c6c906af5730cb785a0b719` |
+
+Installation order:
+
+1. `bring-up-local-channel.sh` creates/repairs the k3d cluster and kubeconfig.
+2. `install-flux-for-channel.sh` applies Flux components.
+3. Script waits for CRDs and controller Deployments.
+4. Script installs SOPS age Secret.
+5. Script applies local Git server.
+6. Script seeds Git server.
+7. Script applies local `GitRepository` and root `Kustomization`.
+8. Script reconciles and waits for Ready status.
+
+No upstream manifest is pulled at apply time. The only network fetch during
+implementation is tool installation or explicit regeneration of the vendored
+manifest.
+
+## 8. Toolchain Installer
+`infra/scripts/install-cluster-tools.sh` is extended in place. INIT-102 does
+not add a separate installer because INIT-101 already established this script
+as the local cluster toolchain surface.
+
+Pinned tools:
+
+| Tool | Version | Install target | Check command |
+|---|---|---|---|
+| `k3d` | `v5.8.3` | existing INIT-101 path | `k3d version` |
+| `flux` | `v2.8.6` | `~/.local/bin/flux` | `flux --version` |
+| `sops` | `v3.12.2` | `~/.local/bin/sops` | `sops --version` |
+| `age` | `v1.3.1` | `~/.local/bin/age` | `age --version` |
+| `age-keygen` | `v1.3.1` | `~/.local/bin/age-keygen` | `age-keygen --version` |
+| standalone `kustomize` | not installed | n/a | n/a |
+
+Standalone `kustomize` is intentionally not installed in INIT-102. The repo
+uses Flux's kustomize-controller for in-cluster reconciliation and may use
+`kubectl kustomize` for local render diagnostics. Installing standalone
+Kustomize would add another pin without a required INIT-102 execution path.
+
+Installer behavior:
+
+- `--check` verifies all required versions and exits nonzero on missing or
+  mismatched tools.
+- `--install` downloads missing or mismatched tools into `~/.local/bin`.
+- Every download has a pinned version and SHA256 verification.
+- Existing correct binaries are not overwritten.
+- Unsupported OS/architecture exits with a clear error.
+- The script remains idempotent: a second `--install` after success performs
+  no replacement.
+
+## 9. Slice Decomposition
+INIT-102 is implemented in six slices. Each slice is locally executable and
+has explicit anti-scope.
+
+### SLICE-102.01 - Pinned GitOps Toolchain
+Files: `infra/scripts/install-cluster-tools.sh`,
+`infra/tests/validate_platform_bootstrap.sh`, `infra/README.md`.
+
+Acceptance: `install-cluster-tools.sh --check` reports pinned k3d, flux, sops,
+age, and age-keygen; `--install` installs missing or mismatched GitOps tools
+into `~/.local/bin`; a second `--install` is idempotent; versions print
+`flux version 2.8.6`, `sops 3.12.2`, and age/age-keygen `v1.3.1`.
+
+Anti-scope: no Flux cluster install, no standalone `kustomize`, no unpinned
+package-manager installs. Dependencies: INIT-101 scripts and local toolchain
+pattern.
+
+### SLICE-102.02 - GitOps Layout and Flux Lockfile
+Files: `gitops/README.md`, `gitops/flux-system/*`,
+`gitops/bases/gitops-sentinel/*`, `gitops/channels/local/*`, and deletion of
+`k8s/**`.
+
+Acceptance: Flux v2.8.6 generates `gotk-components.yaml`; it contains only
+source/kustomize controller Deployments and exactly the 22-resource surface in
+Section 2; `rg` finds no helm/notification/image controller Deployment names;
+`rg --files k8s` fails; `kubectl kustomize gitops/channels/local` renders
+`humility-gitops-sentinel` with `data.channel=local`.
+
+Anti-scope: no remote `dev` overlay, no app-cluster manifests, no application
+workloads. Dependencies: SLICE-102.01.
+
+### SLICE-102.03 - SOPS+age Bootstrap Sentinel
+Files: `gitops/secrets/local/.sops.yaml`,
+`gitops/secrets/local/gitops-sops-sentinel.enc.yaml`,
+`infra/scripts/bootstrap-sops-age-key.sh`,
+`gitops/channels/local/kustomization.yaml`, `infra/README.md`.
+
+Acceptance: `bootstrap-sops-age-key.sh --channel local` creates or verifies
+`~/.config/sops/age/local.txt` mode `0600`; `.sops.yaml` contains one public
+recipient and `encrypted_regex: ^(data|stringData)$`; the encrypted sentinel
+has SOPS metadata, lacks plaintext `sops-local-ready`, and decrypts with
+`SOPS_AGE_KEY_FILE` to `Secret/gitops-sops-sentinel`; the encrypted-file lint
+fails if `gitops/**/*.enc.yaml` contains anything except
+`gitops/secrets/local/gitops-sops-sentinel.enc.yaml` or runtime-secret-shaped
+keys (addresses SC-006).
+
+Anti-scope: no runtime secrets, no Infisical Secret or CRD, no remote deploy
+key. Dependencies: SLICE-102.01 and SLICE-102.02.
+
+### SLICE-102.04 - Channel Schema and Rendering
+Files: channel schemas, `infra/channels/local.yaml`, resolver/validator,
+`infra/scripts/render-gitops-source.py`, `gitops/sources/local/*`,
+`infra/tests/test_platform_channel_gitops.py`,
+`infra/tests/test_gitops_rendering.py`.
+
+Acceptance: schemas reject `gitops.source_kind: oci`, invalid Git URLs, and
+paths outside `./gitops/channels/<id>`; resolved local channel includes all
+`gitops` fields; `dev.yaml` validates without `gitops` because it is
+`vultr-vms`; rendered `GitRepository/humility-local` uses the in-cluster Git
+URL, branch `main`, and `1m`; rendered `Kustomization/humility-local` uses
+path `./gitops/channels/local`, prune `true`, sourceRef
+`GitRepository/humility-local`, and SOPS secretRef `sops-age`.
+
+Anti-scope: no OpenTofu `platform-flux` module, no remote `dev` source
+rendering, no runtime secret provider schema fields. Dependencies:
+SLICE-102.02.
+
+### SLICE-102.05 - Local Git Source and Flux Post-Install
+Files: `gitops/local-git-server/*`,
+`infra/scripts/install-flux-for-channel.sh`,
+`infra/scripts/seed-local-git-source.sh`, local bring-up/delete scripts, and
+`infra/README.md`.
+
+Acceptance: `bring-up-local-channel.sh --channel local` creates or reuses
+local k3d and installs Flux by default; `deploy/git-local` has one available
+replica; `pvc/git-local-data` is Bound; `svc/git-local` exposes TCP 9418; Flux
+reports `GitRepository/humility-local` and `Kustomization/humility-local`
+Ready; `seed-local-git-source.sh --channel local --reconcile` applies a changed
+sentinel snapshot and records the seeded snapshot commit in
+`.tmp/gitops-source/local/last-seed.json` (addresses SC-001, SC-007).
+
+Anti-scope: no GitHub dependency for local proof, no sidecar sync loop, no
+hostPath mount into Flux controllers. Dependencies: SLICE-102.01 through
+SLICE-102.04.
+
+### SLICE-102.06 - End-to-End Harness and Documentation
+Files: `infra/tests/validate_gitops_substrate.sh`,
+`infra/tests/validate_platform_bootstrap.sh`, `infra/README.md`,
+`.pipeline/implementation.md` if slice execution is recorded.
+
+Acceptance: the harness performs clean bring-up, reruns bring-up, verifies
+Flux controllers, source, Kustomization, sentinel ConfigMap, snapshot marker
+ConfigMap, decrypted SOPS Secret, SOPS encrypted-file boundary lint, git daemon
+Pod restart recovery, deletes the local channel, and reruns delete; it fails if
+`k8s/` exists, if Flux is render-only, if
+`GitRepository.status.artifact.revision` does not contain the seeded snapshot
+commit SHA from `.tmp/gitops-source/local/last-seed.json`, if
+`ConfigMap/gitops-snapshot-marker.data.source_sha` does not match the recorded
+source short SHA, or if the SOPS sentinel is missing or wrong (addresses
+SC-001, SC-006, SC-007).
+
+Anti-scope: no remote Vultr apply, no CodeRabbit/PR review work, no extra
+controllers beyond source/kustomize. Dependencies: SLICE-102.01 through
+SLICE-102.05.
+
+## 10. INIT-009 Disposal
+Reference branch:
+
+```text
+feat/init-009-gitops-substrate
+```
+
+Reference branch SHA:
+
+```text
+027b3b669afd80cccdbfce0e95c0681ccc81b336
+```
+
+Discarded INIT-009 paths:
+
+- `gitops/scripts/bootstrap-flux.sh` - kind/dev-channel assumptions and old
+  bootstrap shape.
+- `gitops/scripts/install-tools.sh` - superseded by
+  `infra/scripts/install-cluster-tools.sh`.
+- `gitops/tests/validate_gitops.sh` - old local proof and old layout.
+- `gitops/flux-system/gotk-components.yaml` if present in that branch -
+  generated for all six controllers and wrong Flux version.
+- `gitops/channels/dev/**` - `dev` was the active local proof in INIT-009;
+  INIT-102 uses `local`.
+- `gitops/secrets/dev/**` - dev SOPS metadata and placeholder encrypted
+  content are wrong-shaped.
+- Any kind-specific local cluster docs, manifests, or scripts.
+- Any SOPS-as-runtime wording or examples.
+
+Salvaged ideas only, rederived from scratch:
+
+- Root-level `gitops/` with bases, channel overlays, and secrets grouped by
+  channel.
+- Per-channel `.sops.yaml` with public recipient committed and private key
+  outside the repo.
+- SOPS key rotation runbook concept using `sops updatekeys`.
+- In-cluster `git daemon` concept for local Git-backed Flux.
+- Real cluster reconciliation as the done-state proof.
+
+Current-worktree stale `k8s/` disposal:
+
+- Delete all `k8s/base/**`.
+- Delete all `k8s/clusters/**`.
+- Delete all `k8s/overlays/**`.
+- Delete `k8s/tests/test_gitops_foundation.sh`.
+- Do not move these files under `gitops/`.
+- Do not leave symlinks or archived copies.
+
+## 11. Reproducibility
+Flux CLI pin:
+
+```text
+flux v2.8.6
+```
+
+Flux controller images:
+
+```text
+ghcr.io/fluxcd/source-controller:v1.8.3
+ghcr.io/fluxcd/kustomize-controller:v1.8.4
+```
+
+Local proof image digests:
+
+```text
+ghcr.io/fluxcd/source-controller:v1.8.3@sha256:3ba32981657eb14b6c7143531e56c2a11f093534b9d3201ff246abca1644e477
+ghcr.io/fluxcd/kustomize-controller:v1.8.4@sha256:7a52dc41992243371ede235f6b96850c0b6638535c6c906af5730cb785a0b719
+docker.io/alpine/git:2.49.1@sha256:53a6239398162098fed2f49a46512f9cbba9e3f31b9f2cea4fa90129ee069a99
+```
+
+CLI pins:
+
+```text
+k3d v5.8.3
+flux v2.8.6
+sops v3.12.2
+age v1.3.1
+age-keygen v1.3.1
+```
+
+Lockfile expectations:
+
+- `gitops/flux-system/gotk-components.yaml` is committed and reviewed as the
+  Flux lockfile.
+- Flux manifests are not pulled from GitHub at apply time.
+- Regenerating the Flux lockfile must use `flux v2.8.6` and the exact
+  `--components=source-controller,kustomize-controller` selector.
+- `infra/roots/channels/*/.terraform.lock.hcl` remains OpenTofu-owned from
+  INIT-101; INIT-102 does not add a Flux Terraform provider lockfile.
+- Tool installers use pinned release URLs and SHA256 checks.
+
+## 12. Local-as-First-Deployment Proof
+The exact harness command is `bash infra/tests/validate_gitops_substrate.sh`.
+It runs these assertions against `infra/channels/local/.generated/kubeconfig.yaml`:
+
+- `delete-local-channel.sh --channel local || true` starts from clean state.
+- `bring-up-local-channel.sh --channel local` succeeds twice.
+- `deploy/source-controller` and `deploy/kustomize-controller` in
+  `flux-system` reach `condition=Available` within 120 seconds.
+- `GitRepository/humility-local` in `flux-system` has
+  `status.conditions[type=Ready].status == "True"` and current
+  `observedGeneration`, using a bounded wait equivalent to
+  `kubectl wait --for=condition=Ready gitrepository/humility-local -n flux-system --timeout=120s`.
+- `Kustomization/humility-local` in `flux-system` has
+  `status.conditions[type=Ready].status == "True"` and current
+  `observedGeneration`, using a bounded wait equivalent to
+  `kubectl wait --for=condition=Ready kustomization/humility-local -n flux-system --timeout=120s`.
+- The latest `seed-local-git-source.sh --channel local --reconcile` writes
+  `.tmp/gitops-source/local/last-seed.json`; the harness reads
+  `snapshot_commit` and asserts
+  `GitRepository/humility-local.status.artifact.revision` contains
+  `main@sha1:<snapshot_commit>` or the exact equivalent Flux revision suffix
+  (addresses SC-001).
+- `ConfigMap/gitops-sentinel` in `humility-gitops-sentinel` exists and
+  `.data.channel == "local"`.
+- `ConfigMap/gitops-snapshot-marker` in `humility-gitops-sentinel` exists and
+  `.data.source_sha` equals the `source_short_sha` recorded in
+  `.tmp/gitops-source/local/last-seed.json`, proving the seeded snapshot
+  content was applied to the cluster (addresses SC-001).
+- `Secret/gitops-sops-sentinel` in `humility-gitops-sentinel` exists and
+  decoded `.data.sentinel == "sops-local-ready"`.
+- `gitops/secrets/local/gitops-sops-sentinel.enc.yaml` contains `sops:`
+  metadata and does not contain plaintext `sops-local-ready`.
+- The SOPS boundary lint scans `gitops/**/*.enc.yaml` and fails on any
+  encrypted file outside the allowlisted
+  `gitops/secrets/local/gitops-sops-sentinel.enc.yaml`, or on decrypted keys
+  matching runtime-secret shapes such as `infisical*`, `discord*token`,
+  database passwords, or application config (addresses SC-006).
+- `kubectl delete pod -n git-system -l app=git-daemon` removes the serving Pod;
+  the Deployment recreates it, `kubectl -n git-system exec deploy/git-local -- test -d /srv/git/server-manager.git`
+  proves the seeded bare repo survived the restart, and a forced Flux reconcile
+  returns `GitRepository/humility-local`, `Kustomization/humility-local`,
+  `ConfigMap/gitops-sentinel`, `ConfigMap/gitops-snapshot-marker`, and
+  `Secret/gitops-sops-sentinel` to the same expected values (addresses SC-007).
+- `delete-local-channel.sh --channel local` succeeds twice.
+
+Idempotency means both bring-up runs and both tear-down runs succeed. The
+second bring-up may reapply manifests and reseed the Git server, but it must
+not create duplicate resources, change channel names, or require manual
+cleanup.
+
+## 13. Risk and Supported-Surface Track
+Current-state risk reduced:
+
+- There is no accepted GitOps reconciliation path today. Manual `kubectl apply`
+  or stale hard-env render checks are the only available deployment mechanics.
+- The existing `k8s/` tree encodes hard environments and app-cluster paths
+  ahead of the Phase 5 ordering.
+- SOPS was previously at risk of being treated as the runtime secret store;
+  INIT-102 narrows it to bootstrap-only.
+
+Blast radius added:
+
+- Flux CRDs, ClusterRoles, controllers, and NetworkPolicies are installed into
+  the local control cluster.
+- The `sops-age` Secret in `flux-system` becomes a bootstrap single point of
+  failure for encrypted bootstrap manifests. INIT-115 owns age key rotation,
+  custody, and break-glass recovery; INIT-102 only proves local bootstrap
+  delivery for the sentinel (addresses SC-002).
+- The in-cluster Git daemon serves the local snapshot anonymously inside the
+  cluster network.
+- A stale seeded snapshot can make Flux Ready against older GitOps content
+  until reseeded.
+
+Migration path:
+
+- None. This is the first accepted GitOps substrate after D8 reset. Old
+  `k8s/` and INIT-009 artifacts are discarded, not migrated.
+
+Rollback path:
+
 ```bash
-tofu -chdir=infra/roots/channels/dev plan -out=/tmp/init-101-dev.tfplan
-rm -f /tmp/init-101-dev.tfplan
+kubectl delete kustomization,gitrepository --all -A --ignore-not-found
+flux uninstall --silent --namespace flux-system
+kubectl delete namespace git-system --ignore-not-found
+kubectl delete namespace humility-gitops-sentinel --ignore-not-found
 ```
-**Acceptance criteria:** `vultr_instance` replaces `vultr_kubernetes`; server
-default plan is `vc2-2c-4gb`; remote server count default is one; cloud-init
-sets `INSTALL_K3S_VERSION=v1.32.13+k3s1`; `tofu validate` passes; `tofu plan`
-is possible with credentials; no slice command applies remote resources.
-**Dependencies:** SLICE-101.01.
-**Magnitude:** L.
-**Anti-scope:** no remote `tofu apply`, no embedded-etcd HA, no Vultr load
-balancer, no k3sup, no Vultr Marketplace k3s image, no DNS or TLS resources.
-### SLICE-101.04 - Channel template and generated root rewrite
-**Scope:** Rebuild the platform-channel template, generated roots, backend
-generation, tfvars generation, and drift checks around the k3s-shaped channel
-schema. This is where the salvaged INIT-008 resolver/generator structure is
-adapted to the new target-specific payload.
-**Files touched:**
-- `infra/templates/platform-channel/main.tf`
-- `infra/templates/platform-channel/variables.tf`
-- `infra/templates/platform-channel/outputs.tf`
-- `infra/templates/platform-channel/versions.tf`
-- `infra/roots/channels/local/main.tf`
-- `infra/roots/channels/local/backend.tfbackend`
-- `infra/roots/channels/local/channel.auto.tfvars.json`
-- `infra/roots/channels/local/.terraform.lock.hcl`
-- `infra/roots/channels/dev/main.tf`
-- `infra/roots/channels/dev/backend.tfbackend`
-- `infra/roots/channels/dev/channel.auto.tfvars.json`
-- `infra/roots/channels/dev/.terraform.lock.hcl`
-- `infra/scripts/generate_channel_backend.py`
-- `infra/scripts/generate_channel_tfvars.py`
-- `infra/scripts/spawn_platform_channel.py`
-- `infra/tests/validate_platform_bootstrap.sh`
-**Local-verification acceptance commands:**
+
+Flux custom resources are deleted before `flux uninstall` removes CRDs, so the
+rollback commands remain executable after CRD removal (addresses SC-003).
+
+If the cluster itself should also be removed:
+
 ```bash
-python infra/scripts/generate_channel_backend.py infra/channels/local.yaml --out infra/roots/channels/local/backend.tfbackend
-python infra/scripts/generate_channel_tfvars.py infra/channels/local.yaml --out infra/roots/channels/local/channel.auto.tfvars.json
-python infra/scripts/generate_channel_backend.py infra/channels/dev.yaml --out infra/roots/channels/dev/backend.tfbackend
-python infra/scripts/generate_channel_tfvars.py infra/channels/dev.yaml --out infra/roots/channels/dev/channel.auto.tfvars.json
-git diff --exit-code -- infra/roots/channels/local infra/roots/channels/dev
-tofu -chdir=infra/roots/channels/local init -backend=false
-git diff --exit-code -- infra/roots/channels/local/.terraform.lock.hcl
-tofu -chdir=infra/roots/channels/local validate
-tofu -chdir=infra/roots/channels/dev init -backend=false
-git diff --exit-code -- infra/roots/channels/dev/.terraform.lock.hcl
-tofu -chdir=infra/roots/channels/dev validate
+bash infra/scripts/delete-local-channel.sh --channel local
 ```
-**Acceptance criteria:** generated tfvars contain only k3s/k3d or k3s/Vultr
-fields; the INIT-008 Object Storage state-backend root remains unchanged
-except for formatting if required; root provider lockfiles are committed and
-drift-free after `tofu init -backend=false`; inheritance fixtures exercise the
-new field shape; hard `infra/environments/{dev,staging,production}` roots are
-not revived.
-**Dependencies:** SLICE-101.01, SLICE-101.03.
-**Magnitude:** L.
-**Anti-scope:** no new channel onboarding beyond `local` and `dev`, no
-multi-channel root, no compatibility generation for old tfvars, no semantic
-state-backend redesign.
-### SLICE-101.05 - Local k3d bootstrap end-to-end verification
-**Scope:** Turn the local bring-up surface into the INIT-101 done-state proof.
-This slice creates a real local k3d cluster, verifies `kubectl get nodes`
-against the channel kubeconfig, checks the expected node shape, and makes stale
-generated state handling explicit.
-**Files touched:**
-- `infra/scripts/bring-up-local-channel.sh`
-- `infra/scripts/delete-local-channel.sh`
-- `infra/tests/validate_platform_bootstrap.sh`
-- `infra/tests/README.md` if added
-- `infra/README.md`
-- `.gitignore`
-**Local-verification acceptance commands:**
-```bash
-bash infra/scripts/delete-local-channel.sh || true
-bash infra/scripts/bring-up-local-channel.sh
-bash infra/scripts/bring-up-local-channel.sh
-KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes -o wide
-KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes --no-headers | wc -l
-bash infra/tests/validate_platform_bootstrap.sh
-```
-Cleanup after verification:
-```bash
-bash infra/scripts/delete-local-channel.sh
-bash infra/scripts/delete-local-channel.sh
-```
-**Acceptance criteria:** the cluster is real; `kubectl get nodes` succeeds
-against `infra/channels/local/.generated/kubeconfig.yaml`; at least one node
-exists and the default two-node server/agent shape is verified where k3d
-reports roles; stale generated state is not silently reused; double bring-up
-and double tear-down prove no-op idempotency; harness failure messages
-distinguish missing credentials for remote plan from forbidden local cluster
-failures.
-**Dependencies:** SLICE-101.02, SLICE-101.04.
-**Magnitude:** M.
-**Anti-scope:** no remote VM creation, no Flux install, no workload smoke test,
-no skipping cluster creation because Docker/k3d is unavailable.
-### SLICE-101.06 - Documentation and INIT-102 handoff
-**Scope:** Document the corrected substrate, operator local bring-up, remote
-plan-only boundary, stale material displacement, and INIT-102 handoff. This
-slice makes the decisions visible to future proposal, hookpoint, and
-implementation agents.
-**Files touched:**
-- `infra/README.md`
-- `docs/` deployment substrate document if the repo already has the right
-  location
-- `.pipeline/implementation.md` if the implementation stage records slice
-  status there
-- `DECISIONS.md` only if a mechanical cross-reference to D8 is required; no
-  new decision is expected
-**Local-verification acceptance commands:**
-```bash
-rg -n "D8|k3d|k3s|humility-local|INIT-102|INIT-118|VKE" infra README.md docs .pipeline 2>/dev/null || true
-rg -n "vultr_kubernetes|kind|local-only verification|kubernetes_version|node_pools" infra docs .pipeline && exit 1 || true
-bash infra/tests/validate_platform_bootstrap.sh
-```
-**Acceptance criteria:** docs name D8 as controlling authority; docs state VKE
-artifacts are retired and preserved only on reference branches; docs identify
-the local kubeconfig path consumed by INIT-102; docs state remote HA is
-deferred to INIT-118; docs do not imply remote apply, Flux, Crossplane,
-Infisical, DNS, TLS, or workloads are part of INIT-101.
-**Dependencies:** SLICE-101.05.
-**Magnitude:** S.
-**Anti-scope:** no tutorial-only substitute for executable scripts, no remote
-operations runbook that claims INIT-101 has deployed remote k3s, no new
-architecture decision beyond documenting D8 and D1-D12.
----
-## 4. Tradeoffs accepted
-1. **Single remote server for INIT-101.** D5 accepts a single remote k3s server
-   plan surface instead of embedded-etcd HA. This keeps INIT-101 focused on the
-   substrate contract and local done state. HA is explicitly deferred to
-   INIT-118: Remote Control Cluster HA.
-2. **Local must be real, remote stays plan-ready.** D8 requires every Phase 5
-   initiative to deploy a real local component. INIT-101 therefore creates
-   k3d locally, but does not run a real Vultr apply. The proposal accepts the
-   asymmetry because local is the first deployment target and remote channel
-   onboarding is post-INIT-117 work.
-3. **Schema version remains `1` while the field shape is replaced.** The VKE
-   shape never becomes the accepted main-path contract after D8, so preserving
-   `schema_version: 1` with a clean k3s replacement is less misleading than
-   supporting v1 and v2 side by side. No old reader remains.
-4. **Keep Vultr provider constraint `~> 2.30`.** D7 avoids provider churn even
-   though newer releases exist. INIT-101 changes substrate shape, not provider
-   version policy.
-5. **Use cloud-init plus the official k3s installer, not k3sup.** D9 chooses
-   the bootstrap path already named by D8. k3sup remains out of scope even
-   though it can fetch kubeconfig and join nodes.
-6. **Generated kubeconfigs are files, not global context mutation.** D10
-   accepts channel-scoped kubeconfig files because k3d can mutate global
-   kubeconfig by default. This makes the harness deterministic and keeps later
-   INITs from depending on the operator's current context.
-7. **Delete instead of archive in-tree.** D12 and the no-backwards-compatibility
-   convention reject an `archived/` directory. The old artifacts remain
-   inspectable on the reference branch.
-8. **One channel template dispatches targets.** Keeping
-   `infra/templates/platform-channel/` means local and remote use the same
-   channel-generation contract. The target-specific modules differ, but the
-   environment model does not fork.
-9. **No remote bootstrap token finalization.** INIT-101 exposes the remote
-   token as a plan input/reference shape but does not create a runtime secret
-   flow. Infisical and remote apply are not in this initiative.
-10. **No local exception components.** k3d is accepted because it runs k3s in
-    Docker. kind and VKE simulation are rejected because they violate the
-    same-distribution requirement.
----
-## 5. Hookpoints preview
-Full hookpoint research happens after the risk gate. The expected blast radius
-is visible enough for risk assessment:
-### Delete
-- `infra/modules/platform-cluster/` - VKE module based on
-  `vultr_kubernetes`.
-- `infra/environments/dev/` - hard environment root.
-- `infra/environments/staging/` - hard environment root.
-- `infra/environments/production/` - hard environment root.
-- VKE-shaped generated tfvars in any active root.
-- Any docs describing INIT-008's VKE substrate as the accepted Phase 5 path.
-### Rewrite
-- `infra/schemas/platform-channel.schema.json` - replace VKE cluster fields
-  with k3s/k3d/Vultr-VM fields.
-- `infra/schemas/platform-channel-resolved.schema.json` - resolved shape for
-  generated roots.
-- `infra/channels/dev.yaml` - remote VKE dev channel becomes remote Vultr VM
-  k3s plan channel.
-- `infra/templates/platform-channel/main.tf` - replace VKE module call with
-  target-specific k3d or Vultr-VM module calls.
-- `infra/templates/platform-channel/variables.tf` - replace VKE variables.
-- `infra/templates/platform-channel/outputs.tf` - output channel-scoped
-  cluster/kubeconfig facts.
-- `infra/scripts/generate_channel_tfvars.py` - emit k3s-shaped variables.
-- `infra/tests/validate_platform_bootstrap.sh` - add real local cluster proof
-  and VKE grep invariants.
-- `infra/README.md` - document D8-substrate contract and handoff.
-### Salvage with narrow changes
-- `infra/bootstrap/state-backend/` - reuse unchanged per D11 except formatting
-  or lock-file refresh required by toolchain.
-- `infra/modules/platform-network/` - keep Vultr VPC concept; adjust variables
-  only if the VM module requires stricter inputs.
-- `infra/scripts/resolve_platform_channel.py` - keep inheritance, fixture
-  lookup, deep merge, circular-parent guard, and structured errors.
-- `infra/scripts/spawn_platform_channel.py` - keep ephemeral child concept;
-  update field names.
-- `infra/scripts/generate_channel_backend.py` - keep state backend generation;
-  update local-vs-S3 backend handling if needed.
-- Harness structure for toolchain, formatting, validation, drift, security,
-  and resolver checks.
-### New files
-- `infra/channels/local.yaml`
-- `infra/roots/channels/local/*`
-- `infra/modules/platform-cluster-k3d/*`
-- `infra/modules/platform-cluster-vms/*`
-- `infra/modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl`
-- `infra/scripts/install-cluster-tools.sh`
-- `infra/scripts/bring-up-local-channel.sh`
-- `infra/scripts/delete-local-channel.sh`
----
-## 6. Acceptance criteria for INIT-101
-- [ ] A real local k3d cluster named `humility-local` is created.
-- [ ] The local cluster uses pinned k3d `v5.8.3`.
-- [ ] The local cluster uses pinned k3s `v1.32.13+k3s1`.
-- [ ] `infra/scripts/install-cluster-tools.sh --check` verifies pinned cluster
-  tools, including k3d `v5.8.3`.
-- [ ] OpenTofu CLI verification uses version `1.11.5` while root/module
-  `required_version` floors may remain `>= 1.8.0`.
-- [ ] The local default topology is one k3d server and one k3d agent.
-- [ ] Local bring-up is idempotent when an existing cluster matches the channel
-  contract, and local tear-down is idempotent when the cluster is absent.
-- [ ] A channel-scoped kubeconfig is written at
-  `infra/channels/local/.generated/kubeconfig.yaml`.
-- [ ] `KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes`
-  returns at least one node.
-- [ ] The harness verifies the local `kubectl get nodes` command.
-- [ ] `tofu validate` is clean for `infra/bootstrap/state-backend`.
-- [ ] `tofu validate` is clean for `infra/roots/channels/local`.
-- [ ] `tofu validate` is clean for `infra/roots/channels/dev`.
-- [ ] `tofu plan` against `infra/roots/channels/dev` produces a clean plan
-  when Vultr credentials and required remote inputs are present.
-- [ ] Missing Vultr credentials skip only the remote plan assertion, never the
-  local k3d proof.
-- [ ] Old VKE-shaped artifacts are deleted: no active
-  `infra/modules/platform-cluster/` VKE module remains.
-- [ ] No active channel file contains VKE-shaped fields such as
-  `cluster.kubernetes_version`, `node_pools`, `ha_controlplanes`, or VKE
-  managed-cluster `enable_firewall`.
-- [ ] `infra/templates/platform-channel/main.tf` calls the k3d module for
-  `k3d-local` and the VM module for `vultr-vms`.
-- [ ] Cloud-init uses `INSTALL_K3S_VERSION=v1.32.13+k3s1`.
-- [ ] Cloud-init renders byte-identical `user_data` for byte-identical channel
-  inputs and guards k3s installation to at most once per VM.
-- [ ] The remote module uses `vultr_instance`, not `vultr_kubernetes`.
-- [ ] Generated tfvars are drift-free and k3s-shaped.
-- [ ] `.terraform.lock.hcl` is committed and drift-free for every root, and no
-  module carries a provider lockfile.
-- [ ] Generated kubeconfigs and `.generated/` artifacts are ignored by git.
-- [ ] Documentation identifies INIT-102 as the next consumer of the local
-  control-cluster kubeconfig and channel contract.
-Canonical validation command:
-```bash
-bash infra/tests/validate_platform_bootstrap.sh
-```
-The harness is allowed to call narrower commands internally, but this command
-is the single operator-facing verification entry point for INIT-101.
----
-## 7. Anti-scope
-INIT-101 explicitly does not do the following:
-- No Flux install. INIT-102 owns GitOps and Flux reconciliation.
-- No Crossplane install. INIT-106 owns application-cluster provisioning.
-- No app workloads. INIT-113 owns workload deployment.
-- No HA topology beyond a single remote server in this initiative.
-- No remote embedded-etcd cluster.
-- No Vultr load balancer or fixed remote registration endpoint.
-- No real Vultr `tofu apply`.
-- No remote k3s actually deployed.
-- No remote kubeconfig fetched.
-- No DNS automation.
-- No cert-manager.
-- No Infisical.
-- No public ingress.
-- No SOPS runtime secret expansion.
-- No Buildkite worker.
-- No app-cluster claim or composition.
-- No VKE module.
-- No VKE root.
-- No VKE channel schema.
-- No kind-only harness.
-- No dry-run-only completion.
-- No archived copy of INIT-008 inside this branch.
-Named successors:
-- INIT-102: Flux/GitOps substrate on the local k3d control cluster.
-- INIT-103: Infisical runtime secret store.
-- INIT-106: Crossplane app-cluster provisioning.
-- INIT-113: application workloads.
-- INIT-118: Remote Control Cluster HA, including multi-server topology and any
-  fixed registration endpoint.
-- Post-INIT-117 remote deployment work: first real remote k3s apply and remote
-  kubeconfig retrieval.
-These are not deferred stubs. They are explicit scope boundaries for scheduled
-successor initiatives.
----
-## 8. Stale material disposal
-INIT-008's VKE-shaped artifacts are deleted from this branch. The reference
-copy lives on `feat/init-008-platform-bootstrap` and in the
-`worktrees/init-008-platform-bootstrap/` checkout. No in-tree archive is
-created.
-Disposed material:
-- `infra/modules/platform-cluster/` if it provisions `vultr_kubernetes`.
-- VKE channel schema fields:
-  `cluster.kubernetes_version`, `node_pools`, `ha_controlplanes`, and
-  `enable_firewall` as managed-cluster fields.
-- VKE-oriented platform-channel template inputs.
-- VKE-shaped generated tfvars.
-- Hard `infra/environments/{dev,staging,production}` roots.
-- Dev-channel framing as a remote VKE control cluster.
-- Render-only or local-verification-only harness completion criteria.
-- Documentation that names INIT-008 as the accepted control-cluster substrate.
-Salvaged material:
-- Channel-template directory idea.
-- Channel inheritance/resolution concept.
-- Generated backend/tfvars drift-check concept.
-- Vultr Object Storage state-backend bootstrap module.
-- Vultr VPC/network concept.
-- Resolver structured errors and fixture testing pattern.
-- Harness structure for toolchain checks, validation, generated-artifact drift,
-  security assertions, and channel resolver behavior.
-The disposal rule is strict: no backwards-compatible VKE reader, no VKE field
-aliases, no forwarding module, no "legacy channel" examples, and no note that
-old channels still work. The corrected main path is k3s/k3d/Vultr-VM only.
----
-## 9. Revision history
-- Round 1 A-1 closed by the `platform-cluster-k3d` variable contract in
-  Section 2.5, lines 248-261.
-- Round 1 A-2 closed by the `platform-cluster-vms` variable contract in
-  Section 2.6, lines 284-299.
-- Round 1 A-3 closed by cloud-init idempotency invariants and harness proof in
-  Sections 2.7 and 2.12, lines 325-332 and 478-479.
-- Round 1 A-4 closed by bring-up/tear-down idempotency contracts and double-run
-  harness assertions in Sections 2.11, 2.12, and 3, lines 427-445, 470-477,
-  and 657-675.
-- Round 1 A-5 closed by the OpenTofu `1.11.5` verified CLI pin in Section 2.10,
-  lines 385-391.
-- Round 1 A-6 closed by provider lockfile policy and root drift checks in
-  Sections 2.12, 3, and 6, lines 462-466, 610-636, and 834-835.
-- Round 1 A-7 closed by the named `install-cluster-tools.sh` installer
-  commitment in Sections 2.10, 3, 5, and 6, lines 403-411, 531-554, 795-796,
-  and 803-804.
+
+Observability:
+
+- `kubectl -n flux-system logs deploy/source-controller`
+- `kubectl -n flux-system logs deploy/kustomize-controller`
+- `kubectl -n flux-system get gitrepository,kustomization`
+- `flux -n flux-system get sources git`
+- `flux -n flux-system get kustomizations`
+- `kubectl -n git-system logs deploy/git-local`
+
+Supported surface after INIT-102:
+
+- Local k3d channel only.
+- Git source kind only.
+- Flux `GitRepository` plus `Kustomization` only.
+- Bootstrap-tier SOPS decryption only.
+- Source/kustomize controllers only.
+
+## 14. Anti-Scope
+The following concerns live in other initiatives and must not be added to
+INIT-102:
+
+- Crossplane, Crossplane providers, compositions, claims, and app-cluster
+  provisioning: INIT-106.
+- Infisical runtime secrets, Infisical Operator, `InfisicalSecret` CRDs, and
+  runtime secret sync: INIT-103.
+- Object storage, MinIO, Vultr Object Storage runtime buckets, and S3
+  application paths: INIT-104.
+- cert-manager, DNS, TLS, issuers, certificates, and local CA or ACME flows:
+  INIT-105.
+- Cluster security baseline beyond upstream Flux's own `flux-system`
+  NetworkPolicies, including tenant NetworkPolicies, Pod Security Standards,
+  and tenant RBAC: INIT-107 (addresses S6).
+- Container image build, registry push, image policy, image reflection, and
+  image automation: INIT-108.
+- CI/CD, Buildkite agents, Buildkite pipeline wiring, and release promotion:
+  INIT-109.
+- Ingress controllers, ingress resources, Pomerium routes, and app exposure:
+  INIT-110.
+- Data plane, Postgres, migrations runtime, and database operators: INIT-111.
+- Backup, restore, snapshots, and disaster recovery jobs: INIT-112.
+- Application workloads, API Deployment, Discord daemon Deployment, workers,
+  and beta guild runtime: INIT-113.
+- Auth, Authentik, OIDC, OPAL/Cedar policy runtime, and login flows: INIT-114.
+- Access policy, Flux tenant RBAC, least-privilege service accounts beyond the
+  default Flux install: INIT-115.
+- Tenant isolation, namespace boundary model, and per-tenant GitOps
+  delegation: INIT-116.
+- Observability, notifications, alerts, dashboards, OTLP collectors, and Flux
+  `notification-controller`: INIT-117.
+
+Also out of scope:
+
+- Remote `dev` Flux installation.
+- `flux bootstrap`.
+- Hosted GitHub round-trip for the local proof.
+- OCIRepository or MinIO bucket-watched Flux sources.
+- HelmRelease reconciliation.
+- Runtime secrets in SOPS.
+- Keeping or reshaping the stale `k8s/` tree.
+
+## D-Record Binding Summary
+- D1 D-FLUX-INSTALL: bound to committed `gitops/flux-system/gotk-components.yaml`
+  generated by `flux install --export`, applied by post-install script.
+- D2 D-FLUX-COMPONENTS: bound to source-controller and kustomize-controller
+  only; all other Flux controllers excluded.
+- D3 D-GITOPS-LAYOUT: bound to root `gitops/` with `flux-system`, `bases`,
+  `channels/local`, and `secrets/local`; stale `k8s/` deleted.
+- D4 D-LOCAL-SOURCE: bound to in-cluster `git daemon` Deployment/Service in
+  `git-system`, manually reseeded from a local `gitops/` snapshot.
+- D5 D-SOPS-BOUNDARY: bound to one bootstrap sentinel Secret under
+  `gitops/secrets/local/*.enc.yaml`, with runtime secrets excluded.
+- D6 D-AGE-KEY-DELIVERY: bound to `~/.config/sops/age/local.txt` and
+  `Secret/sops-age` in `flux-system` with key `age.agekey`.
+- D7 D-CHANNEL-SCHEMA-EXT: bound to strict `gitops` schema fields and
+  local-channel required validation.
+- D8 D-CHANNEL-TEMPLATE-INT: bound to
+  `infra/scripts/install-flux-for-channel.sh` invoked from local bring-up,
+  not a TF module.
+- D9 D-INIT-009-DISPOSAL: bound to discard of INIT-009 artifacts and current
+  `k8s/`, with only structural ideas rederived.
+- D10 D-TOOLCHAIN-VERSIONS: bound to flux v2.8.6, sops v3.12.2, age v1.3.1,
+  age-keygen v1.3.1, and no standalone kustomize.
+- D11 D-LOCAL-VERIFICATION: bound to live local k3d harness assertions for
+  Flux Ready, source Ready, Kustomization Ready, sentinel ConfigMap, SOPS
+  Secret, and bring-up/tear-down idempotency.
