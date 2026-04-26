@@ -80,6 +80,12 @@ creates a nested k3d cluster named `humility-local-app` from
 project `platform-vultr`, environment `dev`, path `/api`, into
 `Secret/vultr-creds` in `crossplane-system`.
 
+INIT-107 security manifests live in `gitops/channels/local/security/`. They
+apply restricted-namespace default-deny NetworkPolicies, explicit component
+allow rules, and PDBs for Postgres, Redis, and MinIO. Namespace PSS labels are
+kept on the Namespace manifests themselves; `flux-system` is labeled during
+local Flux installation because Flux creates that namespace.
+
 ## Generated Artifacts
 
 - `.tmp/gitops-source/local/` - rendered local GitOps snapshot used to seed the

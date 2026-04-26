@@ -219,10 +219,34 @@ The local Infisical chart references `Secret/infisical-server-bootstrap` for
 the server connection strings and the bundled Postgres/Redis passwords; rendered
 manifests must not commit chart-default credential literals.
 
-NetworkPolicy isolation for Infisical Postgres and Redis is deferred to
-INIT-107's cluster security baseline. The Bitnami chart defaults are disabled
-in `gitops/channels/local/infisical/server/render-values.yaml` because they
-look restrictive while allowing broad ingress or egress.
+INIT-107 owns Infisical NetworkPolicy isolation through raw manifests in
+`gitops/channels/local/security/`. The Bitnami chart defaults stay disabled in
+`gitops/channels/local/infisical/server/render-values.yaml` because those
+defaults look restrictive while allowing broad ingress or egress. The committed
+baseline applies default-deny to `infisical-system`, then explicitly permits
+only Infisical-to-Postgres, Infisical-to-Redis, operator-to-Infisical, API
+server egress, and DNS egress.
+
+## Cluster Security
+
+INIT-107 adds the local cluster security baseline:
+
+- PSS labels on managed namespaces: system namespaces enforce `baseline`,
+  app/data namespaces enforce `restricted`.
+- `app-cluster-system` is the only local privileged exception because the
+  INIT-106 nested-k3d proof still uses `/var/run/docker.sock`.
+- Default-deny NetworkPolicies plus explicit allow rules isolate Infisical,
+  Postgres, Redis, MinIO, and restricted sample namespaces.
+- provider-kubernetes no longer has cluster-admin; its injected identity is
+  bound only to app-cluster-system Jobs and Events.
+- Postgres, Redis, and MinIO have single-replica PDBs with `minAvailable: 1`.
+
+Focused proof:
+
+```bash
+bash infra/tests/validate_cluster_security_local.sh \
+  --kubeconfig ~/.kube/humility-local.yaml
+```
 
 ## Object Storage
 

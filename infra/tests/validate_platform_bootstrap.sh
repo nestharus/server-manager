@@ -1974,6 +1974,30 @@ assert_app_cluster_cluster_state() {
   fi
 }
 
+assert_cluster_security_cluster_state() {
+  local kubeconfig_path="$1"
+  local description="$2"
+  local output
+  local status
+
+  set +e
+  output="$(bash "${INFRA_DIR}/tests/validate_cluster_security_local.sh" --kubeconfig "$kubeconfig_path" 2>&1)"
+  status=$?
+  set -e
+
+  echo "Cluster security validation (${description}):"
+  echo "$output"
+
+  if [[ "$status" -eq 0 ]] \
+    && grep -q 'PASS: PSS restricted rejects privileged Pod in infisical-sample' <<<"$output" \
+    && grep -q 'PASS: NetworkPolicy denies unauthorized MinIO traffic from infisical-sample' <<<"$output" \
+    && grep -q 'PASS: kubectl auth can-i create jobs.batch -n app-cluster-system' <<<"$output"; then
+    pass "cluster security local proof ${description}"
+  else
+    fail "cluster security local proof ${description}"
+  fi
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -3005,6 +3029,7 @@ assert_local_cluster_can_create() {
   assert_object_storage_cluster_state "$kubeconfig_path" "after bring-up"
   assert_tls_dns_cluster_state "$kubeconfig_path" "after bring-up"
   assert_app_cluster_cluster_state "$kubeconfig_path" "after bring-up"
+  assert_cluster_security_cluster_state "$kubeconfig_path" "after bring-up"
   assert_postgres_restart_durable "$kubeconfig_path"
 
   expected_sha="$(awk '/^[[:space:]]*source_sha:/ { print $2; exit }' "$marker_file" 2>/dev/null || true)"
@@ -3073,6 +3098,7 @@ assert_local_cluster_can_create() {
   assert_object_storage_cluster_state "$kubeconfig_path" "after second bring-up"
   assert_tls_dns_cluster_state "$kubeconfig_path" "after second bring-up"
   assert_app_cluster_cluster_state "$kubeconfig_path" "after second bring-up"
+  assert_cluster_security_cluster_state "$kubeconfig_path" "after second bring-up"
 
   set +e
   delete_output="$(bash "${INFRA_DIR}/scripts/delete-local-channel.sh" --channel local 2>&1)"
@@ -3393,7 +3419,7 @@ assert_cluster_security_namespace_labels() {
     "${REPO_ROOT}/gitops/channels/local/tls/sample-certificate/namespace.yaml" \
     "${REPO_ROOT}/gitops/channels/local/app-clusters/crossplane/namespace.yaml" \
     "${REPO_ROOT}/gitops/channels/local/app-clusters/claims/namespace.yaml" \
-    "${REPO_ROOT}/gitops/channels/local/app-clusters/provider-configs/namespace.yaml"; do
+    "${REPO_ROOT}/gitops/channels/local/app-clusters/providers/namespace.yaml"; do
     cat "$file" >>"$rendered"
     printf '\n---\n' >>"$rendered"
   done
@@ -3457,6 +3483,7 @@ PY
 
 assert_cluster_security_network_policies() {
   local security_dir="${REPO_ROOT}/gitops/channels/local/security"
+  local claims_dir="${REPO_ROOT}/gitops/channels/local/app-clusters/claims"
   local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/cluster-security-networkpolicies.yaml"
   local py_bin
 
@@ -3465,11 +3492,15 @@ assert_cluster_security_network_policies() {
     "gitops/channels/local/security/restricted-default-deny.yaml" \
     "gitops/channels/local/security/dns-egress.yaml" \
     "gitops/channels/local/security/infisical-networkpolicies.yaml" \
-    "gitops/channels/local/security/minio-networkpolicies.yaml"; do
+    "gitops/channels/local/security/minio-networkpolicies.yaml" \
+    "gitops/channels/local/app-clusters/claims/networkpolicies.yaml"; do
     assert_repo_file_exists "$file"
   done
 
-  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$security_dir" >"$rendered"; then
+  if command -v kubectl >/dev/null 2>&1 \
+    && kubectl kustomize "$security_dir" >"$rendered" \
+    && printf '\n---\n' >>"$rendered" \
+    && kubectl kustomize "$claims_dir" >>"$rendered"; then
     pass "kubectl kustomize cluster security NetworkPolicies"
   else
     fail "kubectl kustomize cluster security NetworkPolicies"
@@ -3548,6 +3579,9 @@ assert_cluster_security_pod_hardening_and_pdbs() {
   local app_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/appcluster-security.yaml"
   local security_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/pdb-security.yaml"
   local py_bin
+
+  assert_file_exists "tests/validate_cluster_security_local.sh"
+  assert_executable "tests/validate_cluster_security_local.sh"
 
   if command -v kubectl >/dev/null 2>&1 \
     && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/infisical/server" >"$server_rendered" \

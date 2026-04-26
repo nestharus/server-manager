@@ -362,6 +362,23 @@ bootstrap_infisical_storage() {
   bash "$INFISICAL_STORAGE_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
 }
 
+refresh_infisical_operator_after_bootstrap() {
+  local requested_at
+
+  requested_at="$(date +%s)"
+  log "Refreshing Infisical Operator after bootstrap"
+  kubectl_cmd get infisicalsecrets.secrets.infisical.com -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+    | while IFS= read -r resource; do
+      [[ -n "$resource" ]] || continue
+      kubectl_cmd -n "${resource%% *}" annotate "infisicalsecret.secrets.infisical.com/${resource#* }" \
+        "platform.humility.gg/bootstrap-refreshed-at=${requested_at}" \
+        --overwrite >/dev/null
+    done
+  kubectl_cmd -n "$INFISICAL_NAMESPACE" rollout restart "deployment/${INFISICAL_OPERATOR_DEPLOYMENT}" >/dev/null
+  wait_for_rollout "$INFISICAL_NAMESPACE" "deployment/${INFISICAL_OPERATOR_DEPLOYMENT}" "Infisical Operator Deployment after bootstrap refresh"
+}
+
 wait_for_infisical_server() {
   wait_for_rollout "$INFISICAL_NAMESPACE" "statefulset/${INFISICAL_POSTGRES_STATEFULSET}" "Infisical Postgres StatefulSet"
   wait_for_rollout "$INFISICAL_NAMESPACE" "statefulset/${INFISICAL_REDIS_STATEFULSET}" "Infisical Redis StatefulSet"
@@ -424,6 +441,7 @@ main() {
   wait_for_infisical_server
   bootstrap_infisical_identity
   bootstrap_infisical_storage
+  refresh_infisical_operator_after_bootstrap
   wait_for_infisical_runtime
   wait_for_reconciliation
 

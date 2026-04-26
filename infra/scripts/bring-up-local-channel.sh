@@ -10,7 +10,7 @@ CHANNEL_ID=""
 FORCE=0
 REPAIR=0
 CLUSTER_ONLY=0
-K3D_REGISTRY_PORT=5000
+K3D_REGISTRY_PORT="${K3D_REGISTRY_PORT:-5000}"
 
 usage() {
   cat <<'EOF'
@@ -18,6 +18,9 @@ Usage: bring-up-local-channel.sh [--channel local] [--force | --repair] [--clust
 
 Creates the local k3d platform cluster for a resolved local channel and runs
 the Flux post-install unless --cluster-only is passed.
+
+Environment:
+  K3D_REGISTRY_PORT  Host port for the local k3d registry (default: 5000)
 
 Options:
   --channel <id>   Channel id to resolve (default: local); resolved JSON id is canonical
