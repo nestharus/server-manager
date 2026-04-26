@@ -67,6 +67,9 @@
     "image_registry": {
       "$ref": "#/$defs/imageRegistry"
     },
+    "cicd": {
+      "$ref": "#/$defs/cicd"
+    },
     "tls": {
       "$ref": "#/$defs/tls"
     },
@@ -1225,6 +1228,69 @@
         "namespace": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]*$"
+        }
+      }
+    },
+    "cicd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "agent_namespace",
+        "agent_image",
+        "agent_queue",
+        "agent_token_secret_name",
+        "agent_token_secret_key",
+        "infisical_project",
+        "infisical_environment",
+        "infisical_path",
+        "local_pipeline_file",
+        "local_mode"
+      ],
+      "properties": {
+        "provider": {
+          "const": "buildkite"
+        },
+        "agent_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "agent_image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        },
+        "agent_queue": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "agent_token_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "agent_token_secret_key": {
+          "const": "BUILDKITE_AGENT_TOKEN"
+        },
+        "infisical_project": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "infisical_environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/buildkite/[a-z0-9][a-z0-9-]*$"
+        },
+        "local_pipeline_file": {
+          "type": "string",
+          "pattern": "^\\.buildkite/[A-Za-z0-9._/-]+\\.ya?ml$"
+        },
+        "local_mode": {
+          "type": "string",
+          "enum": [
+            "emulated"
+          ]
         }
       }
     },

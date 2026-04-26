@@ -77,6 +77,18 @@ image_registry:
     app: registry-smoke
     tag: init-108
     namespace: registry-smoke
+cicd:
+  provider: buildkite
+  agent_namespace: buildkite-agent
+  agent_image: buildkite/agent:3.104.0
+  agent_queue: cicd-local
+  agent_token_secret_name: buildkite-agent-token
+  agent_token_secret_key: BUILDKITE_AGENT_TOKEN
+  infisical_project: platform-cicd
+  infisical_environment: local
+  infisical_path: /buildkite/local
+  local_pipeline_file: .buildkite/pipeline.yml
+  local_mode: emulated
 tls:
   provider: step-ca
   local_cluster_issuer_name: humility-local-step-ca
