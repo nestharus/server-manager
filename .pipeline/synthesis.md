@@ -15,7 +15,7 @@ references below use that file unless otherwise noted.
 
 **Decision**: INIT-102 generates the Flux controller install manifest with
 `flux install --export`, vendors the result into the repo at
-`gitops/flux-system/gotk-components.yaml`, and applies it through the channel
+`gitops/flux/gotk-components.yaml`, and applies it through the channel
 template's post-install path. INIT-102 does not run `flux bootstrap`.
 
 **Evidence**: research §2.2. `flux install --export` separates controller
@@ -80,10 +80,10 @@ canonical shape:
 
 ```
 gitops/
-  flux-system/                # vendored Flux controllers (D1)
-  bases/                      # reusable Kustomize bases
+  flux/                       # vendored Flux controllers (D1)
+  sources/<channel-id>/       # GitRepository CR + git-daemon (local channels)
   channels/<channel-id>/      # channel overlays (e.g., channels/local/)
-  secrets/<channel-id>/       # SOPS-encrypted bootstrap-tier secrets + .sops.yaml
+  bootstrap/                  # SOPS-encrypted bootstrap-tier secrets + .sops.yaml
 ```
 
 INIT-102 scope wires the `local` channel only. The `dev` channel overlay is
@@ -274,7 +274,7 @@ the `GitRepository` and `Kustomization` manifests rendered in
 the channel via a **post-install bash script** invoked after cluster
 bring-up (extending or chained from `infra/scripts/bring-up-local-channel.sh`),
 not as a new OpenTofu module. The script reads the resolved channel YAML and
-performs, in order: (1) `kubectl apply -f gitops/flux-system/gotk-components.yaml`,
+performs, in order: (1) `kubectl apply -f gitops/flux/gotk-components.yaml`,
 (2) idempotent `sops-age` Secret apply (D6), (3) `kubectl apply` of the
 channel's `GitRepository` + root `Kustomization` (rendered from `gitops.*`
 fields per D7).
