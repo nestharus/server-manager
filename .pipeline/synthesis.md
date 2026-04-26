@@ -318,32 +318,32 @@ need it, with the SDK contract above.
 addition is purely additive. Required fields:
 
 ```
-provider                      enum: ["minio", "vultr-os"]
+provider                      enum: ["minio", "vultr-object-storage"]
 endpoint                      uri
 region                        string
-addressing_style              enum: ["path", "virtual"]
 bucket                        string (canonical sample/app bucket for the channel)
 infisical_project             string (default: "platform-storage")
 infisical_environment         string (defaults to channel id)
 infisical_secrets_path        string (default: "/object-storage/<channel>/")
 universal_auth_secret_name    string (default: "infisical-storage-operator-auth")
 universal_auth_secret_namespace string (default: "infisical-system")
-credentials_secret_name       string (default: "minio-root" local; "vultr-os" remote)
+credentials_secret_name       string (default: "minio-root" local; "vultr-object-storage" remote)
 credentials_secret_namespace  string (default: "minio-system" local)
 ```
 
 Per-target conditionals:
 
 - `cluster.target == "k3d-local"` requires `gitops`, `infisical`,
-  **and `object_storage`**, with `object_storage.provider == "minio"`,
-  `endpoint` matching the cluster-internal pattern
-  `^http://minio\..*\.svc\.cluster\.local:9000$`, and
-  `addressing_style == "path"`.
+  **and `object_storage`**, with `object_storage.provider == "minio"`
+  and `endpoint` matching the cluster-internal pattern
+  `^http://minio\..*\.svc\.cluster\.local:9000$`. (S3 SDK consumers
+  set path-style addressing at SDK config time; not a schema field.)
 - `cluster.target == "vultr-vms"` makes `object_storage` **optional**
   in INIT-104 (consistent with INIT-103's treatment of `infisical` for
-  remote). When present, `provider == "vultr-os"` and `endpoint` must
-  match `^https://[a-z]{3}1\.vultrobjects\.com$`,
-  `addressing_style == "virtual"`.
+  remote). When present, `provider == "vultr-object-storage"` and
+  `endpoint` must match `^https://[a-z]{3}1\.vultrobjects\.com$`.
+  (Vultr OS supports both path and virtual-host style; SDK consumer
+  picks at config time.)
 
 `infra/scripts/resolve_platform_channel.py`,
 `infra/scripts/validate_platform_channels.py`, and
