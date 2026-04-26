@@ -393,7 +393,7 @@ PY
 
   before="$(find "$server_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
   set +e
-  render_output="$(bash "${INFRA_DIR}/scripts/render-infisical-manifests.sh" 2>&1)"
+  render_output="$(bash "${INFRA_DIR}/scripts/render-infisical-manifests.sh" --check 2>&1)"
   render_status=$?
   set -e
   after="$(find "$server_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
@@ -403,6 +403,117 @@ PY
   else
     echo "$render_output"
     fail "Infisical server render is byte-identical on rerun"
+  fi
+}
+
+assert_infisical_operator_raw_manifests() {
+  local operator_dir="${REPO_ROOT}/gitops/channels/local/infisical/operator"
+  local rendered="${operator_dir}/rendered/secrets-operator-0.10.32.yaml"
+  local expected_crds=(
+    "clustergenerators.secrets.infisical.com"
+    "infisicaldynamicsecrets.secrets.infisical.com"
+    "infisicalpushsecrets.secrets.infisical.com"
+    "infisicalsecrets.secrets.infisical.com"
+    "passwords.secrets.infisical.com"
+    "uuids.secrets.infisical.com"
+  )
+  local before
+  local after
+  local render_output
+  local render_status
+  local py_bin
+
+  assert_repo_file_exists "gitops/channels/local/infisical/operator/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/operator/namespace.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/operator/render-values.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/operator/rendered/secrets-operator-0.10.32.yaml"
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(HelmRelease|OCIRepository)[[:space:]]*$' "${REPO_ROOT}/gitops/channels/local/infisical"; then
+    fail "Infisical raw manifests exclude HelmRelease and OCIRepository"
+  else
+    pass "Infisical raw manifests exclude HelmRelease and OCIRepository"
+  fi
+
+  if grep -R -Eq '(meta\.helm\.sh|helm\.sh/hook|updatedAt|app\.kubernetes\.io/managed-by:[[:space:]]*Helm|heritage:[[:space:]]*Helm)' "$operator_dir"; then
+    fail "Infisical Operator raw manifests exclude Helm ownership metadata"
+  else
+    pass "Infisical Operator raw manifests exclude Helm ownership metadata"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "Infisical Operator CRDs from secrets.infisical.com"
+    fail "Infisical Operator image pin"
+  elif "$py_bin" - "$rendered" "${expected_crds[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+expected = set(sys.argv[2:])
+found = set()
+
+for document in yaml.safe_load_all(path.read_text(encoding="utf-8")):
+    if not isinstance(document, dict) or document.get("kind") != "CustomResourceDefinition":
+        continue
+    metadata = document.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("name"), str):
+        found.add(metadata["name"])
+
+if found != expected:
+    raise SystemExit(f"CRD set mismatch: found={sorted(found)!r}")
+PY
+  then
+    pass "Infisical Operator CRDs from secrets.infisical.com: ${expected_crds[*]}"
+  else
+    fail "Infisical Operator CRDs from secrets.infisical.com"
+  fi
+
+  if [[ -n "${py_bin:-}" ]] && "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+expected = {"infisical/kubernetes-operator:v0.10.32"}
+found = set()
+
+
+def walk(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "image" and isinstance(child, str):
+                found.add(child)
+            walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            walk(child)
+
+
+for document in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")):
+    walk(document)
+
+if found != expected:
+    raise SystemExit(f"image set mismatch: found={sorted(found)!r}")
+PY
+  then
+    pass "Infisical Operator image pin"
+  else
+    fail "Infisical Operator image pin"
+  fi
+
+  before="$(find "$operator_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
+  set +e
+  render_output="$(bash "${INFRA_DIR}/scripts/render-infisical-manifests.sh" --check 2>&1)"
+  render_status=$?
+  set -e
+  after="$(find "$operator_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
+
+  if [[ "$render_status" -eq 0 && "$before" == "$after" ]]; then
+    pass "Infisical Operator render is byte-identical on rerun"
+  else
+    echo "$render_output"
+    fail "Infisical Operator render is byte-identical on rerun"
   fi
 }
 
@@ -1052,6 +1163,11 @@ echo ""
 echo "=== Slice 103.02 Infisical server raw manifest validation ==="
 
 assert_infisical_server_raw_manifests
+
+echo ""
+echo "=== Slice 103.03 Infisical Operator raw manifest validation ==="
+
+assert_infisical_operator_raw_manifests
 
 echo ""
 echo "=== Slice 102.03 SOPS+age bootstrap sentinel validation ==="
