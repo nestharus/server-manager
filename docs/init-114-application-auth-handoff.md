@@ -1,27 +1,78 @@
-# INIT-114 Handoff: Auth After Application Workloads
+# INIT-114 Handoff: Auth Stack
 
-INIT-113 deploys server-manager API and Discord workloads locally without
-adding auth. The API exposes the existing unauthenticated service surface
-behind Kong at `https://api.local.humility.local`.
+INIT-114 adds the local-first auth stack under
+`gitops/channels/local/auth`.
 
-INIT-114 should start from these deployed resources:
+## Delivered
 
-- Namespace: `server-manager`
-- API Service: `server-manager-api.server-manager.svc.cluster.local:8000`
-- Local host: `api.local.humility.local`
-- Runtime secret: `Secret/server-manager-runtime`, synced from
-  Infisical project `server-manager`, env `local`, path `/runtime/local`
-- Database: `Cluster/server-manager-postgres`, database `server_manager`
-- Database URL secret: `Secret/server-manager-postgres-url`
+- Authentik `2026.2.2` rendered from `authentik/authentik`.
+- Authentik uses CNPG `Cluster/authentik-postgres` instead of bundled
+  PostgreSQL.
+- Pomerium `34.0.1` rendered from `pomerium/pomerium`.
+- OPAL `0.0.29` rendered from `permitio/opal`, with
+  `permitio/opal-client-cedar:0.7.12`.
+- Kong hosts:
+  - `auth.local.humility.local`
+  - `authenticate.local.humility.local`
+  - `protected-api.local.humility.local`
+- API proof endpoint:
+  - `GET /api/v1/protected/authz-proof`
+  - requires Pomerium identity headers
+  - calls Cedar Agent at `http://opal-client.auth-system.svc.cluster.local:8180`
+  - allows `sample@local.humility.local` for the sample rule
 
-Required auth decisions:
+## Secrets
 
-- Which API endpoints remain unauthenticated health/readiness probes.
-- Kong edge policy versus in-app auth enforcement.
-- Service-to-service identity for the Discord daemon.
-- Operator and future web UI identity model.
+Bootstrap local auth secrets after Infisical identity bootstrap:
 
-Do not move the runtime secrets out of Infisical, change the image naming
-contract, or add tenant-isolation policy in INIT-114. Tenant isolation remains
-INIT-116.
+```bash
+infra/scripts/bootstrap-infisical-auth.sh \
+  --channel local \
+  --kubeconfig ~/.kube/humility-local.yaml
+```
 
+The script creates or reuses Infisical project `platform-auth`, environment
+`local`, and paths:
+
+- `/auth/local/authentik`
+- `/auth/local/pomerium`
+
+It seeds missing values only; reruns do not rotate existing credentials.
+
+## Validation
+
+Static:
+
+```bash
+infra/tests/validate_auth_stack_local.sh --static-only
+```
+
+Runtime:
+
+```bash
+infra/tests/validate_auth_stack_local.sh \
+  --channel local \
+  --kubeconfig ~/.kube/humility-local.yaml
+```
+
+Runtime proof checks:
+
+- `Cluster/authentik-postgres` Ready.
+- Authentik server and worker available.
+- Pomerium proxy and authenticate deployments available.
+- OPAL server/client available and Cedar sample policy bootstrap complete.
+- Cedar returns Allow for the sample user and Deny for a non-sample user.
+- `protected-api.local.humility.local/api/v1/protected/authz-proof` requires
+  authentication through Pomerium.
+- Authentik admin and sample-user credential keys are synced from Infisical.
+
+## INIT-115 Handoff
+
+INIT-115 should own production policy authoring and real OIDC federation:
+
+- Create and manage the Authentik OIDC application/provider for Pomerium.
+- Replace the sample Cedar policy with a versioned policy repository and review
+  workflow.
+- Decide claim-to-policy mapping for Discord operators, services, and future UI
+  users.
+- Harden remote-channel route, TLS, and logout behavior.
