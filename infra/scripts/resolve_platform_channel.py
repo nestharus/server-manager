@@ -204,6 +204,7 @@ def resolve_channel(channel_id: str) -> dict[str, Any]:
         region = state.get("region")
         if isinstance(region, str) and region:
             state["endpoint"] = f"https://{region}1.vultrobjects.com"
+    # The gitops block is deliberately not defaulted; all fields are operator-supplied.
     validate_resolved_channel(resolved, channel_id)
     return resolved
 

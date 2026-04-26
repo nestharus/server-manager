@@ -17,3 +17,14 @@ state:
   bucket: humility-tfstate
   key: channels/ephemeral-disabled/terraform.tfstate
   region: ewr
+gitops:
+  source_kind: git
+  git_url: git://git-local.git-system.svc.cluster.local:9418/server-manager.git
+  git_ref: refs/heads/main
+  path: ./gitops/channels/local
+  kustomization_name: humility-local
+  kustomization_namespace: flux-system
+  interval: 1m
+  retry_interval: 1m
+  prune: true
+  wait: true

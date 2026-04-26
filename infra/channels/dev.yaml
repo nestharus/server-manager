@@ -25,3 +25,4 @@ state:
   bucket: humility-tfstate
   key: channels/dev/terraform.tfstate
   region: ewr
+# gitops is deliberately omitted for INIT-102; dev keeps the single-cluster remote posture until remote Flux wiring is scoped.

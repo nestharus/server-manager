@@ -15,7 +15,8 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "const": 1,
+      "description": "Schema version 1 accepts additive fields such as gitops; breaking field or semantic changes require schema_version 2."
     },
     "id": {
       "$ref": "#/$defs/channelId"
@@ -43,6 +44,9 @@
     },
     "state": {
       "$ref": "#/$defs/state"
+    },
+    "gitops": {
+      "$ref": "#/$defs/gitops"
     }
   },
   "allOf": [
@@ -57,6 +61,24 @@
       },
       "then": {
         "required": ["cluster", "state"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "cluster": {
+            "properties": {
+              "target": {
+                "const": "k3d-local"
+              }
+            },
+            "required": ["target"]
+          }
+        },
+        "required": ["cluster"]
+      },
+      "then": {
+        "required": ["gitops"]
       }
     }
   ],
@@ -242,6 +264,62 @@
           "type": "string",
           "format": "uri",
           "default": "https://ewr1.vultrobjects.com"
+        }
+      }
+    },
+    "gitops": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_kind",
+        "git_url",
+        "git_ref",
+        "path",
+        "kustomization_name",
+        "kustomization_namespace",
+        "interval",
+        "retry_interval",
+        "prune",
+        "wait"
+      ],
+      "properties": {
+        "source_kind": {
+          "type": "string",
+          "enum": ["git"]
+        },
+        "git_url": {
+          "type": "string",
+          "pattern": "^(git|ssh|https)://[^\\s]+$"
+        },
+        "git_ref": {
+          "type": "string",
+          "pattern": "^(refs/(heads|tags)/[A-Za-z0-9._/-]+|[A-Za-z0-9._/-]+)$"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^\\./gitops/channels/[a-z0-9-]+$"
+        },
+        "kustomization_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "kustomization_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "interval": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(s|m|h)$"
+        },
+        "retry_interval": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(s|m|h)$"
+        },
+        "prune": {
+          "type": "boolean"
+        },
+        "wait": {
+          "type": "boolean"
         }
       }
     }
