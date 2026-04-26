@@ -1,0 +1,20 @@
+hostAPI: http://infisical.infisical-system.svc.cluster.local:8080
+controllerManager:
+  replicas: 1
+  manager:
+    image:
+      repository: infisical/kubernetes-operator
+      tag: v0.10.32
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 128Mi
+scopedNamespaces: []
+scopedRBAC: false
+installCRDs: true
+telemetry:
+  serviceMonitor:
+    enabled: false
