@@ -64,6 +64,9 @@
     "cicd": {
       "$ref": "#/$defs/cicd"
     },
+    "ingress": {
+      "$ref": "#/$defs/ingress"
+    },
     "tls": {
       "$ref": "#/$defs/tls"
     },
@@ -1258,6 +1261,139 @@
           "enum": [
             "emulated"
           ]
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "gateway_namespace",
+        "chart_name",
+        "chart_version",
+        "gateway_image",
+        "controller_image",
+        "ingress_class_name",
+        "gateway_deployment_name",
+        "proxy_service_name",
+        "proxy_service_type",
+        "local_dns_namespace",
+        "local_domain",
+        "remote_domain",
+        "local_cluster_issuer_name",
+        "remote_cluster_issuer_name",
+        "default_service"
+      ],
+      "properties": {
+        "provider": {
+          "const": "kong"
+        },
+        "gateway_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "chart_name": {
+          "const": "kong/kong"
+        },
+        "chart_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "gateway_image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        },
+        "controller_image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        },
+        "ingress_class_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "gateway_deployment_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "proxy_service_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "proxy_service_type": {
+          "type": "string",
+          "enum": [
+            "ClusterIP",
+            "LoadBalancer",
+            "NodePort"
+          ]
+        },
+        "local_dns_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "local_domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "remote_domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "local_cluster_issuer_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "remote_cluster_issuer_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "default_service": {
+          "$ref": "#/$defs/ingressDefaultService"
+        }
+      }
+    },
+    "ingressDefaultService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "namespace",
+        "service_port",
+        "local_host",
+        "remote_host",
+        "tls_secret_name",
+        "proof_path"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "service_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "local_host": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "remote_host": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "tls_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "proof_path": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
         }
       }
     },
