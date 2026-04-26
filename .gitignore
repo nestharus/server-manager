@@ -28,3 +28,4 @@ worktrees/
 .refs/
 .DS_Store
 infra/channels/*/.generated/
+**/.terraform/

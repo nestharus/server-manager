@@ -1,0 +1,3 @@
+bucket = "humility-tfstate"
+key    = "channels/dev/terraform.tfstate"
+region = "ewr"

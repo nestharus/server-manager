@@ -90,6 +90,18 @@ assert_path_absent() {
   fi
 }
 
+assert_file_contains() {
+  local file="$1"
+  local pattern="$2"
+  local description="$3"
+
+  if grep -q -- "$pattern" "${INFRA_DIR}/${file}"; then
+    pass "$description"
+  else
+    fail "$description"
+  fi
+}
+
 python_bin() {
   if command -v python &>/dev/null; then
     command -v python
@@ -97,6 +109,141 @@ python_bin() {
     command -v python3
   else
     return 1
+  fi
+}
+
+assert_vms_module_present() {
+  for file in \
+    "modules/platform-cluster-vms/main.tf" \
+    "modules/platform-cluster-vms/variables.tf" \
+    "modules/platform-cluster-vms/outputs.tf" \
+    "modules/platform-cluster-vms/versions.tf" \
+    "modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl"; do
+    assert_file_exists "$file"
+  done
+}
+
+assert_vms_module_variables_documented() {
+  local variables_file="${INFRA_DIR}/modules/platform-cluster-vms/variables.tf"
+
+  if ! PYTHON_BIN="$(python_bin)"; then
+    fail "platform-cluster-vms variables documented"
+    return
+  fi
+
+  if "$PYTHON_BIN" - "$variables_file" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+expected = {
+    "channel_id",
+    "cluster_name",
+    "region",
+    "vpc_id",
+    "k3s_version",
+    "server_count",
+    "server_plan",
+    "agent_count",
+    "agent_plan",
+    "os_id",
+    "ssh_key_ids",
+}
+
+blocks = {}
+for match in re.finditer(r'variable\s+"([^"]+)"\s+\{', text):
+    name = match.group(1)
+    start = match.end()
+    depth = 1
+    index = start
+    while index < len(text) and depth:
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+        index += 1
+    blocks[name] = text[start:index - 1]
+
+missing = expected - blocks.keys()
+extra = blocks.keys() - expected
+if missing or extra:
+    raise SystemExit(f"variable set mismatch: missing={sorted(missing)} extra={sorted(extra)}")
+
+for name in sorted(expected):
+    block = blocks[name]
+    if not re.search(r"^\s*type\s*=", block, re.MULTILINE):
+        raise SystemExit(f"{name} missing type")
+    has_default = re.search(r"^\s*default\s*=", block, re.MULTILINE) is not None
+    description_match = re.search(r'^\s*description\s*=\s*"([^"]+)"', block, re.MULTILINE)
+    if not description_match:
+        raise SystemExit(f"{name} missing description")
+    if not has_default and not description_match.group(1).endswith("no default; required"):
+        raise SystemExit(f"{name} missing required-description suffix")
+PY
+  then
+    pass "platform-cluster-vms variables documented"
+  else
+    fail "platform-cluster-vms variables documented"
+  fi
+
+  assert_file_contains "modules/platform-cluster-vms/outputs.tf" "sensitive = true" "platform-cluster-vms sensitive token output"
+}
+
+assert_cloud_init_template_present() {
+  assert_file_exists "modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl"
+}
+
+assert_cloud_init_idempotency_marker() {
+  assert_file_contains "modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl" "/etc/k3s-install-marker" "cloud-init idempotency marker"
+}
+
+assert_cloud_init_strict_failure() {
+  assert_file_contains "modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl" "set -euo pipefail" "cloud-init strict shell flags"
+  assert_file_contains "modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl" "exit 1" "cloud-init explicit failure exits"
+}
+
+assert_template_has_conditional_dispatch() {
+  assert_file_contains "templates/platform-channel/main.tf" 'count  = var.cluster_target == "k3d-local"' "template dispatches k3d-local"
+  assert_file_contains "templates/platform-channel/main.tf" 'count  = var.cluster_target == "vultr-vms"' "template dispatches vultr-vms"
+}
+
+assert_dev_root_present() {
+  for file in \
+    "roots/channels/dev/main.tf" \
+    "roots/channels/dev/backend.tfbackend" \
+    "roots/channels/dev/channel.auto.tfvars.json" \
+    "roots/channels/dev/.terraform.lock.hcl"; do
+    assert_file_exists "$file"
+  done
+}
+
+assert_dev_tofu_validate() {
+  local root="${INFRA_DIR}/roots/channels/dev"
+  local lockfile="${root}/.terraform.lock.hcl"
+  local before
+  local after
+
+  if ! command -v tofu >/dev/null 2>&1; then
+    fail "dev root tofu validate"
+    return
+  fi
+
+  before="$(sha256sum "$lockfile" | awk '{print $1}')"
+
+  if tofu -chdir="$root" init -backend=false >/dev/null && tofu -chdir="$root" validate >/dev/null; then
+    pass "dev root tofu init -backend=false and validate"
+  else
+    fail "dev root tofu init -backend=false and validate"
+    return
+  fi
+
+  after="$(sha256sum "$lockfile" | awk '{print $1}')"
+  if [[ "$before" == "$after" ]]; then
+    pass "dev root lockfile byte-identical after re-init"
+  else
+    fail "dev root lockfile byte-identical after re-init"
   fi
 }
 
@@ -271,6 +418,18 @@ if [[ "$RUN_CLUSTER" -eq 1 ]]; then
 else
   skip "CLUSTER: not requested; pass --cluster to create and verify local k3d"
 fi
+
+echo ""
+echo "=== Slice 101.03 remote Vultr VM plan-surface validation ==="
+
+assert_vms_module_present
+assert_vms_module_variables_documented
+assert_cloud_init_template_present
+assert_cloud_init_idempotency_marker
+assert_cloud_init_strict_failure
+assert_template_has_conditional_dispatch
+assert_dev_root_present
+assert_dev_tofu_validate
 
 echo ""
 echo "Summary: ${PASS_COUNT} passed, ${FAIL_COUNT} failed, ${SKIP_COUNT} skipped"

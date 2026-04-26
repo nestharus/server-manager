@@ -1,12 +1,12 @@
-# Platform network module — one VPC per environment.
+# Platform network module — one VPC per channel.
 #
-# Each environment gets a non-overlapping subnet from the 10.40.0.0/16 range:
+# Each channel gets a non-overlapping subnet from the 10.40.0.0/16 range:
 #   dev:        10.40.0.0/20
 #   staging:    10.40.16.0/20
 #   production: 10.40.32.0/20
 
-variable "environment" {
-  description = "Environment name"
+variable "channel" {
+  description = "Channel name"
   type        = string
 }
 
@@ -16,18 +16,18 @@ variable "region" {
 }
 
 variable "v4_subnet" {
-  description = "Base subnet for the environment VPC"
+  description = "Base subnet for the channel VPC"
   type        = string
 }
 
 variable "v4_subnet_mask" {
-  description = "Subnet mask for the environment VPC"
+  description = "Subnet mask for the channel VPC"
   type        = number
   default     = 20
 }
 
 resource "vultr_vpc" "platform" {
-  description    = "humility-${var.environment}-platform"
+  description    = "humility-${var.channel}-platform"
   region         = var.region
   v4_subnet      = var.v4_subnet
   v4_subnet_mask = var.v4_subnet_mask

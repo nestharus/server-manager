@@ -14,7 +14,13 @@ OpenTofu-managed infrastructure for the Humility platform.
     ├── scripts/              # Channel resolution and validation tools
     ├── modules/
     │   ├── platform-cluster-k3d/
+    │   ├── platform-cluster-vms/
     │   └── platform-network/ # Shared VPC module
+    ├── templates/
+    │   └── platform-channel/
+    ├── roots/
+    │   └── channels/
+    │       └── dev/          # Remote Vultr VM plan surface
     └── tests/
 
 ## Bootstrap
@@ -61,4 +67,8 @@ bash infra/scripts/delete-local-channel.sh
 
 - `local` is the local k3d target for first deployment work.
 - `dev` is the remote Vultr VM k3s channel declaration.
-- Later INIT-101 slices add channel roots and Vultr VM plan surfaces.
+- `infra/roots/channels/dev/channel.auto.tfvars.json` intentionally commits
+  `vultr_ssh_key_ids` as an empty list. Operators populate Vultr SSH key IDs at
+  apply time; no SSH key IDs or private keys are committed.
+- INIT-101 validates the remote Vultr VM plan surface but does not run
+  `tofu apply` against Vultr.
