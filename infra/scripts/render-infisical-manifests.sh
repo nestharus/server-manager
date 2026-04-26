@@ -264,7 +264,10 @@ render_operator() {
 
   # The packaged v0.10.32 chart omits the Password and UUID CRD templates.
   # Pull the missing CRD bases from the matching upstream release tag.
-  git clone --depth 1 --branch "$OPERATOR_UPSTREAM_TAG" "$OPERATOR_UPSTREAM_REPO" "$upstream_dir" >/dev/null 2>&1
+  if ! git clone --depth 1 --quiet --branch "$OPERATOR_UPSTREAM_TAG" "$OPERATOR_UPSTREAM_REPO" "$upstream_dir" 2>&1; then
+    echo "ERROR: failed to clone $OPERATOR_UPSTREAM_REPO at $OPERATOR_UPSTREAM_TAG" >&2
+    return 1
+  fi
 
   "$PYTHON_BIN" - "$raw_path" "$output_path" "$upstream_dir" "${OPERATOR_EXPECTED_CRDS[@]}" <<'PY'
 import sys
