@@ -131,6 +131,20 @@ operator_ua_secret_value() {
 verify_operator_ua_secret() {
   [[ -n "$(operator_ua_secret_value clientId)" ]] || die "Secret/${UA_SECRET_NAME} key clientId is empty or missing"
   [[ -n "$(operator_ua_secret_value clientSecret)" ]] || die "Secret/${UA_SECRET_NAME} key clientSecret is empty or missing"
+  ORG_ID="$(operator_ua_secret_value organizationId)"
+  [[ -n "$ORG_ID" ]] || die "Secret/${UA_SECRET_NAME} key organizationId is empty or missing"
+}
+
+target_secret_value() {
+  local key="$1"
+  kubectl_cmd -n "minio-system" get secret "minio-root" -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d || true
+}
+
+runtime_already_bootstrapped() {
+  [[ -n "$(operator_ua_secret_value clientId)" ]] || return 1
+  [[ -n "$(operator_ua_secret_value clientSecret)" ]] || return 1
+  [[ -n "$(target_secret_value MINIO_ROOT_USER)" ]] || return 1
+  [[ -n "$(target_secret_value MINIO_ROOT_PASSWORD)" ]] || return 1
 }
 
 resolve_channel_storage() {
@@ -208,7 +222,20 @@ bootstrap_or_login() {
   fi
 
   if [[ -z "${ORG_ID:-}" ]]; then
-    die "Infisical is already bootstrapped but organization id is unknown"
+    set +e
+    token="$(
+      infisical login \
+        --method user \
+        --email "$admin_email" \
+        --password "$admin_password" \
+        --domain "${api_url}/api" \
+        --plain \
+        --silent 2>/dev/null
+    )"
+    set -e
+    [[ -n "$token" ]] || die "unable to obtain Infisical admin token without organization id"
+    printf '%s\t%s' "$token" ""
+    return
   fi
 
   set +e
@@ -347,7 +374,7 @@ find_identity() {
 
   body="$(jq -n --arg name "$IDENTITY_NAME" '{limit: 100, search: {name: {"$eq": $name}}}')"
   identities="$(api_request POST "/api/v1/identities/search" "$body")" || die "failed to search Infisical identities"
-  jq -er --arg name "$IDENTITY_NAME" '.identities[]? | select(.name == $name) | .id' <<<"$identities"
+  jq -er --arg name "$IDENTITY_NAME" '.identities[]? | select((.name // .identity.name) == $name) | (.identity.id // .identityId // .id)' <<<"$identities"
 }
 
 ensure_identity_project_membership() {
@@ -371,20 +398,24 @@ ensure_identity_project_membership() {
 
 secret_exists() {
   local name="$1"
+  local secret_path="${SECRETS_PATH%/}"
+  local value
 
-  infisical secrets get "$name" \
+  value="$(infisical secrets get "$name" \
     --domain "http://127.0.0.1:${LOCAL_PORT}/api" \
     --token "$ADMIN_TOKEN" \
     --projectId "$PROJECT_ID" \
     --env "$ENVIRONMENT_SLUG" \
-    --path "$SECRETS_PATH" \
+    --path "$secret_path" \
     --plain \
-    --silent >/dev/null 2>&1
+    --silent 2>/dev/null || true)"
+  [[ -n "$value" ]]
 }
 
 set_secret_if_absent() {
   local name="$1"
   local value="$2"
+  local secret_path="${SECRETS_PATH%/}"
 
   if secret_exists "$name"; then
     return
@@ -395,7 +426,7 @@ set_secret_if_absent() {
     --token "$ADMIN_TOKEN" \
     --projectId "$PROJECT_ID" \
     --env "$ENVIRONMENT_SLUG" \
-    --path "$SECRETS_PATH" \
+    --path "$secret_path" \
     --silent >/dev/null
 }
 
@@ -414,6 +445,10 @@ need_command openssl
 resolve_channel_storage
 wait_for_server
 verify_operator_ua_secret
+if runtime_already_bootstrapped; then
+  log "Infisical object-storage credentials already synced to Secret/minio-root"
+  exit 0
+fi
 start_port_forward
 
 ADMIN_EMAIL="$(secret_value INFISICAL_AUTO_BOOTSTRAP_EMAIL)"
