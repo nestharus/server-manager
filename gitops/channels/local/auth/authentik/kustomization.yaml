@@ -4,6 +4,7 @@ namespace: auth-system
 resources:
   - namespace.yaml
   - secrets-infisicalsecret.yaml
+  - bootstrap-blueprint-configmap.yaml
   - postgres-cluster.yaml
   - rendered/authentik-2026.2.2.yaml
   - ingress.yaml
@@ -23,4 +24,3 @@ patches:
       - op: add
         path: /spec/template/spec/automountServiceAccountToken
         value: false
-

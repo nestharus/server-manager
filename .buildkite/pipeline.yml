@@ -26,6 +26,10 @@ steps:
     label: "INIT-113 application workloads static validation"
     command: "infra/tests/validate_application_workloads_local.sh --static-only"
 
+  - key: init-114-auth-stack-static
+    label: "INIT-114 auth stack static validation"
+    command: "infra/tests/validate_auth_stack_local.sh --static-only"
+
   - wait
 
   - key: registry-build-push
