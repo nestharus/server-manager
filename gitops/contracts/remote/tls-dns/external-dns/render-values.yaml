@@ -1,0 +1,28 @@
+provider:
+  name: cloudflare
+sources:
+  - service
+  - ingress
+policy: upsert-only
+registry: txt
+txtOwnerId: humility-dev
+domainFilters:
+  - humility.example
+interval: 1m
+logFormat: text
+logLevel: info
+env:
+  - name: CF_API_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: cloudflare-api-token
+        key: CF_API_TOKEN
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+serviceAccount:
+  create: true
+  name: external-dns
