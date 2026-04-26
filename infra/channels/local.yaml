@@ -84,3 +84,31 @@ app_cluster:
     credentials_secret_key: credentials
     infisical_project: platform-vultr
     infisical_path: /api
+security:
+  pod_security:
+    system_enforce: baseline
+    app_enforce: restricted
+    system_namespaces:
+      - cert-manager
+      - crossplane-system
+      - flux-system
+      - git-system
+      - step-ca-system
+      - step-issuer-system
+    restricted_namespaces:
+      - cert-manager-test
+      - humility-gitops-sentinel
+      - infisical-sample
+      - infisical-system
+      - minio-system
+      - platform-app-clusters
+    local_privileged_namespaces:
+      - app-cluster-system
+  network_policy:
+    default_deny_namespaces:
+      - cert-manager-test
+      - humility-gitops-sentinel
+      - infisical-sample
+      - infisical-system
+      - minio-system
+      - platform-app-clusters
