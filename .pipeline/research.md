@@ -1,618 +1,699 @@
-# INIT-102 Phase 1 Research: GitOps Substrate
+# INIT-103 Phase 1 Research: Infisical Runtime Secret Store
 
-Scope: evidence-only research for INIT-102, the GitOps substrate that runs on
-top of INIT-101's k3s control cluster.
+## Scope
 
-Non-goal: this document does not design the final implementation. It records
-repo facts, upstream contracts, local tool availability, risks, open questions,
-and proposal-phase inputs for Flux v2, Kustomize channel overlays, and
-SOPS+age bootstrap-only secrets.
+- Initiative: INIT-103.
+- Phase: 1, problem/component research.
+- Goal: document evidence for installing and operating Infisical as the platform runtime secret store.
+- Rule: evidence only; proposal choices remain for the proposal phase.
+- Boundary: INIT-102 owns Flux, channel GitOps, and bootstrap-only SOPS+age.
+- Boundary: INIT-103 owns Infisical server, Infisical Operator, InfisicalSecret CRDs, RBAC, and runtime secret sync.
+- Non-negotiable: Infisical is the runtime secret manager; alternatives are out of scope.
+- Non-negotiable: local is a real first deployment target.
+- Non-negotiable: remote remains Vultr-locked.
+- Output path: `.pipeline/research.md`.
 
-## 0. Source Authority
+## Evidence Index
 
-- D8 is the controlling decision for INIT-102. Phase 5 is reset around
-  local-as-first-deployment, self-managed k3s everywhere, Flux as the GitOps
-  reconciler, SOPS+age as bootstrap-only, Infisical as runtime secrets, and
-  channel templates as the environment model. Citation: `DECISIONS.md:176-204`.
-- D8 supersedes kind as the Phase 5 local Kubernetes target and supersedes
-  SOPS+age as a runtime secret store. Citation: `DECISIONS.md:215-222`.
-- D8 also says MinIO bucket-watched Flux is superseded by Git-backed Flux.
-  Citation: `DECISIONS.md:229-230`.
-- D8 consequence: no VKE module, VKE schema, kind-only harness,
-  SOPS-runtime framing, or VKE Crossplane work should merge. Citation:
-  `DECISIONS.md:252-260`.
-- The environment-agnostic memory says local is a deployment target, not a
-  simulation; same code, components, and manifests run locally and remotely;
-  per-channel config carries differences. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:7-14`.
-- That memory says the GitOps layer is Flux reconciling a channel overlay in
-  both local and remote channels. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:15-20`.
-- The same memory explicitly forbids dry-run substitutes, kind-as-VKE
-  simulation, local-only verification as a goal, and environment-specific rules
-  where channel parameterization can carry the difference. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:29-43`.
-- It also records the prior mistake: treating secrets as SOPS-only was wrong;
-  Infisical is the runtime store. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:62-68`.
-- The channel-template memory rejects hard `infra/environments/dev`,
-  `staging`, and `production` roots and points at
-  `infra/templates/platform-channel/`, `infra/channels/<id>/channel.yaml`, and
-  a schema as the Phase 5 shape. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:7-8`
-  and
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:50-56`.
-- The channel-template memory specifically says Flux Kustomizations should
-  align with channels and that inheritance maps to Kustomize bases/overlays.
-  Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:67-74`.
-- The two-tier architecture memory says the control/platform cluster hosts
-  platform controllers, including Flux, and does not host application
-  workloads. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/two-tier-cluster-architecture.md:7-18`.
-- The Phase 5 index names INIT-102 as "Flux, Kustomize channel overlays,
-  SOPS+age bootstrap-only, real reconciliation in local k3d." Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:24-31`.
-- The Phase 5 operating rules repeat that Flux must reconcile the local
-  channel from this repository and that SOPS+age bootstraps only secrets needed
-  to start runtime secret management. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:96-130`.
-- The Phase 5 index archives INIT-009 as reference-only and says Flux,
-  Kustomize, and SOPS ideas are salvageable through INIT-102. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:150-156`.
-- The no-backwards-compatibility convention bans deprecated aliases, dual
-  implementations, transitional adapters, and partial migrations. Citation:
-  `~/ai/conventions/no-backwards-compatibility.md:1-24`.
+- E1: `DECISIONS.md:176-260` records D8: local-as-first-deployment, k3s everywhere, Flux, SOPS bootstrap-only, and Infisical runtime secrets.
+- E2: `product-strategy/tickets/PHASE_5_INDEX.md:1-11` states Phase 5 uses the same local/remote stack and Infisical is runtime secret store.
+- E3: `product-strategy/tickets/PHASE_5_INDEX.md:26-45` places INIT-103 after INIT-102 and before MinIO, DNS/TLS, data plane, and workloads.
+- E4: `product-strategy/tickets/PHASE_5_INDEX.md:96-130` states local is a deployment target and runtime secrets go through Infisical.
+- E5: `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md` states local and remote run the same components, with Infisical in both.
+- E6: `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md` states channels replace hard dev/staging/prod roots.
+- E7: `infra/channels/local.yaml:1-32` defines the local channel as k3s on k3d with a concrete GitOps block.
+- E8: `infra/channels/dev.yaml:1-28` defines the dev channel as k3s on Vultr VMs and deliberately omits GitOps in INIT-102.
+- E9: `infra/schemas/platform-channel.schema.json:1-84` defines the channel schema and requires `gitops` for `k3d-local`.
+- E10: `infra/schemas/platform-channel.schema.json:270-335` defines the current `gitops` object shape.
+- E11: `gitops/README.md:5-16` documents the INIT-102 GitOps layout and says runtime app secrets move through Infisical in INIT-103.
+- E12: `infra/README.md:188-190` says SOPS+age is bootstrap-only and runtime app secrets, Discord tokens, DB passwords, and Infisical runtime data belong to Infisical in INIT-103.
+- E13: `infra/README.md:230-252` documents INIT-102 default and cluster verification and its required tools.
+- E14: `infra/README.md:254-264` lists runtime secret management and Infisical installation as INIT-103 anti-scope for INIT-102.
+- E15: `infra/scripts/lint-sops-boundary.py:14-22` defines the allowed encrypted file and runtime-secret-shaped reject patterns.
+- E16: `infra/scripts/lint-sops-boundary.py:63-98` enforces exactly one SOPS encrypted file under `gitops/bootstrap`.
+- E17: `infra/tests/validate_platform_bootstrap.sh:124-174` validates `.sops.yaml`, the encrypted sentinel, and SOPS boundary lint.
+- E18: `infra/tests/validate_platform_bootstrap.sh:176-239` verifies the local channel GitOps block and the dev omission.
+- E19: `/home/nes/projects/server-manager/worktrees/init-102-gitops-substrate/.pipeline/implementation.md:61-83` hands INIT-103 the local channel overlay and bootstrap-only age key boundary.
+- E20: `/home/nes/projects/server-manager/worktrees/init-102-gitops-substrate/.pipeline/implementation.md:84-94` lists INIT-103 open questions.
+- E21: `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:39-73` is archived context with kind/local-verification framing, now superseded.
+- E22: Infisical Kubernetes Operator overview: https://infisical.com/docs/integrations/platforms/kubernetes/overview
+- E23: InfisicalSecret CRD docs: https://infisical.com/docs/integrations/platforms/kubernetes/infisical-secret-crd
+- E24: Infisical Kubernetes Helm self-hosting docs: https://infisical.com/docs/self-hosting/deployment-options/kubernetes-helm
+- E25: Infisical Docker self-hosting docs: https://infisical.com/docs/self-hosting/deployment-options/standalone-infisical
+- E26: Infisical Docker Compose self-hosting docs: https://infisical.com/docs/self-hosting/deployment-options/docker-compose
+- E27: Infisical environment variables docs: https://infisical.com/docs/self-hosting/configuration/envars
+- E28: Infisical Universal Auth docs: https://infisical.com/docs/documentation/platform/identities/universal-auth
+- E29: Infisical Kubernetes Auth docs: https://infisical.com/docs/documentation/platform/identities/kubernetes-auth
+- E30: Infisical project model docs: https://infisical.com/docs/documentation/platform/secrets-mgmt/project
+- E31: Infisical folder model docs: https://infisical.com/docs/documentation/platform/folder
+- E32: Infisical Kubernetes Operator repository: https://github.com/Infisical/kubernetes-operator
+- E33: Infisical main repository Docker Compose: https://github.com/Infisical/infisical/blob/main/docker-compose.prod.yml
+- E34: Infisical CLI releases: https://github.com/Infisical/cli/releases
+- E35: Local clone evidence: `.tmp/infisical-kubernetes-operator-v0.10.32/config/crd/bases/*.yaml`, tag `infisical-k8-operator/v0.10.32`.
+- E36: Local clone evidence: `.tmp/infisical-kubernetes-operator-v0.10.32/helm-charts/secrets-operator/values.yaml`.
+- E37: Toolchain check run in this worktree on 2026-04-26.
 
-## 1. Current Repo State For GitOps
+## 1. Current Repo State
 
-### 1.1 INIT-101 control-cluster substrate
+### 1.1 Phase 5 control facts
 
-- INIT-101's proposal says the local channel runs k3d, remote channels are
-  OpenTofu-managed Vultr Cloud Compute VMs bootstrapped by cloud-init, and the
-  done state is a real local k3d cluster with `kubectl get nodes` succeeding.
-  Citation:
-  `/home/nes/projects/server-manager/worktrees/init-101-k3s-control-cluster/.pipeline/proposal.md:45-76`.
-- INIT-101 explicitly leaves Flux to INIT-102, Infisical to INIT-103, and
-  Crossplane to INIT-106. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-101-k3s-control-cluster/.pipeline/proposal.md:79-90`.
-- INIT-101's `infra/` shape includes channel schemas, `local.yaml`,
-  `dev.yaml`, `infra/templates/platform-channel/`, local and dev OpenTofu
-  roots, `platform-cluster-k3d`, `platform-cluster-vms`, and local bring-up
-  scripts. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-101-k3s-control-cluster/.pipeline/proposal.md:91-155`.
-- Current `infra/README.md` says `infra/` contains Vultr-locked OpenTofu,
-  self-managed k3s, channel templates, and local-first deployment scripts.
-  Citation: `infra/README.md:5-15`.
-- Current `infra/README.md` says required INIT-101 tools are OpenTofu `1.11.5`,
-  kubectl `>= 1.31`, Docker `>= 24`, Python `>= 3.10` with `jsonschema` and
-  `PyYAML`, and k3d `v5.8.3`. Citation: `infra/README.md:16-29`.
-- Current `infra/templates/platform-channel/main.tf` dispatches on
-  `cluster_target`: `k3d-local` calls `platform-cluster-k3d`, while
-  `vultr-vms` calls network plus `platform-cluster-vms`. Citation:
-  `infra/templates/platform-channel/main.tf:5-44`.
-- Current `infra/templates/platform-channel/variables.tf` accepts
-  `cluster_target` values `k3d-local` and `vultr-vms`, and constrains
-  `cluster_distribution` to `k3s`. Citation:
-  `infra/templates/platform-channel/variables.tf:6-24`.
-- Current `infra/channels/local.yaml` is a k3d-local channel with k3s
-  `v1.32.13+k3s1`, one server, one agent, registry `humility-local`, and state
-  key `channels/local/terraform.tfstate`. Citation: `infra/channels/local.yaml:1-19`.
-- Current `infra/channels/dev.yaml` is a Vultr VM channel with region `ewr`,
-  remote kubeconfig path `/root/humility-k3s.yaml`, one `vc2-2c-4gb` server,
-  zero agents, and state key `channels/dev/terraform.tfstate`. Citation:
-  `infra/channels/dev.yaml:1-27`.
-- Current `infra/schemas/platform-channel.schema.json` has no `gitops` block
-  and no Flux/SOPS fields. It defines metadata, `cluster`, and `state`.
-  Citation: `infra/schemas/platform-channel.schema.json:16-47`.
+- Phase 5 is now governed by local-as-first-deployment, not local simulation. [E1]
+- Phase 5 uses self-managed k3s everywhere: k3d locally and k3s on Vultr Cloud Compute VMs remotely. [E1]
+- Flux remains the GitOps reconciler. [E1]
+- SOPS+age remains bootstrap-only. [E1]
+- Infisical is the runtime secret store. [E1]
+- Channel templates remain the environment model. [E1]
+- Per-channel config is expected to carry Infisical endpoint information. [E1]
+- Every Phase 5 initiative must deploy a real component into the local channel as its done state. [E1]
+- The Phase 5 index repeats that local and remote run the same stack with per-channel configuration. [E2]
+- The Phase 5 index repeats that SOPS+age is bootstrap-only and Infisical is runtime. [E2]
+- INIT-103 is named "Infisical runtime secret store." [E3]
+- INIT-103 scope includes Infisical, Infisical Operator, InfisicalSecret CRDs, RBAC, and runtime secret ownership. [E3]
+- INIT-103 depends on INIT-102. [E3]
+- INIT-104 depends on INIT-103 because MinIO credentials flow through Infisical. [E3]
+- INIT-111 depends on INIT-103 because database credentials flow through Infisical. [E3]
+- INIT-113 depends on INIT-103 because workloads require runtime secrets. [E3]
+- Phase 5 completion requires Infisical to own runtime secrets and sync them through the Operator. [E4]
 
-### 1.2 Current GitOps material in this worktree
+### 1.2 INIT-102 substrate available to INIT-103
 
-- Contrary to the prompt's "no Flux manifests in tree" expectation, the current
-  worktree has a 38-file `k8s/` tree. Command evidence: `find k8s -type f |
-  wc -l` returned `38` on 2026-04-26.
-- That `k8s/` tree is not channel-template-shaped. Its active overlays are
-  hard-coded `dev`, `staging`, and `production`, each split into
-  `control-cluster` and `app-cluster`. Citation:
-  `k8s/tests/test_gitops_foundation.sh:217-248`.
-- The `k8s/` tree includes Flux CR objects in `gotk-sync.yaml`, but the source
-  URL is a placeholder `ssh://git@example.com/humility/discord.git`. Citation:
-  `k8s/clusters/dev/control-cluster/gotk-sync.yaml:1-25`.
-- The same placeholder URL appears in staging and production control/app
-  cluster roots. Citation:
-  `k8s/clusters/staging/control-cluster/gotk-sync.yaml:1-25` and
-  `k8s/clusters/production/control-cluster/gotk-sync.yaml:1-25`.
-- The current `k8s/` base includes generated ConfigMaps, namespaces, and
-  policy markers, but no vendored Flux controller install manifest. Citation:
-  `k8s/base/kustomization.yaml:1-7` and
-  `k8s/base/controllers/kustomization.yaml:1-11`.
-- The current `k8s/` roots include app-cluster paths before INIT-106 creates
-  application cluster provisioning. Citation:
-  `k8s/clusters/dev/app-cluster/gotk-sync.yaml:1-25`; controlling boundary:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/two-tier-cluster-architecture.md:20-47`.
-- The current `k8s/` validation test bans Buildkite direct cluster mutation and
-  validates Flux paths, which is conceptually salvageable as harness posture.
-  Citation: `k8s/tests/test_gitops_foundation.sh:197-254`.
-- The current worktree has no root-level `gitops/` directory. Command evidence:
-  `find gitops -maxdepth 3 -type f` returned no files on 2026-04-26.
-- The current worktree has no `.sops.yaml` and no `*.enc.yaml` files. Command
-  evidence: `find . -name '.sops.yaml' -o -name '*.enc.yaml'` returned no files
-  on 2026-04-26.
-- Current `.pipeline/` files in this worktree are stale INIT-101 artifacts:
-  `.pipeline/proposal.md` is titled "INIT-101 Phase 3 Proposal." Citation:
-  `.pipeline/proposal.md:1-4`.
+- The current local channel is `id: local`. [E7]
+- The current local channel uses `cluster.distribution: k3s`. [E7]
+- The current local channel target is `k3d-local`. [E7]
+- The current local k3d shape is one server and one agent. [E7]
+- The current local channel includes a concrete `gitops` block. [E7]
+- The local GitOps source URL points at an in-cluster `git-local.git-system.svc.cluster.local` service. [E7]
+- The local GitOps path is `./gitops/channels/local`. [E7]
+- The local Flux Kustomization name is `humility-local`. [E7]
+- The local SOPS age secret name is `sops-age`. [E7]
+- The local decryption secret namespace is `flux-system`. [E7]
+- The current remote plan channel is `id: dev`. [E8]
+- The current remote plan channel target is `vultr-vms`. [E8]
+- The current remote plan channel uses Vultr region `ewr`. [E8]
+- The current remote plan channel defines one server VM on `vc2-2c-4gb`. [E8]
+- The current remote plan channel deliberately omits `gitops` in INIT-102. [E8]
+- The channel schema requires `cluster` and `state` when `parent` is null. [E9]
+- The channel schema requires `gitops` when the cluster target is `k3d-local`. [E9]
+- The existing `gitops` schema is strict with `additionalProperties: false`. [E10]
+- The existing `gitops` schema requires source kind, URL, ref, path, Kustomization names, SOPS secret names, intervals, prune, and wait. [E10]
+- INIT-102 therefore gives INIT-103 an existing strict schema pattern to extend. [E9, E10]
+- `gitops/README.md` lists `gitops/flux`, `gitops/sources/local`, `gitops/channels/local`, and `gitops/bootstrap`. [E11]
+- `gitops/README.md` says runtime application secrets do not live in `gitops/bootstrap`. [E11]
+- `infra/README.md` says the encrypted sentinel proves Flux can decrypt bootstrap-tier manifests. [E12]
+- `infra/README.md` says runtime application secrets, Discord tokens, DB passwords, and Infisical runtime data belong to Infisical in INIT-103. [E12]
+- INIT-102 cluster verification requires Docker, k3d, kubectl, flux, sops, age, and age-keygen. [E13]
+- INIT-102 cluster verification waits for Flux source and Kustomization readiness. [E13]
+- INIT-102 cluster verification checks a snapshot marker and SOPS Secret reached the cluster. [E13]
+- INIT-102 anti-scope explicitly excludes runtime secret management and Infisical installation. [E14]
 
-### 1.3 INIT-009 archived GitOps substrate
+### 1.3 SOPS bootstrap boundary currently enforced
 
-- The archived INIT-009 worktree is
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate`,
-  branch `feat/init-009-gitops-substrate`, HEAD `027b3b6`. Command evidence:
-  `git -C ... rev-parse --short HEAD` and `git -C ... log -1 --oneline` on
-  2026-04-26.
-- INIT-009's proposal was bound to old decisions: local cluster was `kind`,
-  active manifests under root-level `gitops/`, SOPS recipients were
-  per-channel, and `k8s/` was deleted. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:26-36`.
-- Salvageable shape: INIT-009 proposed Flux on the control cluster,
-  channel-aligned Kustomize layout, local Git source for verification, and a
-  root-level `gitops/` tree. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:39-73`.
-- Wrong-shaped detail: INIT-009 used kind for local verification, now
-  superseded by D8's k3d/k3s requirement. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:382-390`
-  and `DECISIONS.md:215-218`.
-- Wrong-shaped detail: INIT-009 used `dev` as the active channel inherited from
-  the old INIT-008 control-cluster channel, while INIT-101 now provides
-  `local` as the real first deployment target. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/README.md:10-17`
-  and `infra/channels/local.yaml:1-19`.
-- Wrong-shaped detail: INIT-009 generated Flux `gotk-components.yaml` with
-  source, kustomize, helm, notification, image-reflector, and
-  image-automation controllers. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/bases/flux-system/gotk-components.yaml:1-14`.
-- Wrong-shaped detail: INIT-009's SOPS sample contained a placeholder age
-  recipient and an unencrypted placeholder Secret with empty `stringData`.
-  Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/.sops.yaml:17-24`
-  and
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/bootstrap-creds.enc.yaml:1-10`.
-- Salvageable SOPS custody notes: public recipient committed in `.sops.yaml`,
-  private key stored outside the repo, `SOPS_AGE_KEY_FILE` used for local
-  decryption, and add/remove/rotate runbook. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/README.md:7-35`.
-- Discard the SOPS-as-runtime framing. D8 says SOPS+age is bootstrap-only and
-  Infisical owns runtime secrets. Citation: `DECISIONS.md:196-198` and
-  `DECISIONS.md:219-222`.
+- The SOPS boundary linter allows exactly `gitops/bootstrap/sops-sentinel.enc.yaml`. [E15, E16]
+- The linter treats path/key patterns beginning with `infisical` as runtime-secret-shaped. [E15]
+- The linter treats `discord.*token` as runtime-secret-shaped. [E15]
+- The linter treats `password` as runtime-secret-shaped. [E15]
+- The linter treats `secret_access_key` and `api_key` as runtime-secret-shaped. [E15]
+- The linter fails if the encrypted file set is anything other than the one sentinel file. [E16]
+- The harness validates exactly one SOPS creation rule. [E17]
+- The harness validates that the SOPS creation rule only targets `gitops/bootstrap/*.enc.yaml`. [E17]
+- The harness validates that encrypted fields match `data|stringData`. [E17]
+- The harness runs the SOPS boundary linter. [E17]
+- The existing guard means INIT-103 cannot add runtime secrets as additional SOPS files without changing the boundary. [E15, E16, E17]
+- The existing guard also means an Infisical bootstrap credential needs explicit boundary treatment if it enters through SOPS. [E15, E16]
 
-## 2. Flux v2 Installation Contract
+### 1.4 Current lack of Infisical resources
 
-### 2.1 Flux components and minimum controller set
+- `rg` found no committed Infisical Operator manifests under the current `gitops/` tree. [E37]
+- `rg` found no committed `InfisicalSecret` CRs under the current `gitops/` tree. [E37]
+- `rg` found only planning/documentation references to Infisical in current repo files. [E37]
+- The current GitOps channel overlay contains the namespace, snapshot marker, and SOPS sentinel only. [E11]
+- The current schema contains no top-level `infisical` block. [E9, E10]
+- The current `local.yaml` contains no Infisical server URL, project ID, environment slug, or service-token Secret reference. [E7]
+- The current `dev.yaml` contains no Infisical server URL, project ID, environment slug, or service-token Secret reference. [E8]
+- INIT-102 handoff says INIT-103 should install the Infisical Operator through Flux under `gitops/channels/local/`. [E19]
+- INIT-102 handoff says runtime `InfisicalSecret` resources are INIT-103's contract. [E19]
+- INIT-102 handoff says runtime application secrets must not be encoded in SOPS files. [E19]
+- INIT-102 open questions include Infisical server URL representation. [E20]
+- INIT-102 open questions include whether project ID is one-per-channel, inherited, or tenant/application split. [E20]
+- INIT-102 open questions include where the Infisical service token enters bootstrap. [E20]
+- INIT-102 open questions include Operator namespace and target namespace authorization. [E20]
+- INIT-102 open questions include readiness assertions after `InfisicalSecret` reconciliation exists. [E20]
 
-- Flux documents four GitOps Toolkit controller families: source-controller,
-  kustomize-controller, helm-controller, and notification-controller. Citation:
-  https://fluxcd.io/flux/components/
-- source-controller is the API for sources such as Git repositories, Helm
-  repositories, Helm charts, OCI repositories, and Buckets. Citation:
-  https://fluxcd.io/flux/components/source/
-- kustomize-controller specializes in running continuous delivery pipelines for
-  infrastructure and workloads defined with Kubernetes manifests and assembled
-  with Kustomize. Citation: https://fluxcd.io/flux/components/kustomize/
-- The `Kustomization` API states that `.spec.interval` is required and defines
-  the interval at which reconciliation is performed. Citation:
-  https://fluxcd.io/flux/components/kustomize/kustomizations/
-- The `GitRepository` API states that `.spec.interval` is required and defines
-  how often the source is reconciled. Citation:
-  https://fluxcd.io/flux/components/source/gitrepositories/
-- INIT-102's minimum functional loop for raw manifests is source-controller
-  plus kustomize-controller: source-controller fetches the artifact, and
-  kustomize-controller applies a `Kustomization` path from that source.
-  Evidence chain: source-controller GitRepository docs plus kustomize-controller
-  Kustomization docs above.
-- helm-controller is needed for `HelmRelease` reconciliation, but INIT-102
-  explicitly excludes Helm/application workloads; later initiatives may add
-  Helm sources. Citation for Flux Helm API:
-  https://fluxcd.io/flux/components/helm/
-- notification-controller owns alerting/webhook receiver surfaces. INIT-117 owns
-  observability/notifications in the Phase 5 index. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:45` and
-  https://fluxcd.io/flux/components/notification/
-- OCIRepository is a source-controller CRD and can be used as a source artifact
-  for Kubernetes manifests, but Helm usage is separate and later. Citation:
-  https://fluxcd.io/flux/components/source/ocirepositories/
+### 1.5 Archived anti-pattern context
 
-### 2.2 `flux install` versus `flux bootstrap`
+- The archived INIT-009 proposal used local verification framing that is superseded by D8. [E21, E1]
+- The archived INIT-009 proposal used `kind`, while D8 supersedes local kind with k3d because k3d runs k3s. [E21, E1]
+- The archived INIT-009 proposal treated SOPS+age as a broader GitOps secret mechanism, while D8 narrows SOPS+age to bootstrap-only. [E21, E1]
+- The archived INIT-009 material is useful only as context for what INIT-103 should not reproduce. [E21, E1]
 
-- Flux installation docs expose `flux install` for installing Flux controllers
-  on a cluster. Citation: https://fluxcd.io/flux/installation/
-- The `flux install` command can export installation manifests instead of
-  applying them, allowing generated controller YAML to be committed and
-  reconciled. Citation: https://fluxcd.io/flux/cmd/flux_install/
-- Flux bootstrap docs describe bootstrap as installing Flux on a cluster and
-  configuring Flux to manage itself from a Git repository. Citation:
-  https://fluxcd.io/flux/installation/bootstrap/
-- The `flux bootstrap git` command is the generic bootstrap variant for a Git
-  repository. Citation: https://fluxcd.io/flux/cmd/flux_bootstrap_git/
-- Evidence implication: `flux bootstrap` combines initial cluster install with
-  Git repository wiring, while `flux install --export` separates controller
-  manifest generation from source/root `GitRepository` and `Kustomization`
-  objects.
-- Channel-template implication for proposal phase: if channel overlays own all
-  manifests in-tree, `flux install --export` gives a more explicit artifact
-  boundary; if the bootstrap CLI owns initial source/root creation, bootstrap
-  must be constrained so it does not rewrite repo layout outside the channel
-  template.
+## 2. Infisical Open Source Self-Hosted Architecture
 
-### 2.3 Flux CRDs and fields relevant to INIT-102
+### 2.1 Component inventory
 
-- `GitRepository` supports Git sources, including `url`, `ref`, `interval`,
-  `secretRef`, and suspend behavior. Citation:
-  https://fluxcd.io/flux/components/source/gitrepositories/
-- Flux Git authentication docs cover SSH deploy keys, HTTPS basic auth/token,
-  and provider-specific bootstrap flows. Citation:
-  https://fluxcd.io/flux/installation/bootstrap/github/
-  and https://fluxcd.io/flux/components/source/gitrepositories/#secret-reference
-- `Kustomization` supports `sourceRef`, `path`, `interval`, `prune`, `wait`,
-  `timeout`, `dependsOn`, and decryption settings. Citation:
-  https://fluxcd.io/flux/components/kustomize/kustomizations/
-- `OCIRepository` provides source artifacts from OCI registries and supports
-  interval-driven reconciliation. Citation:
-  https://fluxcd.io/flux/components/source/ocirepositories/
-- `Bucket` sources exist, but D8 explicitly supersedes MinIO bucket-watched Flux
-  with Git-backed Flux. Citation: `DECISIONS.md:229-230` and
-  https://fluxcd.io/flux/components/source/buckets/
-- Reconciliation cadence is object-specific. The current stale `k8s/` tree uses
-  `GitRepository.spec.interval: 1m0s` and `Kustomization.spec.interval: 10m0s`.
-  Citation: `k8s/clusters/dev/control-cluster/gotk-sync.yaml:6-24`.
-- INIT-009's proposal used `GitRepository` `1m` and root `Kustomization` `5m`.
-  Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:280-291`.
-- Flux version pinning evidence: GitHub API reported latest Flux v2 release
-  `v2.8.6`, published 2026-04-21. Citation:
-  https://github.com/fluxcd/flux2/releases/tag/v2.8.6.
-- Flux-generated controller manifests carry controller image tags. INIT-009's
-  generated manifest labels `app.kubernetes.io/version: v2.8.0` and controller
-  components in comments. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/bases/flux-system/gotk-components.yaml:1-14`.
+- Infisical self-hosting docs describe a Docker deployment using the `infisical/infisical` image plus external Postgres and Redis dependencies. [E25]
+- The standalone Docker docs say the image contains application code only and requires Postgres and Redis connections. [E25]
+- The Docker Compose example defines a `backend` service using `infisical/infisical:latest` and explicitly comments to pin a specific tag. [E33]
+- The Docker Compose example defines a `db` service using `postgres:14-alpine`. [E33]
+- The Docker Compose example defines a `redis` service using `redis`. [E33]
+- The Docker Compose example puts Postgres data in a `pg_data` volume. [E33]
+- The Docker Compose example puts Redis data in a `redis_data` volume. [E33]
+- The Kubernetes Helm docs show the application image repository as `infisical/infisical`. [E24]
+- The Kubernetes Helm docs show example image tag `v0.151.0`. [E24]
+- The Kubernetes Helm docs state not to use `latest` in production and to pin a specific version. [E24]
+- The Kubernetes Helm docs show a normal running deployment with Infisical pods plus `postgresql-0` and `redis-master-0`. [E24]
+- The Kubernetes Helm docs state the application layer is stateless and can scale horizontally. [E24]
+- The Kubernetes Helm values reference shows default `infisical.replicaCount: 2`. [E24]
+- The Kubernetes Helm values reference shows `infisical.resources.requests.cpu: 350m`. [E24]
+- The Kubernetes Helm values reference shows `infisical.resources.limits.memory: 1000Mi`. [E24]
+- The Kubernetes Helm values reference shows in-cluster PostgreSQL enabled by default. [E24]
+- The Kubernetes Helm values reference shows in-cluster Redis enabled by default. [E24]
+- The Kubernetes Helm values reference shows PostgreSQL image repository `bitnamilegacy/postgresql`. [E24]
+- The Kubernetes Helm values reference shows Redis image repository `bitnamilegacy/redis`. [E24]
+- The Kubernetes Helm docs state proof-of-concept deployments can use chart-provisioned in-cluster PostgreSQL and Redis. [E24]
+- The Kubernetes Helm docs state in-cluster PostgreSQL and Redis are not high availability. [E24]
+- The Kubernetes Helm docs recommend external managed PostgreSQL and Redis for production HA. [E24]
+- The Kubernetes Helm docs describe default PVCs for PostgreSQL and Redis when in-cluster databases are used. [E24]
+- The Kubernetes Helm docs list default PVC size 8Gi for PostgreSQL data. [E24]
+- The Kubernetes Helm docs list default PVC size 8Gi for Redis data. [E24]
+- The Kubernetes Helm docs say the PostgreSQL PVC contains encrypted secrets and should not be deleted unless data loss is intended. [E24]
 
-## 3. Repo Layout For Channel Overlays
+### 2.2 Required configuration and first-run data
 
-- Kustomize's Kubernetes documentation describes a `kustomization.yaml` with
-  `resources`, `configMapGenerator`, `secretGenerator`, and patches to customize
-  Kubernetes objects. Citation:
-  https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization
-- The same documentation describes bases and overlays: a base can be reused by
-  multiple overlays, and overlays can customize names, labels, images, replicas,
-  and patches. Citation:
-  https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/#bases-and-overlays
-- The channel-template memory says channel inheritance maps to Kustomize
-  bases/overlays. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:69-74`.
-- INIT-009's salvageable layout used root-level `gitops/`, `bases/`,
-  `channels/<channel-id>/`, and `secrets/<channel-id>/`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:112-155`.
-- INIT-009's README describes `bases/` as reusable Kustomize bases and
-  `channels/` as channel overlays. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/README.md:55-69`.
-- Current stale `k8s/` has a base/overlay/root shape, but the overlay keys are
-  environment names (`dev`, `staging`, `production`) rather than channel ids.
-  Citation: `k8s/tests/test_gitops_foundation.sh:217-248`.
-- Current stale `k8s/` also includes `app-cluster` roots even though
-  app-cluster provisioning is later INIT-106. Citation:
-  `k8s/clusters/dev/app-cluster/kustomization.yaml:1-4` and
-  `product-strategy/tickets/PHASE_5_INDEX.md:34`.
-- Repo-layout evidence therefore supports these proposal-phase questions:
-  where to place the accepted GitOps root (`gitops/` versus reshaped `k8s/`);
-  how to name overlays by channel id; and whether the accepted INIT-102 scope
-  contains only `local` control-cluster material or also a remote `dev` plan
-  overlay.
-- Naming evidence from INIT-101: active channel ids are `local` and `dev`.
-  Citation: `infra/channels/local.yaml:1-7` and `infra/channels/dev.yaml:1-7`.
-- Path evidence from Flux: a Flux `Kustomization` points to a path within the
-  source artifact using `.spec.path`. Citation:
-  https://fluxcd.io/flux/components/kustomize/kustomizations/
-- Per-channel Flux Kustomization evidence: the current stale `k8s/` CR uses
-  path `./k8s/clusters/dev/control-cluster/manifests`, proving the existing
-  repo already expects one path per root. Citation:
-  `k8s/clusters/dev/control-cluster/gotk-sync.yaml:17-24`.
+- Infisical accepts self-hosted configuration through environment variables. [E27]
+- Minimal self-hosting requires `ENCRYPTION_KEY`, `AUTH_SECRET`, `DB_CONNECTION_URI`, and `REDIS_URL`. [E27]
+- `ENCRYPTION_KEY` is required. [E27]
+- `ENCRYPTION_KEY` must be a random 16-byte hex string. [E27]
+- `AUTH_SECRET` is required. [E27]
+- `AUTH_SECRET` must be a random 32-byte base64 string. [E27]
+- `SITE_URL` is required. [E27]
+- `SITE_URL` must be an absolute URL including protocol. [E27]
+- `PORT` defaults to `8080`. [E27]
+- `HOST` defaults to `localhost`. [E27]
+- `HOST=0.0.0.0` is needed for external accessibility in self-hosted deployments. [E27]
+- The sample `.env.example` uses `DB_CONNECTION_URI=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}`. [E33]
+- The sample `.env.example` uses `REDIS_URL=redis://redis:6379`. [E33]
+- The sample `.env.example` includes `KUBERNETES_AUTO_FETCH_SERVICE_ACCOUNT_TOKEN=false`. [E33]
+- The Kubernetes Helm docs create `Secret/infisical-secrets` with `AUTH_SECRET`, `ENCRYPTION_KEY`, and `SITE_URL` for proof-of-concept installs. [E24]
+- The Kubernetes Helm docs add `DB_CONNECTION_URI` and `REDIS_URL` when external database and Redis are used. [E24]
+- The Kubernetes Helm docs state the first user to sign up becomes the instance administrator. [E24]
+- The Kubernetes Helm values reference includes `autoBootstrap.enabled: false` by default. [E24]
+- The Kubernetes Helm values reference includes an auto-bootstrap secret destination named `infisical-bootstrap-secret`. [E24]
+- The Kubernetes Helm values reference includes a bootstrap credential secret named `infisical-bootstrap-credentials`. [E24]
+- The auto-bootstrap fields are evidence of a chart-supported bootstrap path, but the research did not validate its behavior end-to-end. [E24]
 
-## 4. SOPS+age Bootstrap-Only Contract
+### 2.3 Resource footprint evidence
 
-### 4.1 SOPS and age mechanics
+- Infisical application container chart defaults request 350m CPU. [E24]
+- Infisical application container chart defaults limit 1000Mi memory. [E24]
+- Infisical Operator chart defaults request 10m CPU. [E36]
+- Infisical Operator chart defaults request 64Mi memory. [E36]
+- Infisical Operator chart defaults limit 500m CPU. [E36]
+- Infisical Operator chart defaults limit 128Mi memory. [E36]
+- PostgreSQL default PVC size is 8Gi in the Helm docs. [E24]
+- Redis default PVC size is 8Gi in the Helm docs. [E24]
+- The local channel currently has one k3d server and one k3d agent. [E7]
+- The remote dev VM plan currently has one `vc2-2c-4gb` server and no agents. [E8]
+- The docs identify insufficient cluster resources and unbound PVCs as common pending-Pod causes. [E24]
+- The docs recommend checking resource limits and scaling horizontally for performance issues. [E24]
+- The docs do not document SQLite as an Infisical self-hosted storage option. [E24, E25, E27]
+- The docs consistently require Postgres and Redis for self-hosted Infisical. [E24, E25, E27]
+- Evidence therefore indicates k3d local needs PVC-backed Postgres and Redis, not SQLite. [E24, E25, E27]
 
-- SOPS supports age recipients and stores encryption metadata in the encrypted
-  file. Citation: https://github.com/getsops/sops#encrypting-using-age.
-- SOPS supports `.sops.yaml` creation rules, including path-based matching and
-  configured recipients. Citation:
-  https://github.com/getsops/sops#using-sops-yaml-conf-to-select-kms-pgp-and-age-for-new-files.
-- SOPS supports `encrypted_regex`, allowing encryption to be scoped to YAML
-  fields such as `data` and `stringData`. Citation:
-  https://github.com/getsops/sops#encrypting-only-parts-of-a-file.
-- age provides `age-keygen` to generate age key pairs. Citation:
-  https://github.com/FiloSottile/age.
-- SOPS reads age private keys through `SOPS_AGE_KEY_FILE` or SOPS age key
-  configuration. Citation: https://github.com/getsops/sops#encrypting-using-age.
-- Flux SOPS integration requires a Kubernetes Secret in the same namespace as
-  the Kustomization, containing the age identity file, and the Kustomization
-  references it through `.spec.decryption.secretRef`. Citation:
-  https://fluxcd.io/flux/guides/mozilla-sops/
-- Flux docs show creating the SOPS age secret with `kubectl create secret
-  generic sops-age --namespace=flux-system --from-file=age.agekey=...`.
-  Citation: https://fluxcd.io/flux/guides/mozilla-sops/
-- Flux docs show `spec.decryption.provider: sops` and `secretRef.name:
-  sops-age` on a `Kustomization`. Citation:
-  https://fluxcd.io/flux/guides/mozilla-sops/
+### 2.4 Supported install methods and GitOps implications
 
-### 4.2 Bootstrap-only boundary
+- Infisical documents Docker Compose for a single Docker host. [E26]
+- Infisical documents standalone Docker with externally supplied Postgres and Redis. [E25]
+- Infisical documents Kubernetes installation through a Helm chart. [E24]
+- Infisical Kubernetes Helm install command uses `helm upgrade --install infisical infisical-helm-charts/infisical-standalone`. [E24]
+- Infisical Operator docs install the Operator through Helm. [E22]
+- Infisical Operator repository also contains Kustomize-style `config/default`, `config/crd`, `config/rbac`, and `config/manager` directories. [E32, E35]
+- Infisical Operator repository also contains a `kubectl-install/install-secrets-operator.yaml` file. [E32, E35]
+- INIT-102 installed only Flux source-controller and kustomize-controller, not helm-controller. [E19, E11]
+- INIT-102 local channel reconciles through Flux Kustomization from raw Git manifests. [E7, E11, E19]
+- INIT-103's raw-manifest need follows from INIT-102's reconciler shape, not from Infisical docs. [E7, E10, E19, E22, E24]
+- Helm charts remain useful as upstream source material for rendered manifests and defaults. [E22, E24, E36]
+- A proposal that uses raw committed manifests needs a version pin for both Infisical server image and Operator manifests. [E24, E32, E36]
 
-- D8 says SOPS+age remains bootstrap-only and Infisical is the runtime secret
-  store. Citation: `DECISIONS.md:196-198`.
-- Phase 5 completion criteria say SOPS+age bootstraps only secrets needed to
-  start runtime secret management, and Infisical owns runtime secrets. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:126-130`.
-- INIT-103 owns Infisical runtime secret store, including Infisical,
-  Infisical Operator, InfisicalSecret CRDs, RBAC, and runtime secret ownership.
-  Citation: `product-strategy/tickets/PHASE_5_INDEX.md:31`.
-- Enforcement is by file content and ownership, not by SOPS itself. SOPS can
-  encrypt any YAML matched by `.sops.yaml`; INIT-102 must define which
-  bootstrap-tier files are allowed to exist.
-- Bootstrap-tier examples from the prompt: Flux Git deploy key and age
-  decryption key delivery. Boundary evidence: runtime app secrets are outside
-  INIT-102 and assigned to INIT-103. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:30-31`.
-- INIT-009's `gitops/secrets/dev/bootstrap-creds.enc.yaml` is not usable
-  evidence for real secret content because it contains placeholder empty
-  `stringData`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/bootstrap-creds.enc.yaml:1-10`.
+## 3. Infisical Kubernetes Operator
 
-### 4.3 Key lifecycle evidence
+### 3.1 Operator role and reconciliation model
 
-- Key generation procedure evidence from age/SOPS: operator runs `age-keygen`
-  to generate a private identity and extracts/records the public recipient for
-  `.sops.yaml`. Citation: https://github.com/FiloSottile/age and
-  https://github.com/getsops/sops#encrypting-using-age.
-- INIT-009's custody notes stored private keys at
-  `~/.config/sops/age/<channel>.txt` and committed public recipients in the
-  channel `.sops.yaml`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/README.md:7-19`.
-- INIT-009's rotation notes add a new recipient, run `sops updatekeys`, remove
-  the old recipient, and update keys again. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/README.md:27-35`.
-- Delivery chicken-and-egg: the cluster must receive the age private key as a
-  Kubernetes Secret before Flux can decrypt encrypted bootstrap files. Flux docs
-  explicitly create the secret outside Flux before SOPS decryption works.
-  Citation: https://fluxcd.io/flux/guides/mozilla-sops/.
-- This private-key Secret is itself not committed as cleartext. It is an
-  operator/bootstrap delivery action; the proposal phase must decide whether
-  that delivery is manual `kubectl create secret generic`, a Flux CLI helper,
-  or a channel-template post-install step.
+- Infisical describes the Operator as Kubernetes controllers for managing secrets between Infisical and Kubernetes. [E22]
+- The Operator supports syncing secrets from Infisical into Kubernetes through `InfisicalSecret`. [E22]
+- The Operator supports pushing Kubernetes secrets to Infisical through `InfisicalPushSecret`. [E22]
+- The Operator supports dynamic secrets and leases through `InfisicalDynamicSecret`. [E22]
+- Infisical docs say configured CRDs are continuously monitored and updated to keep Kubernetes secrets current. [E22]
+- Infisical docs say the Operator can automatically reload dependent workload resources when relevant secrets are updated. [E22, E23]
+- InfisicalSecret docs say managed Kubernetes Secret targets are defined through `managedKubeSecretReferences`. [E23]
+- InfisicalSecret docs say the Operator creates managed Kubernetes Secrets in the specified name and namespace. [E23]
+- InfisicalSecret docs say `managedSecretReference` is deprecated and replaced by `managedKubeSecretReferences`. [E23]
+- InfisicalSecret docs say `managedKubeSecretReferences` accepts an array, allowing multiple managed Secret outputs from one CR. [E23]
+- InfisicalSecret docs say creation policy can be `Orphan` or `Owner`. [E23]
+- InfisicalSecret docs say `Owner` requires the InfisicalSecret CR to be in the same namespace as the managed Secret. [E23]
+- InfisicalSecret docs say templating can transform fetched secrets before writing Kubernetes Secrets. [E23]
+- InfisicalSecret docs say managed ConfigMaps are for non-sensitive data and managed Secrets should be used for sensitive data. [E23]
 
-## 5. Local-First GitOps
+### 3.2 CRD set and API details
 
-### 5.1 Hard question
+- The current operator docs list `InfisicalSecret`, `InfisicalPushSecret`, and `InfisicalDynamicSecret` as supported CRDs. [E22]
+- The v0.10.32 operator repository CRD directory also contains `ClusterGenerator`, `Password`, and `UUID` CRDs. [E35]
+- `InfisicalSecret` group is `secrets.infisical.com`. [E35]
+- `InfisicalSecret` version is `v1alpha1`. [E35]
+- `InfisicalSecret` kind is `InfisicalSecret`. [E35]
+- `InfisicalSecret` scope is Namespaced. [E35]
+- `InfisicalPushSecret` group is `secrets.infisical.com`. [E35]
+- `InfisicalPushSecret` version is `v1alpha1`. [E35]
+- `InfisicalPushSecret` kind is `InfisicalPushSecret`. [E35]
+- `InfisicalPushSecret` scope is Namespaced. [E35]
+- `InfisicalDynamicSecret` group is `secrets.infisical.com`. [E35]
+- `InfisicalDynamicSecret` version is `v1alpha1`. [E35]
+- `InfisicalDynamicSecret` kind is `InfisicalDynamicSecret`. [E35]
+- `InfisicalDynamicSecret` scope is Namespaced. [E35]
+- `ClusterGenerator` group is `secrets.infisical.com`. [E35]
+- `ClusterGenerator` version is `v1alpha1`. [E35]
+- `ClusterGenerator` kind is `ClusterGenerator`. [E35]
+- `ClusterGenerator` scope is Cluster. [E35]
+- `Password` group is `secrets.infisical.com`. [E35]
+- `Password` version is `v1alpha1`. [E35]
+- `Password` kind is `Password`. [E35]
+- `Password` scope is Namespaced. [E35]
+- `UUID` group is `secrets.infisical.com`. [E35]
+- `UUID` version is `v1alpha1`. [E35]
+- `UUID` kind is `UUID`. [E35]
+- `UUID` scope is Namespaced. [E35]
+- The operator docs call the CRD list expandable over time. [E22]
+- The proposal phase needs to decide whether INIT-103 commits all upstream CRDs or only the CRDs needed for pull-based runtime sync. [E22, E35]
 
-- Local-as-first-deployment requires Flux running in local k3d to reconcile a
-  real manifest from a source it can reach. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:45-60`.
-- The local channel is `k3d-local`; it is not a dry-run or render-only target.
-  Citation: `infra/channels/local.yaml:8-15` and `infra/README.md:12-15`.
-- Flux `GitRepository` source URLs are fetched by source-controller running
-  inside the cluster, not by the operator's local shell. Citation:
-  https://fluxcd.io/flux/components/source/gitrepositories/.
-- The inner loop is therefore determined by how a k3d cluster sees the working
-  Git repository.
+### 3.3 InfisicalSecret shape
 
-### 5.2 Options
+- InfisicalSecret sample uses `apiVersion: secrets.infisical.com/v1alpha1`. [E23, E35]
+- InfisicalSecret sample uses `kind: InfisicalSecret`. [E23, E35]
+- InfisicalSecret sample includes `spec.hostAPI`. [E23, E35]
+- InfisicalSecret sample includes `spec.syncConfig.resyncInterval`. [E23, E35]
+- InfisicalSecret sample includes `spec.syncConfig.instantUpdates`. [E23, E35]
+- InfisicalSecret supports a `tls.caRef` for a custom CA Secret. [E23, E35]
+- InfisicalSecret supports Universal Auth through `authentication.universalAuth`. [E23, E35]
+- Universal Auth scope can include `projectSlug`. [E23, E35]
+- Universal Auth scope can include `projectId`. [E23, E35]
+- Universal Auth scope includes `envSlug`. [E23, E35]
+- Universal Auth scope includes `secretsPath`. [E23, E35]
+- Universal Auth scope can include `recursive`. [E23, E35]
+- Universal Auth credentials use a Kubernetes Secret reference with name and namespace. [E23, E35]
+- InfisicalSecret supports Native Kubernetes Auth through `authentication.kubernetesAuth`. [E23, E35]
+- Kubernetes Auth uses `serviceAccountRef`, `identityId`, and `secretsScope`. [E23, E35]
+- InfisicalSecret supports service-token authentication through `authentication.serviceToken`. [E23, E35]
+- Service-token authentication uses `serviceTokenSecretReference`. [E23, E35]
+- Service-token authentication scope uses `envSlug` and `secretsPath`. [E23, E35]
+- Service-token sample Secret stores the token under key `infisicalToken`. [E35]
+- Universal Auth sample Secret stores `clientId` and `clientSecret`. [E35]
+- Current samples show only one authentication method should be defined in one InfisicalSecret. [E35]
+- The CRD docs state either `projectSlug` or `projectId` can be used in `secretsScope`. [E23]
+- The CRD docs state only one of `projectSlug` or `projectId` should be used. [E23]
 
-- Option A: Point Flux at GitHub or another hosted Git endpoint. Evidence:
-  Flux first-class bootstrap providers include GitHub, and GitRepository can use
-  HTTPS or SSH auth. Citation:
-  https://fluxcd.io/flux/installation/bootstrap/github/ and
-  https://fluxcd.io/flux/components/source/gitrepositories/.
-- Option A tradeoff: every local reconciliation requires commit/push or a
-  hosted branch update before Flux can see changes. This conflicts with the
-  prompt's concern about slow GitHub round-trips for local iteration.
-- Option B: Run a local Git server, either in-cluster or on the host with k3d
-  networking. Evidence: Flux GitRepository only needs a reachable Git URL;
-  INIT-009's bootstrap script used an in-cluster `git daemon` service at
-  `git://git-local.git-system.svc.cluster.local/server-manager.git`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/scripts/bootstrap-flux.sh:4-24`
-  and
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/channels/dev/patches/flux-source-local.yaml:1-7`.
-- Option B tradeoff: it adds a local Git service lifecycle, branch/bundle
-  seeding, and trust/auth decisions. The evidence also shows it avoids GitHub,
-  Vultr, real DNS, and hosted Git for proof. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/scripts/bootstrap-flux.sh:4-9`.
-- Option C: Use Flux `OCIRepository` with a local OCI registry. Evidence:
-  source-controller supports OCIRepository sources, and k3d can create or use
-  local registries. Citations:
-  https://fluxcd.io/flux/components/source/ocirepositories/ and
-  https://k3d.io/stable/usage/registries/.
-- Option C tradeoff: D8 says Git-backed Flux, so OCI may be acceptable as a
-  source-controller mechanism only if the proposal treats Git as authoritative
-  and OCI as a local artifact transport. Citation: `DECISIONS.md:229-230`.
-- Option D: Mount the local repo path into source-controller. Evidence:
-  source-controller's documented source APIs are GitRepository, OCIRepository,
-  Bucket, HelmRepository, and HelmChart, not arbitrary mounted host paths.
-  Citation: https://fluxcd.io/flux/components/source/.
-- Option D tradeoff: it depends on controller deployment mutation and host-path
-  coupling; no upstream Flux source API evidence supports it as a normal
-  GitOps source.
+### 3.4 RBAC and namespace scope
 
-### 5.3 Research recommendation for proposal phase
+- Operator docs describe a cluster-wide install where one operator manages secrets across namespaces. [E22]
+- Operator docs say the cluster-wide install works out of the box with no additional RBAC configuration. [E22]
+- Operator docs describe namespace-scoped installs for enhanced security and multi-tenant clusters. [E22]
+- Operator docs say only the first namespace-scoped installation should install CRDs because CRDs are cluster-wide. [E22]
+- Operator docs support `scopedNamespaces`. [E22, E36]
+- Operator docs support `scopedRBAC`. [E22, E36]
+- Operator docs support `installCRDs: false` for additional namespace-scoped installs. [E22, E36]
+- Operator chart values default `scopedNamespaces: []`, meaning watch all namespaces. [E36]
+- Operator chart values default `scopedRBAC: false`. [E36]
+- Operator chart values default `installCRDs: true`. [E36]
+- Operator chart values allow using a pre-existing service account. [E22, E36]
+- Operator RBAC grants create/delete/get/list/update/watch on core `secrets`. [E35]
+- Operator RBAC grants create/delete/get/list/update/watch on core `configmaps`. [E35]
+- Operator RBAC grants get/list on pods. [E35]
+- Operator RBAC grants get/list/watch on serviceaccounts. [E35]
+- Operator RBAC grants create on serviceaccounts/token. [E35]
+- Operator RBAC grants get/list/update/watch on deployments, daemonsets, and statefulsets. [E35]
+- Operator RBAC grants create on tokenreviews. [E35]
+- Operator RBAC grants create/delete/get/list/patch/update/watch on Infisical CRs. [E35]
+- Operator RBAC grants update on Infisical CR finalizers. [E35]
+- Operator RBAC grants get/patch/update on Infisical CR statuses. [E35]
+- These RBAC permissions are broader than a pure read-from-Infisical/write-one-Secret path. [E35]
+- Namespace scoping is therefore a meaningful proposal-phase security control. [E22, E35, E36]
 
-- Recommended local-first source approach: local Git server, preferably
-  in-cluster or host-reachable from k3d, seeded from the current worktree.
-- Rationale: it preserves GitRepository semantics, keeps Git as the source
-  type, avoids GitHub push round-trips, and is already partially prototyped in
-  archived INIT-009. Citations:
-  https://fluxcd.io/flux/components/source/gitrepositories/ and
-  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/scripts/bootstrap-flux.sh:4-24`.
-- This recommendation is not final design. Proposal phase still must choose
-  the concrete service lifecycle, auth posture, branch naming, and cleanup
-  behavior, and must verify it in k3d rather than kind.
+### 3.5 Operator version and manifest pinning evidence
 
-## 6. Channel-Template Integration
+- GitHub reported latest operator release tag `infisical-k8-operator/v0.10.32` on 2026-04-26. [E32, E37]
+- The cloned v0.10.32 chart reports chart version `v0.10.32`. [E36]
+- The cloned v0.10.32 chart reports appVersion `v0.10.32`. [E36]
+- The cloned v0.10.32 chart values still show manager image tag `v0.10.31`. [E36]
+- The chart values tag/appVersion mismatch is an implementation risk to verify before pinning. [E36]
+- The operator chart uses repository `infisical/kubernetes-operator`. [E36]
+- The operator chart uses one replica by default. [E36]
+- The operator chart defaults to restricted container settings including non-root, dropped capabilities, no privilege escalation, read-only root filesystem, and seccomp runtime default. [E36]
+- Raw manifests can be sourced from the operator repository `config/` tree. [E32, E35]
+- Helm-rendered manifests can be sourced from the chart templates if Helm is available in the proposal/implementation environment. [E22, E36]
+- The local toolchain currently lacks `helm`. [E37]
 
-- Current `infra/templates/platform-channel/main.tf` is the dispatch point for
-  channel cluster targets. Citation: `infra/templates/platform-channel/main.tf:1-44`.
-- Current template variables do not include GitOps source URL, branch/ref,
-  manifest path, Flux version, SOPS age Secret name, or reconciliation interval.
-  Citation: `infra/templates/platform-channel/variables.tf:1-120`.
-- Current source schema has no `gitops` field. Citation:
-  `infra/schemas/platform-channel.schema.json:16-47`.
-- Current resolved/channel generator must therefore change if INIT-102 wants
-  per-channel GitOps settings to be validated and emitted into roots. Evidence:
-  generator/resolver ownership in INIT-101 layout: `infra/README.md:31-75`.
-- Possible schema additions for proposal consideration: `gitops.git_url`,
-  `gitops.git_ref`, `gitops.path`, `gitops.source_kind`, `gitops.interval`,
-  `gitops.retry_interval`, `gitops.kustomization_name`,
-  `gitops.kustomization_namespace`, `gitops.sops_age_secret_name`, and
-  `gitops.decryption_secret_namespace`.
-- Boundary concern: the `gitops` block should carry Flux source and bootstrap
-  decryption metadata only. Runtime secret provider fields belong to INIT-103
-  Infisical, not INIT-102. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:30-31`.
-- Integration shape evidence from INIT-101: local bring-up creates the cluster
-  and kubeconfig, while INIT-101 anti-scope names GitOps reconciliation and
-  Flux installation as INIT-102. Citation: `infra/README.md:84-109` and
-  `infra/README.md:170-181`.
-- Proposal-phase question: Flux installation could be modeled as a new
-  OpenTofu-adjacent module/post-install step or as a separate script invoked
-  after cluster bring-up. Evidence only: INIT-101 uses scripts for local k3d
-  lifecycle and modules for cluster resources. Citation:
-  `infra/README.md:84-109` and
-  `infra/templates/platform-channel/main.tf:15-26`.
-- Terraform/OpenTofu cannot safely hide user-visible cluster mutations in this
-  repo without explicit contracts; however INIT-102's visible effect is local
-  cluster mutation, not Discord Tier 3. Citation for local cluster done state:
-  `product-strategy/tickets/PHASE_5_INDEX.md:98-130`.
+## 4. Authentication Model Evidence
 
-## 7. Toolchain Check
+### 4.1 Service token
 
-### 7.1 Local availability on 2026-04-26
+- InfisicalSecret supports `authentication.serviceToken`. [E23, E35]
+- Service token auth uses a Kubernetes Secret reference. [E23, E35]
+- Service token scope includes `envSlug` and `secretsPath`. [E23, E35]
+- The sample service token Secret uses key `infisicalToken`. [E35]
+- Service token auth does not show `projectId` in the sample scope. [E23, E35]
+- Service token auth is therefore tied to the token's own project/path/environment permissions, based on the CRD sample shape. [E23, E35]
+- Service token auth leaves a static token in a Kubernetes Secret. [E23, E35]
+- Static token delivery creates a bootstrap chicken-and-egg for GitOps-managed operator sync. [E15, E16, E19, E20, E23]
 
-- `flux`: not installed. Command evidence: `flux --version` returned
-  `command not found`.
-- `sops`: not installed. Command evidence: `sops --version` returned
-  `command not found`.
-- `age`: not installed. Command evidence: `age --version` returned
-  `command not found`.
-- `age-keygen`: not installed. Command evidence: `age-keygen --version`
-  returned `command not found`.
-- `tofu`: installed as `/home/nes/.local/bin/tofu`; `tofu version` reports
-  OpenTofu `v1.11.5`.
-- `kubectl`: installed as `/usr/local/bin/kubectl`; `kubectl version
-  --client=true` reports client `v1.34.1` and embedded Kustomize `v5.7.1`.
-- standalone `kustomize`: not installed. Command evidence: `kustomize version`
-  returned `command not found`.
-- `k3d`: installed as `/home/nes/.local/bin/k3d`; `k3d version` reports
-  `v5.8.3` and default k3s `v1.31.5-k3s1`.
-- Docker: installed as `/usr/bin/docker`; `docker --version` reports
-  `29.4.0`.
-- INIT-101's k3d installer check passes: `bash infra/scripts/install-cluster-tools.sh
-  --check --no-color` returned `OK: k3d v5.8.3`.
+### 4.2 Universal Auth
 
-### 7.2 Version pins to consider
+- Universal Auth exchanges an identity client ID and client secret at `/api/v1/auth/universal-auth/login`. [E28]
+- Universal Auth login returns an access token. [E28]
+- Universal Auth access tokens have TTL. [E28]
+- Universal Auth default access token TTL is 7200 seconds. [E28]
+- Universal Auth docs describe periodic tokens for secret-zero mitigation. [E28]
+- Universal Auth can renew access tokens when Access Token Period is set. [E28]
+- Universal Auth still requires initial client ID and client secret material. [E28]
+- InfisicalSecret supports Universal Auth through a Kubernetes Secret containing `clientId` and `clientSecret`. [E23, E35]
+- Universal Auth scope can use `projectId` or `projectSlug`, `envSlug`, and `secretsPath`. [E23, E35]
+- Universal Auth maps more directly to a channel schema that wants explicit `project_id`. [E23, E35]
+- Universal Auth still leaves initial identity credentials somewhere in cluster bootstrap. [E28, E35]
 
-- Flux latest official GitHub release on 2026-04-26 is `v2.8.6`, published
-  2026-04-21. Citation: https://github.com/fluxcd/flux2/releases/tag/v2.8.6.
-- SOPS latest official GitHub release on 2026-04-26 is `v3.12.2`, published
-  2026-03-18. Citation: https://github.com/getsops/sops/releases/tag/v3.12.2.
-- age latest official GitHub release on 2026-04-26 is `v1.3.1`, published
-  2025-12-28. Citation: https://github.com/FiloSottile/age/releases/tag/v1.3.1.
-- Kustomize latest official standalone release on 2026-04-26 is
-  `kustomize/v5.8.1`, published 2026-02-09. Citation:
-  https://github.com/kubernetes-sigs/kustomize/releases/tag/kustomize/v5.8.1.
-- INIT-101 pins k3d `v5.8.3` in its installer. Citation:
-  `infra/scripts/install-cluster-tools.sh:1-5`.
-- INIT-101 required tools still apply: OpenTofu, kubectl, Docker, Python,
-  jsonschema/PyYAML, and k3d. Citation: `infra/README.md:16-29`.
+### 4.3 Kubernetes Auth
 
-## 8. Known Risks And Open Questions
+- Kubernetes Auth uses a Kubernetes service account JWT. [E29]
+- The application sends the JWT to `/api/v1/auth/kubernetes-auth/login`. [E29]
+- Infisical validates the JWT through Kubernetes TokenReview. [E29]
+- Infisical checks service account name and namespace allowlists. [E29]
+- Infisical returns a short-lived access token after successful Kubernetes Auth. [E29]
+- Infisical docs recommend clients/SDKs/Agent because they handle service account credential retrieval. [E29]
+- Kubernetes Auth can use a central token reviewer JWT or the incoming token itself. [E29]
+- If no token reviewer JWT is configured, the client service account needs `system:auth-delegator`. [E29]
+- Kubernetes Auth configuration includes Kubernetes API host, allowed service accounts, allowed namespaces, optional audience, CA certificate, token TTL, and max TTL. [E29]
+- InfisicalSecret supports Kubernetes Auth with `identityId`, `serviceAccountRef`, and `secretsScope`. [E23, E35]
+- Kubernetes Auth reduces static credential material in workload specs, but it requires Infisical instance configuration that trusts the cluster. [E29, E35]
+- For a self-hosted local Infisical inside the same k3d cluster, Kubernetes Auth still needs first-run Infisical identity/auth-method setup. [E29, E24]
 
-### 8.1 BLOCKS_PROPOSAL
+### 4.4 Authentication fit for per-channel automation
 
-- Local source decision: proposal cannot be precise without choosing between
-  GitHub round-trip, local Git server, OCI artifact source, or a controller
-  mount hack. Evidence and tradeoffs are in Section 5.
-- Accepted GitOps directory disposition: proposal must decide whether to delete
-  the stale `k8s/` tree, replace it with root-level `gitops/`, or reshape
-  `k8s/` into channel terminology. Current evidence: 38 stale files in `k8s/`,
-  no `gitops/`, no `.sops.yaml`.
-- Flux component set: proposal must decide whether INIT-102 installs only
-  source-controller and kustomize-controller or includes the default
-  helm-controller/notification-controller set. Evidence: Flux components docs
-  plus INIT-102 anti-scope excluding Helm apps and notifications.
-- Channel schema additions: proposal must define whether GitOps config lives in
-  `infra/channels/*.yaml` and what fields are INIT-102-owned versus
-  INIT-103-owned.
+- Per-channel automation needs a server URL. [E20, E23]
+- Per-channel automation needs project or project slug identity. [E20, E23]
+- Per-channel automation needs environment slug. [E23, E30]
+- Per-channel automation needs path/folder scope. [E23, E31]
+- Per-channel automation needs a Kubernetes Secret containing service token or Universal Auth credentials, unless Kubernetes Auth is fully configured. [E23, E28, E29, E35]
+- Service token is simplest in the Operator CRD shape but creates a static bootstrap secret. [E23, E35]
+- Universal Auth carries explicit project scope in the CRD and access-token TTL behavior, but still needs a client secret bootstrap. [E23, E28, E35]
+- Kubernetes Auth best matches Kubernetes service identity, but needs machine identity and auth-method setup in Infisical before the Operator can authenticate. [E29, E35]
+- The proposal phase must choose an initial auth path with evidence for first-run local bootstrap, not just steady-state reconciliation. [E20, E23, E28, E29, E35]
 
-### 8.2 BLOCKS_IMPLEMENTATION
+## 5. Channel Schema Additions Sketch
 
-- Toolchain installer must add pinned `flux`, `sops`, `age`, and `age-keygen`
-  because none are installed locally.
-- SOPS bootstrap must solve the age private-key delivery chicken-and-egg before
-  any encrypted bootstrap file can reconcile.
-- Local k3d cluster availability must be verified before Flux reconciliation
-  tests can run. INIT-101's cluster-mode harness exists, but this research did
-  not create or mutate a cluster.
-- The chosen local Git source must be reachable from inside k3d and must be
-  seedable from the current worktree/branch without requiring GitHub pushes.
-- Any generated Flux controller manifest must be pinned to a concrete Flux
-  release and checked against the toolchain version.
+### 5.1 Current channel schema baseline
 
-### 8.3 INFORMATIONAL
+- Current channel schema is strict and rejects unknown top-level fields. [E9]
+- Current channel schema already supports additive top-level blocks such as `gitops`. [E9, E10]
+- Current `gitops` block is optional except when `cluster.target` is `k3d-local`. [E9]
+- Current `gitops` block uses required inner fields with no additional properties. [E10]
+- Current local channel already carries GitOps endpoint and SOPS bootstrap Secret references. [E7]
+- Current dev channel is Vultr-VM-shaped and has no GitOps block yet. [E8]
+- Memory says channels carry per-environment provider/endpoint config. [E5, E6]
+- D8 says per-channel config carries Infisical endpoint. [E1]
 
-- Helm controller can be deferred unless a later INIT needs `HelmRelease`.
-  INIT-102 can document that Helm CRDs/controllers are not part of the minimum
-  raw-manifest loop.
-- Notification controller can be deferred to INIT-117, which owns
-  observability. Citation: `product-strategy/tickets/PHASE_5_INDEX.md:45`.
-- Multi-tenancy and Flux RBAC boundaries can be deferred to INIT-115/116 unless
-  Flux's bootstrap permissions create an immediate security problem. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:43-44`.
-- Runtime secrets must not leak into SOPS just because SOPS is available.
-  The boundary is ownership/content review, not a technical limitation in SOPS.
-- The stale `k8s/` tree's Buildkite mutation guard is useful evidence for a
-  future harness, but its environment triad is wrong-shaped. Citation:
-  `k8s/tests/test_gitops_foundation.sh:197-254`.
+### 5.2 Candidate `infisical` fields supported by evidence
 
-## 9. Suggested Slice Decomposition Sketch
+- `server_url` is supported by InfisicalSecret `hostAPI`. [E23, E35]
+- `project_id` is supported by InfisicalSecret `secretsScope.projectId` for Universal Auth and several auth methods. [E23, E35]
+- `project_slug` is supported by InfisicalSecret `secretsScope.projectSlug`. [E23, E35]
+- `environment` or `env_slug` is supported by InfisicalSecret `secretsScope.envSlug`. [E23, E35]
+- `secrets_path` is supported by InfisicalSecret `secretsScope.secretsPath`. [E23, E35]
+- `recursive` is supported by InfisicalSecret `secretsScope.recursive`. [E23, E35]
+- `auth_method` is supported by the CRD's separate auth blocks. [E23, E35]
+- `service_token_secret_name` is supported by `serviceTokenSecretReference.secretName`. [E23, E35]
+- `service_token_secret_namespace` is supported by `serviceTokenSecretReference.secretNamespace`. [E23, E35]
+- `universal_auth_secret_name` is supported by `universalAuth.credentialsRef.secretName`. [E23, E35]
+- `universal_auth_secret_namespace` is supported by `universalAuth.credentialsRef.secretNamespace`. [E23, E35]
+- `identity_id` is supported by Kubernetes Auth and other identity auth methods. [E23, E29, E35]
+- `managed_secret_namespace` is supported by `managedKubeSecretReferences[].secretNamespace`. [E23, E35]
+- `managed_secret_name` is supported by `managedKubeSecretReferences[].secretName`. [E23, E35]
+- `creation_policy` is supported by `managedKubeSecretReferences[].creationPolicy`. [E23, E35]
+- `resync_interval` is supported by `syncConfig.resyncInterval`. [E23, E35]
+- `instant_updates` is supported by `syncConfig.instantUpdates`. [E23, E35]
+- `ca_secret_name`, `ca_secret_namespace`, and `ca_secret_key` are supported by `tls.caRef`. [E23, E35]
 
-- SLICE-102.01: Toolchain installer. Evidence target: pinned `flux`, `sops`,
-  `age`, `age-keygen`, plus checks for existing INIT-101 tools.
-- SLICE-102.02: Accepted GitOps repo layout and Flux base manifests. Evidence
-  target: remove or quarantine stale `k8s/`, create channel-aligned layout, and
-  pin Flux controller manifest version.
-- SLICE-102.03: SOPS+age bootstrap-only procedure. Evidence target:
-  `.sops.yaml`, encrypted bootstrap-tier sample/fixture, age key custody docs,
-  and age private-key Secret delivery path.
-- SLICE-102.04: Channel-template integration. Evidence target: channel schema
-  fields for Flux source/path/ref/version/decryption secret and generated
-  per-channel config.
-- SLICE-102.05: Local-first GitOps loop. Evidence target: Flux in real local
-  k3d reconciles a real manifest from the chosen local Git source.
-- SLICE-102.06: Harness and handoff docs. Evidence target: assertions for Flux
-  health, source readiness, Kustomization readiness, reconciled test manifest,
-  and clear INIT-103 Infisical boundary.
+### 5.3 Local versus remote channel evidence
 
-## 10. Evidence Summary For Proposal Phase
+- The local channel must self-host Infisical as a real deployment because D8 says local runs the same components and local is first deployment. [E1, E5]
+- The environment-agnostic memory says Infisical instance runs in local cluster and remote cluster. [E5]
+- The remote channel is Vultr-locked through D8 and the current `dev` channel shape. [E1, E8]
+- The remote `dev` channel is k3s on Vultr VMs, not VKE. [E1, E8]
+- The source evidence does not support a remote-only managed Infisical dependency as the default because the memory explicitly says Infisical instance runs in the remote cluster too. [E5]
+- The source evidence also notes per-channel endpoint config can differ. [E1, E5, E6]
+- DNS and TLS are owned by INIT-105, so INIT-103 local proof may need service/port-forward or cluster-internal URL before public hostname routing exists. [E3, E20, E24]
+- The proposal phase must decide whether remote Infisical exposure is cluster-internal until INIT-105 or externally routable later. [E3, E20, E24]
+- The research evidence points to a same-distribution self-hosted Infisical path for local and remote, with channel-specific endpoint/exposure config. [E1, E5, E8, E24]
 
-- Highest-priority proposal item 1: choose the local source mechanism. The
-  research recommendation is a local Git server because it preserves
-  GitRepository semantics and avoids GitHub round-trips.
-- Highest-priority proposal item 2: decide the accepted repo layout and stale
-  `k8s/` disposition. Current state has stale hard-environment GitOps material
-  but no accepted channel-aligned `gitops/` layout.
-- Highest-priority proposal item 3: define the bootstrap-secret boundary and
-  age key delivery. Flux cannot decrypt SOPS files until an age private key
-  Secret exists in-cluster.
-- Toolchain availability summary: missing `flux`, `sops`, `age`, and
-  `age-keygen`; available OpenTofu `1.11.5`, kubectl `1.34.1` with embedded
-  Kustomize `5.7.1`, k3d `5.8.3`, and Docker `29.4.0`; standalone Kustomize
-  absent.
-- Recommended local-first GitOps source approach: local Git server seeded from
-  the current worktree. Rationale: Git-backed Flux remains the source model,
-  k3d can reach an in-cluster or host-exposed endpoint, and archived INIT-009
-  already tested the shape conceptually with `git://git-local...`; proposal
-  must redo it against k3d and current channel names.
+## 6. Local-First Infisical
+
+### 6.1 k3d viability evidence
+
+- Infisical Kubernetes docs support Kubernetes minor release 1.32. [E22]
+- The local channel uses k3s version `v1.32.13+k3s1`. [E7]
+- Infisical docs list hosted distributions tested, not k3s/k3d. [E22]
+- Infisical docs say it may work on other Kubernetes distributions but they are not officially supported. [E22]
+- Therefore k3d/k3s is evidence-compatible but not explicitly listed as an officially tested distribution. [E22, E7]
+- Infisical Helm docs describe proof-of-concept installs with in-cluster PostgreSQL and Redis. [E24]
+- Infisical Helm docs create PVCs for PostgreSQL and Redis. [E24]
+- k3d local can support PVC-backed workloads through the Kubernetes storage class available in the local cluster; INIT-103 must verify actual PVC binding in harness. [E7, E24]
+- The docs list unbound PVCs as a common pending-Pod cause. [E24]
+- The docs do not provide SQLite as a local-only alternative. [E24, E25, E27]
+- Local-first therefore means local Postgres/Redis in cluster if the proposal keeps the same self-hosted component set. [E5, E24]
+
+### 6.2 Bootstrap chicken-and-egg
+
+- Infisical server needs initial secrets such as `ENCRYPTION_KEY`, `AUTH_SECRET`, database credentials, Redis URL, and site URL. [E24, E27]
+- Infisical Operator needs credentials to read from Infisical. [E23, E28, E29, E35]
+- Infisical Operator credentials can be a service token Secret. [E23, E35]
+- Infisical Operator credentials can be Universal Auth client credentials Secret. [E23, E28, E35]
+- Infisical Operator credentials can be Kubernetes Auth service identity, after Infisical is configured to trust that service account. [E23, E29, E35]
+- INIT-102 SOPS channel currently permits only a sentinel encrypted Secret. [E15, E16]
+- INIT-102 handoff asks where the Infisical service token enters bootstrap. [E20]
+- Any bootstrap path that places Infisical server root secrets or Operator auth credentials in Git must change the SOPS boundary deliberately. [E15, E16, E17]
+- Any bootstrap path that creates the token manually must be included in first-run operations and harness assumptions. [E20, E24]
+- Any bootstrap path that uses auto-bootstrap must validate the chart's auto-bootstrap behavior and generated Secret format. [E24]
+- The chicken-and-egg is not optional because the Operator cannot fetch runtime secrets from Infisical before it can authenticate to Infisical. [E23, E28, E29]
+
+### 6.3 First-run admin and project setup
+
+- Infisical docs say the first user to sign up becomes the instance administrator. [E24]
+- Infisical docs say to complete the first signup before exposing Infisical to others. [E24]
+- Infisical project docs define a project as a workspace for application secrets. [E30]
+- Infisical project docs organize secrets by environments, folders, and individual secrets. [E30]
+- Infisical folder docs define folder/path-based storage and nested folders. [E31]
+- Operator tutorial describes creating a Machine Identity and a project before using CRDs. [E22]
+- Operator tutorial says the operator uses a Machine Identity for Kubernetes Auth. [E22]
+- Operator tutorial says the Machine Identity ID is used later in the CRD. [E22]
+- Operator tutorial says the project must be created before CRD sync. [E22]
+- These docs leave a first-run gap for unattended local GitOps: admin user, organization, project, identity/token, and initial sample secret must exist before final Operator sync can succeed. [E22, E24, E30]
+
+### 6.4 What proves real reconciliation
+
+- INIT-102's real reconciliation proof waits for Flux resources and checks applied cluster state. [E13]
+- INIT-103 real reconciliation must include an Infisical server Pod ready state because local done-state requires a real component. [E1, E5]
+- INIT-103 real reconciliation must include Operator ready state because INIT-103 scope includes Operator installation. [E3, E19]
+- INIT-103 real reconciliation must include an `InfisicalSecret` CR because INIT-103 scope includes CRDs and runtime secret ownership. [E3, E19]
+- INIT-103 real reconciliation must include a target Kubernetes Secret created by the Operator, because Infisical docs define Operator delivery that way. [E22, E23]
+- A runtime proof Secret should not be `gitops/bootstrap/sops-sentinel.enc.yaml`, because that is the INIT-102 bootstrap sentinel. [E11, E12, E15]
+- A runtime proof Secret should be fetched from an Infisical project/environment/path and delivered to a target namespace. [E23, E30, E31]
+- Workload auto-reload can be observed later, but a minimal INIT-103 proof can focus on managed Secret sync because workloads are owned later. [E3, E22, E23]
+
+## 7. Boundary Clarity: SOPS vs Infisical
+
+### 7.1 What SOPS owns
+
+- SOPS owns bootstrap-only encrypted manifests. [E1, E12]
+- The current bootstrap-only example is `gitops/bootstrap/sops-sentinel.enc.yaml`. [E11, E15, E16]
+- Flux uses the age key Secret `sops-age` to decrypt bootstrap-tier manifests. [E7, E12]
+- The Flux Git deployment path exists before Infisical runtime sync. [E7, E11, E19]
+- The Flux Git deploy key, if introduced for a non-anonymous remote Git source, is bootstrap-tier because Flux needs it before it can reconcile Infisical. [E1, E7, E19]
+- The age private key is bootstrap-tier because Flux needs it before it can decrypt bootstrap manifests. [E12, E17]
+- Infisical server root configuration secrets are ambiguous at this phase because the server cannot start before those values exist. [E24, E27]
+- Operator authentication credentials are ambiguous at this phase because the Operator cannot authenticate before those values exist. [E20, E23]
+- The proposal phase must explicitly classify these ambiguous Infisical bootstrap inputs. [E15, E16, E20, E24]
+
+### 7.2 What Infisical owns
+
+- Infisical owns runtime application credentials. [E12]
+- Infisical owns Discord tokens. [E12]
+- Infisical owns database passwords. [E12]
+- Infisical owns API keys. [E12, E15]
+- Infisical owns per-channel and per-tenant runtime secrets after the bootstrap boundary. [E1, E3, E12]
+- Infisical Operator owns syncing Infisical project data into Kubernetes Secrets. [E22, E23]
+- Runtime app workloads should consume Kubernetes Secrets generated by Infisical Operator. [E22, E23]
+- Runtime secrets should not be added as SOPS-encrypted Git files. [E11, E12, E15, E16, E19]
+
+### 7.3 Concrete boundary examples
+
+- Flux Git deploy key: SOPS/bootstrap tier, if needed, because Flux needs Git before Infisical can reconcile. [E7, E19]
+- Flux age key: SOPS/bootstrap tier because it decrypts bootstrap-only manifests. [E12, E17]
+- `gitops-sops-sentinel`: SOPS/bootstrap tier because it proves decryption only. [E11, E12, E17]
+- Discord bot token: Infisical/runtime tier. [E12, E15]
+- Postgres application password for INIT-111 workloads: Infisical/runtime tier. [E3, E12]
+- MinIO credentials for INIT-104: Infisical/runtime tier per dependency ordering. [E3]
+- Infisical server `ENCRYPTION_KEY`: bootstrap-classified open question because Infisical needs it before it can run. [E24, E27]
+- Infisical server `AUTH_SECRET`: bootstrap-classified open question because Infisical needs it before it can run. [E24, E27]
+- Infisical Operator service token: bootstrap-classified open question because Operator needs it before first runtime sync. [E20, E23]
+- Infisical Operator Universal Auth client secret: bootstrap-classified open question for the same reason. [E20, E28, E35]
+
+## 8. Toolchain Check
+
+### 8.1 Local command availability
+
+- `infisical`: missing. [E37]
+- `tofu`: available, `OpenTofu v1.11.5`. [E37]
+- `kubectl`: available, client `v1.34.1`. [E37]
+- standalone `kustomize`: missing. [E37]
+- `kubectl kustomize`: available. [E37]
+- `k3d`: available, `v5.8.3`. [E37]
+- `docker`: available, `29.4.0`. [E37]
+- `flux`: available, `2.8.6`. [E37]
+- `sops`: available, `3.12.2`. [E37]
+- `age`: available, `v1.3.1`. [E37]
+- `age-keygen`: available, `v1.3.1`. [E37]
+- `helm`: missing. [E37]
+
+### 8.2 INIT-102 pinned tool verification
+
+- `infra/scripts/install-cluster-tools.sh --check --no-color` passes for k3d `v5.8.3`. [E37]
+- The same script passes for Flux `v2.8.6`. [E37]
+- The same script passes for SOPS `v3.12.2`. [E37]
+- The same script passes for age `v1.3.1`. [E37]
+- The same script passes for age-keygen `v1.3.1`. [E37]
+- The INIT-102 tool installer pins k3d, Flux, SOPS, and age versions in script constants. [E13]
+- The INIT-102 cluster-mode harness requires Docker, k3d, kubectl, flux, sops, age, and age-keygen. [E13]
+- INIT-103 needs to add Infisical CLI and likely Helm or a render-equivalent tool to the toolchain if using chart rendering. [E24, E34, E37]
+- Latest Infisical CLI release observed through GitHub API was `v0.43.78`, published 2026-04-24. [E34, E37]
+- The local machine does not currently have that CLI installed. [E37]
+
+### 8.3 Toolchain implications for proposal
+
+- Raw Operator manifests can be installed through Flux/Kustomize without Helm at runtime. [E7, E10, E22, E32]
+- Helm may still be needed at implementation time to render upstream charts into committed raw manifests. [E22, E24, E36, E37]
+- Standalone `kustomize` is missing, but `kubectl kustomize` is present. [E37]
+- The proposal must decide whether to vendor rendered YAML, upstream Kustomize config, or Helm-rendered output. [E22, E24, E32, E35, E36]
+- The implementation must avoid relying on helm-controller because INIT-102 did not install it. [E11, E19]
+
+## 9. Known Risks and Open Questions
+
+### 9.1 BLOCKS_PROPOSAL
+
+- Authentication path: choose service token, Universal Auth, or Kubernetes Auth for the first local proof. [E20, E23, E28, E29, E35]
+- Bootstrap classification: decide how Infisical server root secrets are supplied without violating bootstrap-only SOPS boundaries. [E15, E16, E20, E24, E27]
+- Operator credential bootstrap: decide where the service token or identity credential comes from at first install. [E20, E23, E28, E29, E35]
+- Project model: decide one project per channel, one project per tenant, or another minimum model for INIT-103. [E20, E30]
+- Environment slug mapping: decide how channel exposure/id maps to Infisical `envSlug`. [E6, E23, E30]
+- Raw manifest source: decide whether to commit operator repository Kustomize output, Helm-rendered output, or a curated subset. [E22, E32, E35, E36]
+- Server install shape: decide whether to render the Infisical Helm chart into raw manifests or author raw manifests from documented image/env/PVC contracts. [E24, E25, E27]
+- Operator CRD subset: decide whether INIT-103 installs all six v0.10.32 CRDs or the documented three user-facing CRDs. [E22, E35]
+- Operator namespace scope: decide cluster-wide versus namespace-scoped watch/RBAC. [E22, E35, E36]
+- Local endpoint before DNS/TLS: decide whether `hostAPI` uses cluster-internal Service URL, port-forward, or a later DNS/TLS handoff. [E3, E20, E23, E24]
+- Remote distribution: decide whether remote self-hosts the same Infisical stack inside Vultr k3s, based on environment-agnostic memory. [E1, E5, E8]
+
+### 9.2 BLOCKS_IMPLEMENTATION
+
+- Need install or pin Infisical CLI if scripts create projects, identities, or sample secrets. [E34, E37]
+- Need install or pin Helm if implementation renders Helm charts to raw manifests. [E22, E24, E37]
+- Need verify exact Infisical server image tag because docs example `v0.151.0` may lag latest releases. [E24, E33]
+- Need verify exact Operator image tag because chart version v0.10.32 and values tag v0.10.31 differ. [E32, E36]
+- Need verify k3d PVC binding for Infisical PostgreSQL and Redis. [E7, E24]
+- Need define namespace layout for server, operator, and target managed Secrets. [E20, E22, E23]
+- Need define RBAC minimization if using scoped namespaces. [E22, E35, E36]
+- Need define harness assertions for Infisical Pod readiness. [E13, E24]
+- Need define harness assertions for Operator readiness. [E13, E22]
+- Need define harness assertions for `InfisicalSecret` status/readiness. [E22, E23, E35]
+- Need define harness assertions for target Kubernetes Secret content without leaking values to logs. [E12, E15, E23]
+- Need update SOPS boundary linter if bootstrap needs more encrypted files. [E15, E16, E17]
+- Need update channel schema and resolver tests to include `infisical` inheritance and strictness. [E9, E10, E18]
+- Need update GitOps rendering if Infisical manifests are generated from resolved channel YAML. [E7, E10, E18]
+- Need document first-run admin/project/identity steps or automate them. [E22, E24, E30]
+
+### 9.3 INFORMATIONAL
+
+- Infisical supports additional auth methods such as AWS IAM, Azure, GCP ID token, GCP IAM, and LDAP in the CRD, but those are not relevant to Vultr/local first proof. [E23, E35]
+- Infisical supports dynamic secrets, but INIT-103 can likely prove runtime contract with static secret sync first. [E3, E22, E23]
+- Infisical supports managed ConfigMaps, but sensitive runtime values should use managed Secrets. [E23]
+- Infisical supports automatic workload reload annotations, but workloads are downstream of INIT-103. [E3, E22, E23]
+- Infisical supports SMTP and telemetry configuration, but core secret operations can be evaluated without those being first-order requirements. [E24, E27]
+- Infisical docs recommend external managed Postgres and Redis for production HA, but the environment-agnostic memory requires local self-hosting as first deployment. [E5, E24]
+- INIT-116 owns full tenant isolation, but INIT-103 still needs a minimal channel/project hierarchy. [E3, E20, E30]
+- INIT-105 owns DNS/TLS, but INIT-103 still needs a usable `hostAPI` during local proof. [E3, E23, E24]
+
+## 10. Suggested Slice Decomposition Sketch
+
+- SLICE-103.01: Operator manifest evidence/pinning slice.
+- Evidence basis: INIT-103 scope includes Operator, CRDs, and RBAC. [E3]
+- Evidence basis: upstream Operator docs and repo provide Helm and raw/Kustomize source material. [E22, E32, E35, E36]
+- Evidence basis: INIT-102 GitOps path needs raw manifests under the channel overlay. [E7, E10, E19]
+
+- SLICE-103.02: Infisical server self-hosted manifest evidence/pinning slice.
+- Evidence basis: self-hosted Infisical requires application image, Postgres, Redis, and core secrets. [E24, E25, E27]
+- Evidence basis: Helm docs provide image, PVC, resource, and readiness examples. [E24]
+- Evidence basis: Docker Compose confirms Postgres and Redis dependency shape. [E33]
+
+- SLICE-103.03: Channel schema additions for `infisical`.
+- Evidence basis: D8 says channel config carries Infisical endpoint. [E1]
+- Evidence basis: existing schema has strict additive top-level `gitops` pattern. [E9, E10]
+- Evidence basis: InfisicalSecret requires host/API, project/env/path/auth references. [E23, E35]
+
+- SLICE-103.04: Infisical bootstrap credential path.
+- Evidence basis: server root secrets and Operator auth credentials exist before runtime sync. [E24, E27, E23]
+- Evidence basis: current SOPS boundary forbids runtime-shaped SOPS secrets. [E15, E16]
+- Evidence basis: INIT-102 handoff names service-token bootstrap as an open question. [E20]
+
+- SLICE-103.05: Sample InfisicalSecret CR and managed Kubernetes Secret proof.
+- Evidence basis: InfisicalSecret syncs Infisical project/path secrets into Kubernetes Secrets. [E22, E23]
+- Evidence basis: managed output uses `managedKubeSecretReferences`. [E23]
+- Evidence basis: Phase 5 completion requires Infisical to sync through the Operator. [E4]
+
+- SLICE-103.06: Harness extension.
+- Evidence basis: INIT-102 harness already verifies Flux reconciliation and SOPS bootstrap. [E13, E17, E18]
+- Evidence basis: INIT-103 handoff asks what readiness assertions extend the harness. [E20]
+- Evidence basis: Infisical docs provide status endpoint, Pod readiness, Postgres and Redis checks. [E24]
+
+- SLICE-103.07: Documentation and INIT-104 handoff.
+- Evidence basis: INIT-104 depends on INIT-103 for MinIO credentials through Infisical. [E3]
+- Evidence basis: INIT-111 and INIT-113 also depend on runtime secret availability. [E3]
+- Evidence basis: boundary clarity needs explicit documentation to prevent SOPS-runtime regression. [E11, E12, E15]
+
+## 11. Proposal-Phase Priority Items
+
+- Priority 1: Resolve secret-zero/bootstrap for Infisical server root secrets and Operator auth credentials. [E15, E16, E20, E23, E24, E27]
+- Priority 2: Pick the initial Operator auth model for local proof: service token, Universal Auth, or Kubernetes Auth. [E23, E28, E29, E35]
+- Priority 3: Choose raw manifest source and version pins for Infisical server and Operator without helm-controller. [E7, E10, E19, E22, E24, E32, E36]
+
+## 12. Evidence-Based Install Shape For Proposal Consideration
+
+- Evidence points to two installed parts: Infisical server plus Infisical Kubernetes Operator. [E3, E22, E24]
+- Evidence points to server dependencies: Postgres and Redis. [E24, E25, E27, E33]
+- Evidence points to PVC-backed Postgres and Redis for local proof because SQLite is not documented and in-cluster DBs use PVCs. [E24, E25, E27]
+- Evidence points to raw committed manifests under `gitops/channels/local/infisical/` because INIT-102 reconciles Kustomize raw manifests and lacks helm-controller. [E7, E10, E19]
+- Evidence points to using upstream Helm charts or upstream Kustomize config as source material, then committing rendered/pinned manifests. [E22, E24, E32, E35, E36]
+- Evidence points to `InfisicalSecret` as the canonical runtime sync proof, not CLI sync. [E3, E22, E23]
+- Evidence points to CLI as dev/bootstrap convenience only, because Kubernetes reconciliation contract is Operator-driven. [E22, E23, E34]
+- Evidence points to secret-zero bootstrap as the top proposal issue, not an implementation detail. [E15, E16, E20, E23, E24, E27]
+
+## 13. Remote Vultr Notes
+
+- Remote remains Vultr-locked through D8 and the current `dev` channel. [E1, E8]
+- Remote Kubernetes is self-managed k3s on Vultr VMs, not VKE. [E1, E8]
+- Environment-agnostic memory says Infisical runs in the remote cluster as the same component as local. [E5]
+- Remote `dev` currently has no Flux install path in INIT-102. [E8]
+- Remote GitOps installation is therefore outside current substrate done-state and must be handled by successor scope. [E8, E19]
+- Remote Infisical external exposure intersects INIT-105 DNS/TLS ownership. [E3]
+- Until DNS/TLS exists, the remote evidence supports treating endpoint/exposure as channel config and a later handoff, not a different component. [E1, E5, E6]
+
+## 14. Research Bottom Line
+
+- Current repo has a real local Flux/SOPS bootstrap substrate but no Infisical runtime implementation. [E7, E11, E12]
+- Infisical self-hosting requires the Infisical app plus Postgres and Redis. [E24, E25, E27, E33]
+- Infisical Operator syncs Infisical project/path data into native Kubernetes Secrets through `InfisicalSecret`. [E22, E23]
+- The relevant Operator API group/version is `secrets.infisical.com/v1alpha1`. [E23, E35]
+- The minimal local proof should demonstrate Flux applying Infisical resources and Operator-created Kubernetes Secret state. [E4, E13, E22, E23]
+- The highest-risk ambiguity is not whether Infisical works; it is how the initial server secrets and Operator auth credentials cross the bootstrap/runtime boundary. [E15, E16, E20, E23, E24, E27]
