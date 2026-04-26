@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Secret
+metadata:
+    name: sops-sentinel
+    namespace: flux-system
+    labels:
+        channel: local
+        sentinel: sops-local-ready
+type: Opaque
+stringData:
+    ready: ENC[AES256_GCM,data:RpJxnA==,iv:OzqNytg+X7AF2rlqTPHSELt/WvxfHrpd2c6YKc6Cj2k=,tag:z2ZoqSumKyHUGDSl45f1nw==,type:str]
+sops:
+    age:
+        - recipient: age1y7etps8gyw9eryh3ws5tev9n68t4vffq6fcujs2d5mxr4j3gef8sx5tysy
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBucTZDdGJkRWtNZ1Vod2Zr
+            M2JkYnkxV3BPZzhlUGM1bXNROGVWWnk1UUNrCmpMbjdXSDM4Nm5PaVluOGtRZ3Ro
+            MEVieDFTaWJ4aGdGMkwyVFFJMEZKM00KLS0tIHR5L0VCczNsMU0zRzRHdnJlcm51
+            OFFtbnBMUzdNNE9vd2czRnltbkJ0c2sKr177PUMJyWV5OyfVB4W9/kaA9dNuGhh5
+            zeEHW27izVgPs2Mxh7PXPddBn4ByI9ji+iEMnsU6UXqrwIginv+zGg==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-04-26T04:39:29Z"
+    mac: ENC[AES256_GCM,data:31uUdgmMETddXccYYGZ/Nqf7RXxF16SofyhbesT5hsgh9v0pplheN3c14p6rOC17E/WPLroVVvVf8tAHFQCZKiER3J9mBON8SBYehiHN7GaQuUyCNVnQCYoEsegc+7MTMB/xNtKB99qJZljZL+RqCULx3htAYWZb9eqaVWyTRIA=,iv:DC162PqWPSotI93CRT+jM916TN235K/ZTZKsZeSQTPI=,tag:IGVXVDmORJMFCVrkxvPgXw==,type:str]
+    encrypted_regex: ^(data|stringData)$
+    version: 3.12.2

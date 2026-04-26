@@ -100,6 +100,15 @@ assert_repo_path_absent() {
   fi
 }
 
+assert_repo_file_exists() {
+  local file="$1"
+  if [[ -f "${REPO_ROOT}/${file}" ]]; then
+    pass "exists: ${file}"
+  else
+    fail "missing: ${file}"
+  fi
+}
+
 assert_file_contains() {
   local file="$1"
   local pattern="$2"
@@ -110,6 +119,58 @@ assert_file_contains() {
   else
     fail "$description"
   fi
+}
+
+assert_sops_bootstrap_boundary() {
+  local sops_config="${REPO_ROOT}/.sops.yaml"
+  local sentinel="${REPO_ROOT}/gitops/bootstrap/sops-sentinel.enc.yaml"
+  local linter="${INFRA_DIR}/scripts/lint-sops-boundary.py"
+  local py_bin
+
+  assert_repo_file_exists ".sops.yaml"
+
+  if ! py_bin="$(python_bin)"; then
+    fail ".sops.yaml creation rule"
+  elif "$py_bin" - "$sops_config" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+rules = data.get("creation_rules") if isinstance(data, dict) else None
+if not isinstance(rules, list) or len(rules) != 1:
+    raise SystemExit("expected exactly one creation_rule")
+rule = rules[0]
+if rule.get("path_regex") != r"^gitops/.*\.enc\.yaml$":
+    raise SystemExit("creation_rule path_regex mismatch")
+if rule.get("encrypted_regex") != "^(data|stringData)$":
+    raise SystemExit("creation_rule encrypted_regex mismatch")
+age = rule.get("age")
+if not isinstance(age, str) or not age.startswith("age1"):
+    raise SystemExit("creation_rule age recipient missing")
+PY
+  then
+    pass ".sops.yaml creation rule"
+  else
+    fail ".sops.yaml creation rule"
+  fi
+
+  assert_repo_file_exists "gitops/bootstrap/sops-sentinel.enc.yaml"
+  if [[ -f "$sentinel" ]] && grep -q '^sops:' "$sentinel" && grep -q '^[[:space:]]*mac:' "$sentinel"; then
+    pass "sops sentinel is encrypted"
+  else
+    fail "sops sentinel is encrypted"
+  fi
+
+  if [[ -n "${py_bin:-}" && -f "$linter" ]] && "$py_bin" "$linter" >/dev/null; then
+    pass "SOPS boundary lint"
+  else
+    fail "SOPS boundary lint"
+  fi
+
+  assert_file_exists "scripts/bootstrap-sops-age-key.sh"
+  assert_executable "scripts/bootstrap-sops-age-key.sh"
 }
 
 assert_gitops_flux_components() {
@@ -699,6 +760,11 @@ echo "=== Slice 102.02 GitOps layout and Flux lockfile validation ==="
 
 assert_gitops_flux_components
 assert_repo_path_absent "k8s"
+
+echo ""
+echo "=== Slice 102.03 SOPS+age bootstrap sentinel validation ==="
+
+assert_sops_bootstrap_boundary
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create
