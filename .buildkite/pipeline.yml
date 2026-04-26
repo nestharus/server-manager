@@ -1,0 +1,30 @@
+agents:
+  queue: cicd-local
+
+env:
+  CHANNEL_ID: local
+  IMAGE_APP: registry-smoke
+  IMAGE_TAG: init-109-local
+  IMAGE_CONTEXT: containers/samples/registry-smoke
+  IMAGE_FILE: containers/samples/registry-smoke/Containerfile
+
+steps:
+  - key: init-109-smoke
+    label: "INIT-109 smoke"
+    command: "echo INIT-109 Buildkite local smoke"
+
+  - key: unit-tests
+    label: "Unit tests"
+    command: "python -m pytest tests infra/tests"
+
+  - wait
+
+  - key: registry-build-push
+    label: "Build and push registry smoke image"
+    command: >
+      infra/scripts/build-channel-image.sh
+      --channel "${CHANNEL_ID}"
+      --app "${IMAGE_APP}"
+      --tag "${IMAGE_TAG}"
+      --context "${IMAGE_CONTEXT}"
+      --file "${IMAGE_FILE}"
