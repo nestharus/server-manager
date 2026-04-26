@@ -35,6 +35,10 @@ spec:
             - -ec
           args:
             - >-
+              if [ -z "${BUILDKITE_AGENT_TOKEN:-}" ]; then
+                echo "Buildkite token unavailable; local-only mode active";
+                sleep infinity;
+              fi;
               exec buildkite-agent start
               --name "humility-local-${HOSTNAME}"
               --tags "queue=${BUILDKITE_AGENT_QUEUE},channel=local"
@@ -44,6 +48,7 @@ spec:
                 secretKeyRef:
                   name: buildkite-agent-token
                   key: BUILDKITE_AGENT_TOKEN
+                  optional: true
             - name: BUILDKITE_AGENT_QUEUE
               value: cicd-local
             - name: BUILDKITE_NO_PLUGINS
