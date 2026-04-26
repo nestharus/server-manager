@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: buildkite-agent
+  labels:
+    app.kubernetes.io/name: buildkite-agent
+    platform.humility.gg/init: "109"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
