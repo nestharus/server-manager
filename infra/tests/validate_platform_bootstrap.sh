@@ -201,11 +201,13 @@ from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = {
     "source_kind": "git",
-    "git_url": "git://git-local.git-system.svc.cluster.local:9418/server-manager.git",
+    "git_url": "http://git-local.git-system.svc.cluster.local:8080/cgi-bin/git/humility-local.git",
     "git_ref": "refs/heads/main",
     "path": "./gitops/channels/local",
     "kustomization_name": "humility-local",
     "kustomization_namespace": "flux-system",
+    "sops_age_secret_name": "sops-age",
+    "decryption_secret_namespace": "flux-system",
     "interval": "1m",
     "retry_interval": "1m",
     "prune": True,
@@ -680,6 +682,12 @@ assert_local_cluster_can_create() {
   local second_bring_up_status
   local delete_status
   local second_delete_status
+  local marker_file="${REPO_ROOT}/.tmp/gitops-source/local/gitops/channels/local/generated/gitops-snapshot-marker.yaml"
+  local expected_sha
+  local actual_sha
+  local git_pod
+  local git_snapshot_ok
+  local attempt
 
   if ! command -v k3d >/dev/null 2>&1; then
     skip "CLUSTER: tools missing: k3d"
@@ -731,16 +739,81 @@ assert_local_cluster_can_create() {
     fail "kubectl get nodes reports all nodes Ready"
   fi
 
+  if kubectl --kubeconfig "$kubeconfig_path" -n flux-system wait gitrepository/humility-local --for=condition=Ready --timeout=180s >/dev/null; then
+    pass "Flux GitRepository status=Ready"
+  else
+    fail "Flux GitRepository status=Ready"
+  fi
+
+  if kubectl --kubeconfig "$kubeconfig_path" -n flux-system wait kustomization/humility-local --for=condition=Ready --timeout=180s >/dev/null; then
+    pass "Flux Kustomization status=Ready"
+  else
+    fail "Flux Kustomization status=Ready"
+  fi
+
+  echo "Flux resources after bring-up:"
+  kubectl --kubeconfig "$kubeconfig_path" get gitrepository,kustomization -A || true
+
+  expected_sha="$(awk '/^[[:space:]]*source_sha:/ { print $2; exit }' "$marker_file" 2>/dev/null || true)"
+  actual_sha="$(kubectl --kubeconfig "$kubeconfig_path" -n humility-gitops-sentinel get configmap gitops-snapshot-marker -o jsonpath='{.data.source_sha}' 2>/dev/null || true)"
+  if [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]]; then
+    pass "snapshot SHA marker reached cluster (${actual_sha})"
+  else
+    fail "snapshot SHA marker reached cluster"
+  fi
+
+  git_pod="$(kubectl --kubeconfig "$kubeconfig_path" -n git-system get pod -l app.kubernetes.io/name=git-daemon --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [[ -n "$git_pod" ]] \
+    && kubectl --kubeconfig "$kubeconfig_path" -n git-system delete pod "$git_pod" --wait=false >/dev/null \
+    && kubectl --kubeconfig "$kubeconfig_path" -n git-system rollout status deployment/git-daemon --timeout=180s >/dev/null \
+    && kubectl --kubeconfig "$kubeconfig_path" -n git-system wait deployment/git-daemon --for=condition=Available --timeout=180s >/dev/null; then
+    pass "git-daemon Deployment recreates Pod after deletion"
+  else
+    fail "git-daemon Deployment recreates Pod after deletion"
+  fi
+
+  git_snapshot_ok=0
+  for attempt in $(seq 1 60); do
+    git_pod="$(kubectl --kubeconfig "$kubeconfig_path" -n git-system get pod -l app.kubernetes.io/name=git-daemon --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+    if [[ -n "$git_pod" ]] \
+      && kubectl --kubeconfig "$kubeconfig_path" -n git-system exec "$git_pod" -c git-daemon -- git --git-dir=/srv/git/humility-local.git rev-parse --verify refs/heads/main >/dev/null 2>&1; then
+      git_snapshot_ok=1
+      break
+    fi
+    sleep 2
+  done
+
+  if [[ "$git_snapshot_ok" -eq 1 ]]; then
+    pass "git-daemon PVC preserves seeded snapshot after Pod restart"
+  else
+    fail "git-daemon PVC preserves seeded snapshot after Pod restart"
+  fi
+
+  if command -v flux >/dev/null 2>&1; then
+    KUBECONFIG="$kubeconfig_path" flux reconcile source git humility-local --namespace flux-system --timeout=180s >/dev/null 2>&1 || true
+    KUBECONFIG="$kubeconfig_path" flux reconcile kustomization humility-local --namespace flux-system --with-source --timeout=180s >/dev/null 2>&1 || true
+  else
+    kubectl --kubeconfig "$kubeconfig_path" -n flux-system annotate gitrepository/humility-local reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite >/dev/null 2>&1 || true
+    kubectl --kubeconfig "$kubeconfig_path" -n flux-system annotate kustomization/humility-local reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite >/dev/null 2>&1 || true
+  fi
+
+  if kubectl --kubeconfig "$kubeconfig_path" -n flux-system wait gitrepository/humility-local --for=condition=Ready --timeout=180s >/dev/null \
+    && kubectl --kubeconfig "$kubeconfig_path" -n flux-system wait kustomization/humility-local --for=condition=Ready --timeout=180s >/dev/null; then
+    pass "git-daemon restart resilience: Flux still reconciles"
+  else
+    fail "git-daemon restart resilience: Flux still reconciles"
+  fi
+
   set +e
   second_bring_up_output="$(bash "${INFRA_DIR}/scripts/bring-up-local-channel.sh" --channel local 2>&1)"
   second_bring_up_status=$?
   set -e
 
-  if [[ "$second_bring_up_status" -eq 0 ]] && grep -q "already up; no changes needed" <<<"$second_bring_up_output"; then
-    pass "second bring-up is an idempotent no-op"
+  if [[ "$second_bring_up_status" -eq 0 ]] && grep -q "Flux post-install complete for channel 'local'" <<<"$second_bring_up_output"; then
+    pass "second bring-up reapplies Flux without error"
   else
     echo "$second_bring_up_output"
-    fail "second bring-up is an idempotent no-op"
+    fail "second bring-up reapplies Flux without error"
   fi
 
   set +e
@@ -843,6 +916,7 @@ for file in \
   "modules/platform-cluster-k3d/versions.tf" \
   "scripts/install-cluster-tools.sh" \
   "scripts/bring-up-local-channel.sh" \
+  "scripts/install-flux-for-channel.sh" \
   "scripts/delete-local-channel.sh"; do
   assert_file_exists "$file"
 done
@@ -850,6 +924,7 @@ done
 assert_dir_exists "modules/platform-cluster-k3d"
 assert_executable "scripts/install-cluster-tools.sh"
 assert_executable "scripts/bring-up-local-channel.sh"
+assert_executable "scripts/install-flux-for-channel.sh"
 assert_executable "scripts/delete-local-channel.sh"
 assert_install_cluster_tools_check
 assert_gitops_tool_versions
@@ -861,6 +936,7 @@ echo "=== Slice 102.02 GitOps layout and Flux lockfile validation ==="
 
 assert_gitops_flux_components
 assert_repo_path_absent "k8s"
+assert_repo_file_exists "gitops/sources/local/git-daemon.yaml"
 assert_file_exists "scripts/render-gitops-source.py"
 assert_executable "scripts/render-gitops-source.py"
 assert_gitops_channel_schema_rendering

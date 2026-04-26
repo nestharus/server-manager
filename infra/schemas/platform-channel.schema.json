@@ -277,6 +277,8 @@
         "path",
         "kustomization_name",
         "kustomization_namespace",
+        "sops_age_secret_name",
+        "decryption_secret_namespace",
         "interval",
         "retry_interval",
         "prune",
@@ -289,7 +291,7 @@
         },
         "git_url": {
           "type": "string",
-          "pattern": "^(git|ssh|https)://[^\\s]+$"
+          "pattern": "^(http|https|ssh)://[^\\s]+$"
         },
         "git_ref": {
           "type": "string",
@@ -304,6 +306,14 @@
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
         },
         "kustomization_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "sops_age_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "decryption_secret_namespace": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
         },

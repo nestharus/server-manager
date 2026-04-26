@@ -81,6 +81,29 @@ cluster_exists() {
   k3d cluster get "$cluster_name" >/dev/null 2>&1
 }
 
+cleanup_flux_resources() {
+  if [[ ! -f "$kubeconfig_path" ]] || ! command -v kubectl >/dev/null 2>&1; then
+    log "Skipping Flux cleanup because kubeconfig or kubectl is unavailable"
+    return 0
+  fi
+
+  if ! kubectl --kubeconfig "$kubeconfig_path" get namespace kube-system >/dev/null 2>&1; then
+    log "Skipping Flux cleanup because cluster API is unreachable"
+    return 0
+  fi
+
+  log "Deleting Flux custom resources"
+  kubectl --kubeconfig "$kubeconfig_path" delete kustomizations.kustomize.toolkit.fluxcd.io --all -A --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl --kubeconfig "$kubeconfig_path" delete gitrepositories.source.toolkit.fluxcd.io --all -A --ignore-not-found=true >/dev/null 2>&1 || true
+
+  if command -v flux >/dev/null 2>&1; then
+    log "Uninstalling Flux controllers"
+    KUBECONFIG="$kubeconfig_path" flux uninstall --silent >/dev/null 2>&1 || true
+  else
+    log "Skipping flux uninstall because flux CLI is unavailable"
+  fi
+}
+
 main() {
   parse_args "$@"
 
@@ -101,6 +124,7 @@ main() {
   kubeconfig_path="${kubeconfig_path/#\~/$HOME}"
 
   if cluster_exists; then
+    cleanup_flux_resources
     log "Deleting k3d cluster '${cluster_name}'"
     k3d cluster delete "$cluster_name"
   else

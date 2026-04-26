@@ -4,6 +4,9 @@ set -euo pipefail
 CHANNEL_ID="local"
 KEY_FILE="${HOME}/.config/sops/age/local.txt"
 KUBECONFIG_ARG=()
+SECRET_NAMESPACE="flux-system"
+SECRET_NAME="sops-age"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 usage() {
   cat <<'EOF'
@@ -16,6 +19,8 @@ Options:
   --channel <id>     Channel id for the default key path (default: local)
   --key-file <path>  Override age private key path
   --kubeconfig <p>   Pass a kubeconfig path to kubectl
+  --namespace <n>    Secret namespace (default: flux-system)
+  --secret-name <n>  Secret name (default: sops-age)
   -h, --help         Show this help
 EOF
 }
@@ -42,6 +47,16 @@ parse_args() {
       --kubeconfig)
         [[ $# -ge 2 ]] || die "--kubeconfig requires a value"
         KUBECONFIG_ARG=(--kubeconfig "$2")
+        shift
+        ;;
+      --namespace)
+        [[ $# -ge 2 ]] || die "--namespace requires a value"
+        SECRET_NAMESPACE="$2"
+        shift
+        ;;
+      --secret-name)
+        [[ $# -ge 2 ]] || die "--secret-name requires a value"
+        SECRET_NAME="$2"
         shift
         ;;
       -h|--help)
@@ -81,12 +96,21 @@ fi
 
 recipient="$(public_key)" || die "could not read public recipient from ${KEY_FILE}"
 
-kubectl "${KUBECONFIG_ARG[@]}" create secret generic sops-age \
-  --namespace flux-system \
+manifest_dir="${REPO_ROOT}/.tmp/sops-age-secret"
+manifest_path="${manifest_dir}/${CHANNEL_ID}.yaml"
+mkdir -p "$manifest_dir"
+
+kubectl "${KUBECONFIG_ARG[@]}" create secret generic "$SECRET_NAME" \
+  --namespace "$SECRET_NAMESPACE" \
   --from-file=age.agekey="${KEY_FILE}" \
   --dry-run=client \
-  -o yaml \
-  | kubectl "${KUBECONFIG_ARG[@]}" apply -f -
+  -o yaml > "$manifest_path"
+
+if kubectl "${KUBECONFIG_ARG[@]}" get namespace "$SECRET_NAMESPACE" >/dev/null 2>&1; then
+  kubectl "${KUBECONFIG_ARG[@]}" apply -f "$manifest_path"
+else
+  echo "Cluster namespace ${SECRET_NAMESPACE} is not reachable; wrote Secret manifest: ${manifest_path}"
+fi
 
 cat <<EOF
 

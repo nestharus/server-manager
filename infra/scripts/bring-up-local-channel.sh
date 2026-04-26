@@ -4,21 +4,26 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
 TOOL_INSTALLER="${REPO_ROOT}/infra/scripts/install-cluster-tools.sh"
+FLUX_INSTALLER="${REPO_ROOT}/infra/scripts/install-flux-for-channel.sh"
 CHANNEL_ID="local"
 FORCE=0
 REPAIR=0
+CLUSTER_ONLY=0
+POSITIONAL_CHANNEL=0
 
 usage() {
   cat <<'EOF'
-Usage: bring-up-local-channel.sh [--channel local] [--force | --repair]
+Usage: bring-up-local-channel.sh [local | --channel local] [--force | --repair] [--cluster-only]
 
-Creates the local k3d platform cluster for a resolved local channel.
+Creates the local k3d platform cluster for a resolved local channel and runs
+the Flux post-install unless --cluster-only is passed.
 
 Options:
-  --channel <id>  Channel id to resolve (default: local)
-  --force         Delete stale local state and recreate the cluster
-  --repair        Repair stale generated kubeconfig state without recreating a matching cluster
-  -h, --help      Show this help
+  --channel <id>   Channel id to resolve (default: local)
+  --force          Delete stale local state and recreate the cluster
+  --repair         Repair stale generated kubeconfig state without recreating a matching cluster
+  --cluster-only   Skip Flux post-install
+  -h, --help       Show this help
 EOF
 }
 
@@ -59,12 +64,19 @@ parse_args() {
       --repair)
         REPAIR=1
         ;;
+      --cluster-only)
+        CLUSTER_ONLY=1
+        ;;
       -h|--help)
         usage
         exit 0
         ;;
       *)
-        die "unknown argument: $1"
+        if [[ "$1" == -* || "$POSITIONAL_CHANNEL" -eq 1 ]]; then
+          die "unknown argument: $1"
+        fi
+        CHANNEL_ID="$1"
+        POSITIONAL_CHANNEL=1
         ;;
     esac
     shift
@@ -208,13 +220,24 @@ create_cluster() {
   log "Local channel '${CHANNEL_ID}' is up: cluster=${cluster_name} kubeconfig=${kubeconfig_path}"
 }
 
+install_flux_post_install() {
+  if [[ "$CLUSTER_ONLY" -eq 1 ]]; then
+    log "Skipping Flux post-install because --cluster-only was passed"
+    return 0
+  fi
+
+  bash "$FLUX_INSTALLER" --channel "$CHANNEL_ID"
+}
+
 main() {
   parse_args "$@"
 
   command -v k3d >/dev/null 2>&1 || die "k3d is required; run infra/scripts/install-cluster-tools.sh --install"
   command -v docker >/dev/null 2>&1 || die "docker is required to run k3d"
   command -v kubectl >/dev/null 2>&1 || die "kubectl is required to verify local cluster reachability"
-  bash "$TOOL_INSTALLER" --check --no-color >/dev/null || die "k3d must match the pinned local toolchain; run infra/scripts/install-cluster-tools.sh --install"
+  if [[ "$CLUSTER_ONLY" -eq 0 ]]; then
+    bash "$TOOL_INSTALLER" --check --no-color >/dev/null || die "local GitOps toolchain must match pinned versions; run infra/scripts/install-cluster-tools.sh --install"
+  fi
   docker info >/dev/null 2>&1 || die "docker daemon is unavailable"
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required to resolve channels"
 
@@ -242,6 +265,7 @@ main() {
   if [[ "$FORCE" -eq 1 ]]; then
     delete_existing_state
     create_cluster
+    install_flux_post_install
     exit 0
   fi
 
@@ -264,8 +288,9 @@ main() {
     if [[ "$REPAIR" -eq 1 ]]; then
       log "Local channel '${CHANNEL_ID}' repaired and already up: cluster=${cluster_name} kubeconfig=${kubeconfig_path}"
     else
-      log "Local channel '${CHANNEL_ID}' already up; no changes needed: cluster=${cluster_name} kubeconfig=${kubeconfig_path}"
+      log "Local channel '${CHANNEL_ID}' already up: cluster=${cluster_name} kubeconfig=${kubeconfig_path}"
     fi
+    install_flux_post_install
     exit 0
   fi
 
@@ -283,6 +308,7 @@ main() {
   fi
 
   create_cluster
+  install_flux_post_install
 }
 
 main "$@"
