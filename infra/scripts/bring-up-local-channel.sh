@@ -183,9 +183,10 @@ delete_existing_state() {
 }
 
 create_cluster() {
+  local k3d_image_tag="${k3s_version/+/-}"
   local args=(
     cluster create "$cluster_name"
-    --image "rancher/k3s:${k3s_version}"
+    --image "rancher/k3s:${k3d_image_tag}"
     --servers "$servers"
     --agents "$agents"
     --kubeconfig-update-default=false
@@ -193,7 +194,7 @@ create_cluster() {
   )
 
   if [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]]; then
-    args+=(--registry-create "${registry_name}:0.0.0.0:5000")
+    args+=(--registry-create "$registry_name")
   fi
 
   k3d "${args[@]}"
