@@ -200,6 +200,7 @@ create_cluster() {
     --servers "$servers"
     --agents "$agents"
     --kubeconfig-update-default=false
+    --volume "/var/run/docker.sock:/var/run/docker.sock@all"
     --wait
   )
 
