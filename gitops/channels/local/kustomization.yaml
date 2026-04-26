@@ -8,3 +8,4 @@ resources:
   - infisical/server
   - infisical/operator
   - infisical/sample
+  - object-storage
