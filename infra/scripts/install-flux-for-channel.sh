@@ -7,6 +7,7 @@ RENDERER="${REPO_ROOT}/infra/scripts/render-gitops-source.py"
 AGE_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-sops-age-key.sh"
 INFISICAL_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-identity.sh"
 INFISICAL_STORAGE_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-storage.sh"
+INFISICAL_DATABASES_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-databases.sh"
 CHANNEL_REQUEST="local"
 CHANNEL_ID=""
 WAIT_TIMEOUT="180s"
@@ -362,6 +363,11 @@ bootstrap_infisical_storage() {
   bash "$INFISICAL_STORAGE_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
 }
 
+bootstrap_infisical_databases() {
+  log "Bootstrapping Infisical database credentials"
+  bash "$INFISICAL_DATABASES_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
+}
+
 refresh_infisical_operator_after_bootstrap() {
   local requested_at
 
@@ -441,6 +447,7 @@ main() {
   wait_for_infisical_server
   bootstrap_infisical_identity
   bootstrap_infisical_storage
+  bootstrap_infisical_databases
   refresh_infisical_operator_after_bootstrap
   wait_for_infisical_runtime
   wait_for_reconciliation
