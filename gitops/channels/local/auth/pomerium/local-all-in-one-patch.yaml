@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pomerium-authenticate
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pomerium-authorize
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pomerium-databroker
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pomerium-proxy
+spec:
+  template:
+    spec:
+      containers:
+        - name: pomerium
+          env:
+            - name: SERVICES
+              value: all

@@ -7,6 +7,7 @@ resources:
   - ingress.yaml
   - local-dns-alias.yaml
 patches:
+  - path: local-all-in-one-patch.yaml
   - target:
       kind: Deployment
       labelSelector: app.kubernetes.io/instance=pomerium

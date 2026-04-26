@@ -221,8 +221,7 @@ assert_runtime() {
   pass "Authentik server and worker available"
 
   kubectl_cmd -n "$AUTH_NAMESPACE" rollout status deployment/pomerium-proxy --timeout=300s >/dev/null
-  kubectl_cmd -n "$AUTH_NAMESPACE" rollout status deployment/pomerium-authenticate --timeout=300s >/dev/null
-  pass "Pomerium proxy and authenticate available"
+  pass "Pomerium all-in-one proxy available"
 
   kubectl_cmd -n "$AUTH_NAMESPACE" rollout status deployment/opal-client --timeout=300s >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" rollout status deployment/opal-server --timeout=300s >/dev/null
