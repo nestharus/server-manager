@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: local
+  labels:
+    app.kubernetes.io/name: minio-ingress-alias
+    platform.humility.gg/init: "110"
+spec:
+  # DNS-only alias for the existing CoreDNS rewrite. This Service/minio in
+  # namespace local resolves minio.local.humility.local to Kong. It is not the
+  # Ingress backend; ingress.yaml targets the real Service/minio in minio-system.
+  type: ExternalName
+  externalName: kong-kong-proxy.kong-system.svc.cluster.local

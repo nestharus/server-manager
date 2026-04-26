@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio
+  namespace: minio-system
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/component: object-storage
+    platform.humility.gg/init: "110"
+  annotations:
+    cert-manager.io/issuer: humility-local-step-ca
+    cert-manager.io/issuer-kind: StepClusterIssuer
+    cert-manager.io/issuer-group: certmanager.step.sm
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - minio.local.humility.local
+      secretName: minio-local-ingress-tls
+  rules:
+    - host: minio.local.humility.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio
+                port:
+                  number: 9000
