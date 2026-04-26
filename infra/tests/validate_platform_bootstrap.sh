@@ -3455,6 +3455,93 @@ PY
   fi
 }
 
+assert_cluster_security_network_policies() {
+  local security_dir="${REPO_ROOT}/gitops/channels/local/security"
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/cluster-security-networkpolicies.yaml"
+  local py_bin
+
+  for file in \
+    "gitops/channels/local/security/kustomization.yaml" \
+    "gitops/channels/local/security/restricted-default-deny.yaml" \
+    "gitops/channels/local/security/dns-egress.yaml" \
+    "gitops/channels/local/security/infisical-networkpolicies.yaml" \
+    "gitops/channels/local/security/minio-networkpolicies.yaml"; do
+    assert_repo_file_exists "$file"
+  done
+
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$security_dir" >"$rendered"; then
+    pass "kubectl kustomize cluster security NetworkPolicies"
+  else
+    fail "kubectl kustomize cluster security NetworkPolicies"
+    return
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "cluster security NetworkPolicies enforce default deny and explicit allows"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+policies = {
+    (doc.get("metadata", {}).get("namespace"), doc.get("metadata", {}).get("name")): doc
+    for doc in docs
+    if doc.get("kind") == "NetworkPolicy"
+}
+default_deny_namespaces = {
+    "cert-manager-test",
+    "humility-gitops-sentinel",
+    "infisical-sample",
+    "infisical-system",
+    "minio-system",
+    "platform-app-clusters",
+}
+for namespace in default_deny_namespaces:
+    deny = policies.get((namespace, "default-deny"))
+    if deny is None:
+        raise SystemExit(f"NetworkPolicy/default-deny missing in {namespace}")
+    spec = deny.get("spec", {})
+    if spec.get("podSelector") != {} or set(spec.get("policyTypes", [])) != {"Ingress", "Egress"}:
+        raise SystemExit(f"default-deny mismatch in {namespace}: {spec!r}")
+    dns = policies.get((namespace, "allow-dns-egress"))
+    if dns is None:
+        raise SystemExit(f"NetworkPolicy/allow-dns-egress missing in {namespace}")
+
+required = {
+    ("infisical-system", "allow-infisical-to-postgresql"),
+    ("infisical-system", "allow-infisical-to-redis"),
+    ("infisical-system", "allow-infisical-app-egress"),
+    ("infisical-system", "allow-infisical-operator-to-server-and-api"),
+    ("infisical-system", "allow-infisical-server-from-operator"),
+    ("minio-system", "allow-minio-s3-ingress"),
+    ("minio-system", "allow-minio-bootstrap-egress"),
+}
+missing = sorted(required - set(policies))
+if missing:
+    raise SystemExit(f"missing policies: {missing}")
+
+postgres = policies[("infisical-system", "allow-infisical-to-postgresql")]
+if postgres["spec"]["ingress"][0]["ports"][0]["port"] != 5432:
+    raise SystemExit("postgres policy must allow 5432")
+redis = policies[("infisical-system", "allow-infisical-to-redis")]
+if redis["spec"]["ingress"][0]["ports"][0]["port"] != 6379:
+    raise SystemExit("redis policy must allow 6379")
+operator = policies[("infisical-system", "allow-infisical-operator-to-server-and-api")]
+if {"ipBlock": {"cidr": "10.43.0.1/32"}} not in operator["spec"]["egress"][1]["to"]:
+    raise SystemExit("operator policy must allow local Kubernetes API service")
+minio = policies[("minio-system", "allow-minio-s3-ingress")]
+if minio["spec"]["ingress"][0]["ports"][0]["port"] != 9000:
+    raise SystemExit("MinIO policy must allow 9000 only through explicit ingress")
+PY
+  then
+    pass "cluster security NetworkPolicies enforce default deny and explicit allows"
+  else
+    fail "cluster security NetworkPolicies enforce default deny and explicit allows"
+  fi
+}
+
 assert_app_cluster_manifests() {
   local app_dir="${REPO_ROOT}/gitops/channels/local/app-clusters"
   local remote_dir="${REPO_ROOT}/gitops/contracts/remote/app-clusters"
@@ -3770,6 +3857,7 @@ echo "=== Slice 107.02 cluster security channel and PSS validation ==="
 
 assert_cluster_security_channel_schema
 assert_cluster_security_namespace_labels
+assert_cluster_security_network_policies
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="

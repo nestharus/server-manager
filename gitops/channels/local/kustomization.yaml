@@ -12,3 +12,4 @@ resources:
   - tls
   - dns
   - app-clusters
+  - security
