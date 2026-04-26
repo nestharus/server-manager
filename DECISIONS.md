@@ -172,6 +172,7 @@ writing.
   track.
 - If any default is later corrected by the user, the proposal must be
   revised and the full risk gate rerun.
+
 ## D8 - 2026-04-26 - Environment-agnostic Phase 5 reset: local-as-first-deployment and self-managed k3s everywhere
 
 **Context**: Phase 5 was originally planned from a shallow read of platform
@@ -257,5 +258,4 @@ config.
   controlling sources.
 - Any initiative that cannot deploy a real local-channel component must stop
   in proposal/risk and choose a different component.
-```
 

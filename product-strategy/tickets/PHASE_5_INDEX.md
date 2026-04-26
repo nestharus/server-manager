@@ -25,8 +25,8 @@ remotely. SOPS+age is bootstrap-only. Infisical is the runtime secret store.
 
 | INIT | Name | Scope | Dependencies | Local First | Magnitude | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| INIT-100 | Phase 5 reset | Delete wrong-shaped INIT-008/009/017 from main path, preserve reference branches, land D8 canon, replace old Phase 5 tracker | none | reset gate | S | pending |
-| INIT-101 | Self-managed k3s control cluster | k3d local control cluster; OpenTofu plus Vultr VMs plus cloud-init k3s remote control cluster contract | 100 | yes | XL | pending |
+| INIT-100 | Phase 5 reset | Delete wrong-shaped INIT-008/009/017 from main path, preserve reference branches, land D8 canon, replace old Phase 5 tracker | none | reset gate | S | done |
+| INIT-101 | Self-managed k3s control cluster | k3d local control cluster; OpenTofu plus Vultr VMs plus cloud-init k3s remote control cluster contract | 100 | yes | XL | done |
 | INIT-102 | GitOps substrate | Flux, Kustomize channel overlays, SOPS+age bootstrap-only, real reconciliation in local k3d | 101 | yes | L | pending |
 | INIT-103 | Infisical runtime secret store | Infisical, Infisical Operator, InfisicalSecret CRDs, RBAC, runtime secret ownership | 102 | yes | L | pending |
 | INIT-104 | S3-compatible storage layer | MinIO local, Vultr Object Storage remote, same S3 SDK path, credentials through Infisical | 103 | yes | M | pending |
