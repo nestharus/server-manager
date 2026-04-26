@@ -50,7 +50,7 @@ Local TLS must use the INIT-105 `StepClusterIssuer` named
 `humility-local-step-ca`. Because the issuer kind/group are not cert-manager's
 default `ClusterIssuer`, local Ingress objects need:
 
-- `cert-manager.io/cluster-issuer: humility-local-step-ca`
+- `cert-manager.io/issuer: humility-local-step-ca`
 - `cert-manager.io/issuer-kind: StepClusterIssuer`
 - `cert-manager.io/issuer-group: certmanager.step.sm`
 
