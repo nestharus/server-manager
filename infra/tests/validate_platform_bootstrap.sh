@@ -1020,6 +1020,53 @@ PY
   fi
 }
 
+assert_s3_roundtrip_script() {
+  local script="${INFRA_DIR}/scripts/test-s3-roundtrip.sh"
+  local dry_run_output
+
+  assert_file_exists "scripts/test-s3-roundtrip.sh"
+  assert_executable "scripts/test-s3-roundtrip.sh"
+
+  if bash "$script" --help >/dev/null; then
+    pass "test-s3-roundtrip --help"
+  else
+    fail "test-s3-roundtrip --help"
+  fi
+
+  if dry_run_output="$(env \
+    S3_ENDPOINT=http://minio.minio-system.svc.cluster.local:9000 \
+    S3_ACCESS_KEY_ID=dry-run-access \
+    S3_SECRET_ACCESS_KEY=dry-run-secret \
+    S3_REGION=us-east-1 \
+    S3_BUCKET=humility-local-sample \
+    bash "$script" --dry-run 2>&1)" \
+    && grep -q 'DRY-RUN: S3 round-trip configuration valid' <<<"$dry_run_output"; then
+    pass "test-s3-roundtrip dry-run"
+  else
+    fail "test-s3-roundtrip dry-run"
+  fi
+
+  if env -u S3_ENDPOINT -u S3_ACCESS_KEY_ID -u S3_SECRET_ACCESS_KEY -u S3_REGION -u S3_BUCKET \
+    bash "$script" --dry-run >/dev/null 2>&1; then
+    fail "test-s3-roundtrip fails when S3 env is missing"
+  else
+    pass "test-s3-roundtrip fails when S3 env is missing"
+  fi
+
+  if grep -q 'mc cp' "$script" \
+    && grep -q 'cmp -s' "$script" \
+    && grep -q 'mc rm' "$script" \
+    && grep -q 'S3_ENDPOINT' "$script" \
+    && grep -q 'S3_ACCESS_KEY_ID' "$script" \
+    && grep -q 'S3_SECRET_ACCESS_KEY' "$script" \
+    && grep -q 'S3_REGION' "$script" \
+    && grep -q 'S3_BUCKET' "$script"; then
+    pass "test-s3-roundtrip implements PUT GET compare DELETE contract"
+  else
+    fail "test-s3-roundtrip implements PUT GET compare DELETE contract"
+  fi
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -2245,6 +2292,11 @@ echo ""
 echo "=== Slice 104.05 bucket Job manifest validation ==="
 
 assert_object_storage_bucket_job
+
+echo ""
+echo "=== Slice 104.06 S3 round-trip script validation ==="
+
+assert_s3_roundtrip_script
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create
