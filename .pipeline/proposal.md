@@ -52,9 +52,8 @@ surface and replaces the stale top-level `k8s/` tree with `gitops/`.
 | `.pipeline/proposal.md` | proposal | Binding Phase 3 design for INIT-102. | Modified; replaces stale INIT-101 text. |
 | `gitops/` | directory | Root GitOps source tree for Flux-managed manifests and SOPS bootstrap secrets. | New. |
 | `gitops/README.md` | doc | Documents layout, channel ownership, bootstrap-only SOPS boundary, and local reseed flow. | New. |
-| `gitops/flux-system/` | directory | Vendored Flux controller installation artifact. | New. |
-| `gitops/flux-system/gotk-components.yaml` | manifest | Output of pinned `flux install --export --components=source-controller,kustomize-controller`. | New. |
-| `gitops/flux-system/kustomization.yaml` | manifest | Kustomize entrypoint for applying the vendored Flux components. | New. |
+| `gitops/flux/` | directory | Vendored Flux controller installation artifact. | New. |
+| `gitops/flux/gotk-components.yaml` | manifest | Output of pinned `flux install --export --components=source-controller,kustomize-controller`. | New. |
 | `gitops/bases/` | directory | Reusable Kustomize bases shared by channel overlays. | New. |
 | `gitops/bases/gitops-sentinel/` | directory | Minimal target manifest proving Flux applied channel content. | New. |
 | `gitops/bases/gitops-sentinel/namespace.yaml` | manifest | Creates namespace `humility-gitops-sentinel`. | New. |
@@ -64,10 +63,8 @@ surface and replaces the stale top-level `k8s/` tree with `gitops/`.
 | `gitops/channels/local/` | directory | Local channel overlay reconciled by Flux in local k3d. | New. |
 | `gitops/channels/local/kustomization.yaml` | manifest | Includes sentinel base and encrypted bootstrap secret for local channel. | New. |
 | `gitops/channels/local/patches/gitops-sentinel-channel.yaml` | manifest | Patches sentinel `ConfigMap` to `data.channel=local`. | New. |
-| `gitops/secrets/` | directory | Bootstrap-tier SOPS encrypted manifests, grouped by channel id. | New. |
-| `gitops/secrets/local/` | directory | Local channel bootstrap-tier encrypted material and SOPS creation rule. | New. |
-| `gitops/secrets/local/.sops.yaml` | schema/config | SOPS creation rule for local bootstrap encrypted YAML. | New. |
-| `gitops/secrets/local/gitops-sops-sentinel.enc.yaml` | manifest | Encrypted Secret used only to prove Flux SOPS decryption works. | New. |
+| `.sops.yaml` | schema/config | SOPS creation rule for bootstrap encrypted YAML. | New. |
+| `gitops/bootstrap/sops-sentinel.enc.yaml` | manifest | Encrypted Secret used only to prove Flux SOPS decryption works. | New. |
 | `gitops/sources/` | directory | Rendered Flux source/sync CRs applied after controllers are installed. | New. |
 | `gitops/sources/local/` | directory | Local channel Flux `GitRepository` and root `Kustomization`. | New. |
 | `gitops/sources/local/gitrepository.yaml` | manifest | `GitRepository/humility-local` pointing at in-cluster Git daemon. | New. |
@@ -76,8 +73,8 @@ surface and replaces the stale top-level `k8s/` tree with `gitops/`.
 | `gitops/local-git-server/` | directory | Kubernetes manifests for the local in-cluster `git daemon`. | New. |
 | `gitops/local-git-server/namespace.yaml` | manifest | Creates namespace `git-system`. | New. |
 | `gitops/local-git-server/pvc.yaml` | manifest | Persists the local bare Git repository across `git-local` Pod restarts (addresses SC-007). | New. |
-| `gitops/local-git-server/deployment.yaml` | manifest | Runs one `git daemon` Pod serving `/srv/git/server-manager.git`. | New. |
-| `gitops/local-git-server/service.yaml` | manifest | ClusterIP Service `git-local` on TCP 9418. | New. |
+| `gitops/local-git-server/deployment.yaml` | manifest | Runs one local Git source Pod serving `/srv/git/humility-local.git` over HTTP. | New. |
+| `gitops/local-git-server/service.yaml` | manifest | ClusterIP Service `git-local` on HTTP port 8080. | New. |
 | `gitops/local-git-server/kustomization.yaml` | manifest | Kustomize entrypoint for local Git server install. | New. |
 | `infra/channels/local.yaml` | schema data | Adds concrete `gitops` block for local k3d target. | Modified. |
 | `infra/channels/dev.yaml` | schema data | Remains Vultr-VM plan channel; `gitops` block stays absent in INIT-102. | Unmodified unless schema fixtures require explicit absence. |
@@ -118,10 +115,8 @@ gitops/
       kustomization.yaml
       patches/
         gitops-sentinel-channel.yaml
-  secrets/
-    local/
-      .sops.yaml
-      gitops-sops-sentinel.enc.yaml
+  bootstrap/
+    sops-sentinel.enc.yaml
   sources/
     local/
       gitrepository.yaml
@@ -139,14 +134,14 @@ The `dev` overlay is intentionally absent. `dev` is a remote Vultr-VM channel
 and INIT-102 does not install remote Flux.
 
 ### Flux Base Manifest Surface
-`gitops/flux-system/gotk-components.yaml` is generated, committed, and treated
+`gitops/flux/gotk-components.yaml` is generated, committed, and treated
 as a lockfile. The generating command is:
 
 ```bash
 flux install \
   --export \
   --components=source-controller,kustomize-controller \
-  > gitops/flux-system/gotk-components.yaml
+  > gitops/flux/gotk-components.yaml
 ```
 
 The CLI version used for generation must be `flux v2.8.6`. The expected
@@ -229,11 +224,14 @@ The source-schema addition is:
         "git_url",
         "git_ref",
         "path",
-        "interval_source",
-        "interval_kustomization",
-        "flux_version",
+        "kustomization_name",
+        "kustomization_namespace",
         "sops_age_secret_name",
-        "decryption_secret_namespace"
+        "decryption_secret_namespace",
+        "interval",
+        "retry_interval",
+        "prune",
+        "wait"
       ],
       "properties": {
         "source_kind": {
@@ -242,7 +240,7 @@ The source-schema addition is:
         },
         "git_url": {
           "type": "string",
-          "pattern": "^(git|ssh|https)://[^\\s]+$"
+          "pattern": "^(http|https|ssh)://[^\\s]+$"
         },
         "git_ref": {
           "type": "string",
@@ -252,17 +250,21 @@ The source-schema addition is:
           "type": "string",
           "pattern": "^\\./gitops/channels/[a-z0-9][a-z0-9-]*$"
         },
-        "interval_source": {
+        "kustomization_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "kustomization_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "interval": {
           "type": "string",
           "pattern": "^[1-9][0-9]*(s|m|h)$"
         },
-        "interval_kustomization": {
+        "retry_interval": {
           "type": "string",
           "pattern": "^[1-9][0-9]*(s|m|h)$"
-        },
-        "flux_version": {
-          "type": "string",
-          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
         },
         "sops_age_secret_name": {
           "type": "string",
@@ -271,8 +273,13 @@ The source-schema addition is:
         },
         "decryption_secret_namespace": {
           "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
-          "default": "flux-system"
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "prune": {
+          "type": "boolean"
+        },
+        "wait": {
+          "type": "boolean"
         }
       }
     }
@@ -290,14 +297,17 @@ resolved JSON: `sops_age_secret_name` resolves to `sops-age`, and
 ```yaml
 gitops:
   source_kind: git
-  git_url: git://git-local.git-system.svc.cluster.local:9418/server-manager.git
+  git_url: http://git-local.git-system.svc.cluster.local:8080/cgi-bin/git/humility-local.git
   git_ref: refs/heads/main
   path: ./gitops/channels/local
-  interval_source: 1m
-  interval_kustomization: 1m
-  flux_version: v2.8.6
+  kustomization_name: humility-local
+  kustomization_namespace: flux-system
   sops_age_secret_name: sops-age
   decryption_secret_namespace: flux-system
+  interval: 1m
+  retry_interval: 1m
+  prune: true
+  wait: true
 ```
 
 `infra/channels/dev.yaml` does not receive `gitops` in INIT-102. Its
@@ -327,7 +337,7 @@ The script entrypoint is:
 ```bash
 infra/scripts/install-flux-for-channel.sh \
   --channel local \
-  [--kubeconfig infra/channels/local/.generated/kubeconfig.yaml] \
+  [--kubeconfig ~/.kube/humility-local.yaml] \
   [--skip-reconcile]
 ```
 
@@ -345,7 +355,7 @@ The script performs these steps in order:
 2. Require `cluster.target == "k3d-local"`.
 3. Verify `flux`, `sops`, `age`, `age-keygen`, `kubectl`, `k3d`, and Docker
    toolchain pins through `install-cluster-tools.sh --check`.
-4. Apply `gitops/flux-system/gotk-components.yaml`.
+4. Apply `gitops/flux/gotk-components.yaml`.
 5. Wait for CRDs and the `source-controller` and `kustomize-controller`
    Deployments.
 6. Run `bootstrap-sops-age-key.sh --channel local --kubeconfig <path>`.
@@ -362,9 +372,8 @@ Idempotency contract:
 - Existing `sops-age` Secret is replaced only when the local age key file
   content changes.
 - Existing Git daemon Deployment/Service are applied, not recreated.
-- Reseeding overwrites the served bare repository atomically in the Pod:
-  copy to `/srv/git/.incoming/server-manager.git`, then rename to
-  `/srv/git/server-manager.git`.
+- Reseeding pushes the served snapshot into `/srv/git/humility-local.git` in
+  the Pod.
 - Existing `GitRepository` and `Kustomization` CRs are applied, not deleted.
 - A second successful run must leave the cluster Ready and must not change
   resource names.
@@ -379,8 +388,11 @@ for INIT-101-style substrate-only diagnostics, but the default path for
 INIT-102 includes Flux installation.
 
 ## 5. Local Git Source Mechanism
-D4 binds the local source to an in-cluster `git daemon`. INIT-102 uses a
-single-replica Deployment and ClusterIP Service in namespace `git-system`.
+D4 binds the local source to an in-cluster bare Git repository served over
+HTTP. INIT-102 uses a single-replica Deployment and ClusterIP Service in
+namespace `git-system`. The earlier native `git://` design was replaced
+because Flux v2.8 rejects `GitRepository.spec.url` values using the `git://`
+scheme; the final source URL is HTTP over the seeded bare repository.
 
 ### Deployment Shape
 Kubernetes resources:
@@ -388,19 +400,19 @@ Kubernetes resources:
 | Resource | Name | Namespace | Count/port |
 |---|---|---|---|
 | `Namespace` | `git-system` | n/a | 1 |
-| `PersistentVolumeClaim` | `git-local-data` | `git-system` | `ReadWriteOnce`; restart recovery (addresses SC-007) |
-| `Deployment` | `git-local` | `git-system` | replicas `1` |
-| `Service` | `git-local` | `git-system` | TCP `9418` named `git` |
+| `PersistentVolumeClaim` | `git-daemon-pvc` | `git-system` | `ReadWriteOnce`; restart recovery (addresses SC-007) |
+| `Deployment` | `git-daemon` | `git-system` | replicas `1` |
+| `Service` | `git-local` | `git-system` | HTTP `8080` named `http` |
 
 Container:
 
 | Field | Value |
 |---|---|
-| Image | `docker.io/alpine/git:2.49.1` |
-| Linux amd64 digest | `sha256:53a6239398162098fed2f49a46512f9cbba9e3f31b9f2cea4fa90129ee069a99` |
-| Command | `git daemon --verbose --export-all --reuseaddr --base-path=/srv/git /srv/git` |
-| Volume | PVC `git-local-data` mounted at `/srv/git` |
-| Security | non-root where image permits; no host networking; ClusterIP only |
+| Git workspace image | `docker.io/alpine/git:v2.45.2` |
+| HTTP serving image | `docker.io/alpine/git:v2.45.2` with BusyBox `httpd` prepared by init container |
+| Served path | `/srv/git/humility-local.git` |
+| Persistent volume | PVC `git-daemon-pvc` mounted at `/srv/git` in the Git workspace container |
+| Security | non-root, read-only root filesystems, dropped capabilities, no host networking, ClusterIP only |
 
 The Deployment and Pod template carry label `app=git-daemon` so the harness can
 delete the serving Pod without selecting unrelated resources (addresses SC-007).
@@ -414,7 +426,7 @@ git-local.git-system.svc.cluster.local
 The Flux URL is:
 
 ```text
-git://git-local.git-system.svc.cluster.local:9418/server-manager.git
+http://git-local.git-system.svc.cluster.local:8080/cgi-bin/git/humility-local.git
 ```
 
 ### Seeding Mechanism
@@ -428,7 +440,7 @@ Script signature:
 ```bash
 infra/scripts/seed-local-git-source.sh \
   --channel local \
-  [--kubeconfig infra/channels/local/.generated/kubeconfig.yaml] \
+  [--kubeconfig ~/.kube/humility-local.yaml] \
   [--reconcile]
 ```
 
@@ -450,10 +462,9 @@ Algorithm:
 6. Record the temporary snapshot commit SHA and source short SHA in
    `.tmp/gitops-source/<channel>/last-seed.json`.
 7. Create branch `main`.
-8. Clone that temp repo as a bare repo named `server-manager.git`.
-9. `kubectl cp` the bare repo to the `git-local` Pod as
-   `/srv/git/.incoming/server-manager.git`.
-10. `kubectl exec` the Pod to atomically replace `/srv/git/server-manager.git`.
+8. Initialize `/srv/git/humility-local.git` in the `git-daemon` Pod if needed.
+9. Stream the rendered snapshot into the Pod.
+10. Commit and push the snapshot to `/srv/git/humility-local.git`.
 11. If `--reconcile` is passed, run
    `flux reconcile source git humility-local -n flux-system` and
    `flux reconcile kustomization humility-local -n flux-system --with-source`.
@@ -474,7 +485,7 @@ The channel YAML stores the ref as `refs/heads/main`; the renderer converts it
 to Flux's branch field. Re-seed cadence is manual: the operator or harness runs
 `seed-local-git-source.sh --reconcile` after changing local GitOps manifests.
 There is no sidecar resync loop and no scheduled polling from the host. Flux
-still polls the in-cluster Git server every `gitops.interval_source`, but it
+still polls the in-cluster Git server every `gitops.interval`, but it
 can only see the last seeded snapshot.
 
 Failure mode:
@@ -484,7 +495,7 @@ Failure mode:
   snapshot commit SHA and the current local snapshot SHA to make divergence
   explicit.
 - If the Git daemon Pod restarts, the PVC must retain
-  `/srv/git/server-manager.git`. The harness deletes the Pod selected by
+  `/srv/git/humility-local.git`. The harness deletes the Pod selected by
   `app=git-daemon`, waits for the Deployment to recreate it, verifies the bare
   repo is still present, and reconciles Flux again (addresses SC-007).
 - If the Git server has invalid content, `source-controller` reports
@@ -492,10 +503,11 @@ Failure mode:
   `GitRepository Ready`.
 
 ## 6. SOPS+age Bootstrap Flow
-SOPS+age is bootstrap-only. INIT-102 encrypts exactly one file:
+SOPS+age is bootstrap-only. The boundary lint is the binding source of truth:
+INIT-102 encrypts exactly one file:
 
 ```text
-gitops/secrets/local/gitops-sops-sentinel.enc.yaml
+gitops/bootstrap/sops-sentinel.enc.yaml
 ```
 
 The decrypted manifest is a Kubernetes Secret:
@@ -504,8 +516,8 @@ The decrypted manifest is a Kubernetes Secret:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: gitops-sops-sentinel
-  namespace: humility-gitops-sentinel
+  name: sops-sentinel
+  namespace: flux-system
 type: Opaque
 stringData:
   channel: local
@@ -516,31 +528,24 @@ This is intentionally a non-runtime sentinel. It proves Flux can decrypt
 SOPS-managed bootstrap-tier YAML. It is not a Discord token, database
 password, API key, Infisical runtime secret, or user-facing credential.
 
-`.sops.yaml` location:
-
-```text
-gitops/secrets/local/.sops.yaml
-```
-
 Creation rule:
 
 ```yaml
 creation_rules:
-  - path_regex: gitops/secrets/local/.*\.enc\.ya?ml$
+  - path_regex: ^gitops/.*\.enc\.yaml$
     encrypted_regex: ^(data|stringData)$
-    age: ["<local-channel-public-age-recipient>"]
+    age: <local-channel-public-age-recipient>
 ```
 
 The public recipient is committed. The private key is never committed.
 
 The bootstrap-only boundary is a failing invariant, not review convention:
-`infra/tests/validate_gitops_substrate.sh` scans the encrypted file glob
+`infra/scripts/lint-sops-boundary.py` scans the encrypted file glob
 `gitops/**/*.enc.yaml` and fails unless the only match is
-`gitops/secrets/local/gitops-sops-sentinel.enc.yaml`. The same lint decrypts
-the allowlisted file and fails on runtime-secret-shaped keys or paths,
-including case-insensitive `infisical*`, `discord*token`, database passwords,
-application config, or encrypted files outside INIT-102's bootstrap SOPS
-allowlist (addresses SC-006).
+`gitops/bootstrap/sops-sentinel.enc.yaml`. The same lint fails on
+runtime-secret-shaped keys or paths, including case-insensitive `infisical*`,
+`discord*token`, database passwords, API keys, or encrypted files outside
+INIT-102's bootstrap SOPS allowlist (addresses SC-006).
 
 Age key file on the operator machine:
 
@@ -565,8 +570,8 @@ The script:
 1. Creates `~/.config/sops/age/local.txt` with `age-keygen` if missing.
 2. Sets file mode `0600`.
 3. Extracts the public recipient.
-4. Writes or verifies `gitops/secrets/local/.sops.yaml` with that recipient.
-5. Encrypts `gitops/secrets/local/gitops-sops-sentinel.enc.yaml` if the file
+4. Prints the recipient for the repo-root `.sops.yaml`.
+5. Encrypts `gitops/bootstrap/sops-sentinel.enc.yaml` if the file
    is plaintext or missing SOPS metadata.
 6. Creates or updates the cluster Secret after Flux namespace exists:
 
@@ -603,7 +608,7 @@ decryption:
 
 Harness verification:
 
-- `kubectl --namespace humility-gitops-sentinel get secret gitops-sops-sentinel`
+- `kubectl --namespace flux-system get secret sops-sentinel`
   must succeed.
 - Decoded `.data.channel` must equal `local`.
 - Decoded `.data.sentinel` must equal `sops-local-ready`.
@@ -612,7 +617,7 @@ Harness verification:
 
 ## 7. Flux Installation
 D1 binds installation to `flux install --export`, not `flux bootstrap`.
-`gitops/flux-system/gotk-components.yaml` is generated once with pinned CLI
+`gitops/flux/gotk-components.yaml` is generated once with pinned CLI
 `flux v2.8.6` and committed to the repo.
 
 Component subset from D2:
@@ -698,7 +703,7 @@ package-manager installs. Dependencies: INIT-101 scripts and local toolchain
 pattern.
 
 ### SLICE-102.02 - GitOps Layout and Flux Lockfile
-Files: `gitops/README.md`, `gitops/flux-system/*`,
+Files: `gitops/README.md`, `gitops/flux/*`,
 `gitops/bases/gitops-sentinel/*`, `gitops/channels/local/*`, and deletion of
 `k8s/**`.
 
@@ -712,8 +717,7 @@ Anti-scope: no remote `dev` overlay, no app-cluster manifests, no application
 workloads. Dependencies: SLICE-102.01.
 
 ### SLICE-102.03 - SOPS+age Bootstrap Sentinel
-Files: `gitops/secrets/local/.sops.yaml`,
-`gitops/secrets/local/gitops-sops-sentinel.enc.yaml`,
+Files: `.sops.yaml`, `gitops/bootstrap/sops-sentinel.enc.yaml`,
 `infra/scripts/bootstrap-sops-age-key.sh`,
 `gitops/channels/local/kustomization.yaml`, `infra/README.md`.
 
@@ -721,9 +725,9 @@ Acceptance: `bootstrap-sops-age-key.sh --channel local` creates or verifies
 `~/.config/sops/age/local.txt` mode `0600`; `.sops.yaml` contains one public
 recipient and `encrypted_regex: ^(data|stringData)$`; the encrypted sentinel
 has SOPS metadata, lacks plaintext `sops-local-ready`, and decrypts with
-`SOPS_AGE_KEY_FILE` to `Secret/gitops-sops-sentinel`; the encrypted-file lint
+`SOPS_AGE_KEY_FILE` to `Secret/sops-sentinel`; the encrypted-file lint
 fails if `gitops/**/*.enc.yaml` contains anything except
-`gitops/secrets/local/gitops-sops-sentinel.enc.yaml` or runtime-secret-shaped
+`gitops/bootstrap/sops-sentinel.enc.yaml` or runtime-secret-shaped
 keys (addresses SC-006).
 
 Anti-scope: no runtime secrets, no Infisical Secret or CRD, no remote deploy
@@ -754,8 +758,8 @@ Files: `gitops/local-git-server/*`,
 `infra/README.md`.
 
 Acceptance: `bring-up-local-channel.sh --channel local` creates or reuses
-local k3d and installs Flux by default; `deploy/git-local` has one available
-replica; `pvc/git-local-data` is Bound; `svc/git-local` exposes TCP 9418; Flux
+local k3d and installs Flux by default; `deploy/git-daemon` has one available
+replica; `pvc/git-daemon-pvc` is Bound; `svc/git-local` exposes HTTP 8080; Flux
 reports `GitRepository/humility-local` and `Kustomization/humility-local`
 Ready; `seed-local-git-source.sh --channel local --reconcile` applies a changed
 sentinel snapshot and records the seeded snapshot commit in
@@ -867,7 +871,7 @@ age-keygen v1.3.1
 
 Lockfile expectations:
 
-- `gitops/flux-system/gotk-components.yaml` is committed and reviewed as the
+- `gitops/flux/gotk-components.yaml` is committed and reviewed as the
   Flux lockfile.
 - Flux manifests are not pulled from GitHub at apply time.
 - Regenerating the Flux lockfile must use `flux v2.8.6` and the exact
@@ -878,7 +882,7 @@ Lockfile expectations:
 
 ## 12. Local-as-First-Deployment Proof
 The exact harness command is `bash infra/tests/validate_gitops_substrate.sh`.
-It runs these assertions against `infra/channels/local/.generated/kubeconfig.yaml`:
+It runs these assertions against `~/.kube/humility-local.yaml`:
 
 - `delete-local-channel.sh --channel local || true` starts from clean state.
 - `bring-up-local-channel.sh --channel local` succeeds twice.
@@ -904,21 +908,21 @@ It runs these assertions against `infra/channels/local/.generated/kubeconfig.yam
   `.data.source_sha` equals the `source_short_sha` recorded in
   `.tmp/gitops-source/local/last-seed.json`, proving the seeded snapshot
   content was applied to the cluster (addresses SC-001).
-- `Secret/gitops-sops-sentinel` in `humility-gitops-sentinel` exists and
+- `Secret/sops-sentinel` in `flux-system` exists and
   decoded `.data.sentinel == "sops-local-ready"`.
-- `gitops/secrets/local/gitops-sops-sentinel.enc.yaml` contains `sops:`
+- `gitops/bootstrap/sops-sentinel.enc.yaml` contains `sops:`
   metadata and does not contain plaintext `sops-local-ready`.
 - The SOPS boundary lint scans `gitops/**/*.enc.yaml` and fails on any
   encrypted file outside the allowlisted
-  `gitops/secrets/local/gitops-sops-sentinel.enc.yaml`, or on decrypted keys
+  `gitops/bootstrap/sops-sentinel.enc.yaml`, or on decrypted keys
   matching runtime-secret shapes such as `infisical*`, `discord*token`,
   database passwords, or application config (addresses SC-006).
 - `kubectl delete pod -n git-system -l app=git-daemon` removes the serving Pod;
-  the Deployment recreates it, `kubectl -n git-system exec deploy/git-local -- test -d /srv/git/server-manager.git`
+  the Deployment recreates it, `kubectl -n git-system exec deploy/git-daemon -c git-daemon -- test -d /srv/git/humility-local.git`
   proves the seeded bare repo survived the restart, and a forced Flux reconcile
   returns `GitRepository/humility-local`, `Kustomization/humility-local`,
   `ConfigMap/gitops-sentinel`, `ConfigMap/gitops-snapshot-marker`, and
-  `Secret/gitops-sops-sentinel` to the same expected values (addresses SC-007).
+  `Secret/sops-sentinel` to the same expected values (addresses SC-007).
 - `delete-local-channel.sh --channel local` succeeds twice.
 
 Idempotency means both bring-up runs and both tear-down runs succeed. The
@@ -979,7 +983,7 @@ Observability:
 - `kubectl -n flux-system get gitrepository,kustomization`
 - `flux -n flux-system get sources git`
 - `flux -n flux-system get kustomizations`
-- `kubectl -n git-system logs deploy/git-local`
+- `kubectl -n git-system logs deploy/git-daemon`
 
 Supported surface after INIT-102:
 
@@ -1033,7 +1037,7 @@ Also out of scope:
 - Keeping or reshaping the stale `k8s/` tree.
 
 ## D-Record Binding Summary
-- D1 D-FLUX-INSTALL: bound to committed `gitops/flux-system/gotk-components.yaml`
+- D1 D-FLUX-INSTALL: bound to committed `gitops/flux/gotk-components.yaml`
   generated by `flux install --export`, applied by post-install script.
 - D2 D-FLUX-COMPONENTS: bound to source-controller and kustomize-controller
   only; all other Flux controllers excluded.
@@ -1041,8 +1045,8 @@ Also out of scope:
   `channels/local`, and `secrets/local`; stale `k8s/` deleted.
 - D4 D-LOCAL-SOURCE: bound to in-cluster `git daemon` Deployment/Service in
   `git-system`, manually reseeded from a local `gitops/` snapshot.
-- D5 D-SOPS-BOUNDARY: bound to one bootstrap sentinel Secret under
-  `gitops/secrets/local/*.enc.yaml`, with runtime secrets excluded.
+- D5 D-SOPS-BOUNDARY: bound to one bootstrap sentinel Secret at
+  `gitops/bootstrap/sops-sentinel.enc.yaml`, with runtime secrets excluded.
 - D6 D-AGE-KEY-DELIVERY: bound to `~/.config/sops/age/local.txt` and
   `Secret/sops-age` in `flux-system` with key `age.agekey`.
 - D7 D-CHANNEL-SCHEMA-EXT: bound to strict `gitops` schema fields and

@@ -32,6 +32,35 @@ spec:
       labels:
         app.kubernetes.io/name: git-daemon
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: prepare-git-http-tools
+          image: alpine/git:v2.45.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              cp -R "$(git --exec-path)/." /git-core/
+              apk add --no-cache git-daemon=2.45.4-r0 busybox-extras=1.36.1-r31 >/dev/null
+              cp -R /usr/libexec/git-core/. /git-core/
+              cp /bin/busybox-extras /tools/httpd
+              chmod -R 0555 /git-core /tools
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+          volumeMounts:
+            - name: git-core-tools
+              mountPath: /git-core
+            - name: git-http-tools
+              mountPath: /tools
       containers:
         - name: git-daemon
           image: alpine/git:v2.45.2
@@ -40,42 +69,75 @@ spec:
             - /bin/sh
             - -ec
           args:
-            - apk add --no-cache git-daemon=2.45.4-r0 >/dev/null && exec git daemon --reuseaddr --base-path=/srv/git --export-all --enable=receive-pack /srv/git
-          ports:
-            - name: git
-              containerPort: 9418
+            - exec sleep infinity
+          env:
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: git-data
               mountPath: /srv/git
+            - name: git-daemon-tmp
+              mountPath: /tmp
+            - name: git-core-tools
+              mountPath: /usr/libexec/git-core
+              readOnly: true
         - name: git-http
-          image: alpine:3.20.3
+          image: alpine/git:v2.45.2
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
             - -ec
           args:
             - |
-              apk add --no-cache git-daemon=2.45.4-r0 busybox-extras=1.36.1-r31 >/dev/null
-              mkdir -p /www/cgi-bin
-              cat > /www/cgi-bin/git <<'EOF'
+              mkdir -p /tmp/www/cgi-bin
+              cat > /tmp/www/cgi-bin/git <<'EOF'
               #!/bin/sh
               export GIT_PROJECT_ROOT=/srv/git
               export GIT_HTTP_EXPORT_ALL=1
               exec git http-backend
               EOF
-              chmod +x /www/cgi-bin/git
-              exec httpd -f -p 8080 -h /www
+              chmod +x /tmp/www/cgi-bin/git
+              exec /opt/git-http-tools/httpd -f -p 8080 -h /tmp/www
+          env:
+            - name: HOME
+              value: /tmp
           ports:
             - name: http
               containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: git-data
               mountPath: /srv/git
               readOnly: true
+            - name: git-core-tools
+              mountPath: /usr/libexec/git-core
+              readOnly: true
+            - name: git-http-tools
+              mountPath: /opt/git-http-tools
+              readOnly: true
+            - name: git-http-tmp
+              mountPath: /tmp
       volumes:
         - name: git-data
           persistentVolumeClaim:
             claimName: git-daemon-pvc
+        - name: git-core-tools
+          emptyDir: {}
+        - name: git-http-tools
+          emptyDir: {}
+        - name: git-daemon-tmp
+          emptyDir: {}
+        - name: git-http-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -89,9 +151,6 @@ spec:
   selector:
     app.kubernetes.io/name: git-daemon
   ports:
-    - name: git
-      port: 9418
-      targetPort: git
     - name: http
       port: 8080
       targetPort: http

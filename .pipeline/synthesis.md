@@ -121,16 +121,16 @@ are added by a later initiative.
 ### D4 — D-LOCAL-SOURCE
 
 **Decision**: The local-channel Flux source is a Git server that runs
-in-cluster (a `git daemon` Pod plus ClusterIP Service in a dedicated
+in-cluster (a local Git source Pod plus ClusterIP Service in a dedicated
 `git-system` namespace) and is seeded from the working repo by the channel
-bring-up script. The source URL is `git://<service>.git-system.svc:9418/<repo>.git`.
+bring-up script. The source URL is
+`http://git-local.git-system.svc.cluster.local:8080/cgi-bin/git/humility-local.git`.
 
 **Evidence**: research §5.2 Option B + §5.3 recommendation. Flux
 `GitRepository` only needs a URL the source-controller can reach from inside
 the cluster (research §5.1, §5.2). Archived INIT-009 already prototyped an
-in-cluster `git daemon` service at
-`git://git-local.git-system.svc.cluster.local/server-manager.git` (research
-§5.2). Git-backed Flux is mandated by D8 (research §0).
+in-cluster Git service shape; INIT-102's final HTTP CGI URL is the binding
+adaptation for Flux v2.8. Git-backed Flux is mandated by D8 (research §0).
 
 **Alternatives rejected**:
 - Option A — GitHub round-trip: every iteration requires commit/push before
@@ -234,9 +234,10 @@ exactly these fields:
 - `gitops.git_url` — Git URL the in-cluster `source-controller` can reach.
 - `gitops.git_ref` — branch or tag (e.g., `main`).
 - `gitops.path` — path within the source artifact (e.g., `./gitops/channels/local`).
-- `gitops.interval_source` — `GitRepository.spec.interval` (e.g., `1m`).
-- `gitops.interval_kustomization` — root `Kustomization.spec.interval` (e.g., `5m`).
-- `gitops.flux_version` — pinned Flux release (matches D9).
+- `gitops.interval` — `GitRepository.spec.interval` and root `Kustomization.spec.interval` (e.g., `1m`).
+- `gitops.retry_interval` — root `Kustomization.spec.retryInterval` (e.g., `1m`).
+- `gitops.kustomization_name` — root Flux source and kustomization name.
+- `gitops.kustomization_namespace` — namespace containing the Flux source and kustomization.
 - `gitops.sops_age_secret_name` — Kubernetes Secret name (default `sops-age`).
 - `gitops.decryption_secret_namespace` — namespace (default `flux-system`).
 
