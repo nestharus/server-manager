@@ -233,7 +233,7 @@ kubeconfig location.
   `infra/scripts/bring-up-local-channel.sh:100-101`; README documents
   `~/.kube/humility-local.yaml` at `infra/README.md:95-109`.
 - Proposal evidence: post-install signature example mentions
-  `infra/channels/local/.generated/kubeconfig.yaml`
+  `~/.kube/humility-local.yaml`
   (`.pipeline/proposal.md:324-340`), and local proof says assertions run
   against that path (`.pipeline/proposal.md:879-929`).
 - Resolution required before implementation: choose one path. Given INIT-101
@@ -350,14 +350,17 @@ D10. Do not bring forward INIT-009 `gitops/secrets/dev/**`.
 ```yaml
 gitops:
   source_kind: git
-  git_url: git://git-local.git-system.svc.cluster.local:9418/server-manager.git
+  git_url: http://git-local.git-system.svc.cluster.local:8080/cgi-bin/git/humility-local.git
   git_ref: refs/heads/main
   path: ./gitops/channels/local
-  interval_source: 1m
-  interval_kustomization: 1m
-  flux_version: v2.8.6
+  kustomization_name: humility-local
+  kustomization_namespace: flux-system
   sops_age_secret_name: sops-age
   decryption_secret_namespace: flux-system
+  interval: 1m
+  retry_interval: 1m
+  prune: true
+  wait: true
 ```
 
 `infra/channels/dev.yaml` deliberately omits `gitops`.
@@ -402,8 +405,7 @@ Adjacent blast radius:
 Files added:
 
 - `gitops/README.md`
-- `gitops/flux-system/gotk-components.yaml`
-- `gitops/flux-system/kustomization.yaml`
+- `gitops/flux/gotk-components.yaml`
 - `gitops/bases/gitops-sentinel/namespace.yaml`
 - `gitops/bases/gitops-sentinel/configmap.yaml`
 - `gitops/bases/gitops-sentinel/kustomization.yaml`
@@ -432,8 +434,8 @@ Adjacent blast radius:
 
 Files added:
 
-- `gitops/secrets/local/.sops.yaml`
-- `gitops/secrets/local/gitops-sops-sentinel.enc.yaml`
+- `.sops.yaml`
+- `gitops/bootstrap/sops-sentinel.enc.yaml`
 - `infra/scripts/bootstrap-sops-age-key.sh`
 
 Files modified:
@@ -511,7 +513,7 @@ Adjacent blast radius:
 - Live local cluster namespaces `flux-system`, `git-system`, and
   `humility-gitops-sentinel`.
 - `.tmp/gitops-source/local/last-seed.json`.
-- In-cluster anonymous Git service on TCP 9418, ClusterIP only.
+- In-cluster anonymous Git service on HTTP 8080, ClusterIP only.
 
 ### SLICE-102.06 - End-to-End Harness and Documentation
 
@@ -544,7 +546,7 @@ written.
 - Current INIT-101 path: `~/.kube/humility-local.yaml`
   (`infra/scripts/bring-up-local-channel.sh:100-101`,
   `infra/README.md:95-109`).
-- Proposal example/path: `infra/channels/local/.generated/kubeconfig.yaml`
+- Proposal example/path: `~/.kube/humility-local.yaml`
   (`.pipeline/proposal.md:324-340`, `.pipeline/proposal.md:879-929`).
 - Recommendation: preserve INIT-101 path and adjust INIT-102 implementation
   scripts/tests to read the resolved kubeconfig default.

@@ -465,7 +465,8 @@ SOPS+age bootstrap-only secrets.
   generator/resolver ownership in INIT-101 layout: `infra/README.md:31-75`.
 - Possible schema additions for proposal consideration: `gitops.git_url`,
   `gitops.git_ref`, `gitops.path`, `gitops.source_kind`, `gitops.interval`,
-  `gitops.flux_version`, `gitops.sops_age_secret_name`, and
+  `gitops.retry_interval`, `gitops.kustomization_name`,
+  `gitops.kustomization_namespace`, `gitops.sops_age_secret_name`, and
   `gitops.decryption_secret_namespace`.
 - Boundary concern: the `gitops` block should carry Flux source and bootstrap
   decryption metadata only. Runtime secret provider fields belong to INIT-103

@@ -986,7 +986,7 @@ config.
    on Vultr VMs.
 2. VKE managed Kubernetes as the workload/runtime substrate. Superseded by D8
    k3s on k3d/Vultr VMs.
-3. D7's VKE-specific cluster target. Vultr and OpenTofu survive; VKE does not.
+3. The prior VKE-specific cluster target. Vultr and OpenTofu survive; VKE does not.
 4. The old `local-only verification` framing. Superseded by local-as-first
    deployment in `environment-agnostic-stack.md` and D8.
 5. kind as the local Kubernetes target for Phase 5. Superseded by k3d because

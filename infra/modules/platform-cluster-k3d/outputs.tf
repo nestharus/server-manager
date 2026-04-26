@@ -3,7 +3,7 @@ output "cluster_name" {
 }
 
 output "kubeconfig_path" {
-  value = var.kubeconfig_path
+  value = local.kubeconfig_path
 }
 
 output "registry_name" {

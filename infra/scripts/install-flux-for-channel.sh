@@ -157,7 +157,6 @@ seed_git_daemon() {
   kubectl_cmd -n git-system exec "$pod" -c git-daemon -- sh -c "
     set -e
     cd '${seed_path}'
-    chown -R \"\$(id -u):\$(id -g)\" '${seed_path}'
     git config --global --add safe.directory '${seed_path}'
     git init --initial-branch=main >/dev/null
     git config user.email 'gitops-seed@humility.local'
