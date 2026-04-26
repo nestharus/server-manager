@@ -20,8 +20,11 @@ plan-only until a later deployment initiative.
 
 Required tools: OpenTofu `1.11.5`, kubectl `>= 1.31`, Docker `>= 24`,
 Python `>= 3.10` with `jsonschema` and `PyYAML`, k3d `v5.8.3`, Flux
-`v2.8.6`, Helm `v3.20.2`, SOPS `v3.12.2`, age/age-keygen `v1.3.1`, and
-Infisical CLI `v0.43.78`, and MinIO Client `RELEASE.2025-08-13T08-35-41Z`.
+`v2.8.6`, Helm `v3.20.2`, SOPS `v3.12.2`, age/age-keygen `v1.3.1`,
+Infisical CLI `v0.43.78`, and MinIO Client
+`RELEASE.2025-08-13T08-35-41Z`. The `step` CLI and `cmctl` are useful for
+manual diagnosis, but INIT-105 validation uses Kubernetes resources and does
+not require either host binary.
 
 Verify or install the pinned local cluster and GitOps toolchain:
 
@@ -260,6 +263,62 @@ Rollback for local development is the normal local-channel delete:
 bring-up reseeds Infisical storage credentials idempotently and recreates the
 MinIO PVC and bucket.
 
+## TLS And DNS
+
+INIT-105 adds local certificate issuance and local service-name DNS. Flux
+reconciles raw manifests from `gitops/channels/local/tls/` and
+`gitops/channels/local/dns/`.
+
+Local TLS components:
+
+- cert-manager `v1.20.2`, rendered from the upstream chart with CRDs included.
+- step-ca chart `1.30.1`, app `0.30.2`, deployed in `step-ca-system`.
+- step-issuer chart `1.10.2`, app `0.10.2`, deployed in
+  `step-issuer-system`.
+- `StepClusterIssuer/humility-local-step-ca`, generated after step-ca writes
+  its local root and provisioner credentials.
+- `Certificate/cert-manager-test/humility-local-sample`, issuing
+  `Secret/humility-local-sample-tls` for
+  `minio.minio-system.humility.local`.
+
+Local DNS uses the k3s CoreDNS ConfigMap in `kube-system`. The managed Corefile
+keeps normal Kubernetes DNS behavior and rewrites `*.humility.local` to
+`*.svc.cluster.local`, so internal services can be addressed by local channel
+names before ingress exists.
+
+Verify the focused local proof after the local channel is up:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml \
+  bash infra/tests/validate_tls_dns_local.sh
+```
+
+Expected proof points:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml \
+  kubectl get stepclusterissuer.certmanager.step.sm humility-local-step-ca
+KUBECONFIG=~/.kube/humility-local.yaml \
+  kubectl get certificate -n cert-manager-test humility-local-sample
+```
+
+Troubleshooting starts with:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n cert-manager get deploy,pod
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n step-ca-system get job,sts,pod,cm,secret
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n step-issuer-system logs deploy/step-issuer
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n cert-manager-test describe certificate humility-local-sample
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n kube-system get configmap coredns -o yaml
+```
+
+Remote TLS/DNS is a contract only in INIT-105. Manifests live under
+`gitops/contracts/remote/tls-dns/` and are not referenced by the local channel.
+The Cloudflare API token must come from Infisical project `platform-dns`,
+environment `dev`, path `/dns/dev/`, key `CLOUDFLARE_API_TOKEN`; it must not be
+stored in SOPS. ExternalDNS and the Let's Encrypt staging ACME `ClusterIssuer`
+are config-only until remote deployment work after INIT-117.
+
 ## GitOps Substrate
 
 INIT-102 adds the canonical local GitOps reconciliation path. The local channel
@@ -397,10 +456,12 @@ infisical, and mc. It verifies `kubectl get nodes` against
 `GitRepository` and `Kustomization` readiness, waits for Infisical server,
 PostgreSQL, Redis, Operator, Universal Auth, `InfisicalSecret`, and target
 Secret readiness, verifies MinIO readiness, bucket creation, real S3
-PUT/GET/compare/DELETE, MinIO Pod restart durability, verifies the snapshot
-marker reached the cluster, checks Postgres and git-daemon Pod restart
-recovery, reruns bring-up, repeats the object-storage proof, deletes the
-cluster, and checks delete idempotency.
+PUT/GET/compare/DELETE, MinIO Pod restart durability, verifies cert-manager,
+step-ca, step-issuer, sample Certificate issuance, and CoreDNS
+`humility.local` resolution, verifies the snapshot marker reached the cluster,
+checks Postgres and git-daemon Pod restart recovery, reruns bring-up, repeats
+the object-storage and TLS/DNS proofs, deletes the cluster, and checks delete
+idempotency.
 
 ## Anti-Scope
 
@@ -409,7 +470,9 @@ This directory does not install or operate:
 - Vultr Object Storage provisioning or S3 backup targets: later remote storage
   and INIT-112 work.
 - Crossplane app-cluster provisioning: INIT-106.
-- DNS automation, TLS, cert-manager, ingress, and edge policy: later INITs.
+- Ingress and edge policy: INIT-110 and later.
+- Real Cloudflare DNS records and production ACME issuance: post-INIT-117
+  deployment work.
 - Application workloads, API service deployment, Discord daemon deployment,
   databases, queues, or observability workloads: INIT-113 and later.
 - Remote k3s apply, remote HA, remote kubeconfig retrieval, or Vultr load
