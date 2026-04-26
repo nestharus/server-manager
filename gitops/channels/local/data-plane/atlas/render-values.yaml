@@ -1,0 +1,27 @@
+replicaCount: 1
+
+image:
+  repository: arigaio/atlas-operator
+  tag: 0.7.28
+  pullPolicy: IfNotPresent
+
+podSecurityContext:
+  runAsNonRoot: true
+
+containerSecurityContext:
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+prewarmDevDB: true
+allowCustomConfig: false

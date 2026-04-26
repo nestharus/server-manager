@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-app-atlas-migrations
+  namespace: sample-app-db
+  labels:
+    app.kubernetes.io/name: sample-app
+    platform.humility.gg/init: "111"
+data:
+  20260426000100_init.sql: |
+    CREATE SCHEMA IF NOT EXISTS sample_app;
+
+    CREATE TABLE sample_app.widgets (
+        id uuid PRIMARY KEY,
+        name text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+    );
+  atlas.sum: |
+    h1:RmDr7o+6EyPEINDQcdY8uqwvf8KoLoMOrpy8BoSMQRY=
+    20260426000100_init.sql h1:xShova1kw8jRarcmssY6r+UtjuOel45Nu5fKzQcywfU=

@@ -1,0 +1,33 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: sample-app-postgres
+  namespace: sample-app-db
+  labels:
+    app.kubernetes.io/name: sample-app-postgres
+    platform.humility.gg/init: "111"
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
+  primaryUpdateStrategy: unsupervised
+  bootstrap:
+    initdb:
+      database: sample_app
+      owner: sample_app
+      secret:
+        name: sample-app-postgres-app
+  storage:
+    size: 1Gi
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://humility-local-sample/cnpg/local/sample-app-postgres
+      endpointURL: http://minio.minio-system.svc.cluster.local:9000
+      s3Credentials:
+        accessKeyId:
+          name: minio-root
+          key: MINIO_ROOT_USER
+        secretAccessKey:
+          name: minio-root
+          key: MINIO_ROOT_PASSWORD
+      wal:
+        compression: gzip
