@@ -28,4 +28,5 @@ worktrees/
 .refs/
 .DS_Store
 infra/channels/*/.generated/
+*.kubeconfig
 **/.terraform/

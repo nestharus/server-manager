@@ -22,6 +22,10 @@ die() {
   exit 1
 }
 
+log() {
+  echo "$*"
+}
+
 python_bin() {
   if command -v python >/dev/null 2>&1; then
     command -v python
@@ -73,6 +77,10 @@ else:
 PY
 }
 
+cluster_exists() {
+  k3d cluster get "$cluster_name" >/dev/null 2>&1
+}
+
 main() {
   parse_args "$@"
 
@@ -92,16 +100,25 @@ main() {
   kubeconfig_path="$(resolve_field kubeconfig_path)"
   kubeconfig_path="${kubeconfig_path/#\~/$HOME}"
 
-  if k3d cluster get "$cluster_name" >/dev/null 2>&1; then
+  if cluster_exists; then
+    log "Deleting k3d cluster '${cluster_name}'"
     k3d cluster delete "$cluster_name"
   else
-    echo "k3d cluster '${cluster_name}' already gone"
+    log "k3d cluster '${cluster_name}' already gone"
   fi
 
   if [[ -f "$kubeconfig_path" ]]; then
     rm -f "$kubeconfig_path"
-    echo "Removed kubeconfig ${kubeconfig_path}"
+    log "Removed kubeconfig ${kubeconfig_path}"
+  else
+    log "kubeconfig ${kubeconfig_path} already absent"
   fi
+
+  if cluster_exists; then
+    die "k3d cluster '${cluster_name}' still exists after delete"
+  fi
+
+  log "Local channel '${CHANNEL_ID}' is deleted: cluster=${cluster_name}"
 }
 
 main "$@"

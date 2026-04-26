@@ -8,6 +8,7 @@ PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
 RUN_CLUSTER=0
+CLUSTER_EXERCISED=0
 
 pass() {
   echo "  PASS: $1"
@@ -31,7 +32,7 @@ Usage: validate_platform_bootstrap.sh [--cluster]
 Validates platform bootstrap files and local channel tooling.
 
 Options:
-  --cluster   Also create, verify, and delete the local k3d cluster when tools are present
+  --cluster   Run the full local k3d bring-up, kubectl, idempotency, and delete proof
   -h, --help  Show this help
 EOF
 }
@@ -410,6 +411,11 @@ assert_delete_missing_local_cluster() {
     return
   fi
 
+  if k3d cluster get humility-local >/dev/null 2>&1; then
+    skip "delete-local-channel missing-cluster check skipped because humility-local exists"
+    return
+  fi
+
   if bash "${INFRA_DIR}/scripts/delete-local-channel.sh" --channel local >/dev/null; then
     pass "delete-local-channel missing cluster is idempotent"
   else
@@ -420,6 +426,14 @@ assert_delete_missing_local_cluster() {
 assert_local_cluster_can_create() {
   local kubeconfig_path="${HOME}/.kube/humility-local.yaml"
   local node_count
+  local bring_up_output
+  local second_bring_up_output
+  local delete_output
+  local second_delete_output
+  local bring_up_status
+  local second_bring_up_status
+  local delete_status
+  local second_delete_status
 
   if ! command -v k3d >/dev/null 2>&1; then
     skip "CLUSTER: tools missing: k3d"
@@ -439,9 +453,16 @@ assert_local_cluster_can_create() {
     return
   fi
 
-  if bash "${INFRA_DIR}/scripts/bring-up-local-channel.sh" --channel local; then
+  set +e
+  bring_up_output="$(bash "${INFRA_DIR}/scripts/bring-up-local-channel.sh" --channel local 2>&1)"
+  bring_up_status=$?
+  set -e
+
+  if [[ "$bring_up_status" -eq 0 ]]; then
+    CLUSTER_EXERCISED=1
     pass "local k3d cluster bring-up"
   else
+    echo "$bring_up_output"
     fail "local k3d cluster bring-up"
     return
   fi
@@ -452,16 +473,58 @@ assert_local_cluster_can_create() {
     fail "local kubeconfig exists"
   fi
 
-  if node_count="$(kubectl --kubeconfig "$kubeconfig_path" get nodes --no-headers 2>/dev/null | wc -l)" && [[ "$node_count" -ge 1 ]]; then
+  if node_count="$(kubectl --kubeconfig "$kubeconfig_path" get nodes --no-headers 2>/dev/null | awk 'NF { count += 1 } END { print count + 0 }')" && [[ "$node_count" -ge 1 ]]; then
     pass "kubectl get nodes returns ${node_count} node(s)"
   else
     fail "kubectl get nodes returns at least one node"
   fi
 
-  if bash "${INFRA_DIR}/scripts/delete-local-channel.sh" --channel local; then
+  if kubectl --kubeconfig "$kubeconfig_path" get nodes --no-headers 2>/dev/null | awk 'NF && $2 != "Ready" { bad = 1 } END { exit bad }'; then
+    pass "kubectl get nodes reports all nodes Ready"
+  else
+    fail "kubectl get nodes reports all nodes Ready"
+  fi
+
+  set +e
+  second_bring_up_output="$(bash "${INFRA_DIR}/scripts/bring-up-local-channel.sh" --channel local 2>&1)"
+  second_bring_up_status=$?
+  set -e
+
+  if [[ "$second_bring_up_status" -eq 0 ]] && grep -q "already up; no changes needed" <<<"$second_bring_up_output"; then
+    pass "second bring-up is an idempotent no-op"
+  else
+    echo "$second_bring_up_output"
+    fail "second bring-up is an idempotent no-op"
+  fi
+
+  set +e
+  delete_output="$(bash "${INFRA_DIR}/scripts/delete-local-channel.sh" --channel local 2>&1)"
+  delete_status=$?
+  set -e
+
+  if [[ "$delete_status" -eq 0 ]]; then
     pass "local k3d cluster cleanup"
   else
+    echo "$delete_output"
     fail "local k3d cluster cleanup"
+  fi
+
+  if ! k3d cluster get humility-local >/dev/null 2>&1; then
+    pass "local k3d cluster gone after cleanup"
+  else
+    fail "local k3d cluster gone after cleanup"
+  fi
+
+  set +e
+  second_delete_output="$(bash "${INFRA_DIR}/scripts/delete-local-channel.sh" --channel local 2>&1)"
+  second_delete_status=$?
+  set -e
+
+  if [[ "$second_delete_status" -eq 0 ]] && grep -q "already gone" <<<"$second_delete_output"; then
+    pass "second delete is an idempotent no-op"
+  else
+    echo "$second_delete_output"
+    fail "second delete is an idempotent no-op"
   fi
 }
 
@@ -586,6 +649,11 @@ assert_spawn_against_disabled_fails
 
 echo ""
 echo "Summary: ${PASS_COUNT} passed, ${FAIL_COUNT} failed, ${SKIP_COUNT} skipped"
+if [[ "$CLUSTER_EXERCISED" -eq 1 ]]; then
+  echo "Cluster mode exercised: yes"
+else
+  echo "Cluster mode exercised: no"
+fi
 
 if [[ "$FAIL_COUNT" -gt 0 ]]; then
   exit 1

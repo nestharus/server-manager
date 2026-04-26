@@ -3,18 +3,21 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
+TOOL_INSTALLER="${REPO_ROOT}/infra/scripts/install-cluster-tools.sh"
 CHANNEL_ID="local"
-RECREATE=0
+FORCE=0
+REPAIR=0
 
 usage() {
   cat <<'EOF'
-Usage: bring-up-local-channel.sh [--channel local] [--recreate]
+Usage: bring-up-local-channel.sh [--channel local] [--force | --repair]
 
 Creates the local k3d platform cluster for a resolved local channel.
 
 Options:
   --channel <id>  Channel id to resolve (default: local)
-  --recreate      Delete an existing cluster before creating it again
+  --force         Delete stale local state and recreate the cluster
+  --repair        Repair stale generated kubeconfig state without recreating a matching cluster
   -h, --help      Show this help
 EOF
 }
@@ -22,6 +25,14 @@ EOF
 die() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+log() {
+  echo "$*"
+}
+
+stale_state() {
+  die "stale state detected: $*; rerun with --repair to fix generated kubeconfig state or --force to recreate the local cluster"
 }
 
 python_bin() {
@@ -42,8 +53,11 @@ parse_args() {
         CHANNEL_ID="$2"
         shift
         ;;
-      --recreate)
-        RECREATE=1
+      --force)
+        FORCE=1
+        ;;
+      --repair)
+        REPAIR=1
         ;;
       -h|--help)
         usage
@@ -55,6 +69,10 @@ parse_args() {
     esac
     shift
   done
+
+  if [[ "$FORCE" -eq 1 && "$REPAIR" -eq 1 ]]; then
+    die "--force and --repair are mutually exclusive"
+  fi
 }
 
 resolve_field() {
@@ -86,11 +104,117 @@ else:
 PY
 }
 
+cluster_exists() {
+  k3d cluster get "$cluster_name" >/dev/null 2>&1
+}
+
+write_kubeconfig() {
+  mkdir -p "$(dirname "$kubeconfig_path")"
+  k3d kubeconfig get "$cluster_name" > "$kubeconfig_path"
+  chmod 600 "$kubeconfig_path"
+  log "Wrote kubeconfig to ${kubeconfig_path}"
+}
+
+kubeconfig_matches_cluster() {
+  local expected
+
+  [[ -f "$kubeconfig_path" ]] || return 1
+
+  expected="$(mktemp)"
+  k3d kubeconfig get "$cluster_name" > "$expected"
+  if cmp -s "$expected" "$kubeconfig_path"; then
+    rm -f "$expected"
+    return 0
+  fi
+
+  rm -f "$expected"
+  return 1
+}
+
+node_count() {
+  local output
+
+  if ! output="$(kubectl --kubeconfig "$kubeconfig_path" get nodes --no-headers 2>/dev/null)"; then
+    echo 0
+    return 0
+  fi
+
+  awk 'NF { count += 1 } END { print count + 0 }' <<<"$output"
+}
+
+all_nodes_ready() {
+  local output
+
+  output="$(kubectl --kubeconfig "$kubeconfig_path" get nodes --no-headers 2>/dev/null)" || return 1
+  awk 'NF && $2 != "Ready" { bad = 1 } END { exit bad }' <<<"$output"
+}
+
+verify_kubectl_reachability() {
+  local count
+
+  count="$(node_count)"
+  [[ "$count" -ge 1 ]] || die "kubectl could not reach any nodes through ${kubeconfig_path}"
+}
+
+verify_cluster_contract() {
+  local expected_count
+  local actual_count
+
+  expected_count=$((servers + agents))
+  actual_count="$(node_count)"
+
+  if [[ "$actual_count" -ne "$expected_count" ]]; then
+    return 1
+  fi
+
+  all_nodes_ready
+}
+
+delete_existing_state() {
+  if cluster_exists; then
+    log "Deleting existing k3d cluster '${cluster_name}' before recreate"
+    k3d cluster delete "$cluster_name"
+  fi
+
+  if [[ -f "$kubeconfig_path" ]]; then
+    rm -f "$kubeconfig_path"
+    log "Removed stale kubeconfig ${kubeconfig_path}"
+  fi
+}
+
+create_cluster() {
+  local args=(
+    cluster create "$cluster_name"
+    --image "rancher/k3s:${k3s_version}"
+    --servers "$servers"
+    --agents "$agents"
+    --kubeconfig-update-default=false
+    --wait
+  )
+
+  if [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]]; then
+    args+=(--registry-create "${registry_name}:0.0.0.0:5000")
+  fi
+
+  k3d "${args[@]}"
+  write_kubeconfig
+  verify_kubectl_reachability
+
+  if ! verify_cluster_contract; then
+    die "created cluster '${cluster_name}' does not match channel topology: expected $((servers + agents)) Ready node(s)"
+  fi
+
+  log "Local channel '${CHANNEL_ID}' is up: cluster=${cluster_name} kubeconfig=${kubeconfig_path}"
+}
+
 main() {
   parse_args "$@"
 
   command -v k3d >/dev/null 2>&1 || die "k3d is required; run infra/scripts/install-cluster-tools.sh --install"
   command -v docker >/dev/null 2>&1 || die "docker is required to run k3d"
+  command -v kubectl >/dev/null 2>&1 || die "kubectl is required to verify local cluster reachability"
+  bash "$TOOL_INSTALLER" --check --no-color >/dev/null || die "k3d must match the pinned local toolchain; run infra/scripts/install-cluster-tools.sh --install"
+  docker info >/dev/null 2>&1 || die "docker daemon is unavailable"
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required to resolve channels"
 
   RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_ID")"
@@ -114,33 +238,50 @@ main() {
   kubeconfig_path="$(resolve_field kubeconfig_path)"
   kubeconfig_path="${kubeconfig_path/#\~/$HOME}"
 
-  if k3d cluster get "$cluster_name" >/dev/null 2>&1; then
-    if [[ "$RECREATE" -eq 0 ]]; then
-      echo "k3d cluster '${cluster_name}' exists; skipping create"
-      mkdir -p "$(dirname "$kubeconfig_path")"
-      k3d kubeconfig get "$cluster_name" > "$kubeconfig_path"
-      chmod 600 "$kubeconfig_path"
-      echo "Wrote kubeconfig to ${kubeconfig_path}"
-      exit 0
-    fi
-
-    echo "Deleting existing k3d cluster '${cluster_name}' before recreate"
-    k3d cluster delete "$cluster_name"
+  if [[ "$FORCE" -eq 1 ]]; then
+    delete_existing_state
+    create_cluster
+    exit 0
   fi
 
-  mkdir -p "$(dirname "$kubeconfig_path")"
+  if cluster_exists; then
+    if ! kubeconfig_matches_cluster; then
+      if [[ "$REPAIR" -eq 1 ]]; then
+        log "Repairing kubeconfig for existing k3d cluster '${cluster_name}'"
+        write_kubeconfig
+      else
+        stale_state "cluster '${cluster_name}' exists but kubeconfig '${kubeconfig_path}' is missing or does not match k3d output"
+      fi
+    fi
 
-  k3d cluster create "$cluster_name" \
-    --image "rancher/k3s:${k3s_version}" \
-    --servers "$servers" \
-    --agents "$agents" \
-    --registry-create "${registry_name}:0.0.0.0:5000" \
-    --kubeconfig-update-default=false \
-    --wait
+    verify_kubectl_reachability
 
-  k3d kubeconfig get "$cluster_name" > "$kubeconfig_path"
-  chmod 600 "$kubeconfig_path"
-  echo "Wrote kubeconfig to ${kubeconfig_path}"
+    if ! verify_cluster_contract; then
+      die "stale state detected: cluster '${cluster_name}' does not match channel topology: expected $((servers + agents)) Ready node(s); rerun with --force to recreate it"
+    fi
+
+    if [[ "$REPAIR" -eq 1 ]]; then
+      log "Local channel '${CHANNEL_ID}' repaired and already up: cluster=${cluster_name} kubeconfig=${kubeconfig_path}"
+    else
+      log "Local channel '${CHANNEL_ID}' already up; no changes needed: cluster=${cluster_name} kubeconfig=${kubeconfig_path}"
+    fi
+    exit 0
+  fi
+
+  if [[ -f "$kubeconfig_path" ]]; then
+    if [[ "$REPAIR" -eq 1 ]]; then
+      rm -f "$kubeconfig_path"
+      log "Removed stale kubeconfig ${kubeconfig_path}"
+    else
+      stale_state "kubeconfig '${kubeconfig_path}' exists but k3d cluster '${cluster_name}' does not"
+    fi
+  fi
+
+  if [[ "$REPAIR" -eq 1 ]]; then
+    log "Repair requested; creating missing k3d cluster '${cluster_name}'"
+  fi
+
+  create_cluster
 }
 
 main "$@"
