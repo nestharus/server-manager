@@ -31,10 +31,17 @@ Reader's guide for the local GitOps substrate.
 - `gitops/channels/local/dns/` - INIT-105 local DNS automation. It owns the
   local CoreDNS ConfigMap rewrite for `*.humility.local` to
   `*.svc.cluster.local`.
+- `gitops/channels/local/app-clusters/` - INIT-106 Crossplane application
+  cluster provisioning. It contains raw chart-rendered Crossplane v1.20.7,
+  provider-kubernetes, provider-vultr, ProviderConfigs, the AppCluster XRD and
+  Compositions, and the local `AppCluster/local-sample` proof.
 - `gitops/contracts/remote/tls-dns/` - INIT-105 remote contract-only manifests
   for Cloudflare ExternalDNS credentials, ExternalDNS configuration, and a
   Let's Encrypt staging ACME `ClusterIssuer`. The local channel does not
   reference this subtree.
+- `gitops/contracts/remote/app-clusters/` - INIT-106 remote contract-only
+  AppCluster manifests for Vultr credential flow and the Vultr VM plus k3s
+  Composition.
 
 `gitops/channels/local/infisical/` is part of the Flux-reconciled local
 channel. It does not introduce Helm controller, `HelmRelease`, `OCIRepository`,
@@ -64,6 +71,14 @@ TLS manifests are raw Kubernetes YAML. cert-manager, step-ca, step-issuer, and
 ExternalDNS are rendered from pinned charts outside the cluster; Flux applies
 the committed manifests directly. There is still no Helm controller,
 `HelmRelease`, or runtime chart fetch in the local channel.
+
+Crossplane follows the same render-only rule. `crossplane-1.20.7.yaml` is
+rendered with local Helm and committed as raw YAML; provider installation uses
+Crossplane `Provider` packages, not Helm resources. The local AppCluster proof
+creates a nested k3d cluster named `humility-local-app` from
+`AppCluster/local-sample`. Vultr API credentials are synced from Infisical
+project `platform-vultr`, environment `dev`, path `/api`, into
+`Secret/vultr-creds` in `crossplane-system`.
 
 ## Generated Artifacts
 
