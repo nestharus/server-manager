@@ -1,0 +1,19 @@
+schema_version: 1
+id: local
+parent: null
+exposure: dev
+tenant: null
+allow_ephemeral_children: true
+enabled_platforms: [kubernetes]
+cluster:
+  distribution: k3s
+  k3s_version: v1.32.13+k3s1
+  target: k3d-local
+  k3d:
+    servers: 1
+    agents: 1
+    registry_name: humility-local
+state:
+  bucket: humility-tfstate
+  key: channels/local/terraform.tfstate
+  region: ewr

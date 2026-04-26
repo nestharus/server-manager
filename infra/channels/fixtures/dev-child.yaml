@@ -1,0 +1,7 @@
+schema_version: 1
+id: dev-child
+parent: dev
+exposure: dev
+tenant: dev-child
+allow_ephemeral_children: true
+enabled_platforms: [kubernetes]

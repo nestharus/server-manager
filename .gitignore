@@ -27,3 +27,4 @@ node_modules/
 worktrees/
 .refs/
 .DS_Store
+infra/channels/*/.generated/

@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://humility.local/schemas/platform-channel.schema.json",
+  "title": "Humility platform channel",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "parent",
+    "exposure",
+    "tenant",
+    "allow_ephemeral_children",
+    "enabled_platforms"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/channelId"
+    },
+    "parent": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "exposure": {
+      "type": "string",
+      "enum": ["prod", "stage", "dev"]
+    },
+    "tenant": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "allow_ephemeral_children": {
+      "type": "boolean"
+    },
+    "enabled_platforms": {
+      "$ref": "#/$defs/enabledPlatforms"
+    },
+    "cluster": {
+      "$ref": "#/$defs/cluster"
+    },
+    "state": {
+      "$ref": "#/$defs/state"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "parent": {
+            "const": null
+          }
+        },
+        "required": ["parent"]
+      },
+      "then": {
+        "required": ["cluster", "state"]
+      }
+    }
+  ],
+  "$defs": {
+    "channelId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "enabledPlatforms": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["docker", "kubernetes"]
+      },
+      "uniqueItems": true
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^[a-z]{3}$"
+    },
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["distribution", "k3s_version", "target"],
+      "properties": {
+        "distribution": {
+          "const": "k3s"
+        },
+        "k3s_version": {
+          "type": "string",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+\\+k3s[0-9]+$"
+        },
+        "target": {
+          "type": "string",
+          "enum": ["k3d-local", "vultr-vms"]
+        },
+        "k3d": {
+          "$ref": "#/$defs/k3d"
+        },
+        "vultr_vms": {
+          "$ref": "#/$defs/vultrVms"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "target": {
+              "const": "k3d-local"
+            }
+          },
+          "required": ["k3d"],
+          "not": {
+            "required": ["vultr_vms"]
+          }
+        },
+        {
+          "properties": {
+            "target": {
+              "const": "vultr-vms"
+            }
+          },
+          "required": ["vultr_vms"],
+          "not": {
+            "required": ["k3d"]
+          }
+        }
+      ]
+    },
+    "k3d": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["servers", "agents", "registry_name"],
+      "properties": {
+        "servers": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "agents": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "registry_name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "vultrVms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["region", "servers", "agents"],
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/region"
+        },
+        "servers": {
+          "$ref": "#/$defs/vmPool"
+        },
+        "agents": {
+          "$ref": "#/$defs/vmPool"
+        }
+      }
+    },
+    "vmPool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "plan"],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "plan": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "key", "region"],
+      "properties": {
+        "bucket": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^channels/[a-z0-9-]+/terraform\\.tfstate$"
+        },
+        "region": {
+          "$ref": "#/$defs/region"
+        }
+      }
+    }
+  }
+}
