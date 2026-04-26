@@ -24,6 +24,17 @@ Reader's guide for the local GitOps substrate.
   storage. It contains raw Kustomize resources for `minio-system`,
   `InfisicalSecret/minio-root`, single-node MinIO, and
   `Job/create-sample-bucket`.
+- `gitops/channels/local/tls/` - INIT-105 local certificate automation. It
+  contains raw chart-rendered cert-manager, step-ca, step-issuer, a generated
+  `StepClusterIssuer/humility-local-step-ca`, and the
+  `Certificate/humility-local-sample` proof.
+- `gitops/channels/local/dns/` - INIT-105 local DNS automation. It owns the
+  local CoreDNS ConfigMap rewrite for `*.humility.local` to
+  `*.svc.cluster.local`.
+- `gitops/contracts/remote/tls-dns/` - INIT-105 remote contract-only manifests
+  for Cloudflare ExternalDNS credentials, ExternalDNS configuration, and a
+  Let's Encrypt staging ACME `ClusterIssuer`. The local channel does not
+  reference this subtree.
 
 `gitops/channels/local/infisical/` is part of the Flux-reconciled local
 channel. It does not introduce Helm controller, `HelmRelease`, `OCIRepository`,
@@ -42,6 +53,17 @@ syncs `Secret/minio-root` from Infisical project `platform-storage`, path
 `Secret/infisical-operator-auth` in `infisical-system`. MinIO and Vultr Object
 Storage credentials must not be placed in `gitops/bootstrap/` or any
 SOPS-encrypted file.
+
+DNS credentials remain outside Git. The remote Cloudflare API token contract
+uses Infisical project `platform-dns`, environment `dev`, path `/dns/dev/`,
+secret key `CLOUDFLARE_API_TOKEN`, and target
+`Secret/cloudflare-api-token` in `external-dns-system`. INIT-105 does not apply
+remote DNS records or contact Cloudflare.
+
+TLS manifests are raw Kubernetes YAML. cert-manager, step-ca, step-issuer, and
+ExternalDNS are rendered from pinned charts outside the cluster; Flux applies
+the committed manifests directly. There is still no Helm controller,
+`HelmRelease`, or runtime chart fetch in the local channel.
 
 ## Generated Artifacts
 
