@@ -1,7 +1,8 @@
 # INIT-107 Implementation Log
 
 ## Status
-- INIT-107 implementation starts after this pipeline commit.
+- INIT-107 is implemented across the pipeline commit plus five code slices.
+- The local channel now declares security policy, labels namespaces for PSS, applies NetworkPolicies, narrows provider-kubernetes injected-identity RBAC, hardens remaining pod specs, and proves the baseline in cluster mode.
 
 ## Slices
 - 107.01 pipeline artifacts.
@@ -10,6 +11,12 @@
 - 107.04 provider-kubernetes RBAC narrowing.
 - 107.05 pod hardening and PDBs.
 - 107.06 harness, docs, and handoff.
+
+## INIT-108 Handoff
+- Replace the local app-cluster Docker-socket provisioner with a non-hostPath mechanism if INIT-108 continues app-cluster platform work.
+- Keep app-cluster-system as the only privileged PSS namespace until that replacement lands.
+- Extend the security block only through strict schema fields; do not add aliases for pod security or network policy controls.
+- Preserve the cluster proof shape: real PSS rejection, real NetworkPolicy denial, and kubectl auth can-i checks.
 
 - Evidence detail 1: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
 - Evidence detail 2: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
