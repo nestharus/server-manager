@@ -32,10 +32,10 @@ log() {
 }
 
 python_bin() {
-  if command -v python >/dev/null 2>&1; then
-    command -v python
-  elif command -v python3 >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1; then
     command -v python3
+  elif command -v python >/dev/null 2>&1; then
+    command -v python
   else
     return 1
   fi

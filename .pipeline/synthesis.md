@@ -155,7 +155,7 @@ local channel resolves to the in-cluster service URL.
 
 **Decision**: SOPS+age in INIT-102 encrypts only **bootstrap-tier** files —
 those needed to start runtime secret management — under
-`gitops/secrets/<channel-id>/*.enc.yaml`. Encryption is scoped to the
+`gitops/bootstrap/*.enc.yaml`. Encryption is scoped to the
 `data` and `stringData` fields via `encrypted_regex`. Examples of in-scope
 files: a Flux Git deploy key for future remote channels and the bootstrap
 credential used by INIT-103 to provision Infisical. **Out of scope for SOPS
@@ -178,7 +178,7 @@ supports `encrypted_regex` to scope encryption to YAML fields (research §4.1).
   diff review harder for bootstrap content (research §4.1).
 
 **Consequence**: SLICE-102.03 owns `.sops.yaml` creation rules limited to
-`gitops/secrets/<channel>/`, an `encrypted_regex` of `^(data|stringData)$`,
+`gitops/bootstrap/`, an `encrypted_regex` of `^(data|stringData)$`,
 and a single bootstrap-tier sample/fixture demonstrating the pattern. Any
 runtime secret introduced by a later INIT must go through Infisical, not SOPS.
 
@@ -193,7 +193,8 @@ sops-age -n flux-system --from-file=age.agekey=$SOPS_AGE_KEY_FILE
 --dry-run=client -o yaml | kubectl apply -f -`) invoked from the channel
 bring-up flow. The age private key file lives at
 `~/.config/sops/age/<channel-id>.txt` outside the repo. Public recipients are
-committed in `gitops/secrets/<channel-id>/.sops.yaml`.
+committed in the repo-root `.sops.yaml` (bootstrap-tier custody is repo-wide,
+not per-channel).
 
 **Evidence**: research §4.3. Flux SOPS integration requires a Kubernetes
 Secret in the same namespace as the `Kustomization`, referenced via
@@ -311,8 +312,8 @@ from `worktrees/init-009-gitops-substrate/` is copied into INIT-102. Only
 **structural ideas** are reused, re-derived from scratch against the current
 constraints:
 
-- Salvaged ideas: root-level `gitops/` layout (`bases/`, `channels/`,
-  `secrets/<channel>/`); `.sops.yaml` per-channel custody pattern with
+- Salvaged ideas: root-level `gitops/` layout (`flux/`, `sources/`,
+  `channels/`, `bootstrap/`); `.sops.yaml` repo-root custody pattern with
   public recipient committed and private key outside repo; SOPS rotation
   runbook outline (`updatekeys` flow); the "in-cluster Git server" concept
   (D4).
