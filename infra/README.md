@@ -21,7 +21,7 @@ plan-only until a later deployment initiative.
 Required tools: OpenTofu `1.11.5`, kubectl `>= 1.31`, Docker `>= 24`,
 Python `>= 3.10` with `jsonschema` and `PyYAML`, k3d `v5.8.3`, Flux
 `v2.8.6`, Helm `v3.20.2`, SOPS `v3.12.2`, age/age-keygen `v1.3.1`, and
-Infisical CLI `v0.43.78`.
+Infisical CLI `v0.43.78`, and MinIO Client `RELEASE.2025-08-13T08-35-41Z`.
 
 Verify or install the pinned local cluster and GitOps toolchain:
 
@@ -30,7 +30,7 @@ bash infra/scripts/install-cluster-tools.sh --check
 bash infra/scripts/install-cluster-tools.sh --install
 ```
 
-`--install` writes k3d, flux, helm, sops, age, age-keygen, and infisical to
+`--install` writes k3d, flux, helm, sops, age, age-keygen, infisical, and mc to
 `~/.local/bin`. Helm is local render tooling only; it is not installed into
 the cluster. The script does not install OpenTofu, kubectl, Docker, Python,
 `jsonschema`, or `PyYAML`.

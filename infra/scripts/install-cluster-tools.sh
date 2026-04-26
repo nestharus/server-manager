@@ -7,12 +7,14 @@ HELM_VERSION="v3.20.2"
 SOPS_VERSION="v3.12.2"
 AGE_VERSION="v1.3.1"
 INFISICAL_VERSION="v0.43.78"
+MC_VERSION="RELEASE.2025-08-13T08-35-41Z"
 
 FLUX_SHA256="c53cc990ae266f7840f64c81515d701d8821d558a9062aa4211d71b38cf044be"
 HELM_SHA256="258e830a9e613c8a7a302d6059b4bb3b9758f2f3e1bb8ea0d707ce10a9a72fea"
 SOPS_SHA256="14e2e1ba3bef31e74b70cf0b674f6443c80f6c5f3df15d05ffc57c34851b4998"
 AGE_SHA256="bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377"
 INFISICAL_SHA256="4cba7e88befff7fab44bc45bf9a0d8fe307d85748267a4c76c25deb72f38be74"
+MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
 
 INSTALL_DIR="${HOME}/.local/bin"
 NO_COLOR=0
@@ -207,6 +209,14 @@ installed_infisical_version() {
   infisical --version 2>/dev/null | awk '/^infisical version / { print "v" $3; exit } /^[0-9]+\./ { print "v" $1; exit }'
 }
 
+installed_mc_version() {
+  if ! command -v mc >/dev/null 2>&1; then
+    return 1
+  fi
+
+  mc --version 2>/dev/null | awk '/^mc version / { print $3; exit }'
+}
+
 check_k3d() {
   local installed=""
 
@@ -324,6 +334,23 @@ check_infisical() {
   return 1
 }
 
+check_mc() {
+  local installed=""
+
+  if installed="$(installed_mc_version)" && [[ -n "$installed" ]]; then
+    if [[ "$installed" == "$MC_VERSION" ]]; then
+      echo "$(color "$GREEN" "OK"): mc ${installed}"
+      return 0
+    fi
+
+    echo "$(color "$YELLOW" "MISMATCH"): mc ${installed}; expected ${MC_VERSION}"
+    return 1
+  fi
+
+  echo "$(color "$YELLOW" "MISSING"): mc ${MC_VERSION}"
+  return 1
+}
+
 check_all() {
   local status=0
 
@@ -333,6 +360,7 @@ check_all() {
   check_sops || status=1
   check_age || status=1
   check_infisical || status=1
+  check_mc || status=1
 
   return "$status"
 }
@@ -497,6 +525,27 @@ install_infisical() {
   echo "$(color "$GREEN" "OK"): installed infisical ${INFISICAL_VERSION} to ${INSTALL_DIR}/infisical"
 }
 
+install_mc() {
+  local url="https://dl.min.io/client/mc/release/linux-amd64/archive/mc.${MC_VERSION}"
+  local tmpdir
+  local tmpbin
+
+  detect_linux_amd64 "mc"
+  require_download_tools "mc"
+
+  mkdir -p "$INSTALL_DIR"
+  tmpdir="$(mktemp -d)"
+  tmpbin="${tmpdir}/mc"
+
+  echo "Downloading mc ${MC_VERSION} from ${url}"
+  curl -fsSL "$url" -o "$tmpbin"
+  verify_sha256 "$tmpbin" "$MC_SHA256" "mc linux-amd64 binary"
+
+  install -m 0755 "$tmpbin" "${INSTALL_DIR}/mc"
+  rm -rf "$tmpdir"
+  echo "$(color "$GREEN" "OK"): installed mc ${MC_VERSION} to ${INSTALL_DIR}/mc"
+}
+
 install_missing_or_mismatched() {
   if check_k3d; then
     :
@@ -532,6 +581,12 @@ install_missing_or_mismatched() {
     :
   else
     install_infisical
+  fi
+
+  if check_mc; then
+    :
+  else
+    install_mc
   fi
 }
 

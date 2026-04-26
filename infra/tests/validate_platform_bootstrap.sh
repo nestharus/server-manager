@@ -1410,6 +1410,7 @@ assert_gitops_tool_versions() {
   assert_tool_version "age" "v1.3.1" '^v1\.3\.1$'
   assert_tool_version "age-keygen" "v1.3.1" '^v1\.3\.1$'
   assert_tool_version "infisical" "infisical version 0.43.78" '^infisical version 0\.43\.78$'
+  assert_tool_version "mc" "RELEASE.2025-08-13T08-35-41Z" '^mc version RELEASE\.2025-08-13T08-35-41Z([[:space:]].*)?$'
 }
 
 assert_bring_up_script_help_works() {
