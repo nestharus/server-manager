@@ -6,5 +6,6 @@ resources:
   - url-infisicalsecret.yaml
   - backup-credentials-infisicalsecret.yaml
   - cluster.yaml
+  - scheduled-backup.yaml
   - atlas-migrations-configmap.yaml
   - atlas-migration.yaml

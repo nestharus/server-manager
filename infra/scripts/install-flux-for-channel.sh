@@ -21,6 +21,8 @@ INFISICAL_SAMPLE_NAMESPACE="infisical-sample"
 INFISICAL_SAMPLE_NAME="infisical-local-sample"
 INFISICAL_SAMPLE_KEY="INFISICAL_SAMPLE_KEY"
 INFISICAL_SAMPLE_VALUE="infisical-local-ready"
+MINIO_NAMESPACE="minio-system"
+MINIO_DEPLOYMENT="minio"
 
 usage() {
   cat <<'EOF'
@@ -363,6 +365,16 @@ bootstrap_infisical_storage() {
   bash "$INFISICAL_STORAGE_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
 }
 
+refresh_minio_after_storage_bootstrap() {
+  if ! kubectl_cmd -n "$MINIO_NAMESPACE" get "deployment/${MINIO_DEPLOYMENT}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  log "Refreshing MinIO Deployment after storage credential bootstrap"
+  kubectl_cmd -n "$MINIO_NAMESPACE" rollout restart "deployment/${MINIO_DEPLOYMENT}" >/dev/null
+  wait_for_rollout "$MINIO_NAMESPACE" "deployment/${MINIO_DEPLOYMENT}" "MinIO Deployment after storage bootstrap refresh"
+}
+
 bootstrap_infisical_databases() {
   log "Bootstrapping Infisical database credentials"
   bash "$INFISICAL_DATABASES_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
@@ -447,6 +459,7 @@ main() {
   wait_for_infisical_server
   bootstrap_infisical_identity
   bootstrap_infisical_storage
+  refresh_minio_after_storage_bootstrap
   bootstrap_infisical_databases
   refresh_infisical_operator_after_bootstrap
   wait_for_infisical_runtime

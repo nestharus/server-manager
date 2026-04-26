@@ -97,7 +97,7 @@ data_plane:
     operator_namespace: cnpg-system
     operator_version: 1.29.0
     operator_manifest: gitops/channels/dev/data-plane/cnpg/rendered/cnpg-1.29.0.yaml
-    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-standard-trixie
+    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
   atlas:
     operator_namespace: atlas-operator
     chart_name: oci://ghcr.io/ariga/charts/atlas-operator
@@ -124,15 +124,19 @@ data_plane:
     repo_dir: database/migrations/sample-app
     revisions_schema: atlas_schema_revisions
     verify_table: sample_app.widgets
-  backup:
-    # provider denotes the S3-compatible MinIO API contract; dev points at Vultr Object Storage.
-    provider: minio
-    endpoint: https://ewr1.vultrobjects.com
-    bucket: humility-dev-sample
-    region: ewr
-    destination_path: s3://humility-dev-sample/cnpg/dev/sample-app-postgres
-    credentials_secret_name: vultr-object-storage
-    credentials_secret_namespace: app-runtime
+backup:
+  provider: vultr-object-storage
+  endpoint: https://ewr1.vultrobjects.com
+  bucket: humility-dev-backups
+  region: ewr
+  destination_path: s3://humility-dev-backups/cnpg/dev/sample-app-postgres
+  retention_policy: 7d
+  schedule: "0 0 0 * * *"
+  credentials_secret_name: backup-object-storage
+  credentials_secret_namespace: sample-app-db
+  infisical_project: platform-storage
+  infisical_environment: dev
+  infisical_path: /object-storage/dev/
 tls:
   provider: acme
   remote_cluster_issuer_name: letsencrypt-staging

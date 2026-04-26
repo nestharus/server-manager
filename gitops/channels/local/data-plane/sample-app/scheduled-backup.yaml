@@ -1,0 +1,16 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: sample-app-postgres-daily
+  namespace: sample-app-db
+  labels:
+    app.kubernetes.io/name: sample-app-postgres
+    platform.humility.gg/init: "112"
+spec:
+  schedule: "0 0 0 * * *"
+  immediate: true
+  backupOwnerReference: cluster
+  method: barmanObjectStore
+  target: primary
+  cluster:
+    name: sample-app-postgres

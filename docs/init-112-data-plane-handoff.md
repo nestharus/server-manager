@@ -10,14 +10,17 @@ INIT-111 established the app database data plane.
   `gitops/channels/local/data-plane/atlas/rendered/atlas-operator-0.7.28.yaml`
 - Sample database namespace: `sample-app-db`
 - Sample cluster: `Cluster/sample-app-postgres`
+- Current INIT-112 operand image:
+  `ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie`
 - Sample app database/user: `sample_app`
 - Atlas migration: `AtlasMigration/sample-app`
 - Migration directory: `database/migrations/sample-app`
 - Database credential source:
   Infisical project `platform-databases`, environment `local`, path
   `/postgres/local/sample-app`
-- Backup target config:
-  `s3://humility-local-sample/cnpg/local/sample-app-postgres` through INIT-104
+- Initial backup target config, superseded by INIT-112's dedicated backup
+  bucket:
+  `s3://humility-local-backups/cnpg/local/sample-app-postgres` through INIT-104
   MinIO
 
 ## Proof Harness
@@ -44,22 +47,23 @@ The runtime proof checks:
 - `psql` connects with the app URL Secret
 - `sample_app.widgets` exists
 
-## INIT-112 Scope Boundary
+## INIT-112 Completion
 
-INIT-112 should add scheduled backups and restore proof. It should not redefine
-the CNPG install path, database credential path, sample cluster name, or Atlas
-migration mechanism.
+INIT-112 added scheduled backups and restore proof without redefining the CNPG
+install path, database credential path, sample cluster name, or Atlas migration
+mechanism.
 
-The expected INIT-112 deliverables are:
+Delivered INIT-112 artifacts:
 
-- `ScheduledBackup` resource or equivalent CNPG backup schedule for
+- `ScheduledBackup` resource for
   `sample-app-postgres`
-- backup completion proof against the existing MinIO destination
-- restore drill into a separate recovery cluster
-- verification that restored data and credentials behave as expected
+- backup completion proof against MinIO bucket `humility-local-backups`
+- restore drill into a separate recovery cluster through
+  `infra/scripts/run-cnpg-restore-drill.sh`
+- verification that restored schema and inserted drill data behave as expected
 - retention and failure-observability notes
-- migration from CNPG's deprecated in-tree Barman object-store backup fields to
-  the Barman Cloud CNPG-I plugin before any CNPG 1.30 upgrade
+- migration reminder from CNPG's deprecated in-tree Barman object-store backup
+  fields to the Barman Cloud CNPG-I plugin before any CNPG 1.30 upgrade
 
 Keep backup credentials in Infisical. Do not move database or object-storage
 credentials into SOPS.

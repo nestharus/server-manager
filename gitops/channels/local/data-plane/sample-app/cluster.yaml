@@ -8,7 +8,7 @@ metadata:
     platform.humility.gg/init: "111"
 spec:
   instances: 1
-  imageName: ghcr.io/cloudnative-pg/postgresql:18.3-standard-trixie
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
   primaryUpdateStrategy: unsupervised
   resources:
     requests:
@@ -30,14 +30,14 @@ spec:
     # CNPG 1.29-compatible config only. INIT-112 must migrate this to the
     # Barman Cloud CNPG-I plugin before any CNPG 1.30 upgrade.
     barmanObjectStore:
-      destinationPath: s3://humility-local-sample/cnpg/local/sample-app-postgres
+      destinationPath: s3://humility-local-backups/cnpg/local/sample-app-postgres
       endpointURL: http://minio.minio-system.svc.cluster.local:9000
       s3Credentials:
         accessKeyId:
-          name: minio-root
+          name: backup-object-storage
           key: MINIO_ROOT_USER
         secretAccessKey:
-          name: minio-root
+          name: backup-object-storage
           key: MINIO_ROOT_PASSWORD
       wal:
         compression: gzip

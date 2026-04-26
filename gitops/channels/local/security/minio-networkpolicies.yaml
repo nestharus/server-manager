@@ -15,6 +15,16 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: create-sample-bucket
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: create-backup-bucket
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: sample-app-db
+          podSelector:
+            matchExpressions:
+              - key: cnpg.io/cluster
+                operator: Exists
       ports:
         - protocol: TCP
           port: 9000
@@ -26,8 +36,12 @@ metadata:
   namespace: minio-system
 spec:
   podSelector:
-    matchLabels:
-      app.kubernetes.io/name: create-sample-bucket
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - create-sample-bucket
+          - create-backup-bucket
   policyTypes:
     - Egress
   egress:

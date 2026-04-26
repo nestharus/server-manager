@@ -504,6 +504,41 @@ checks Postgres and git-daemon Pod restart recovery, reruns bring-up, repeats
 the object-storage and TLS/DNS proofs, deletes the cluster, and checks delete
 idempotency.
 
+## Backup / DR
+
+INIT-112 adds the platform backup contract, local CNPG scheduled backups to
+MinIO bucket `humility-local-backups`, a deterministic restore drill, and a k3d
+Docker-volume snapshot script for the local control cluster.
+
+Static Backup / DR validation:
+
+```bash
+bash infra/tests/validate_backup_dr_local.sh --static-only
+```
+
+Runtime Backup / DR proof after local Flux reconciliation:
+
+```bash
+bash infra/tests/validate_backup_dr_local.sh \
+  --channel local \
+  --kubeconfig ~/.kube/humility-local.yaml
+```
+
+The runtime proof waits for `Job/create-backup-bucket`, verifies
+`ScheduledBackup/sample-app-postgres-daily`, inserts a known row, creates a
+manual CNPG `Backup`, verifies backup objects in MinIO, restores to a fresh
+CNPG cluster, and checks both `sample_app.widgets` and the inserted row.
+
+Create a local k3d control-cluster volume snapshot:
+
+```bash
+bash infra/scripts/snapshot-k3d-volumes.sh \
+  --cluster humility-local
+```
+
+The `dev` channel records the Vultr Object Storage backup contract only. Bucket
+creation and remote restore execution remain deployment work.
+
 ## Container Delivery
 
 INIT-108 adds the channel image registry contract. The local channel pushes to
@@ -543,8 +578,7 @@ Remote `dev` records the Vultr Container Registry contract only:
 
 This directory does not install or operate:
 
-- Vultr Object Storage provisioning or S3 backup targets: later remote storage
-  and INIT-112 work.
+- Vultr Object Storage bucket provisioning: later remote deployment work.
 - Crossplane app-cluster provisioning: INIT-106.
 - Ingress and edge policy: INIT-110 and later.
 - Real Cloudflare DNS records and production ACME issuance: post-INIT-117

@@ -5,8 +5,9 @@ metadata:
   namespace: sample-app-db
 spec:
   podSelector:
-    matchLabels:
-      cnpg.io/cluster: sample-app-postgres
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: Exists
   policyTypes:
     - Ingress
   ingress:
@@ -39,8 +40,9 @@ metadata:
   namespace: sample-app-db
 spec:
   podSelector:
-    matchLabels:
-      cnpg.io/cluster: sample-app-postgres
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: Exists
   policyTypes:
     - Egress
   egress:
