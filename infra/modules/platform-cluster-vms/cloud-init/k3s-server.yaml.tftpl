@@ -1,0 +1,16 @@
+#cloud-config
+hostname: ${hostname}
+manage_etc_hosts: true
+
+write_files:
+  - path: /etc/k3s-install-marker
+    content: "pending"
+    permissions: '0644'
+
+runcmd:
+  # Idempotency guard: skip install if marker says complete.
+  - bash -c 'if grep -q "complete" /etc/k3s-install-marker 2>/dev/null; then echo "k3s already installed; skipping"; exit 0; fi'
+  # The official k3s installer URL is stable; the installed k3s release is pinned by INSTALL_K3S_VERSION.
+  - bash -c 'set -euo pipefail; curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${k3s_version} ${k3s_url_env} INSTALL_K3S_EXEC="${k3s_exec_args}" K3S_TOKEN=${k3s_token} sh -s -' || (echo "k3s install failed" >&2; exit 1)
+  - bash -c 'set -euo pipefail; systemctl is-active --quiet ${k3s_service_name} || (echo "${k3s_service_name} not active" >&2; exit 1)'
+  - bash -c 'set -euo pipefail; echo "complete" > /etc/k3s-install-marker'
