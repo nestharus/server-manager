@@ -22,7 +22,7 @@ client:
   replicas: 1
   opaPort: 8180
   extraEnv:
-    OPAL_POLICY_STORE_TYPE: cedar
+    OPAL_POLICY_STORE_TYPE: CEDAR
     OPAL_POLICY_STORE_URL: http://localhost:8180
     OPAL_POLICY_STORE_AUTH_TYPE: none
   securityContext:
@@ -47,4 +47,3 @@ image:
     registry: docker.io
     repository: permitio/opal-client-cedar
     tag: 0.7.12
-
