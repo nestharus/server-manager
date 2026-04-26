@@ -1,0 +1,84 @@
+deployment:
+  kong:
+    enabled: true
+  serviceAccount:
+    create: true
+    automountServiceAccountToken: false
+
+env:
+  database: "off"
+  router_flavor: traditional
+  nginx_worker_processes: "1"
+
+image:
+  repository: kong
+  tag: "3.9"
+  pullPolicy: IfNotPresent
+
+proxy:
+  enabled: true
+  type: ClusterIP
+  http:
+    enabled: true
+    servicePort: 80
+    containerPort: 8000
+  tls:
+    enabled: true
+    servicePort: 443
+    containerPort: 8443
+
+admin:
+  enabled: false
+
+manager:
+  enabled: false
+
+portal:
+  enabled: false
+
+enterprise:
+  enabled: false
+
+postgresql:
+  enabled: false
+
+ingressController:
+  enabled: true
+  image:
+    repository: kong/kubernetes-ingress-controller
+    tag: "3.5"
+  ingressClass: kong
+  createIngressClass: true
+  admissionWebhook:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+containerSecurityContext:
+  enabled: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
+
+serviceMonitor:
+  enabled: false
