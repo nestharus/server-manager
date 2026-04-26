@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - runtime-infisicalsecret.yaml
+  - database-credentials-infisicalsecret.yaml
+  - database-url-infisicalsecret.yaml
+  - backup-credentials-infisicalsecret.yaml
+  - storage-credentials-infisicalsecret.yaml
+  - postgres-cluster.yaml
+  - scheduled-backup.yaml
+  - atlas-migrations-configmap.yaml
+  - atlas-migration.yaml
+  - alembic-migration-job.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - api-ingress.yaml
+  - local-dns-alias.yaml
+  - discord-deployment.yaml
+  - object-storage-bucket-job.yaml
+  - networkpolicies.yaml
+

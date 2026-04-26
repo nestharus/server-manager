@@ -1,0 +1,42 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: server-manager-postgres
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-postgres
+    platform.humility.gg/init: "113"
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
+  primaryUpdateStrategy: unsupervised
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  bootstrap:
+    initdb:
+      database: server_manager
+      owner: server_manager
+      secret:
+        name: server-manager-postgres-app
+  storage:
+    size: 2Gi
+  backup:
+    retentionPolicy: "7d"
+    barmanObjectStore:
+      destinationPath: s3://humility-local-backups/cnpg/local/server-manager-postgres
+      endpointURL: http://minio.minio-system.svc.cluster.local:9000
+      s3Credentials:
+        accessKeyId:
+          name: server-manager-backup-object-storage
+          key: MINIO_ROOT_USER
+        secretAccessKey:
+          name: server-manager-backup-object-storage
+          key: MINIO_ROOT_PASSWORD
+      wal:
+        compression: gzip
+

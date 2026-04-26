@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: server-manager-atlas-guard-migrations
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager
+    platform.humility.gg/init: "113"
+data:
+  20260426011300_atlas_guard.sql: |
+    SELECT 1;
+

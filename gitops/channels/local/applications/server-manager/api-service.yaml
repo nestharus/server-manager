@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-manager-api
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    platform.humility.gg/init: "113"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: server-manager-api
+  ports:
+    - name: http
+      port: 8000
+      protocol: TCP
+      targetPort: http
+

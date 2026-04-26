@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: server-manager-api
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    platform.humility.gg/init: "113"
+  annotations:
+    cert-manager.io/issuer: humility-local-step-ca
+    cert-manager.io/issuer-kind: StepClusterIssuer
+    cert-manager.io/issuer-group: certmanager.step.sm
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - api.local.humility.local
+      secretName: server-manager-api-local-ingress-tls
+  rules:
+    - host: api.local.humility.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: server-manager-api
+                port:
+                  number: 8000
+
