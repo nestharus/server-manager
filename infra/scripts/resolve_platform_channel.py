@@ -204,7 +204,20 @@ def resolve_channel(channel_id: str) -> dict[str, Any]:
         region = state.get("region")
         if isinstance(region, str) and region:
             state["endpoint"] = f"https://{region}1.vultrobjects.com"
-    # GitOps and Infisical blocks are deliberately not defaulted; all fields are operator-supplied.
+    object_storage = resolved.get("object_storage")
+    cluster = resolved.get("cluster")
+    if (
+        isinstance(object_storage, dict)
+        and object_storage.get("provider") == "vultr-object-storage"
+        and "endpoint" not in object_storage
+        and isinstance(cluster, dict)
+    ):
+        vultr_vms = cluster.get("vultr_vms")
+        if isinstance(vultr_vms, dict):
+            region = vultr_vms.get("region")
+            if isinstance(region, str) and region:
+                object_storage["endpoint"] = f"https://{region}1.vultrobjects.com"
+    # GitOps, Infisical, and local object-storage blocks are deliberately not defaulted; all fields are operator-supplied.
     validate_resolved_channel(resolved, channel_id)
     return resolved
 

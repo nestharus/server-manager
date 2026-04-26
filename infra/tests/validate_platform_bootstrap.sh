@@ -522,6 +522,173 @@ PY
   fi
 }
 
+assert_object_storage_channel_schema() {
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/object-storage-channel"
+  local local_resolved="${tmp_dir}/local.resolved.json"
+  local dev_resolved="${tmp_dir}/dev.resolved.json"
+  local registry="${tmp_dir}/channels"
+  local py_bin
+
+  if ! py_bin="$(python_bin)"; then
+    fail "python interpreter available for object-storage channel validation"
+    return
+  fi
+
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel local --out "$local_resolved" \
+    && "$py_bin" - "$local_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "provider": "minio",
+    "endpoint": "http://minio.minio-system.svc.cluster.local:9000",
+    "region": "us-east-1",
+    "bucket": "humility-local-sample",
+    "credentials_secret_name": "minio-root",
+    "credentials_secret_namespace": "minio-system",
+    "infisical_project": "platform-storage",
+    "infisical_path": "/object-storage/local/",
+}
+if data.get("object_storage") != expected:
+    raise SystemExit(f"unexpected object_storage block: {data.get('object_storage')!r}")
+PY
+  then
+    pass "local channel resolves with required MinIO object_storage block"
+  else
+    fail "local channel resolves with required MinIO object_storage block"
+  fi
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel dev --out "$dev_resolved" \
+    && "$py_bin" - "$dev_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+storage = data.get("object_storage")
+if storage is None:
+    raise SystemExit("dev object_storage block is absent")
+if storage.get("provider") != "vultr-object-storage":
+    raise SystemExit(f"unexpected dev provider: {storage!r}")
+if storage.get("endpoint") != "https://ewr1.vultrobjects.com":
+    raise SystemExit(f"unexpected dev endpoint: {storage!r}")
+if "gitops" in data or "infisical" in data:
+    raise SystemExit("dev must keep remote GitOps and Infisical omitted")
+PY
+  then
+    pass "dev channel validates with optional Vultr object_storage block"
+  else
+    fail "dev channel validates with optional Vultr object_storage block"
+  fi
+
+  if "$py_bin" - "${INFRA_DIR}/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import resolve_platform_channel as resolver
+
+resolved = resolver.resolve_channel("local-child")
+if resolved.get("object_storage", {}).get("provider") != "minio":
+    raise SystemExit(f"local-child did not inherit object_storage: {resolved.get('object_storage')!r}")
+PY
+  then
+    pass "local child channel inherits object_storage block"
+  else
+    fail "local child channel inherits object_storage block"
+  fi
+
+  rm -rf "$registry"
+  cp -R "${INFRA_DIR}/channels" "$registry"
+  if "$py_bin" - "${registry}/local.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data.pop("object_storage", None)
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+  then
+    if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+      fail "local k3d channel without object_storage fails schema validation"
+    else
+      pass "local k3d channel without object_storage fails schema validation"
+    fi
+  else
+    fail "local k3d channel without object_storage fails schema validation"
+  fi
+
+  rm -rf "$registry"
+  cp -R "${INFRA_DIR}/channels" "$registry"
+  if "$py_bin" - "${registry}/dev.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data["object_storage"].pop("endpoint", None)
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+  then
+    if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" \
+      && "$py_bin" - "${INFRA_DIR}/scripts" "$registry" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import resolve_platform_channel as resolver
+
+registry = Path(sys.argv[2])
+resolver.CHANNELS_DIR = registry
+resolver.FIXTURES_DIR = registry / "fixtures"
+data = resolver.resolve_channel("dev")
+if data.get("object_storage", {}).get("endpoint") != "https://ewr1.vultrobjects.com":
+    raise SystemExit(data.get("object_storage"))
+PY
+    then
+      pass "Vultr object_storage endpoint resolves from region"
+    else
+      fail "Vultr object_storage endpoint resolves from region"
+    fi
+  else
+    fail "Vultr object_storage endpoint resolves from region"
+  fi
+
+  for alias in s3 endpoint_url secret_namespace; do
+    rm -rf "$registry"
+    cp -R "${INFRA_DIR}/channels" "$registry"
+    if "$py_bin" - "${registry}/local.yaml" "$alias" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+alias = sys.argv[2]
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data["object_storage"][alias] = "rejected"
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+    then
+      if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+        fail "object_storage alias ${alias} is rejected"
+      else
+        pass "object_storage alias ${alias} is rejected"
+      fi
+    else
+      fail "object_storage alias ${alias} is rejected"
+    fi
+  done
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -1726,6 +1893,11 @@ echo ""
 echo "=== Slice 103.05 Infisical channel schema and sample validation ==="
 
 assert_infisical_channel_schema_and_sample
+
+echo ""
+echo "=== Slice 104.01 object-storage channel schema validation ==="
+
+assert_object_storage_channel_schema
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create

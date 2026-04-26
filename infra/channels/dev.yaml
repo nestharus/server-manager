@@ -25,4 +25,13 @@ state:
   bucket: humility-tfstate
   key: channels/dev/terraform.tfstate
   region: ewr
+object_storage:
+  provider: vultr-object-storage
+  endpoint: https://ewr1.vultrobjects.com
+  region: ewr
+  bucket: humility-dev-sample
+  credentials_secret_name: vultr-object-storage
+  credentials_secret_namespace: app-runtime
+  infisical_project: platform-storage
+  infisical_path: /object-storage/dev/
 # gitops is deliberately omitted for INIT-102; dev keeps the single-cluster remote posture until remote Flux wiring is scoped.
