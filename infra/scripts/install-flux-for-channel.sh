@@ -6,6 +6,7 @@ RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
 RENDERER="${REPO_ROOT}/infra/scripts/render-gitops-source.py"
 AGE_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-sops-age-key.sh"
 INFISICAL_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-identity.sh"
+INFISICAL_STORAGE_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-storage.sh"
 CHANNEL_REQUEST="local"
 CHANNEL_ID=""
 WAIT_TIMEOUT="180s"
@@ -351,6 +352,11 @@ bootstrap_infisical_identity() {
   bash "$INFISICAL_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
 }
 
+bootstrap_infisical_storage() {
+  log "Bootstrapping Infisical object-storage credentials"
+  bash "$INFISICAL_STORAGE_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
+}
+
 wait_for_infisical_server() {
   wait_for_rollout "$INFISICAL_NAMESPACE" "statefulset/${INFISICAL_POSTGRES_STATEFULSET}" "Infisical Postgres StatefulSet"
   wait_for_rollout "$INFISICAL_NAMESPACE" "statefulset/${INFISICAL_REDIS_STATEFULSET}" "Infisical Redis StatefulSet"
@@ -412,6 +418,7 @@ main() {
   request_kustomization_reconciliation
   wait_for_infisical_server
   bootstrap_infisical_identity
+  bootstrap_infisical_storage
   wait_for_infisical_runtime
   wait_for_reconciliation
 

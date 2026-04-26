@@ -10,7 +10,8 @@ Reader's guide for the local GitOps substrate.
   git-daemon Deployment. Rendered `GitRepository` and source-side
   `Kustomization` manifests are generated from the channel contract.
 - `gitops/channels/local/` - the local channel overlay, namespace, bootstrap
-  sentinel reference, generated snapshot marker, and runtime Infisical subtree.
+  sentinel reference, generated snapshot marker, runtime Infisical subtree, and
+  local object-storage subtree.
 - `gitops/channels/local/infisical/` - INIT-103 runtime-secret management for
   the local channel. `server/` and `operator/` contain committed raw YAML
   rendered from pinned Helm charts. `sample/` contains the authored
@@ -19,6 +20,10 @@ Reader's guide for the local GitOps substrate.
 - `gitops/bootstrap/` - SOPS+age bootstrap-only encrypted secrets. Runtime
   application secrets do not live here; they move through Infisical in
   INIT-103.
+- `gitops/channels/local/object-storage/` - INIT-104 local S3-compatible
+  storage. It contains raw Kustomize resources for `minio-system`,
+  `InfisicalSecret/minio-root`, single-node MinIO, and
+  `Job/create-sample-bucket`.
 
 `gitops/channels/local/infisical/` is part of the Flux-reconciled local
 channel. It does not introduce Helm controller, `HelmRelease`, `OCIRepository`,
@@ -31,9 +36,12 @@ allowed under `gitops/bootstrap/`; Operator Universal Auth credentials and all
 downstream runtime secrets are created outside Git and consumed through
 Infisical plus `InfisicalSecret` resources.
 
-INIT-104 must add its own object-storage `InfisicalSecret` resources in the
-owning application namespace. It must not place MinIO or Vultr Object Storage
-credentials in `gitops/bootstrap/` or any SOPS-encrypted file.
+Object storage credentials remain outside Git. `InfisicalSecret/minio-root`
+syncs `Secret/minio-root` from Infisical project `platform-storage`, path
+`/object-storage/local/`, using the existing
+`Secret/infisical-operator-auth` in `infisical-system`. MinIO and Vultr Object
+Storage credentials must not be placed in `gitops/bootstrap/` or any
+SOPS-encrypted file.
 
 ## Generated Artifacts
 

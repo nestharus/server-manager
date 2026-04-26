@@ -156,8 +156,9 @@ Operator one-time bootstrap:
    The post-Flux script renders and seeds the local GitOps source, delivers
    the Flux SOPS age key, waits for the Infisical server, runs
    `infra/scripts/bootstrap-infisical-identity.sh`, applies
-   `Secret/infisical-operator-auth`, waits for the Operator, and then waits
-   for the sample runtime Secret.
+   `Secret/infisical-operator-auth`, runs
+   `infra/scripts/bootstrap-infisical-storage.sh`, waits for the Operator, and
+   then waits for the sample runtime Secret.
 
 Verify the runtime proof:
 
@@ -202,6 +203,62 @@ NetworkPolicy isolation for Infisical Postgres and Redis is deferred to
 INIT-107's cluster security baseline. The Bitnami chart defaults are disabled
 in `gitops/channels/local/infisical/server/render-values.yaml` because they
 look restrictive while allowing broad ingress or egress.
+
+## Object Storage
+
+INIT-104 adds a local S3-compatible storage proof. Flux reconciles raw MinIO
+manifests from `gitops/channels/local/object-storage/`: namespace,
+`InfisicalSecret/minio-root`, single-node `Deployment/minio`,
+`PersistentVolumeClaim/minio-data`, internal `Service/minio`, and
+`Job/create-sample-bucket`.
+
+Local credentials live in Infisical project `platform-storage`, environment
+`local`, path `/object-storage/local/`. The bootstrap script seeds
+`MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` only when absent and reuses
+`Secret/infisical-operator-auth`; it does not create a storage-specific
+Universal Auth Secret.
+
+The generic S3 contract is:
+
+```text
+S3_ENDPOINT
+S3_ACCESS_KEY_ID
+S3_SECRET_ACCESS_KEY
+S3_REGION
+S3_BUCKET
+```
+
+Local values resolve to endpoint
+`http://minio.minio-system.svc.cluster.local:9000`, region `us-east-1`, and
+bucket `humility-local-sample`. Verify a live endpoint through the harness or
+manually with:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml \
+  bash infra/tests/validate_object_storage_local.sh
+```
+
+The standalone script below works against any S3-compatible endpoint when the
+five `S3_*` variables are present:
+
+```bash
+bash infra/scripts/test-s3-roundtrip.sh --dry-run
+bash infra/scripts/test-s3-roundtrip.sh
+```
+
+Troubleshooting starts with:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n minio-system get infisicalsecret,secret,pvc,deploy,job,pod
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n minio-system describe infisicalsecret minio-root
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n minio-system logs deploy/minio
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n minio-system logs job/create-sample-bucket
+```
+
+Rollback for local development is the normal local-channel delete:
+`bash infra/scripts/delete-local-channel.sh --channel local`. The next
+bring-up reseeds Infisical storage credentials idempotently and recreates the
+MinIO PVC and bucket.
 
 ## GitOps Substrate
 
@@ -335,20 +392,22 @@ bash infra/tests/validate_platform_bootstrap.sh --cluster
 ```
 
 Cluster mode requires Docker, k3d, kubectl, flux, helm, sops, age, age-keygen,
-and infisical. It verifies `kubectl get nodes` against
+infisical, and mc. It verifies `kubectl get nodes` against
 `~/.kube/humility-local.yaml`, confirms all nodes are `Ready`, waits for Flux
 `GitRepository` and `Kustomization` readiness, waits for Infisical server,
 PostgreSQL, Redis, Operator, Universal Auth, `InfisicalSecret`, and target
-Secret readiness, verifies the snapshot marker reached the cluster, checks
-Postgres and git-daemon Pod restart recovery, reruns bring-up, deletes the
+Secret readiness, verifies MinIO readiness, bucket creation, real S3
+PUT/GET/compare/DELETE, MinIO Pod restart durability, verifies the snapshot
+marker reached the cluster, checks Postgres and git-daemon Pod restart
+recovery, reruns bring-up, repeats the object-storage proof, deletes the
 cluster, and checks delete idempotency.
 
 ## Anti-Scope
 
 This directory does not install or operate:
 
-- Object storage, MinIO, Vultr Object Storage, or S3 backup targets: INIT-104
-  and INIT-112.
+- Vultr Object Storage provisioning or S3 backup targets: later remote storage
+  and INIT-112 work.
 - Crossplane app-cluster provisioning: INIT-106.
 - DNS automation, TLS, cert-manager, ingress, and edge policy: later INITs.
 - Application workloads, API service deployment, Discord daemon deployment,

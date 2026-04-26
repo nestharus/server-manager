@@ -204,10 +204,11 @@ assert_infisical_identity_bootstrap_script() {
   if grep -q '^UA_SECRET_NAME="infisical-operator-auth"$' "$script" \
     && grep -q '^UA_SECRET_NAMESPACE="infisical-system"$' "$script" \
     && grep -q -- '--from-literal=clientId=' "$script" \
-    && grep -q -- '--from-literal=clientSecret=' "$script"; then
-    pass "Operator UA Secret is kubectl-applied with clientId/clientSecret"
+    && grep -q -- '--from-literal=clientSecret=' "$script" \
+    && grep -q -- '--from-literal=organizationId=' "$script"; then
+    pass "Operator UA Secret is kubectl-applied with clientId/clientSecret/organizationId"
   else
-    fail "Operator UA Secret is kubectl-applied with clientId/clientSecret"
+    fail "Operator UA Secret is kubectl-applied with clientId/clientSecret/organizationId"
   fi
 
   if grep -q 'universalAuth:' "$operator_crd" \
@@ -780,7 +781,7 @@ expected = {
     ("spec", "hostAPI"): "http://infisical.infisical-system.svc.cluster.local:8080",
     ("scope", "projectSlug"): "platform-storage",
     ("scope", "envSlug"): "local",
-    ("scope", "secretsPath"): "/object-storage/local/",
+    ("scope", "secretsPath"): "/object-storage/local",
     ("creds", "secretName"): "infisical-operator-auth",
     ("creds", "secretNamespace"): "infisical-system",
     ("target", "secretName"): "minio-root",
@@ -1026,6 +1027,8 @@ assert_s3_roundtrip_script() {
 
   assert_file_exists "scripts/test-s3-roundtrip.sh"
   assert_executable "scripts/test-s3-roundtrip.sh"
+  assert_file_exists "tests/validate_object_storage_local.sh"
+  assert_executable "tests/validate_object_storage_local.sh"
 
   if bash "$script" --help >/dev/null; then
     pass "test-s3-roundtrip --help"
@@ -1064,6 +1067,30 @@ assert_s3_roundtrip_script() {
     pass "test-s3-roundtrip implements PUT GET compare DELETE contract"
   else
     fail "test-s3-roundtrip implements PUT GET compare DELETE contract"
+  fi
+}
+
+assert_object_storage_cluster_state() {
+  local kubeconfig_path="$1"
+  local description="$2"
+  local output
+  local status
+
+  set +e
+  output="$(bash "${INFRA_DIR}/tests/validate_object_storage_local.sh" --kubeconfig "$kubeconfig_path" 2>&1)"
+  status=$?
+  set -e
+
+  echo "Object storage validation (${description}):"
+  echo "$output"
+
+  if [[ "$status" -eq 0 ]] \
+    && grep -q 'PUT ok:' <<<"$output" \
+    && grep -q 'GET ok:' <<<"$output" \
+    && grep -q 'PASS: Pod-restart durability verified' <<<"$output"; then
+    pass "object-storage local proof ${description}"
+  else
+    fail "object-storage local proof ${description}"
   fi
 }
 
@@ -2057,6 +2084,7 @@ assert_local_cluster_can_create() {
   kubectl --kubeconfig "$kubeconfig_path" get gitrepository,kustomization -A || true
 
   assert_infisical_runtime_cluster_state "$kubeconfig_path" "after bring-up"
+  assert_object_storage_cluster_state "$kubeconfig_path" "after bring-up"
   assert_postgres_restart_durable "$kubeconfig_path"
 
   expected_sha="$(awk '/^[[:space:]]*source_sha:/ { print $2; exit }' "$marker_file" 2>/dev/null || true)"
@@ -2122,6 +2150,7 @@ assert_local_cluster_can_create() {
   fi
 
   assert_infisical_runtime_cluster_state "$kubeconfig_path" "after second bring-up"
+  assert_object_storage_cluster_state "$kubeconfig_path" "after second bring-up"
 
   set +e
   delete_output="$(bash "${INFRA_DIR}/scripts/delete-local-channel.sh" --channel local 2>&1)"

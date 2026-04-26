@@ -420,6 +420,7 @@ runtime_already_bootstrapped() {
   [[ "$ROTATE" -eq 0 ]] || return 1
   [[ -n "$(existing_ua_secret_value clientId)" ]] || return 1
   [[ -n "$(existing_ua_secret_value clientSecret)" ]] || return 1
+  [[ -n "$(existing_ua_secret_value organizationId)" ]] || return 1
   [[ "$(target_secret_value)" == "$SAMPLE_SECRET_VALUE" ]] || return 1
 }
 
@@ -434,14 +435,17 @@ create_client_secret() {
 apply_ua_secret() {
   local client_id="$1"
   local client_secret="$2"
+  local organization_id="$3"
 
   [[ -n "$client_id" ]] || die "clientId is empty"
   [[ -n "$client_secret" ]] || die "clientSecret is empty"
+  [[ -n "$organization_id" ]] || die "organizationId is empty"
 
   kubectl_cmd create namespace "$UA_SECRET_NAMESPACE" --dry-run=client -o yaml | kubectl_cmd apply -f - >/dev/null
   kubectl_cmd -n "$UA_SECRET_NAMESPACE" create secret generic "$UA_SECRET_NAME" \
     --from-literal=clientId="$client_id" \
     --from-literal=clientSecret="$client_secret" \
+    --from-literal=organizationId="$organization_id" \
     --dry-run=client -o yaml | kubectl_cmd apply -f - >/dev/null
 }
 
@@ -491,5 +495,5 @@ if [[ -z "$CLIENT_SECRET" ]]; then
   CLIENT_SECRET="$(create_client_secret "$IDENTITY_ID")"
 fi
 
-apply_ua_secret "$CLIENT_ID" "$CLIENT_SECRET"
+apply_ua_secret "$CLIENT_ID" "$CLIENT_SECRET" "$ORG_ID"
 log "Applied Secret/${UA_SECRET_NAME} in namespace ${UA_SECRET_NAMESPACE}"
