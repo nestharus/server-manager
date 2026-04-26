@@ -926,6 +926,100 @@ PY
   fi
 }
 
+assert_object_storage_bucket_job() {
+  local storage_dir="${REPO_ROOT}/gitops/channels/local/object-storage"
+  local buckets_dir="${storage_dir}/buckets"
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/object-storage-buckets-rendered.yaml"
+  local py_bin
+
+  assert_repo_file_exists "gitops/channels/local/object-storage/buckets/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/buckets/serviceaccount.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/buckets/job.yaml"
+
+  mkdir -p "$(dirname "$rendered")"
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$storage_dir" >"$rendered"; then
+    pass "kubectl kustomize object-storage bucket Job"
+  else
+    fail "kubectl kustomize object-storage bucket Job"
+    return
+  fi
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(ClusterRole|ClusterRoleBinding|Role|RoleBinding|CronJob)[[:space:]]*$' "$buckets_dir"; then
+    fail "bucket Job excludes RBAC bindings and CronJob"
+  else
+    pass "bucket Job excludes RBAC bindings and CronJob"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "bucket Job rendered manifest contract"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+by_kind_name = {(doc.get("kind"), doc.get("metadata", {}).get("name")): doc for doc in docs}
+
+sa = by_kind_name.get(("ServiceAccount", "create-sample-bucket"))
+if sa is None:
+    raise SystemExit("ServiceAccount/create-sample-bucket missing")
+if sa.get("metadata", {}).get("namespace") != "minio-system":
+    raise SystemExit("bucket ServiceAccount wrong namespace")
+if sa.get("automountServiceAccountToken") is not False:
+    raise SystemExit("bucket ServiceAccount must disable token automount")
+
+job = by_kind_name.get(("Job", "create-sample-bucket"))
+if job is None:
+    raise SystemExit("Job/create-sample-bucket missing")
+metadata = job.get("metadata", {})
+if metadata.get("namespace") != "minio-system":
+    raise SystemExit("bucket Job wrong namespace")
+if "ttlSecondsAfterFinished" in job.get("spec", {}):
+    raise SystemExit("bucket Job must not set ttlSecondsAfterFinished")
+template = job.get("spec", {}).get("template", {}).get("spec", {})
+if template.get("serviceAccountName") != "create-sample-bucket":
+    raise SystemExit("bucket Job must use create-sample-bucket ServiceAccount")
+if template.get("automountServiceAccountToken") is not False:
+    raise SystemExit("bucket Job must disable token automount")
+if template.get("restartPolicy") != "OnFailure":
+    raise SystemExit("bucket Job restartPolicy must be OnFailure")
+containers = template.get("containers", [])
+if len(containers) != 1:
+    raise SystemExit("bucket Job must have one container")
+container = containers[0]
+expected_image = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+if container.get("image") != expected_image:
+    raise SystemExit(f"unexpected mc image: {container.get('image')!r}")
+command = "\n".join(str(part) for part in container.get("command", []))
+for expected in (
+    "mc alias set",
+    "mc ready",
+    "mc mb --ignore-existing local/humility-local-sample",
+):
+    if expected not in command:
+        raise SystemExit(f"missing command fragment: {expected}")
+if "humility-local-sample" not in command or command.count("humility-local-sample") != 1:
+    raise SystemExit("bucket Job must create exactly the sample bucket")
+env = {item.get("name"): item for item in container.get("env", [])}
+for name in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"):
+    ref = env.get(name, {}).get("valueFrom", {}).get("secretKeyRef", {})
+    if ref != {"name": "minio-root", "key": name}:
+        raise SystemExit(f"{name} must come from Secret/minio-root")
+PY
+  then
+    pass "bucket Job rendered manifest contract"
+  else
+    fail "bucket Job rendered manifest contract"
+  fi
+
+  if grep -q 'buckets' "${REPO_ROOT}/gitops/channels/local/object-storage/kustomization.yaml"; then
+    pass "object-storage kustomization includes bucket Job"
+  else
+    fail "object-storage kustomization includes bucket Job"
+  fi
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -2146,6 +2240,11 @@ echo ""
 echo "=== Slice 104.04 raw MinIO manifest validation ==="
 
 assert_object_storage_minio_manifests
+
+echo ""
+echo "=== Slice 104.05 bucket Job manifest validation ==="
+
+assert_object_storage_bucket_job
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create
