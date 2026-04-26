@@ -904,11 +904,32 @@ for name in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"):
     ref = env.get(name, {}).get("valueFrom", {}).get("secretKeyRef", {})
     if ref != {"name": "minio-root", "key": name}:
         raise SystemExit(f"{name} must come from Secret/minio-root")
+pod_security = template.get("securityContext", {})
+if pod_security.get("runAsNonRoot") is not True or pod_security.get("fsGroup") != 1000:
+    raise SystemExit(f"Deployment/minio pod securityContext mismatch: {pod_security!r}")
+security = container.get("securityContext", {})
+expected_security = {
+    "runAsNonRoot": True,
+    "runAsUser": 1000,
+    "runAsGroup": 1000,
+    "allowPrivilegeEscalation": False,
+    "readOnlyRootFilesystem": True,
+    "capabilities": {"drop": ["ALL"]},
+    "seccompProfile": {"type": "RuntimeDefault"},
+}
+if security != expected_security:
+    raise SystemExit(f"Deployment/minio container securityContext mismatch: {security!r}")
 resources = container.get("resources", {})
-if resources.get("requests") != {"cpu": "250m", "memory": "512Mi"}:
+if resources.get("requests") != {"cpu": "500m", "memory": "512Mi"}:
     raise SystemExit(f"request mismatch: {resources.get('requests')!r}")
 if resources.get("limits") != {"cpu": "1", "memory": "1Gi"}:
     raise SystemExit(f"limit mismatch: {resources.get('limits')!r}")
+volume_mounts = {item.get("name"): item.get("mountPath") for item in container.get("volumeMounts", [])}
+if volume_mounts.get("data") != "/data" or volume_mounts.get("tmp") != "/tmp":
+    raise SystemExit(f"Deployment/minio volume mounts mismatch: {volume_mounts!r}")
+volumes = {item.get("name"): item for item in template.get("volumes", [])}
+if "persistentVolumeClaim" not in volumes.get("data", {}) or "emptyDir" not in volumes.get("tmp", {}):
+    raise SystemExit(f"Deployment/minio volumes mismatch: {volumes!r}")
 for probe in ("livenessProbe", "readinessProbe"):
     http_get = container.get(probe, {}).get("httpGet", {})
     if http_get.get("port") != "s3" or not str(http_get.get("path", "")).startswith("/minio/health/"):
@@ -985,6 +1006,9 @@ if template.get("automountServiceAccountToken") is not False:
     raise SystemExit("bucket Job must disable token automount")
 if template.get("restartPolicy") != "OnFailure":
     raise SystemExit("bucket Job restartPolicy must be OnFailure")
+pod_security = template.get("securityContext", {})
+if pod_security.get("runAsNonRoot") is not True or pod_security.get("fsGroup") != 1000:
+    raise SystemExit(f"bucket Job pod securityContext mismatch: {pod_security!r}")
 containers = template.get("containers", [])
 if len(containers) != 1:
     raise SystemExit("bucket Job must have one container")
@@ -992,6 +1016,18 @@ container = containers[0]
 expected_image = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
 if container.get("image") != expected_image:
     raise SystemExit(f"unexpected mc image: {container.get('image')!r}")
+security = container.get("securityContext", {})
+expected_security = {
+    "runAsNonRoot": True,
+    "runAsUser": 1000,
+    "runAsGroup": 1000,
+    "allowPrivilegeEscalation": False,
+    "readOnlyRootFilesystem": True,
+    "capabilities": {"drop": ["ALL"]},
+    "seccompProfile": {"type": "RuntimeDefault"},
+}
+if security != expected_security:
+    raise SystemExit(f"bucket Job container securityContext mismatch: {security!r}")
 command = "\n".join(str(part) for part in container.get("command", []))
 for expected in (
     "mc alias set",
@@ -1007,6 +1043,12 @@ for name in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"):
     ref = env.get(name, {}).get("valueFrom", {}).get("secretKeyRef", {})
     if ref != {"name": "minio-root", "key": name}:
         raise SystemExit(f"{name} must come from Secret/minio-root")
+volume_mounts = {item.get("name"): item.get("mountPath") for item in container.get("volumeMounts", [])}
+if volume_mounts.get("tmp") != "/tmp":
+    raise SystemExit(f"bucket Job tmp volume mount mismatch: {volume_mounts!r}")
+volumes = {item.get("name"): item for item in template.get("volumes", [])}
+if "emptyDir" not in volumes.get("tmp", {}):
+    raise SystemExit(f"bucket Job tmp volume mismatch: {volumes!r}")
 PY
   then
     pass "bucket Job rendered manifest contract"

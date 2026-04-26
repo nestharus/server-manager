@@ -459,7 +459,7 @@ need_command base64
 resolve_channel_infisical
 wait_for_server
 if runtime_already_bootstrapped; then
-  log "Infisical runtime identity and sample Secret already bootstrapped"
+  log "Infisical runtime identity and sample Secret already bootstrapped for channel ${CHANNEL}"
   exit 0
 fi
 start_port_forward
@@ -496,4 +496,4 @@ if [[ -z "$CLIENT_SECRET" ]]; then
 fi
 
 apply_ua_secret "$CLIENT_ID" "$CLIENT_SECRET" "$ORG_ID"
-log "Applied Secret/${UA_SECRET_NAME} in namespace ${UA_SECRET_NAMESPACE}"
+log "Applied Secret/${UA_SECRET_NAME} in namespace ${UA_SECRET_NAMESPACE} for channel ${CHANNEL}"
