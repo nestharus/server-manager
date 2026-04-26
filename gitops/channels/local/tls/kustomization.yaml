@@ -5,3 +5,4 @@ resources:
   - step-ca
   - step-issuer
   - local-issuer
+  - sample-certificate

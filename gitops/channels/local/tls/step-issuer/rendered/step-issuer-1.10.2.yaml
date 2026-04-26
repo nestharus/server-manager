@@ -274,6 +274,7 @@ metadata:
     app.kubernetes.io/name: step-issuer
     app.kubernetes.io/instance: step-issuer
     app.kubernetes.io/version: 0.10.2
+  namespace: step-issuer-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

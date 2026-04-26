@@ -7,7 +7,7 @@ image:
 bootstrap:
   image:
     repository: cr.smallstep.com/smallstep/step-ca-bootstrap
-    tag: "0.30.2"
+    tag: "latest@sha256:5270356cf91596afe18478eab60c6c0866b2cc62618f282d42827e58f84d6eae"
     pullPolicy: IfNotPresent
 ca:
   name: Humility Local CA
@@ -22,7 +22,7 @@ ca:
     size: 1Gi
   bootstrap:
     postInitHook: |
-      step ca provisioner add acme --type ACME --force --ca-config "$(step path)/config/ca.json"
+      step ca provisioner add acme --type ACME --ca-config "$(step path)/config/ca.json"
 resources:
   requests:
     cpu: 50m

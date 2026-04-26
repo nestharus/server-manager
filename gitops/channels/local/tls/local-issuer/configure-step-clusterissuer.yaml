@@ -71,7 +71,7 @@ spec:
         fsGroup: 1001
       containers:
         - name: kubectl
-          image: bitnami/kubectl:1.34.1
+          image: bitnami/kubectl@sha256:98736aabcecb8d3cbcdcd7b132d14b1d67ed99bac2f06d471f06235933103df3
           imagePullPolicy: IfNotPresent
           securityContext:
             runAsNonRoot: true
