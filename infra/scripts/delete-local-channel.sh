@@ -84,6 +84,17 @@ cluster_exists() {
   k3d cluster get "$cluster_name" >/dev/null 2>&1
 }
 
+delete_nested_app_clusters() {
+  local nested_cluster="humility-${CHANNEL_ID}-app"
+
+  if k3d cluster get "$nested_cluster" >/dev/null 2>&1; then
+    log "Deleting nested app k3d cluster '${nested_cluster}'"
+    k3d cluster delete "$nested_cluster"
+  else
+    log "nested app k3d cluster '${nested_cluster}' already gone"
+  fi
+}
+
 cleanup_flux_resources() {
   if [[ ! -f "$kubeconfig_path" ]] || ! command -v kubectl >/dev/null 2>&1; then
     log "Skipping Flux cleanup because kubeconfig or kubectl is unavailable"
@@ -128,6 +139,7 @@ main() {
   kubeconfig_path="${kubeconfig_path/#\~/$HOME}"
 
   if cluster_exists; then
+    delete_nested_app_clusters
     cleanup_flux_resources
     log "Deleting k3d cluster '${cluster_name}'"
     k3d cluster delete "$cluster_name"

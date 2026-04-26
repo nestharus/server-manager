@@ -1940,6 +1940,29 @@ assert_tls_dns_cluster_state() {
   fi
 }
 
+assert_app_cluster_cluster_state() {
+  local kubeconfig_path="$1"
+  local description="$2"
+  local output
+  local status
+
+  set +e
+  output="$(bash "${INFRA_DIR}/tests/validate_app_clusters_local.sh" --kubeconfig "$kubeconfig_path" 2>&1)"
+  status=$?
+  set -e
+
+  echo "App-cluster validation (${description}):"
+  echo "$output"
+
+  if [[ "$status" -eq 0 ]] \
+    && grep -q 'PASS: AppCluster/local-sample Ready=True' <<<"$output" \
+    && grep -q 'PASS: nested k3d cluster humility-local-app nodes Ready' <<<"$output"; then
+    pass "app-cluster local proof ${description}"
+  else
+    fail "app-cluster local proof ${description}"
+  fi
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -2963,6 +2986,7 @@ assert_local_cluster_can_create() {
   assert_infisical_runtime_cluster_state "$kubeconfig_path" "after bring-up"
   assert_object_storage_cluster_state "$kubeconfig_path" "after bring-up"
   assert_tls_dns_cluster_state "$kubeconfig_path" "after bring-up"
+  assert_app_cluster_cluster_state "$kubeconfig_path" "after bring-up"
   assert_postgres_restart_durable "$kubeconfig_path"
 
   expected_sha="$(awk '/^[[:space:]]*source_sha:/ { print $2; exit }' "$marker_file" 2>/dev/null || true)"
@@ -3030,6 +3054,7 @@ assert_local_cluster_can_create() {
   assert_infisical_runtime_cluster_state "$kubeconfig_path" "after second bring-up"
   assert_object_storage_cluster_state "$kubeconfig_path" "after second bring-up"
   assert_tls_dns_cluster_state "$kubeconfig_path" "after second bring-up"
+  assert_app_cluster_cluster_state "$kubeconfig_path" "after second bring-up"
 
   set +e
   delete_output="$(bash "${INFRA_DIR}/scripts/delete-local-channel.sh" --channel local 2>&1)"
@@ -3059,6 +3084,275 @@ assert_local_cluster_can_create() {
   else
     echo "$second_delete_output"
     fail "second delete is an idempotent no-op"
+  fi
+}
+
+assert_app_cluster_channel_schema() {
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/app-cluster-channel"
+  local local_resolved="${tmp_dir}/local.resolved.json"
+  local dev_resolved="${tmp_dir}/dev.resolved.json"
+  local registry="${tmp_dir}/channels"
+  local py_bin
+
+  if ! py_bin="$(python_bin)"; then
+    fail "python interpreter available for app_cluster channel validation"
+    return
+  fi
+
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel local --out "$local_resolved" \
+    && "$py_bin" - "$local_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+app = data.get("app_cluster")
+expected = {
+    "provider": "crossplane",
+    "claim_namespace": "platform-app-clusters",
+    "sample_claim_name": "local-sample",
+    "crossplane_namespace": "crossplane-system",
+    "provider_kubernetes_package": "xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.18.0",
+    "provider_vultr_package": "xpkg.upbound.io/crossplane-contrib/provider-vultr:v0.2.0",
+    "local": {
+        "target": "k3d-local",
+        "cluster_name": "humility-local-app",
+        "servers": 1,
+        "agents": 0,
+        "docker_socket_hostpath": "/var/run/docker.sock",
+    },
+    "vultr": {
+        "credentials_secret_name": "vultr-creds",
+        "credentials_secret_namespace": "crossplane-system",
+        "credentials_secret_key": "credentials",
+        "infisical_project": "platform-vultr",
+        "infisical_path": "/api",
+    },
+}
+if app != expected:
+    raise SystemExit(f"unexpected local app_cluster block: {app!r}")
+PY
+  then
+    pass "local channel resolves with required app_cluster block"
+  else
+    fail "local channel resolves with required app_cluster block"
+  fi
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel dev --out "$dev_resolved" \
+    && "$py_bin" - "$dev_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+app = data.get("app_cluster")
+if app is None:
+    raise SystemExit("dev app_cluster block is absent")
+if app.get("provider") != "crossplane":
+    raise SystemExit(app)
+if app.get("vultr", {}).get("infisical_project") != "platform-vultr":
+    raise SystemExit(app)
+if app.get("vultr", {}).get("server_plan") != "vc2-2c-4gb":
+    raise SystemExit(app)
+PY
+  then
+    pass "dev channel resolves with Vultr app_cluster contract block"
+  else
+    fail "dev channel resolves with Vultr app_cluster contract block"
+  fi
+
+  if "$py_bin" - "${INFRA_DIR}/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import resolve_platform_channel as resolver
+
+resolved = resolver.resolve_channel("local-child")
+if resolved.get("app_cluster", {}).get("provider") != "crossplane":
+    raise SystemExit(f"local-child did not inherit app_cluster: {resolved.get('app_cluster')!r}")
+PY
+  then
+    pass "local child channel inherits app_cluster block"
+  else
+    fail "local child channel inherits app_cluster block"
+  fi
+
+  rm -rf "$registry"
+  cp -R "${INFRA_DIR}/channels" "$registry"
+  if "$py_bin" - "${registry}/local.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data.pop("app_cluster", None)
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+  then
+    if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+      fail "local k3d channel without app_cluster fails schema validation"
+    else
+      pass "local k3d channel without app_cluster fails schema validation"
+    fi
+  else
+    fail "local k3d channel without app_cluster fails schema validation"
+  fi
+
+  for alias in crossplane appclusters app_cluster_provider vultr_api_token; do
+    rm -rf "$registry"
+    cp -R "${INFRA_DIR}/channels" "$registry"
+    if "$py_bin" - "${registry}/local.yaml" "$alias" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+alias = sys.argv[2]
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data[alias] = {"rejected": True}
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+    then
+      if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+        fail "app_cluster alias ${alias} is rejected"
+      else
+        pass "app_cluster alias ${alias} is rejected"
+      fi
+    else
+      fail "app_cluster alias ${alias} is rejected"
+    fi
+  done
+}
+
+assert_app_cluster_manifests() {
+  local app_dir="${REPO_ROOT}/gitops/channels/local/app-clusters"
+  local remote_dir="${REPO_ROOT}/gitops/contracts/remote/app-clusters"
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/app-clusters-rendered.yaml"
+  local remote_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/app-clusters-remote-rendered.yaml"
+  local py_bin
+
+  for file in \
+    "gitops/channels/local/app-clusters/kustomization.yaml" \
+    "gitops/channels/local/app-clusters/crossplane/core/rendered/crossplane-1.20.7.yaml" \
+    "gitops/channels/local/app-clusters/providers/provider-kubernetes.yaml" \
+    "gitops/channels/local/app-clusters/providers/provider-vultr.yaml" \
+    "gitops/channels/local/app-clusters/provider-configs/vultr-token-infisicalsecret.yaml" \
+    "gitops/channels/local/app-clusters/xrd/appcluster-xrd.yaml" \
+    "gitops/channels/local/app-clusters/compositions/appcluster-k3d-local.yaml" \
+    "gitops/channels/local/app-clusters/compositions/appcluster-vultr-vms.yaml" \
+    "gitops/channels/local/app-clusters/claims/local-sample-appcluster.yaml" \
+    "gitops/contracts/remote/app-clusters/kustomization.yaml" \
+    "infra/tests/validate_app_clusters_local.sh"; do
+    assert_repo_file_exists "$file"
+  done
+
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$app_dir" >"$rendered"; then
+    pass "kubectl kustomize local app-clusters manifests"
+  else
+    fail "kubectl kustomize local app-clusters manifests"
+    return
+  fi
+
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$remote_dir" >"$remote_rendered"; then
+    pass "kubectl kustomize remote app-clusters contract"
+  else
+    fail "kubectl kustomize remote app-clusters contract"
+    return
+  fi
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(HelmRelease|OCIRepository|HelmRepository)[[:space:]]*$' "$app_dir"; then
+    fail "Crossplane app-cluster install excludes runtime Helm resources"
+  else
+    pass "Crossplane app-cluster install excludes runtime Helm resources"
+  fi
+
+  if grep -q -- '--volume "/var/run/docker.sock:/var/run/docker.sock@all"' "${INFRA_DIR}/scripts/bring-up-local-channel.sh" \
+    && grep -q 'delete_nested_app_clusters' "${INFRA_DIR}/scripts/delete-local-channel.sh"; then
+    pass "local channel exposes and cleans nested k3d Docker socket contract"
+  else
+    fail "local channel exposes and cleans nested k3d Docker socket contract"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "app-cluster rendered manifest contract"
+  elif "$py_bin" - "$rendered" "$remote_rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+local_docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+remote_docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[2]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+docs = local_docs + remote_docs
+by_kind_name = {(doc.get("kind"), doc.get("metadata", {}).get("name")): doc for doc in docs}
+
+for kind, name in {
+    ("Namespace", "crossplane-system"),
+    ("Provider", "provider-kubernetes"),
+    ("Provider", "provider-vultr"),
+    ("ProviderConfig", "in-cluster"),
+    ("ProviderConfig", "default"),
+    ("CompositeResourceDefinition", "xappclusters.platform.humility.gg"),
+    ("Composition", "appcluster-k3d-local"),
+    ("Composition", "appcluster-vultr-vms"),
+    ("AppCluster", "local-sample"),
+}:
+    if by_kind_name.get((kind, name)) is None:
+        raise SystemExit(f"{kind}/{name} missing")
+
+packages = {
+    doc["metadata"]["name"]: doc.get("spec", {}).get("package")
+    for doc in docs
+    if doc.get("kind") == "Provider"
+}
+if packages.get("provider-kubernetes") != "xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.18.0":
+    raise SystemExit(packages)
+if packages.get("provider-vultr") != "xpkg.upbound.io/crossplane-contrib/provider-vultr:v0.2.0":
+    raise SystemExit(packages)
+
+provider_config = by_kind_name[("ProviderConfig", "default")]
+secret_ref = provider_config.get("spec", {}).get("credentials", {}).get("secretRef", {})
+if secret_ref != {"namespace": "crossplane-system", "name": "vultr-creds", "key": "credentials"}:
+    raise SystemExit(f"Vultr ProviderConfig secret mismatch: {secret_ref!r}")
+
+infisical = by_kind_name.get(("InfisicalSecret", "vultr-creds"))
+scope = infisical.get("spec", {}).get("authentication", {}).get("universalAuth", {}).get("secretsScope", {})
+if scope.get("projectSlug") != "platform-vultr" or scope.get("secretsPath") != "/api":
+    raise SystemExit(f"Vultr token must come from Infisical platform-vultr /api: {scope!r}")
+
+claim = by_kind_name[("AppCluster", "local-sample")]
+params = claim.get("spec", {}).get("parameters", {})
+if params.get("target") != "k3d-local" or params.get("local", {}).get("clusterName") != "humility-local-app":
+    raise SystemExit(f"local sample AppCluster mismatch: {params!r}")
+
+local_comp = by_kind_name[("Composition", "appcluster-k3d-local")]
+job = local_comp["spec"]["resources"][0]["base"]["spec"]["forProvider"]["manifest"]
+container = job["spec"]["template"]["spec"]["containers"][0]
+if container.get("image") != "docker:29.0.4-cli":
+    raise SystemExit(f"nested k3d Job image mismatch: {container.get('image')!r}")
+script = container.get("command", [])[-1]
+for fragment in ("k3d cluster create", "--image \"rancher/k3s:${image_tag}\"", "/var/run/docker.sock"):
+    if fragment not in script and fragment not in yaml.safe_dump(job):
+        raise SystemExit(f"nested k3d composition missing {fragment!r}")
+
+remote_comp = by_kind_name[("Composition", "appcluster-vultr-vms")]
+server = remote_comp["spec"]["resources"][0]["base"]
+if server.get("apiVersion") != "vultr.vultr.upbound.io/v1alpha1" or server.get("kind") != "Instance":
+    raise SystemExit("remote composition must create Vultr Instance")
+user_data = server.get("spec", {}).get("forProvider", {}).get("userData", "")
+for fragment in ("#cloud-config", "INSTALL_K3S_VERSION=v1.32.13+k3s1", "/etc/k3s-install-marker", "/root/humility-k3s.yaml"):
+    if fragment not in user_data:
+        raise SystemExit(f"remote composition cloud-init missing {fragment!r}")
+PY
+  then
+    pass "app-cluster rendered manifest contract"
+  else
+    fail "app-cluster rendered manifest contract"
   fi
 }
 
@@ -3220,6 +3514,16 @@ echo ""
 echo "=== Slice 105.06 sample Certificate and DNS proof validation ==="
 
 assert_tls_sample_certificate_manifests
+
+echo ""
+echo "=== Slice 106.01 app-cluster channel schema validation ==="
+
+assert_app_cluster_channel_schema
+
+echo ""
+echo "=== Slice 106.02 Crossplane app-cluster manifest validation ==="
+
+assert_app_cluster_manifests
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="
