@@ -49,3 +49,19 @@ object_storage:
   credentials_secret_namespace: minio-system
   infisical_project: platform-storage
   infisical_path: /object-storage/local/
+tls:
+  provider: step-ca
+  local_cluster_issuer_name: humility-local-step-ca
+  step_ca_namespace: step-ca-system
+  step_ca_service_name: step-ca
+  step_issuer_namespace: step-issuer-system
+  sample_certificate_namespace: cert-manager-test
+  sample_certificate_name: humility-local-sample
+  local_domain: humility.local
+dns:
+  provider: coredns
+  local_domain: humility.local
+  cluster_domain: cluster.local
+  coredns_configmap_namespace: kube-system
+  coredns_configmap_name: coredns
+  sample_lookup_name: minio.minio-system.humility.local

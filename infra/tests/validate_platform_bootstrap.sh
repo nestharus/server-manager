@@ -690,6 +690,151 @@ PY
   done
 }
 
+assert_tls_dns_channel_schema() {
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/tls-dns-channel"
+  local local_resolved="${tmp_dir}/local.resolved.json"
+  local dev_resolved="${tmp_dir}/dev.resolved.json"
+  local registry="${tmp_dir}/channels"
+  local py_bin
+
+  if ! py_bin="$(python_bin)"; then
+    fail "python interpreter available for TLS/DNS channel validation"
+    return
+  fi
+
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel local --out "$local_resolved" \
+    && "$py_bin" - "$local_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected_tls = {
+    "provider": "step-ca",
+    "local_cluster_issuer_name": "humility-local-step-ca",
+    "step_ca_namespace": "step-ca-system",
+    "step_ca_service_name": "step-ca",
+    "step_issuer_namespace": "step-issuer-system",
+    "sample_certificate_namespace": "cert-manager-test",
+    "sample_certificate_name": "humility-local-sample",
+    "local_domain": "humility.local",
+}
+expected_dns = {
+    "provider": "coredns",
+    "local_domain": "humility.local",
+    "cluster_domain": "cluster.local",
+    "coredns_configmap_namespace": "kube-system",
+    "coredns_configmap_name": "coredns",
+    "sample_lookup_name": "minio.minio-system.humility.local",
+}
+if data.get("tls") != expected_tls:
+    raise SystemExit(f"unexpected local tls block: {data.get('tls')!r}")
+if data.get("dns") != expected_dns:
+    raise SystemExit(f"unexpected local dns block: {data.get('dns')!r}")
+PY
+  then
+    pass "local channel resolves with required TLS/DNS blocks"
+  else
+    fail "local channel resolves with required TLS/DNS blocks"
+  fi
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel dev --out "$dev_resolved" \
+    && "$py_bin" - "$dev_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if data.get("tls", {}).get("provider") != "acme":
+    raise SystemExit(f"unexpected dev tls block: {data.get('tls')!r}")
+if data.get("dns", {}).get("provider") != "cloudflare":
+    raise SystemExit(f"unexpected dev dns block: {data.get('dns')!r}")
+if data.get("tls", {}).get("acme_server") != "https://acme-staging-v02.api.letsencrypt.org/directory":
+    raise SystemExit(f"dev must use Let's Encrypt staging: {data.get('tls')!r}")
+if data.get("dns", {}).get("infisical_project") != "platform-dns":
+    raise SystemExit(f"dev Cloudflare token must come from platform-dns: {data.get('dns')!r}")
+if "gitops" in data or "infisical" in data:
+    raise SystemExit("dev must keep remote GitOps and Infisical omitted")
+PY
+  then
+    pass "dev channel validates with remote TLS/DNS contract blocks"
+  else
+    fail "dev channel validates with remote TLS/DNS contract blocks"
+  fi
+
+  if "$py_bin" - "${INFRA_DIR}/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import resolve_platform_channel as resolver
+
+resolved = resolver.resolve_channel("local-child")
+if resolved.get("tls", {}).get("local_cluster_issuer_name") != "humility-local-step-ca":
+    raise SystemExit(f"local-child did not inherit tls: {resolved.get('tls')!r}")
+if resolved.get("dns", {}).get("sample_lookup_name") != "minio.minio-system.humility.local":
+    raise SystemExit(f"local-child did not inherit dns: {resolved.get('dns')!r}")
+PY
+  then
+    pass "local child channel inherits TLS/DNS blocks"
+  else
+    fail "local child channel inherits TLS/DNS blocks"
+  fi
+
+  for block in tls dns; do
+    rm -rf "$registry"
+    cp -R "${INFRA_DIR}/channels" "$registry"
+    if "$py_bin" - "${registry}/local.yaml" "$block" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+block = sys.argv[2]
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data.pop(block, None)
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+    then
+      if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+        fail "local k3d channel without ${block} fails schema validation"
+      else
+        pass "local k3d channel without ${block} fails schema validation"
+      fi
+    else
+      fail "local k3d channel without ${block} fails schema validation"
+    fi
+  done
+
+  for alias in certs certificate dns_provider cloudflare_token; do
+    rm -rf "$registry"
+    cp -R "${INFRA_DIR}/channels" "$registry"
+    if "$py_bin" - "${registry}/local.yaml" "$alias" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+alias = sys.argv[2]
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data[alias] = {"rejected": True}
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+    then
+      if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+        fail "TLS/DNS alias ${alias} is rejected"
+      else
+        pass "TLS/DNS alias ${alias} is rejected"
+      fi
+    else
+      fail "TLS/DNS alias ${alias} is rejected"
+    fi
+  done
+}
+
 assert_object_storage_infisical_bootstrap() {
   local script="${INFRA_DIR}/scripts/bootstrap-infisical-storage.sh"
   local storage_dir="${REPO_ROOT}/gitops/channels/local/object-storage/infisical"
@@ -2348,6 +2493,11 @@ echo ""
 echo "=== Slice 104.01 object-storage channel schema validation ==="
 
 assert_object_storage_channel_schema
+
+echo ""
+echo "=== Slice 105.01 TLS/DNS channel schema validation ==="
+
+assert_tls_dns_channel_schema
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="
