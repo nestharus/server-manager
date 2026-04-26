@@ -3,11 +3,6 @@ variable "channel_id" {
   description = "Channel identifier used for names, tags, and labels; no default; required"
 }
 
-variable "cluster_name" {
-  type        = string
-  description = "Cluster name passed as the VM label and tag; no default; required"
-}
-
 variable "region" {
   type        = string
   description = "Vultr region code, for example ewr; no default; required"
@@ -25,7 +20,8 @@ variable "k3s_version" {
 
 variable "server_count" {
   type        = number
-  description = "Number of remote server VMs for the channel; no default; required"
+  default     = 1
+  description = "Number of remote server VMs for INIT-101. Default: 1."
 
   validation {
     condition     = var.server_count >= 1
@@ -35,12 +31,14 @@ variable "server_count" {
 
 variable "server_plan" {
   type        = string
-  description = "Vultr instance plan for server VMs; no default; required"
+  default     = "vc2-2c-4gb"
+  description = "Vultr instance plan for server VMs. Default: vc2-2c-4gb."
 }
 
 variable "agent_count" {
   type        = number
-  description = "Number of remote agent VMs for the channel; no default; required"
+  default     = 0
+  description = "Number of remote agent VMs for INIT-101. Default: 0."
 
   validation {
     condition     = var.agent_count >= 0
@@ -50,16 +48,36 @@ variable "agent_count" {
 
 variable "agent_plan" {
   type        = string
-  description = "Vultr instance plan for agent VMs; no default; required"
-}
-
-variable "os_id" {
-  type        = number
-  default     = 1743
-  description = "Vultr OS ID for Ubuntu 22.04 LTS x64. Default: 1743."
+  default     = "vc2-2c-4gb"
+  description = "Vultr instance plan for future agent VMs. Default: vc2-2c-4gb."
 }
 
 variable "ssh_key_ids" {
   type        = list(string)
   description = "Operator-supplied Vultr SSH key IDs for apply-capable remote channels; no default; required"
+}
+
+variable "allowed_ssh_cidrs" {
+  type        = list(string)
+  description = "CIDRs allowed to reach SSH on remote VMs; no default; required"
+
+  validation {
+    condition = alltrue([
+      for cidr in var.allowed_ssh_cidrs : can(cidrhost(cidr, 0)) && length(split("/", cidr)) == 2
+    ])
+    error_message = "allowed_ssh_cidrs must contain valid CIDR strings."
+  }
+}
+
+variable "remote_kubeconfig_path" {
+  type        = string
+  default     = "/root/humility-k3s.yaml"
+  description = "Path where cloud-init copies the server kubeconfig. Default: /root/humility-k3s.yaml."
+}
+
+variable "firewall_name" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Optional explicit firewall group name. Default: null."
 }

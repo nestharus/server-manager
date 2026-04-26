@@ -1,3 +1,5 @@
 bucket = "humility-tfstate"
 key = "channels/dev/terraform.tfstate"
 region = "ewr"
+endpoint = "https://ewr1.vultrobjects.com"
+skip_credentials_validation = true

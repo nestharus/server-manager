@@ -45,6 +45,8 @@ def _load_json(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
+    except FileNotFoundError as exc:
+        raise ChannelError("file_not_found", str(path), f"file not found: {path}") from exc
     except json.JSONDecodeError as exc:
         raise ChannelError("schema_invalid", str(path), f"invalid JSON schema: {exc}") from exc
 
@@ -122,6 +124,8 @@ def load_source_channel(channel_id: str, requester: str | None = None) -> dict[s
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
+    except FileNotFoundError as exc:
+        raise ChannelError("file_not_found", channel_id, f"channel file not found: {path}") from exc
     except yaml.YAMLError as exc:
         raise ChannelError("schema_invalid", channel_id, f"invalid YAML: {exc}") from exc
 
@@ -195,6 +199,11 @@ def resolve_channel(channel_id: str) -> dict[str, Any]:
     resolved = _resolve_unvalidated(channel_id, [])
     resolved.pop("parent", None)
     _assert_no_target_merge_conflict(resolved, channel_id)
+    state = resolved.get("state")
+    if isinstance(state, dict) and "endpoint" not in state:
+        region = state.get("region")
+        if isinstance(region, str) and region:
+            state["endpoint"] = f"https://{region}1.vultrobjects.com"
     validate_resolved_channel(resolved, channel_id)
     return resolved
 

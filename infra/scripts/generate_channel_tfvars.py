@@ -11,12 +11,16 @@ from typing import Any
 from resolve_platform_channel import ChannelError, write_error
 
 
-DEFAULT_VULTR_AGENT_PLAN = "vc2-1c-2gb"
+DEFAULT_VULTR_AGENT_PLAN = "vc2-2c-4gb"
+DEFAULT_REMOTE_KUBECONFIG_PATH = "/root/humility-k3s.yaml"
 
 
 def _load_resolved(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError as exc:
+        raise ChannelError("file_not_found", "resolved", f"resolved channel file not found: {path}") from exc
     if not isinstance(data, dict):
         raise ValueError("resolved channel JSON must contain an object")
     return data
@@ -35,7 +39,7 @@ def _required_string(value: Any, name: str) -> str:
 
 
 def _required_int(value: Any, name: str) -> int:
-    if not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{name} must be an integer")
     return value
 
@@ -56,6 +60,18 @@ def _ssh_key_ids(vultr_vms: dict[str, Any]) -> list[str]:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ValueError("cluster.vultr_vms.ssh_key_ids must be a list of strings")
     return raw
+
+
+def _optional_string(value: Any, name: str) -> str | None:
+    if value is None:
+        return None
+    return _required_string(value, name)
+
+
+def _string_list(value: Any, name: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{name} must be a list of strings")
+    return value
 
 
 def tfvars_payload(resolved: dict[str, Any]) -> dict[str, Any]:
@@ -91,12 +107,24 @@ def tfvars_payload(resolved: dict[str, Any]) -> dict[str, Any]:
         agents = _required_mapping(vultr_vms.get("agents"), "cluster.vultr_vms.agents")
         payload.update(
             {
+                "vultr_allowed_ssh_cidrs": _string_list(
+                    vultr_vms.get("allowed_ssh_cidrs", []),
+                    "cluster.vultr_vms.allowed_ssh_cidrs",
+                ),
                 "vultr_agent_count": _required_int(agents.get("count"), "cluster.vultr_vms.agents.count"),
                 "vultr_agent_plan": _required_string(
                     agents.get("plan", DEFAULT_VULTR_AGENT_PLAN),
                     "cluster.vultr_vms.agents.plan",
                 ),
+                "vultr_firewall_name": _optional_string(
+                    vultr_vms.get("firewall_name"),
+                    "cluster.vultr_vms.firewall_name",
+                ),
                 "vultr_region": _required_string(vultr_vms.get("region"), "cluster.vultr_vms.region"),
+                "vultr_remote_kubeconfig_path": _required_string(
+                    vultr_vms.get("remote_kubeconfig_path", DEFAULT_REMOTE_KUBECONFIG_PATH),
+                    "cluster.vultr_vms.remote_kubeconfig_path",
+                ),
                 "vultr_server_count": _required_int(servers.get("count"), "cluster.vultr_vms.servers.count"),
                 "vultr_server_plan": _required_string(servers.get("plan"), "cluster.vultr_vms.servers.plan"),
                 "vultr_ssh_key_ids": _ssh_key_ids(vultr_vms),
@@ -126,6 +154,9 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(render_tfvars(resolved), encoding="utf-8")
         return 0
+    except ChannelError as exc:
+        write_error(exc)
+        return 1
     except (ValueError, KeyError, json.JSONDecodeError) as exc:
         write_error(ChannelError("schema_invalid", "resolved", str(exc)))
         return 1

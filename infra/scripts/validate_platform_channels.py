@@ -21,6 +21,8 @@ def _load_yaml(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
+    except FileNotFoundError as exc:
+        raise ChannelError("file_not_found", path.stem, f"channel file not found: {path}") from exc
     except yaml.YAMLError as exc:
         raise ChannelError("schema_invalid", path.stem, f"invalid YAML: {exc}") from exc
 

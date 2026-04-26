@@ -141,7 +141,6 @@ path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 expected = {
     "channel_id",
-    "cluster_name",
     "region",
     "vpc_id",
     "k3s_version",
@@ -149,8 +148,10 @@ expected = {
     "server_plan",
     "agent_count",
     "agent_plan",
-    "os_id",
     "ssh_key_ids",
+    "allowed_ssh_cidrs",
+    "remote_kubeconfig_path",
+    "firewall_name",
 }
 
 blocks = {}
