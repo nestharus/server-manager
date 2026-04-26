@@ -69,6 +69,9 @@
     },
     "dns": {
       "$ref": "#/$defs/dns"
+    },
+    "app_cluster": {
+      "$ref": "#/$defs/appCluster"
     }
   },
   "allOf": [
@@ -114,7 +117,8 @@
           "infisical",
           "object_storage",
           "tls",
-          "dns"
+          "dns",
+          "app_cluster"
         ],
         "properties": {
           "object_storage": {
@@ -220,6 +224,93 @@
               },
               "sample_lookup_name": {
                 "const": "minio.minio-system.humility.local"
+              }
+            }
+          },
+          "app_cluster": {
+            "required": [
+              "provider",
+              "claim_namespace",
+              "sample_claim_name",
+              "crossplane_namespace",
+              "provider_kubernetes_package",
+              "provider_vultr_package",
+              "local",
+              "vultr"
+            ],
+            "properties": {
+              "provider": {
+                "const": "crossplane"
+              },
+              "claim_namespace": {
+                "const": "platform-app-clusters"
+              },
+              "sample_claim_name": {
+                "const": "local-sample"
+              },
+              "crossplane_namespace": {
+                "const": "crossplane-system"
+              },
+              "provider_kubernetes_package": {
+                "const": "xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.18.0"
+              },
+              "provider_vultr_package": {
+                "const": "xpkg.upbound.io/crossplane-contrib/provider-vultr:v0.2.0"
+              },
+              "local": {
+                "required": [
+                  "target",
+                  "cluster_name",
+                  "servers",
+                  "agents",
+                  "docker_socket_hostpath"
+                ],
+                "properties": {
+                  "target": {
+                    "const": "k3d-local"
+                  },
+                  "cluster_name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]*$"
+                  },
+                  "servers": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "agents": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "docker_socket_hostpath": {
+                    "const": "/var/run/docker.sock"
+                  }
+                }
+              },
+              "vultr": {
+                "required": [
+                  "credentials_secret_name",
+                  "credentials_secret_namespace",
+                  "credentials_secret_key",
+                  "infisical_project",
+                  "infisical_path"
+                ],
+                "properties": {
+                  "credentials_secret_name": {
+                    "const": "vultr-creds"
+                  },
+                  "credentials_secret_namespace": {
+                    "const": "crossplane-system"
+                  },
+                  "credentials_secret_key": {
+                    "const": "credentials"
+                  },
+                  "infisical_project": {
+                    "const": "platform-vultr"
+                  },
+                  "infisical_path": {
+                    "const": "/api"
+                  }
+                }
               }
             }
           }
@@ -856,6 +947,111 @@
         "infisical_path": {
           "type": "string",
           "pattern": "^/dns/[a-z0-9][a-z0-9-]*/$"
+        }
+      }
+    },
+    "appCluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "claim_namespace",
+        "sample_claim_name",
+        "crossplane_namespace",
+        "provider_kubernetes_package",
+        "provider_vultr_package",
+        "vultr"
+      ],
+      "properties": {
+        "provider": {
+          "const": "crossplane"
+        },
+        "claim_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "sample_claim_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "crossplane_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "provider_kubernetes_package": {
+          "const": "xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.18.0"
+        },
+        "provider_vultr_package": {
+          "const": "xpkg.upbound.io/crossplane-contrib/provider-vultr:v0.2.0"
+        },
+        "local": {
+          "$ref": "#/$defs/appClusterLocal"
+        },
+        "vultr": {
+          "$ref": "#/$defs/appClusterVultr"
+        }
+      }
+    },
+    "appClusterLocal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "cluster_name",
+        "servers",
+        "agents",
+        "docker_socket_hostpath"
+      ],
+      "properties": {
+        "target": {
+          "const": "k3d-local"
+        },
+        "cluster_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "servers": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "agents": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "docker_socket_hostpath": {
+          "const": "/var/run/docker.sock"
+        }
+      }
+    },
+    "appClusterVultr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "credentials_secret_name",
+        "credentials_secret_namespace",
+        "credentials_secret_key",
+        "infisical_project",
+        "infisical_path"
+      ],
+      "properties": {
+        "credentials_secret_name": {
+          "const": "vultr-creds"
+        },
+        "credentials_secret_namespace": {
+          "const": "crossplane-system"
+        },
+        "credentials_secret_key": {
+          "const": "credentials"
+        },
+        "infisical_project": {
+          "const": "platform-vultr"
+        },
+        "infisical_path": {
+          "const": "/api"
+        },
+        "server_plan": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }

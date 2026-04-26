@@ -49,4 +49,18 @@ dns:
   cloudflare_api_token_secret_namespace: external-dns-system
   infisical_project: platform-dns
   infisical_path: /dns/dev/
+app_cluster:
+  provider: crossplane
+  claim_namespace: platform-app-clusters
+  sample_claim_name: dev-sample
+  crossplane_namespace: crossplane-system
+  provider_kubernetes_package: xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.18.0
+  provider_vultr_package: xpkg.upbound.io/crossplane-contrib/provider-vultr:v0.2.0
+  vultr:
+    credentials_secret_name: vultr-creds
+    credentials_secret_namespace: crossplane-system
+    credentials_secret_key: credentials
+    infisical_project: platform-vultr
+    infisical_path: /api
+    server_plan: vc2-2c-4gb
 # gitops is deliberately omitted for INIT-102; dev keeps the single-cluster remote posture until remote Flux wiring is scoped.
