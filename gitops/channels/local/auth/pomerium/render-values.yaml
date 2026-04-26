@@ -7,13 +7,6 @@ config:
   generateTLS: false
   generateSigningKey: false
   insecure: true
-authenticate:
-  idp:
-    provider: oidc
-    clientID: from-infisical
-    clientSecret: from-infisical
-    url: https://auth.local.humility.local/application/o/pomerium/
-    scopes: openid email profile
 databroker:
   storage:
     type: memory
@@ -34,4 +27,3 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-

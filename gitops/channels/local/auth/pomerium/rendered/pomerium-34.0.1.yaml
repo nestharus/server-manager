@@ -190,7 +190,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum: d0b2950d6ee2a5858815890cf46376a92952a69ef14d0ae8ff4781d07c513cdc
+        checksum: 36b0ddba506e8c3ff2777eff770f55bfd6edca5c183d9ecc647aebb14c0680df
       labels:
         app.kubernetes.io/name: pomerium-authenticate
         helm.sh/chart: pomerium-34.0.1
@@ -281,7 +281,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum: d0b2950d6ee2a5858815890cf46376a92952a69ef14d0ae8ff4781d07c513cdc
+        checksum: 36b0ddba506e8c3ff2777eff770f55bfd6edca5c183d9ecc647aebb14c0680df
       labels:
         app.kubernetes.io/name: pomerium-authorize
         helm.sh/chart: pomerium-34.0.1
@@ -368,7 +368,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum: d0b2950d6ee2a5858815890cf46376a92952a69ef14d0ae8ff4781d07c513cdc
+        checksum: 36b0ddba506e8c3ff2777eff770f55bfd6edca5c183d9ecc647aebb14c0680df
       labels:
         app.kubernetes.io/name: pomerium-databroker
         helm.sh/chart: pomerium-34.0.1
@@ -456,7 +456,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum: d0b2950d6ee2a5858815890cf46376a92952a69ef14d0ae8ff4781d07c513cdc
+        checksum: 36b0ddba506e8c3ff2777eff770f55bfd6edca5c183d9ecc647aebb14c0680df
       labels:
         app.kubernetes.io/name: pomerium-proxy
         helm.sh/chart: pomerium-34.0.1

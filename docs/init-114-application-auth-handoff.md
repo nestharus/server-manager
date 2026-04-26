@@ -15,6 +15,8 @@ INIT-114 adds the local-first auth stack under
   - `auth.local.humility.local`
   - `authenticate.local.humility.local`
   - `protected-api.local.humility.local`
+- Local DNS aliases for those hosts live in `gitops/channels/local/dns/` so
+  the CoreDNS `*.humility.local` rewrite resolves them in namespace `local`.
 - API proof endpoint:
   - `GET /api/v1/protected/authz-proof`
   - requires Pomerium identity headers
@@ -59,7 +61,7 @@ Runtime proof checks:
 
 - `Cluster/authentik-postgres` Ready.
 - Authentik server and worker available.
-- Pomerium proxy and authenticate deployments available.
+- Pomerium local all-in-one proxy available.
 - OPAL server/client available and Cedar sample policy bootstrap complete.
 - Cedar returns Allow for the sample user and Deny for a non-sample user.
 - `protected-api.local.humility.local/api/v1/protected/authz-proof` requires

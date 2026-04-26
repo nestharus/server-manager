@@ -9,6 +9,7 @@ metadata:
 spec:
   instances: 1
   imageName: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
+  # LOCAL ONLY: remote channels should use supervised update strategy.
   primaryUpdateStrategy: unsupervised
   resources:
     requests:
@@ -25,4 +26,3 @@ spec:
         name: authentik-postgres-app
   storage:
     size: 2Gi
-

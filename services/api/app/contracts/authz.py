@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel
 
 
 class ProtectedAuthzRead(BaseModel):
     subject: str
     action: str
     resource: str
-    decision: str = Field(pattern="^Allow$")
+    decision: Literal["Allow"] = "Allow"
+
+
+class AuthzErrorDetail(BaseModel):
+    code: str
+    message: str
 
 
 class CedarAuthorizationDecision(BaseModel):
-    decision: str
-
+    decision: Literal["Allow", "Deny"]

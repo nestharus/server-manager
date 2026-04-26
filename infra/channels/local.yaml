@@ -127,6 +127,8 @@ auth_stack:
     infisical_environment: local
     infisical_path: /auth/local/authentik
   pomerium:
+    # INIT-114 intentionally uses Helm-rendered raw manifests for this local
+    # slice. INIT-115 owns remote-channel Pomerium deployment strategy review.
     chart_name: pomerium/pomerium
     chart_version: 34.0.1
     image: pomerium/pomerium:v0.22.1

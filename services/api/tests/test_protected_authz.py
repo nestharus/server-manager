@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 
+from app.contracts.authz import CedarAuthorizationDecision
 from app.infrastructure.authz import (
     CedarAuthorizationRequest,
     CedarAuthorizationUnavailableError,
@@ -26,11 +27,7 @@ class FakeCedarAuthorizer:
         if self.error is not None:
             raise self.error
 
-        class Decision:
-            def __init__(self, value: str) -> None:
-                self.decision = value
-
-        return Decision(self.decision)
+        return CedarAuthorizationDecision(decision=self.decision)
 
 
 async def test_protected_authz_allows_pomerium_identity(
@@ -62,8 +59,13 @@ async def test_protected_authz_allows_pomerium_identity(
 
 
 async def test_protected_authz_rejects_missing_identity(
+    app: FastAPI,
     async_client: AsyncClient,
 ) -> None:
+    app.state.cedar_authorizer = FakeCedarAuthorizer(
+        error=AssertionError("authorizer should not be called without identity")
+    )
+
     response = await async_client.get("/api/v1/protected/authz-proof")
 
     assert response.status_code == 401

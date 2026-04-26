@@ -146,25 +146,32 @@ assert_helm_render_reproducible() {
   local rendered
   command -v helm >/dev/null 2>&1 || die "helm is required"
 
+  ensure_helm_repo "authentik" "https://charts.goauthentik.io"
+  ensure_helm_repo "pomerium" "https://helm.pomerium.io"
+  ensure_helm_repo "permitio" "https://permitio.github.io/opal-helm-chart"
+
   rendered="$(mktemp)"
   TEMP_FILES+=("$rendered")
   helm template authentik authentik/authentik --version 2026.2.2 --namespace auth-system \
     -f "${REPO_ROOT}/gitops/channels/local/auth/authentik/render-values.yaml" >"$rendered"
-  diff -u "${REPO_ROOT}/gitops/channels/local/auth/authentik/rendered/authentik-2026.2.2.yaml" "$rendered" >/dev/null
+  diff -u "${REPO_ROOT}/gitops/channels/local/auth/authentik/rendered/authentik-2026.2.2.yaml" "$rendered" \
+    || die "Authentik Helm render is not reproducible"
   pass "Authentik Helm render is reproducible"
 
   rendered="$(mktemp)"
   TEMP_FILES+=("$rendered")
   helm template pomerium pomerium/pomerium --version 34.0.1 --namespace auth-system \
     -f "${REPO_ROOT}/gitops/channels/local/auth/pomerium/render-values.yaml" >"$rendered"
-  diff -u "${REPO_ROOT}/gitops/channels/local/auth/pomerium/rendered/pomerium-34.0.1.yaml" "$rendered" >/dev/null
+  diff -u "${REPO_ROOT}/gitops/channels/local/auth/pomerium/rendered/pomerium-34.0.1.yaml" "$rendered" \
+    || die "Pomerium Helm render is not reproducible"
   pass "Pomerium Helm render is reproducible"
 
   rendered="$(mktemp)"
   TEMP_FILES+=("$rendered")
   helm template opal permitio/opal --version 0.0.29 --namespace auth-system \
     -f "${REPO_ROOT}/gitops/channels/local/auth/opal-cedar/render-values.yaml" >"$rendered"
-  diff -u "${REPO_ROOT}/gitops/channels/local/auth/opal-cedar/rendered/opal-0.0.29.yaml" "$rendered" >/dev/null
+  diff -u "${REPO_ROOT}/gitops/channels/local/auth/opal-cedar/rendered/opal-0.0.29.yaml" "$rendered" \
+    || die "OPAL/Cedar Helm render is not reproducible"
   pass "OPAL/Cedar Helm render is reproducible"
 }
 
@@ -193,12 +200,25 @@ assert_kustomize() {
 }
 
 assert_no_secret_literals() {
+  local secret_matches
+  secret_matches="$(mktemp)"
+  TEMP_FILES+=("$secret_matches")
+
   if rg -n '(AUTHENTIK_BOOTSTRAP_PASSWORD|AUTHENTIK_SECRET_KEY|OIDC_CLIENT_SECRET|COOKIE_SECRET|SHARED_SECRET|SIGNING_KEY):[[:space:]]+[^"{[:space:]]' \
-    "${REPO_ROOT}/gitops/channels/local/auth" >/tmp/init114-secret-literals.txt; then
-    cat /tmp/init114-secret-literals.txt >&2
+    "${REPO_ROOT}/gitops/channels/local/auth" >"$secret_matches"; then
+    cat "$secret_matches" >&2
     die "no committed auth credential literals"
   fi
   pass "no committed auth credential literals"
+}
+
+ensure_helm_repo() {
+  local name="$1"
+  local url="$2"
+
+  if ! helm repo list -o yaml | grep -Eq "^[[:space:]-]*name: ${name}$"; then
+    helm repo add "$name" "$url" >/dev/null
+  fi
 }
 
 assert_runtime() {
@@ -233,7 +253,7 @@ assert_runtime() {
     --restart=Never \
     --labels=app.kubernetes.io/name=opal-cedar,platform.humility.gg/init=114 \
     --image=curlimages/curl:8.16.0 \
-    --command -- /bin/sh -ec "curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"sample@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized && echo && curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"other@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized" >/dev/null
+    --command -- /bin/sh -ec "ready=0; for attempt in \$(seq 1 30); do if curl -fsS http://opal-client:8180/v1/policies >/dev/null 2>&1; then ready=1; break; fi; sleep 1; done; test \"\$ready\" = 1; curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"sample@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized && echo && curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"other@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized" >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" wait pod/init-114-cedar --for=jsonpath='{.status.phase}'=Succeeded --timeout=180s >/dev/null
   allowed_body="$(kubectl_cmd -n "$AUTH_NAMESPACE" logs pod/init-114-cedar | sed -n '1p')"
   denied_body="$(kubectl_cmd -n "$AUTH_NAMESPACE" logs pod/init-114-cedar | sed -n '2p')"
@@ -244,11 +264,12 @@ assert_runtime() {
   kubectl_cmd -n "$AUTH_NAMESPACE" delete pod init-114-protected-api --ignore-not-found >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" run init-114-protected-api \
     --restart=Never \
+    --labels=app.kubernetes.io/name=auth-stack-probe,platform.humility.gg/init=114 \
     --image=curlimages/curl:8.16.0 \
-    --command -- /bin/sh -ec "code=\$(curl -ksS -o /dev/null -w '%{http_code}' https://${POMERIUM_HOST}${PROTECTED_PATH}); test \"\$code\" = 302 -o \"\$code\" = 401 -o \"\$code\" = 403" >/dev/null
+    --command -- /bin/sh -ec "code=\$(curl -ksS -H 'Host: ${POMERIUM_HOST}' -o /dev/null -w '%{http_code}' https://kong-kong-proxy.kong-system.svc.cluster.local${PROTECTED_PATH}); test \"\$code\" = 302 -o \"\$code\" = 401 -o \"\$code\" = 403" >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" wait pod/init-114-protected-api --for=jsonpath='{.status.phase}'=Succeeded --timeout=180s >/dev/null
   status="$(kubectl_cmd -n "$AUTH_NAMESPACE" logs pod/init-114-protected-api || true)"
-  [[ -z "$status" ]] || true
+  [[ -z "$status" ]] || die "protected API probe emitted unexpected output: ${status}"
   pass "protected API requires authentication through Pomerium"
 
   kubectl_cmd -n "$AUTH_NAMESPACE" get secret authentik-config -o jsonpath='{.data.AUTHENTIK_BOOTSTRAP_PASSWORD}' | grep -q .

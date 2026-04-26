@@ -9,6 +9,7 @@ metadata:
     platform.humility.gg/init: "114"
 spec:
   backoffLimit: 12
+  ttlSecondsAfterFinished: 3600
   template:
     metadata:
       labels:
@@ -33,7 +34,13 @@ spec:
             - /bin/sh
             - -ec
             - |
+              elapsed=0
               until curl -fsS http://opal-client:8180/v1/policies >/dev/null; do
+                elapsed=$((elapsed + 2))
+                if [ "$elapsed" -ge 300 ]; then
+                  echo "Timed out waiting for opal-client policy endpoint" >&2
+                  exit 1
+                fi
                 sleep 2
               done
               curl -fsS -X PUT \

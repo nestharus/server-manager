@@ -41,6 +41,40 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-auth-stack-probe-egress
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: auth-stack-probe
+    platform.humility.gg/init: "114"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: auth-stack-probe
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kong-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: app
+              app.kubernetes.io/instance: kong
+              app.kubernetes.io/name: kong
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-kong-to-auth-entrypoints
   namespace: auth-system
   labels:
@@ -107,6 +141,10 @@ spec:
           port: 80
         - protocol: TCP
           port: 443
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8443
     - to:
         - podSelector:
             matchLabels:
@@ -124,6 +162,24 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kong-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: app
+              app.kubernetes.io/instance: kong
+              app.kubernetes.io/name: kong
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8443
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -211,12 +267,14 @@ spec:
           port: 53
     - to:
         - ipBlock:
+            # LOCAL ONLY: k3s Kubernetes service IP in the local k3d channel.
             cidr: 10.43.0.1/32
       ports:
         - protocol: TCP
           port: 443
     - to:
         - ipBlock:
+            # LOCAL ONLY: k3d Docker bridge/node network for the local API server.
             cidr: 172.28.0.0/16
       ports:
         - protocol: TCP

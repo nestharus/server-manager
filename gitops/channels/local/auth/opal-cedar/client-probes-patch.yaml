@@ -20,5 +20,6 @@ spec:
             tcpSocket:
               port: opa
             failureThreshold: 5
+            initialDelaySeconds: 10
             timeoutSeconds: 10
             periodSeconds: 30
