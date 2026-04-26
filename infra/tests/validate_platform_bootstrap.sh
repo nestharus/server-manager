@@ -804,6 +804,128 @@ PY
   fi
 }
 
+assert_object_storage_minio_manifests() {
+  local storage_dir="${REPO_ROOT}/gitops/channels/local/object-storage"
+  local minio_dir="${storage_dir}/minio"
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/object-storage-rendered.yaml"
+  local py_bin
+
+  assert_repo_file_exists "gitops/channels/local/object-storage/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/namespace.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/minio/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/minio/serviceaccount.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/minio/pvc.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/minio/deployment.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/minio/service.yaml"
+
+  mkdir -p "$(dirname "$rendered")"
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$storage_dir" >"$rendered"; then
+    pass "kubectl kustomize object-storage local subtree"
+  else
+    fail "kubectl kustomize object-storage local subtree"
+    return
+  fi
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(HelmRelease|OCIRepository|Tenant|AdminJob)[[:space:]]*$' "$storage_dir"; then
+    fail "object-storage raw manifests exclude Helm, Tenant, and AdminJob resources"
+  else
+    pass "object-storage raw manifests exclude Helm, Tenant, and AdminJob resources"
+  fi
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(ClusterRole|ClusterRoleBinding|Role|RoleBinding)[[:space:]]*$' "$minio_dir"; then
+    fail "MinIO ServiceAccount has no RBAC binding"
+  else
+    pass "MinIO ServiceAccount has no RBAC binding"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "MinIO rendered manifest contract"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+by_kind_name = {(doc.get("kind"), doc.get("metadata", {}).get("name")): doc for doc in docs}
+
+namespace = by_kind_name.get(("Namespace", "minio-system"))
+if namespace is None:
+    raise SystemExit("Namespace/minio-system missing")
+
+sa = by_kind_name.get(("ServiceAccount", "minio"))
+if sa is None or sa.get("metadata", {}).get("namespace") != "minio-system":
+    raise SystemExit("ServiceAccount/minio missing or wrong namespace")
+if sa.get("automountServiceAccountToken") is not False:
+    raise SystemExit("ServiceAccount/minio must disable token automount")
+
+pvc = by_kind_name.get(("PersistentVolumeClaim", "minio-data"))
+if pvc is None:
+    raise SystemExit("PVC/minio-data missing")
+if pvc.get("metadata", {}).get("namespace") != "minio-system":
+    raise SystemExit("PVC/minio-data wrong namespace")
+if pvc.get("spec", {}).get("storageClassName") != "local-path":
+    raise SystemExit("PVC/minio-data must use local-path")
+if pvc.get("spec", {}).get("resources", {}).get("requests", {}).get("storage") != "10Gi":
+    raise SystemExit("PVC/minio-data must request 10Gi")
+
+svc = by_kind_name.get(("Service", "minio"))
+if svc is None:
+    raise SystemExit("Service/minio missing")
+ports = svc.get("spec", {}).get("ports", [])
+if len(ports) != 1 or ports[0].get("port") != 9000 or ports[0].get("targetPort") != "s3":
+    raise SystemExit(f"Service/minio must expose only 9000: {ports!r}")
+if svc.get("spec", {}).get("type") != "ClusterIP":
+    raise SystemExit("Service/minio must be ClusterIP")
+
+deployment = by_kind_name.get(("Deployment", "minio"))
+if deployment is None:
+    raise SystemExit("Deployment/minio missing")
+spec = deployment.get("spec", {})
+template = spec.get("template", {}).get("spec", {})
+containers = template.get("containers", [])
+if spec.get("replicas") != 1:
+    raise SystemExit("Deployment/minio must run one replica")
+if spec.get("strategy", {}).get("type") != "Recreate":
+    raise SystemExit("Deployment/minio must use Recreate strategy")
+if template.get("serviceAccountName") != "minio" or template.get("automountServiceAccountToken") is not False:
+    raise SystemExit("Deployment/minio must use minio ServiceAccount without token automount")
+if len(containers) != 1:
+    raise SystemExit("Deployment/minio must have one container")
+container = containers[0]
+expected_image = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+if container.get("image") != expected_image:
+    raise SystemExit(f"unexpected image: {container.get('image')!r}")
+env = {item.get("name"): item for item in container.get("env", [])}
+if env.get("MINIO_BROWSER", {}).get("value") != "off":
+    raise SystemExit("MINIO_BROWSER must be off")
+for name in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"):
+    ref = env.get(name, {}).get("valueFrom", {}).get("secretKeyRef", {})
+    if ref != {"name": "minio-root", "key": name}:
+        raise SystemExit(f"{name} must come from Secret/minio-root")
+resources = container.get("resources", {})
+if resources.get("requests") != {"cpu": "250m", "memory": "512Mi"}:
+    raise SystemExit(f"request mismatch: {resources.get('requests')!r}")
+if resources.get("limits") != {"cpu": "1", "memory": "1Gi"}:
+    raise SystemExit(f"limit mismatch: {resources.get('limits')!r}")
+for probe in ("livenessProbe", "readinessProbe"):
+    http_get = container.get(probe, {}).get("httpGet", {})
+    if http_get.get("port") != "s3" or not str(http_get.get("path", "")).startswith("/minio/health/"):
+        raise SystemExit(f"{probe} must use MinIO health endpoint on s3 port")
+PY
+  then
+    pass "MinIO rendered manifest contract"
+  else
+    fail "MinIO rendered manifest contract"
+  fi
+
+  if grep -q 'object-storage' "${REPO_ROOT}/gitops/channels/local/kustomization.yaml"; then
+    pass "local channel kustomization includes object-storage subtree"
+  else
+    fail "local channel kustomization includes object-storage subtree"
+  fi
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -2019,6 +2141,11 @@ echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="
 
 assert_object_storage_infisical_bootstrap
+
+echo ""
+echo "=== Slice 104.04 raw MinIO manifest validation ==="
+
+assert_object_storage_minio_manifests
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create
