@@ -247,6 +247,139 @@ assert_dev_tofu_validate() {
   fi
 }
 
+assert_local_root_present() {
+  for file in \
+    "roots/channels/local/main.tf" \
+    "roots/channels/local/backend.tfbackend" \
+    "roots/channels/local/channel.auto.tfvars.json" \
+    "roots/channels/local/.terraform.lock.hcl"; do
+    assert_file_exists "$file"
+  done
+}
+
+assert_channel_backend_drift_check() {
+  local channel="$1"
+  local committed="${INFRA_DIR}/roots/channels/${channel}/backend.tfbackend"
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/${channel}"
+  local resolved="${tmp_dir}/resolved.json"
+  local generated="${tmp_dir}/backend.tfbackend"
+
+  if ! PYTHON_BIN="$(python_bin)"; then
+    fail "${channel} backend generator drift check"
+    return
+  fi
+
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  if "$PYTHON_BIN" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel "$channel" --out "$resolved" \
+    && "$PYTHON_BIN" "${INFRA_DIR}/scripts/generate_channel_backend.py" --resolved "$resolved" --out "$generated" \
+    && cmp -s "$generated" "$committed"; then
+    pass "${channel} backend generated artifact drift-free"
+  else
+    diff -u "$committed" "$generated" || true
+    fail "${channel} backend generated artifact drift-free"
+  fi
+}
+
+assert_channel_tfvars_drift_check() {
+  local channel="$1"
+  local committed="${INFRA_DIR}/roots/channels/${channel}/channel.auto.tfvars.json"
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/${channel}"
+  local resolved="${tmp_dir}/resolved.json"
+  local generated="${tmp_dir}/channel.auto.tfvars.json"
+
+  if ! PYTHON_BIN="$(python_bin)"; then
+    fail "${channel} tfvars generator drift check"
+    return
+  fi
+
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  if "$PYTHON_BIN" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel "$channel" --out "$resolved" \
+    && "$PYTHON_BIN" "${INFRA_DIR}/scripts/generate_channel_tfvars.py" --resolved "$resolved" --out "$generated" \
+    && cmp -s "$generated" "$committed"; then
+    pass "${channel} tfvars generated artifact drift-free"
+  else
+    diff -u "$committed" "$generated" || true
+    fail "${channel} tfvars generated artifact drift-free"
+  fi
+}
+
+assert_local_tofu_validate() {
+  local root="${INFRA_DIR}/roots/channels/local"
+  local lockfile="${root}/.terraform.lock.hcl"
+  local before
+  local after
+
+  if ! command -v tofu >/dev/null 2>&1; then
+    fail "local root tofu validate"
+    return
+  fi
+
+  before="$(sha256sum "$lockfile" | awk '{print $1}')"
+
+  if tofu -chdir="$root" init -backend=false >/dev/null && tofu -chdir="$root" validate >/dev/null; then
+    pass "local root tofu init -backend=false and validate"
+  else
+    fail "local root tofu init -backend=false and validate"
+    return
+  fi
+
+  after="$(sha256sum "$lockfile" | awk '{print $1}')"
+  if [[ "$before" == "$after" ]]; then
+    pass "local root lockfile byte-identical after re-init"
+  else
+    fail "local root lockfile byte-identical after re-init"
+  fi
+}
+
+assert_spawn_against_dev_succeeds() {
+  local out_dir="${REPO_ROOT}/.tmp/test-spawn"
+  local output_file="${out_dir}/channel.yaml"
+
+  if ! PYTHON_BIN="$(python_bin)"; then
+    fail "spawn against dev succeeds"
+    return
+  fi
+
+  rm -rf "$out_dir"
+
+  if "$PYTHON_BIN" "${INFRA_DIR}/scripts/spawn_platform_channel.py" --parent dev --suffix pr-123 --out .tmp/test-spawn \
+    && [[ -f "$output_file" ]] \
+    && grep -q '^id: dev-pr-123$' "$output_file" \
+    && [[ ! -e "${INFRA_DIR}/channels/dev-pr-123.yaml" ]] \
+    && [[ ! -e "${INFRA_DIR}/roots/channels/dev-pr-123" ]]; then
+    pass "spawn against dev succeeds under .tmp only"
+  else
+    fail "spawn against dev succeeds under .tmp only"
+  fi
+}
+
+assert_spawn_against_disabled_fails() {
+  local out_dir="${REPO_ROOT}/.tmp/test-spawn-disabled"
+  local output
+  local status
+
+  if ! PYTHON_BIN="$(python_bin)"; then
+    fail "spawn against disabled channel fails"
+    return
+  fi
+
+  rm -rf "$out_dir"
+  set +e
+  output="$("$PYTHON_BIN" "${INFRA_DIR}/scripts/spawn_platform_channel.py" --parent ephemeral-disabled --suffix pr-123 --out .tmp/test-spawn-disabled 2>&1)"
+  status=$?
+  set -e
+
+  if [[ "$status" -ne 0 ]] && grep -q '"code": "ephemeral_children_disabled"' <<<"$output" && [[ ! -e "$out_dir/channel.yaml" ]]; then
+    pass "spawn against disabled channel returns structured failure"
+  else
+    fail "spawn against disabled channel returns structured failure"
+  fi
+}
+
 assert_install_cluster_tools_check() {
   local output
   local status
@@ -430,6 +563,26 @@ assert_cloud_init_strict_failure
 assert_template_has_conditional_dispatch
 assert_dev_root_present
 assert_dev_tofu_validate
+
+echo ""
+echo "=== Slice 101.04 channel template and generated root validation ==="
+
+for file in \
+  "scripts/generate_channel_backend.py" \
+  "scripts/generate_channel_tfvars.py" \
+  "scripts/spawn_platform_channel.py"; do
+  assert_file_exists "$file"
+  assert_executable "$file"
+done
+
+assert_local_root_present
+assert_channel_backend_drift_check "dev"
+assert_channel_tfvars_drift_check "dev"
+assert_channel_backend_drift_check "local"
+assert_channel_tfvars_drift_check "local"
+assert_local_tofu_validate
+assert_spawn_against_dev_succeeds
+assert_spawn_against_disabled_fails
 
 echo ""
 echo "Summary: ${PASS_COUNT} passed, ${FAIL_COUNT} failed, ${SKIP_COUNT} skipped"
