@@ -1,0 +1,27 @@
+crds:
+  enabled: true
+prometheus:
+  enabled: false
+startupapicheck:
+  enabled: true
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+cainjector:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+webhook:
+  timeoutSeconds: 4
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

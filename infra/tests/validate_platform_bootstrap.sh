@@ -835,6 +835,94 @@ PY
   done
 }
 
+assert_tls_cert_manager_manifests() {
+  local cert_manager_dir="${REPO_ROOT}/gitops/channels/local/tls/cert-manager"
+  local rendered="${cert_manager_dir}/rendered/cert-manager-v1.20.2.yaml"
+  local out="${REPO_ROOT}/.tmp/validate-platform-bootstrap/cert-manager-rendered.yaml"
+  local py_bin
+
+  assert_repo_file_exists "gitops/channels/local/tls/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/tls/cert-manager/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/tls/cert-manager/namespace.yaml"
+  assert_repo_file_exists "gitops/channels/local/tls/cert-manager/render-values.yaml"
+  assert_repo_file_exists "gitops/channels/local/tls/cert-manager/rendered/cert-manager-v1.20.2.yaml"
+
+  mkdir -p "$(dirname "$out")"
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$cert_manager_dir" >"$out"; then
+    pass "kubectl kustomize cert-manager raw manifests"
+  else
+    fail "kubectl kustomize cert-manager raw manifests"
+    return
+  fi
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(HelmRelease|OCIRepository|HelmRepository)[[:space:]]*$' "$cert_manager_dir"; then
+    fail "cert-manager install excludes runtime Helm resources"
+  else
+    pass "cert-manager install excludes runtime Helm resources"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "cert-manager rendered manifest contract"
+  elif "$py_bin" - "$out" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+by_kind_name = {(doc.get("kind"), doc.get("metadata", {}).get("name")): doc for doc in docs}
+
+if by_kind_name.get(("Namespace", "cert-manager")) is None:
+    raise SystemExit("Namespace/cert-manager missing")
+
+crds = [doc for doc in docs if doc.get("kind") == "CustomResourceDefinition"]
+required = {
+    "certificates.cert-manager.io",
+    "certificaterequests.cert-manager.io",
+    "clusterissuers.cert-manager.io",
+    "issuers.cert-manager.io",
+}
+present = {doc.get("metadata", {}).get("name") for doc in crds}
+missing = sorted(required - present)
+if missing:
+    raise SystemExit(f"missing cert-manager CRDs: {missing!r}")
+
+deployments = {name: doc for (kind, name), doc in by_kind_name.items() if kind == "Deployment"}
+expected_images = {
+    "cert-manager-cainjector": "quay.io/jetstack/cert-manager-cainjector:v1.20.2",
+    "cert-manager": "quay.io/jetstack/cert-manager-controller:v1.20.2",
+    "cert-manager-webhook": "quay.io/jetstack/cert-manager-webhook:v1.20.2",
+}
+for name, image in expected_images.items():
+    deployment = deployments.get(name)
+    if deployment is None:
+        raise SystemExit(f"Deployment/{name} missing")
+    if deployment.get("metadata", {}).get("namespace") != "cert-manager":
+        raise SystemExit(f"Deployment/{name} wrong namespace")
+    containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+    images = {container.get("image") for container in containers}
+    if image not in images:
+        raise SystemExit(f"Deployment/{name} missing image {image!r}; got {images!r}")
+
+jobs = [doc for doc in docs if doc.get("kind") == "Job"]
+if not any(job.get("metadata", {}).get("name") == "cert-manager-startupapicheck" for job in jobs):
+    raise SystemExit("cert-manager startup API check Job missing")
+if any("helm.sh/" in key for doc in docs for key in doc.get("metadata", {}).get("annotations", {})):
+    raise SystemExit("rendered cert-manager manifests must not carry Helm ownership annotations")
+PY
+  then
+    pass "cert-manager rendered manifest contract"
+  else
+    fail "cert-manager rendered manifest contract"
+  fi
+
+  if grep -q '  - tls$' "${REPO_ROOT}/gitops/channels/local/kustomization.yaml"; then
+    pass "local channel kustomization includes TLS subtree"
+  else
+    fail "local channel kustomization includes TLS subtree"
+  fi
+}
+
 assert_object_storage_infisical_bootstrap() {
   local script="${INFRA_DIR}/scripts/bootstrap-infisical-storage.sh"
   local storage_dir="${REPO_ROOT}/gitops/channels/local/object-storage/infisical"
@@ -2498,6 +2586,11 @@ echo ""
 echo "=== Slice 105.01 TLS/DNS channel schema validation ==="
 
 assert_tls_dns_channel_schema
+
+echo ""
+echo "=== Slice 105.02 cert-manager raw manifest validation ==="
+
+assert_tls_cert_manager_manifests
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="
