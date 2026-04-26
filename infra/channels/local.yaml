@@ -113,6 +113,47 @@ ingress:
     remote_host: minio.local.humility.gg
     tls_secret_name: minio-local-ingress-tls
     proof_path: /minio/health/ready
+data_plane:
+  provider: cloudnative-pg
+  cnpg:
+    operator_namespace: cnpg-system
+    operator_version: 1.29.0
+    operator_manifest: gitops/channels/local/data-plane/cnpg/rendered/cnpg-1.29.0.yaml
+    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
+  atlas:
+    operator_namespace: atlas-operator
+    chart_name: oci://ghcr.io/ariga/charts/atlas-operator
+    chart_version: 0.7.28
+    operator_image: arigaio/atlas-operator:0.7.28
+    rendered_manifest: gitops/channels/local/data-plane/atlas/rendered/atlas-operator-0.7.28.yaml
+  sample:
+    namespace: sample-app-db
+    cluster_name: sample-app-postgres
+    instances: 1
+    database: sample_app
+    owner: sample_app
+    service_name: sample-app-postgres-rw
+    storage_size: 1Gi
+  credentials:
+    infisical_project: platform-databases
+    infisical_environment: local
+    infisical_path: /postgres/local/sample-app
+    app_secret_name: sample-app-postgres-app
+    url_secret_name: sample-app-postgres-url
+  migrations:
+    atlas_migration_name: sample-app
+    config_map_name: sample-app-atlas-migrations
+    repo_dir: database/migrations/sample-app
+    revisions_schema: atlas_schema_revisions
+    verify_table: sample_app.widgets
+  backup:
+    provider: minio
+    endpoint: http://minio.minio-system.svc.cluster.local:9000
+    bucket: humility-local-sample
+    region: us-east-1
+    destination_path: s3://humility-local-sample/cnpg/local/sample-app-postgres
+    credentials_secret_name: minio-root
+    credentials_secret_namespace: minio-system
 tls:
   provider: step-ca
   local_cluster_issuer_name: humility-local-step-ca
@@ -157,6 +198,7 @@ security:
       - crossplane-system
       - flux-system
       - git-system
+      - cnpg-system
       - kong-system
       - step-ca-system
       - step-issuer-system
@@ -169,6 +211,8 @@ security:
       - local
       - minio-system
       - platform-app-clusters
+      - atlas-operator
+      - sample-app-db
     local_privileged_namespaces:
       - app-cluster-system
   network_policy:
@@ -181,3 +225,4 @@ security:
       - local
       - minio-system
       - platform-app-clusters
+      - sample-app-db

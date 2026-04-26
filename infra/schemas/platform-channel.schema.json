@@ -73,6 +73,9 @@
     "ingress": {
       "$ref": "#/$defs/ingress"
     },
+    "data_plane": {
+      "$ref": "#/$defs/dataPlane"
+    },
     "tls": {
       "$ref": "#/$defs/tls"
     },
@@ -1427,6 +1430,254 @@
         "proof_path": {
           "type": "string",
           "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+        }
+      }
+    },
+    "dataPlane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "cnpg",
+        "atlas",
+        "sample",
+        "credentials",
+        "migrations",
+        "backup"
+      ],
+      "properties": {
+        "provider": {
+          "const": "cloudnative-pg"
+        },
+        "cnpg": {
+          "$ref": "#/$defs/dataPlaneCnpg"
+        },
+        "atlas": {
+          "$ref": "#/$defs/dataPlaneAtlas"
+        },
+        "sample": {
+          "$ref": "#/$defs/dataPlaneSample"
+        },
+        "credentials": {
+          "$ref": "#/$defs/dataPlaneCredentials"
+        },
+        "migrations": {
+          "$ref": "#/$defs/dataPlaneMigrations"
+        },
+        "backup": {
+          "$ref": "#/$defs/dataPlaneBackup"
+        }
+      }
+    },
+    "dataPlaneCnpg": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operator_namespace",
+        "operator_version",
+        "operator_manifest",
+        "postgres_image"
+      ],
+      "properties": {
+        "operator_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "operator_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "operator_manifest": {
+          "type": "string",
+          "pattern": "^gitops/channels/[a-z0-9-]+/data-plane/cnpg/rendered/cnpg-[0-9]+\\.[0-9]+\\.[0-9]+\\.yaml$"
+        },
+        "postgres_image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        }
+      }
+    },
+    "dataPlaneAtlas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operator_namespace",
+        "chart_name",
+        "chart_version",
+        "operator_image",
+        "rendered_manifest"
+      ],
+      "properties": {
+        "operator_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "chart_name": {
+          "const": "oci://ghcr.io/ariga/charts/atlas-operator"
+        },
+        "chart_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "operator_image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        },
+        "rendered_manifest": {
+          "type": "string",
+          "pattern": "^gitops/channels/[a-z0-9-]+/data-plane/atlas/rendered/atlas-operator-[0-9]+\\.[0-9]+\\.[0-9]+\\.yaml$"
+        }
+      }
+    },
+    "dataPlaneSample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "cluster_name",
+        "instances",
+        "database",
+        "owner",
+        "service_name",
+        "storage_size"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "cluster_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "instances": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "database": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "service_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "storage_size": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(Mi|Gi)$"
+        }
+      }
+    },
+    "dataPlaneCredentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "infisical_project",
+        "infisical_environment",
+        "infisical_path",
+        "app_secret_name",
+        "url_secret_name"
+      ],
+      "properties": {
+        "infisical_project": {
+          "const": "platform-databases"
+        },
+        "infisical_environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/postgres/[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$"
+        },
+        "app_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "url_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        }
+      }
+    },
+    "dataPlaneMigrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "atlas_migration_name",
+        "config_map_name",
+        "repo_dir",
+        "revisions_schema",
+        "verify_table"
+      ],
+      "properties": {
+        "atlas_migration_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "config_map_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "repo_dir": {
+          "type": "string",
+          "pattern": "^database/migrations/[a-z0-9][a-z0-9-]*$"
+        },
+        "revisions_schema": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "verify_table": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+        }
+      }
+    },
+    "dataPlaneBackup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "endpoint",
+        "bucket",
+        "region",
+        "destination_path",
+        "credentials_secret_name",
+        "credentials_secret_namespace"
+      ],
+      "properties": {
+        "provider": {
+          "const": "minio"
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "region": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "destination_path": {
+          "type": "string",
+          "pattern": "^s3://[a-z0-9][a-z0-9.-]*[a-z0-9]/[A-Za-z0-9._/-]+$"
+        },
+        "credentials_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "credentials_secret_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
         }
       }
     },
