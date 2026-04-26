@@ -46,6 +46,12 @@ variable "k3d_registry_name" {
   description = "Local k3d registry name. Default: humility-local."
 }
 
+variable "k3d_registry_port" {
+  type        = number
+  default     = 5000
+  description = "Local k3d registry host port. Default: 5000."
+}
+
 variable "k3d_kubeconfig_path" {
   type        = string
   default     = "~/.kube/humility-local.yaml"

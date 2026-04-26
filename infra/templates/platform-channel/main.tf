@@ -22,6 +22,7 @@ module "cluster_k3d" {
   servers         = var.k3d_servers
   agents          = var.k3d_agents
   registry_name   = var.k3d_registry_name
+  registry_port   = var.k3d_registry_port
   kubeconfig_path = var.k3d_kubeconfig_path
 }
 

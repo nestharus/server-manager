@@ -10,8 +10,6 @@ spec:
   claimNames:
     kind: AppCluster
     plural: appclusters
-  defaultCompositionRef:
-    name: appcluster-k3d-local
   versions:
     - name: v1alpha1
       served: true

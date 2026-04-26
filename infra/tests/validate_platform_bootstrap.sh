@@ -1248,8 +1248,19 @@ scope = spec.get("authentication", {}).get("universalAuth", {}).get("secretsScop
 target = spec.get("managedSecretReference", {})
 if scope.get("projectSlug") != "platform-dns" or scope.get("secretsPath") != "/dns/dev":
     raise SystemExit(f"Cloudflare token must come from Infisical platform-dns /dns/dev: {scope!r}")
+if spec.get("hostAPI") != "http://infisical.infisical-system.svc.cluster.local:8080":
+    raise SystemExit(f"Cloudflare Infisical hostAPI mismatch: {spec.get('hostAPI')!r}")
 if target.get("secretName") != "cloudflare-api-token" or target.get("secretNamespace") != "external-dns-system":
     raise SystemExit(f"Cloudflare target Secret mismatch: {target!r}")
+template = target.get("template", {})
+if template.get("includeAllSecrets") is not True:
+    raise SystemExit(f"Cloudflare token template mismatch: {template!r}")
+
+channel_parameters = by_kind_name.get(("ConfigMap", "external-dns-channel"))
+if channel_parameters is None:
+    raise SystemExit("ConfigMap/external-dns-channel missing")
+if channel_parameters.get("data", {}).get("channelId") != "dev":
+    raise SystemExit(f"ExternalDNS txtOwnerId channel parameter mismatch: {channel_parameters!r}")
 
 deployment = by_kind_name.get(("Deployment", "external-dns"))
 if deployment is None:
@@ -2615,7 +2626,7 @@ assert_spawn_against_dev_succeeds() {
 
   rm -rf "$out_dir"
 
-  if "$PYTHON_BIN" "${INFRA_DIR}/scripts/spawn_platform_channel.py" --parent dev --suffix pr-123 --out .tmp/test-spawn \
+  if "$PYTHON_BIN" "${INFRA_DIR}/scripts/spawn_platform_channel.py" --parent dev --suffix pr-123 --out "$out_dir" \
     && [[ -f "$output_file" ]] \
     && grep -q '^id: dev-pr-123$' "$output_file" \
     && [[ ! -e "${INFRA_DIR}/channels/dev-pr-123.yaml" ]] \
@@ -2638,7 +2649,7 @@ assert_spawn_against_disabled_fails() {
 
   rm -rf "$out_dir"
   set +e
-  output="$("$PYTHON_BIN" "${INFRA_DIR}/scripts/spawn_platform_channel.py" --parent ephemeral-disabled --suffix pr-123 --out .tmp/test-spawn-disabled 2>&1)"
+  output="$("$PYTHON_BIN" "${INFRA_DIR}/scripts/spawn_platform_channel.py" --parent ephemeral-disabled --suffix pr-123 --out "$out_dir" 2>&1)"
   status=$?
   set -e
 
@@ -2724,6 +2735,13 @@ assert_bring_up_script_help_works() {
   else
     fail "bring-up-local-channel --help"
   fi
+}
+
+assert_k3d_registry_port_contract() {
+  assert_file_contains "modules/platform-cluster-k3d/variables.tf" 'variable "registry_port"' "k3d module exposes registry_port input"
+  assert_file_contains "modules/platform-cluster-k3d/main.tf" '--registry-create "$REGISTRY_NAME:0.0.0.0:$REGISTRY_PORT"' "k3d module pins registry host port"
+  assert_file_contains "modules/platform-cluster-k3d/outputs.tf" "value       = var.registry_port" "k3d module reports configured registry port"
+  assert_file_contains "scripts/bring-up-local-channel.sh" '--registry-create "${registry_name}:0.0.0.0:${K3D_REGISTRY_PORT}"' "bring-up pins registry host port"
 }
 
 assert_delete_missing_local_cluster() {
@@ -3329,6 +3347,10 @@ secret_ref = provider_config.get("spec", {}).get("credentials", {}).get("secretR
 if secret_ref != {"namespace": "crossplane-system", "name": "vultr-creds", "key": "credentials"}:
     raise SystemExit(f"Vultr ProviderConfig secret mismatch: {secret_ref!r}")
 
+remote_xrd = by_kind_name[("CompositeResourceDefinition", "xappclusters.platform.humility.gg")]
+if remote_xrd.get("spec", {}).get("defaultCompositionRef") is not None:
+    raise SystemExit("AppCluster XRD must not default to the local k3d composition")
+
 infisical = by_kind_name.get(("InfisicalSecret", "vultr-creds"))
 scope = infisical.get("spec", {}).get("authentication", {}).get("universalAuth", {}).get("secretsScope", {})
 if scope.get("projectSlug") != "platform-vultr" or scope.get("secretsPath") != "/api":
@@ -3447,6 +3469,7 @@ assert_executable "scripts/delete-local-channel.sh"
 assert_install_cluster_tools_check
 assert_gitops_tool_versions
 assert_bring_up_script_help_works
+assert_k3d_registry_port_contract
 assert_delete_missing_local_cluster
 
 echo ""

@@ -157,7 +157,7 @@ spec:
         - --source=ingress
         - --policy=upsert-only
         - --registry=txt
-        - --txt-owner-id=humility-dev
+        - --txt-owner-id=humility-channel-id
         - --domain-filter=humility.example
         - --provider=cloudflare
         ports:

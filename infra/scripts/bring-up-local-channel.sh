@@ -10,6 +10,7 @@ CHANNEL_ID=""
 FORCE=0
 REPAIR=0
 CLUSTER_ONLY=0
+K3D_REGISTRY_PORT=5000
 
 usage() {
   cat <<'EOF'
@@ -205,7 +206,7 @@ create_cluster() {
   )
 
   if [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]]; then
-    args+=(--registry-create "$registry_name")
+    args+=(--registry-create "${registry_name}:0.0.0.0:${K3D_REGISTRY_PORT}")
   fi
 
   k3d "${args[@]}"
