@@ -104,6 +104,12 @@ def _tree_digest(root: Path, ignored_relative_paths: set[str] | None = None) -> 
 def _render_source_manifests(out: Path, channel_id: str, gitops: dict[str, Any]) -> None:
     source_name = _required_string(gitops.get("kustomization_name"), "gitops.kustomization_name")
     namespace = _required_string(gitops.get("kustomization_namespace"), "gitops.kustomization_namespace")
+    decryption_secret_namespace = _required_string(
+        gitops.get("decryption_secret_namespace"),
+        "gitops.decryption_secret_namespace",
+    )
+    if decryption_secret_namespace != namespace:
+        raise ValueError("gitops.decryption_secret_namespace must match gitops.kustomization_namespace")
     interval = _required_string(gitops.get("interval"), "gitops.interval")
     retry_interval = _required_string(gitops.get("retry_interval"), "gitops.retry_interval")
     source_dir = out / "gitops" / "sources" / channel_id
@@ -119,7 +125,6 @@ def _render_source_manifests(out: Path, channel_id: str, gitops: dict[str, Any])
             },
             "spec": {
                 "interval": interval,
-                "retryInterval": retry_interval,
                 "url": _required_string(gitops.get("git_url"), "gitops.git_url"),
                 "ref": _git_ref(_required_string(gitops.get("git_ref"), "gitops.git_ref")),
             },
@@ -143,6 +148,12 @@ def _render_source_manifests(out: Path, channel_id: str, gitops: dict[str, Any])
                 "sourceRef": {
                     "kind": "GitRepository",
                     "name": source_name,
+                },
+                "decryption": {
+                    "provider": "sops",
+                    "secretRef": {
+                        "name": _required_string(gitops.get("sops_age_secret_name"), "gitops.sops_age_secret_name"),
+                    },
                 },
             },
         },

@@ -4,4 +4,4 @@
 creation_rules:
   - path_regex: ^gitops/.*\.enc\.yaml$
     encrypted_regex: ^(data|stringData)$
-    age: age1y7etps8gyw9eryh3ws5tev9n68t4vffq6fcujs2d5mxr4j3gef8sx5tysy
+    age: age1yv0ad3agu5wsahpplc0slswfv8d3jr6sh860eqjqnz2ra2m6uclq7d5g4c

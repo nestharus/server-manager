@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: git-system
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: git-daemon-pvc
+  namespace: git-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-daemon
+  namespace: git-system
+  labels:
+    app.kubernetes.io/name: git-daemon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: git-daemon
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: git-daemon
+    spec:
+      containers:
+        - name: git-daemon
+          image: alpine/git:v2.45.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - apk add --no-cache git-daemon=2.45.4-r0 >/dev/null && exec git daemon --reuseaddr --base-path=/srv/git --export-all --enable=receive-pack /srv/git
+          ports:
+            - name: git
+              containerPort: 9418
+          volumeMounts:
+            - name: git-data
+              mountPath: /srv/git
+        - name: git-http
+          image: alpine:3.20.3
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              apk add --no-cache git-daemon=2.45.4-r0 busybox-extras=1.36.1-r31 >/dev/null
+              mkdir -p /www/cgi-bin
+              cat > /www/cgi-bin/git <<'EOF'
+              #!/bin/sh
+              export GIT_PROJECT_ROOT=/srv/git
+              export GIT_HTTP_EXPORT_ALL=1
+              exec git http-backend
+              EOF
+              chmod +x /www/cgi-bin/git
+              exec httpd -f -p 8080 -h /www
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: git-data
+              mountPath: /srv/git
+              readOnly: true
+      volumes:
+        - name: git-data
+          persistentVolumeClaim:
+            claimName: git-daemon-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: git-local
+  namespace: git-system
+  labels:
+    app.kubernetes.io/name: git-daemon
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: git-daemon
+  ports:
+    - name: git
+      port: 9418
+      targetPort: git
+    - name: http
+      port: 8080
+      targetPort: http
