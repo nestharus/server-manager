@@ -5,3 +5,4 @@ resources:
   - dns-egress.yaml
   - infisical-networkpolicies.yaml
   - minio-networkpolicies.yaml
+  - pdbs.yaml

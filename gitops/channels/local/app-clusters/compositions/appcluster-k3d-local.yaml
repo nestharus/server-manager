@@ -37,11 +37,27 @@ spec:
                     labels:
                       app.kubernetes.io/name: appcluster-provisioner
                   spec:
+                    automountServiceAccountToken: false
                     restartPolicy: Never
                     containers:
                       - name: k3d
                         image: docker:29.0.4-cli
                         imagePullPolicy: IfNotPresent
+                        securityContext:
+                          allowPrivilegeEscalation: false
+                          capabilities:
+                            drop:
+                              - ALL
+                          readOnlyRootFilesystem: false
+                          seccompProfile:
+                            type: RuntimeDefault
+                        resources:
+                          requests:
+                            cpu: 100m
+                            memory: 128Mi
+                          limits:
+                            cpu: 500m
+                            memory: 512Mi
                         env:
                           - name: APP_CLUSTER_NAME
                             value: humility-local-app
