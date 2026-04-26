@@ -97,7 +97,7 @@ data_plane:
     operator_namespace: cnpg-system
     operator_version: 1.29.0
     operator_manifest: gitops/channels/dev/data-plane/cnpg/rendered/cnpg-1.29.0.yaml
-    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
+    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-standard-trixie
   atlas:
     operator_namespace: atlas-operator
     chart_name: oci://ghcr.io/ariga/charts/atlas-operator
@@ -125,6 +125,7 @@ data_plane:
     revisions_schema: atlas_schema_revisions
     verify_table: sample_app.widgets
   backup:
+    # provider denotes the S3-compatible MinIO API contract; dev points at Vultr Object Storage.
     provider: minio
     endpoint: https://ewr1.vultrobjects.com
     bucket: humility-dev-sample

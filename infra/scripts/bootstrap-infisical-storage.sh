@@ -41,8 +41,8 @@ stop_port_forward() {
 
 cleanup() {
   stop_port_forward
-  if [[ "${#TEMP_FILES[@]}" -gt 0 ]]; then
-    rm -f "${TEMP_FILES[@]}"
+  if [[ ${#TEMP_FILES[@]} -gt 0 ]]; then
+    rm -f "${TEMP_FILES[@]+"${TEMP_FILES[@]}"}"
   fi
 }
 
@@ -107,7 +107,11 @@ need_command() {
 }
 
 kubectl_cmd() {
-  kubectl "${KUBECONFIG_ARG[@]}" "$@"
+  if [[ ${#KUBECONFIG_ARG[@]} -gt 0 ]]; then
+    kubectl "${KUBECONFIG_ARG[@]}" "$@"
+  else
+    kubectl "$@"
+  fi
 }
 
 json_field() {
@@ -446,8 +450,7 @@ resolve_channel_storage
 wait_for_server
 verify_operator_ua_secret
 if runtime_already_bootstrapped; then
-  log "Infisical object-storage credentials already synced to Secret/minio-root"
-  exit 0
+  log "Secret/minio-root already synced; proceeding to verify Infisical project and path"
 fi
 start_port_forward
 

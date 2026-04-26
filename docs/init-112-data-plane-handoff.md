@@ -58,6 +58,8 @@ The expected INIT-112 deliverables are:
 - restore drill into a separate recovery cluster
 - verification that restored data and credentials behave as expected
 - retention and failure-observability notes
+- migration from CNPG's deprecated in-tree Barman object-store backup fields to
+  the Barman Cloud CNPG-I plugin before any CNPG 1.30 upgrade
 
 Keep backup credentials in Infisical. Do not move database or object-storage
 credentials into SOPS.

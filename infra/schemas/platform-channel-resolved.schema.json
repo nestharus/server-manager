@@ -1618,6 +1618,7 @@
       ],
       "properties": {
         "provider": {
+          "description": "S3-compatible object storage provider using the MinIO API contract.",
           "const": "minio"
         },
         "endpoint": {

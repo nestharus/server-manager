@@ -119,7 +119,7 @@ data_plane:
     operator_namespace: cnpg-system
     operator_version: 1.29.0
     operator_manifest: gitops/channels/local/data-plane/cnpg/rendered/cnpg-1.29.0.yaml
-    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
+    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-standard-trixie
   atlas:
     operator_namespace: atlas-operator
     chart_name: oci://ghcr.io/ariga/charts/atlas-operator

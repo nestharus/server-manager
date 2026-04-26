@@ -11,6 +11,8 @@ PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
 RESOLVED_JSON=""
+KUSTOMIZE_CMD=()
+TEMP_FILES=()
 CNPG_NAMESPACE=""
 ATLAS_NAMESPACE=""
 SAMPLE_NAMESPACE=""
@@ -52,6 +54,12 @@ fail() {
 skip() {
   echo "SKIP: $1"
   SKIP_COUNT=$((SKIP_COUNT + 1))
+}
+
+cleanup() {
+  if [[ ${#TEMP_FILES[@]} -gt 0 ]]; then
+    rm -f "${TEMP_FILES[@]+"${TEMP_FILES[@]}"}"
+  fi
 }
 
 finish() {
@@ -104,9 +112,29 @@ python_bin() {
   fi
 }
 
+configure_kustomize_cmd() {
+  if command -v kubectl >/dev/null 2>&1; then
+    KUSTOMIZE_CMD=(kubectl kustomize)
+  elif command -v kustomize >/dev/null 2>&1; then
+    KUSTOMIZE_CMD=(kustomize build)
+  else
+    die "kubectl or kustomize is required for static manifest rendering"
+  fi
+}
+
 json_field() {
   local expression="$1"
   jq -er "$expression" <<<"$RESOLVED_JSON"
+}
+
+assert_json_equals() {
+  local expression="$1"
+  local expected="$2"
+  local description="$3"
+  local actual
+
+  actual="$(json_field "$expression")"
+  [[ "$actual" == "$expected" ]] || die "expected ${description} to be ${expected}, got: ${actual}"
 }
 
 assert_file() {
@@ -182,14 +210,15 @@ primary_pod() {
 assert_channel_contract() {
   RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST")"
 
-  [[ "$(json_field '.data_plane.provider')" == "cloudnative-pg" ]] || die "data_plane provider is cloudnative-pg"
-  [[ "$(json_field '.data_plane.cnpg.operator_namespace')" == "cnpg-system" ]] || die "CNPG namespace contract"
-  [[ "$(json_field '.data_plane.cnpg.operator_version')" == "1.29.0" ]] || die "CNPG version contract"
-  [[ "$(json_field '.data_plane.atlas.chart_version')" == "0.7.28" ]] || die "Atlas chart version contract"
-  [[ "$(json_field '.data_plane.credentials.infisical_project')" == "platform-databases" ]] || die "database Infisical project contract"
-  [[ "$(json_field '.data_plane.credentials.infisical_path')" == "/postgres/local/sample-app" ]] || die "database Infisical path contract"
-  [[ "$(json_field '.data_plane.backup.bucket')" == "humility-local-sample" ]] || die "backup bucket contract"
-  [[ "$(json_field '.data_plane.backup.endpoint')" == "http://minio.minio-system.svc.cluster.local:9000" ]] || die "backup endpoint contract"
+  assert_json_equals '.id' 'local' 'channel id'
+  assert_json_equals '.data_plane.provider' 'cloudnative-pg' 'data_plane provider'
+  assert_json_equals '.data_plane.cnpg.operator_namespace' 'cnpg-system' 'CNPG namespace'
+  assert_json_equals '.data_plane.cnpg.operator_version' '1.29.0' 'CNPG version'
+  assert_json_equals '.data_plane.atlas.chart_version' '0.7.28' 'Atlas chart version'
+  assert_json_equals '.data_plane.credentials.infisical_project' 'platform-databases' 'database Infisical project'
+  assert_json_equals '.data_plane.credentials.infisical_path' '/postgres/local/sample-app' 'database Infisical path'
+  assert_json_equals '.data_plane.backup.bucket' 'humility-local-sample' 'backup bucket'
+  assert_json_equals '.data_plane.backup.endpoint' 'http://minio.minio-system.svc.cluster.local:9000' 'backup endpoint'
   pass "resolved channel data_plane contract"
 
   CNPG_NAMESPACE="$(json_field '.data_plane.cnpg.operator_namespace')"
@@ -217,14 +246,15 @@ assert_static_manifests() {
 
   data_plane_render="$(mktemp)"
   local_render="$(mktemp)"
-  kubectl kustomize "${REPO_ROOT}/gitops/channels/local/data-plane" >"$data_plane_render"
+  TEMP_FILES+=("$data_plane_render" "$local_render")
+  "${KUSTOMIZE_CMD[@]}" "${REPO_ROOT}/gitops/channels/local/data-plane" >"$data_plane_render"
   pass "data-plane raw manifests kustomize"
-  kubectl kustomize --load-restrictor=LoadRestrictionsNone "${REPO_ROOT}/gitops/channels/local" >"$local_render"
+  "${KUSTOMIZE_CMD[@]}" --load-restrictor=LoadRestrictionsNone "${REPO_ROOT}/gitops/channels/local" >"$local_render"
   pass "local root kustomization includes data-plane"
 
-  grep -q '^kind: Cluster$' "$data_plane_render" || die "CNPG Cluster rendered"
-  grep -q '^kind: AtlasMigration$' "$data_plane_render" || die "AtlasMigration rendered"
-  grep -q 'name: sample-app-atlas-migrations' "$data_plane_render" || die "migration ConfigMap rendered"
+  grep -q '^kind: Cluster$' "$data_plane_render" || die "missing CNPG Cluster kind in rendered manifests"
+  grep -q '^kind: AtlasMigration$' "$data_plane_render" || die "missing AtlasMigration kind in rendered manifests"
+  grep -q 'name: sample-app-atlas-migrations' "$data_plane_render" || die "missing migration ConfigMap sample-app-atlas-migrations in rendered manifests"
   pass "sample Cluster and Atlas migration objects rendered"
 
   if rg -n '^kind: (Secret|Backup|ScheduledBackup)$' --glob '!**/rendered/**' "${REPO_ROOT}/gitops/channels/local/data-plane" >/tmp/init111-forbidden-kind.txt; then
@@ -239,7 +269,6 @@ assert_static_manifests() {
   fi
   pass "no committed database URL credential literals"
 
-  rm -f "$data_plane_render" "$local_render"
 }
 
 assert_runtime() {
@@ -284,19 +313,27 @@ assert_runtime() {
   kubectl_cmd -n "$SAMPLE_NAMESPACE" exec "$pod" -c postgres -- psql "$url" -v ON_ERROR_STOP=1 -c "select 1;" >/dev/null
   pass "psql connect succeeded through ${SAMPLE_SERVICE}"
 
-  kubectl_cmd -n "$SAMPLE_NAMESPACE" exec "$pod" -c postgres -- psql "$url" -v ON_ERROR_STOP=1 -Atc \
-    "select exists (select 1 from information_schema.tables where table_schema = '${table_schema}' and table_name = '${table_name}');" \
-    | grep -qx 't' || die "schema table ${VERIFY_TABLE} missing"
+  kubectl_cmd -n "$SAMPLE_NAMESPACE" exec -i "$pod" -c postgres -- psql "$url" -v ON_ERROR_STOP=1 \
+    -v "tbl_schema=${table_schema}" -v "tbl_name=${table_name}" -At \
+    <<'SQL' | grep -qx 't' || die "schema table ${VERIFY_TABLE} missing"
+select exists (
+  select 1
+  from information_schema.tables
+  where table_schema = :'tbl_schema'
+    and table_name = :'tbl_name'
+);
+SQL
   pass "schema verify found ${VERIFY_TABLE}"
 }
 
 main() {
+  trap cleanup EXIT
   parse_args "$@"
   command -v jq >/dev/null 2>&1 || die "jq is required"
   command -v rg >/dev/null 2>&1 || die "rg is required"
   command -v base64 >/dev/null 2>&1 || die "base64 is required"
-  command -v kubectl >/dev/null 2>&1 || die "kubectl is required"
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required"
+  configure_kustomize_cmd
 
   assert_channel_contract
   assert_static_manifests
