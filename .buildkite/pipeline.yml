@@ -17,6 +17,10 @@ steps:
     label: "Unit tests"
     command: "python -m pytest tests infra/tests"
 
+  - key: init-111-data-plane-static
+    label: "INIT-111 data plane static validation"
+    command: "infra/tests/validate_data_plane_local.sh --static-only"
+
   - wait
 
   - key: registry-build-push
