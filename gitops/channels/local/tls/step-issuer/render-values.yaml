@@ -1,0 +1,34 @@
+replicaCount: 1
+image:
+  repository: cr.step.sm/smallstep/step-issuer
+  pullPolicy: IfNotPresent
+  tag: "0.10.2"
+kubeRBACproxy:
+  image:
+    repository: gcr.io/kubebuilder/kube-rbac-proxy
+    pullPolicy: IfNotPresent
+    tag: v0.15.0
+serviceAccount:
+  create: true
+  name: step-issuer-controller-manager
+certManager:
+  serviceAccount:
+    name: cert-manager
+    namespace: cert-manager
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 20m
+    memory: 64Mi
+podSecurityContext:
+  fsGroup: 1000
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL

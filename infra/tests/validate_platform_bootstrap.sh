@@ -923,6 +923,141 @@ PY
   fi
 }
 
+assert_tls_step_ca_manifests() {
+  local tls_dir="${REPO_ROOT}/gitops/channels/local/tls"
+  local step_ca_dir="${tls_dir}/step-ca"
+  local step_issuer_dir="${tls_dir}/step-issuer"
+  local local_issuer_dir="${tls_dir}/local-issuer"
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/tls-step-ca-rendered.yaml"
+  local py_bin
+
+  for file in \
+    "gitops/channels/local/tls/step-ca/kustomization.yaml" \
+    "gitops/channels/local/tls/step-ca/namespace.yaml" \
+    "gitops/channels/local/tls/step-ca/render-values.yaml" \
+    "gitops/channels/local/tls/step-ca/rendered/step-certificates-1.30.1.yaml" \
+    "gitops/channels/local/tls/step-issuer/kustomization.yaml" \
+    "gitops/channels/local/tls/step-issuer/namespace.yaml" \
+    "gitops/channels/local/tls/step-issuer/render-values.yaml" \
+    "gitops/channels/local/tls/step-issuer/rendered/step-issuer-1.10.2.yaml" \
+    "gitops/channels/local/tls/local-issuer/kustomization.yaml" \
+    "gitops/channels/local/tls/local-issuer/configure-step-clusterissuer.yaml"; do
+    assert_repo_file_exists "$file"
+  done
+
+  mkdir -p "$(dirname "$rendered")"
+  if command -v kubectl >/dev/null 2>&1 \
+    && kubectl kustomize "$step_ca_dir" >"${rendered}.step-ca" \
+    && kubectl kustomize "$step_issuer_dir" >"${rendered}.step-issuer" \
+    && kubectl kustomize "$local_issuer_dir" >"${rendered}.local-issuer"; then
+    {
+      printf '%s\n' '---'
+      cat "${rendered}.step-ca"
+      printf '%s\n' '---'
+      cat "${rendered}.step-issuer"
+      printf '%s\n' '---'
+      cat "${rendered}.local-issuer"
+    } >"$rendered"
+    pass "kubectl kustomize step-ca, step-issuer, and local issuer"
+  else
+    fail "kubectl kustomize step-ca, step-issuer, and local issuer"
+    return
+  fi
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(HelmRelease|OCIRepository|HelmRepository)[[:space:]]*$' "$step_ca_dir" "$step_issuer_dir" "$local_issuer_dir"; then
+    fail "step-ca issuer install excludes runtime Helm resources"
+  else
+    pass "step-ca issuer install excludes runtime Helm resources"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "step-ca issuer rendered manifest contract"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+by_kind_name = {(doc.get("kind"), doc.get("metadata", {}).get("name")): doc for doc in docs}
+
+for ns in ("step-ca-system", "step-issuer-system"):
+    if by_kind_name.get(("Namespace", ns)) is None:
+        raise SystemExit(f"Namespace/{ns} missing")
+
+statefulset = by_kind_name.get(("StatefulSet", "step-ca"))
+if statefulset is None:
+    raise SystemExit("StatefulSet/step-ca missing")
+template = statefulset.get("spec", {}).get("template", {}).get("spec", {})
+containers = template.get("containers", [])
+init_containers = template.get("initContainers", [])
+if "busybox:1.37.0" not in {item.get("image") for item in init_containers}:
+    raise SystemExit("step-ca initContainer must use busybox:1.37.0")
+if "cr.smallstep.com/smallstep/step-ca:0.30.2" not in {item.get("image") for item in containers}:
+    raise SystemExit("step-ca image pin missing")
+if statefulset.get("metadata", {}).get("namespace") != "step-ca-system":
+    raise SystemExit("StatefulSet/step-ca wrong namespace")
+
+bootstrap_job = by_kind_name.get(("Job", "step-ca"))
+if bootstrap_job is None:
+    raise SystemExit("Job/step-ca bootstrap missing")
+job_containers = bootstrap_job.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+if "cr.smallstep.com/smallstep/step-ca-bootstrap:0.30.2" not in {item.get("image") for item in job_containers}:
+    raise SystemExit("step-ca bootstrap image pin missing")
+bootstrap_config = by_kind_name.get(("ConfigMap", "step-ca-bootstrap"))
+if bootstrap_config is None:
+    raise SystemExit("ConfigMap/step-ca-bootstrap missing")
+script = bootstrap_config.get("data", {}).get("bootstrap.sh", "")
+if "step ca provisioner add acme --type ACME" not in script:
+    raise SystemExit("step-ca bootstrap must add ACME provisioner")
+
+step_clusterissuer_crd = by_kind_name.get(("CustomResourceDefinition", "stepclusterissuers.certmanager.step.sm"))
+if step_clusterissuer_crd is None:
+    raise SystemExit("StepClusterIssuer CRD missing")
+step_issuer_deployment = by_kind_name.get(("Deployment", "step-issuer"))
+if step_issuer_deployment is None:
+    raise SystemExit("Deployment/step-issuer missing")
+issuer_images = {
+    item.get("image")
+    for item in step_issuer_deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+}
+if "cr.step.sm/smallstep/step-issuer:0.10.2" not in issuer_images:
+    raise SystemExit(f"step-issuer image pin missing: {issuer_images!r}")
+
+configure_job = by_kind_name.get(("Job", "configure-step-clusterissuer"))
+if configure_job is None:
+    raise SystemExit("Job/configure-step-clusterissuer missing")
+command = configure_job.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [{}])[0].get("command", [])
+script = command[-1] if command else ""
+required_fragments = [
+    "kind: StepClusterIssuer",
+    "name: humility-local-step-ca",
+    "url: https://step-ca.step-ca-system.svc.cluster.local",
+    "name: step-ca-provisioner-password",
+    "namespace: step-ca-system",
+]
+for fragment in required_fragments:
+    if fragment not in script:
+        raise SystemExit(f"configure job missing fragment: {fragment}")
+
+if any(doc.get("kind") == "Pod" and str(doc.get("metadata", {}).get("name", "")).endswith("test-connection") for doc in docs):
+    raise SystemExit("step-ca chart test Pod must not be applied")
+PY
+  then
+    pass "step-ca issuer rendered manifest contract"
+  else
+    fail "step-ca issuer rendered manifest contract"
+  fi
+
+  if grep -q '  - step-ca$' "${REPO_ROOT}/gitops/channels/local/tls/kustomization.yaml" \
+    && grep -q '  - step-issuer$' "${REPO_ROOT}/gitops/channels/local/tls/kustomization.yaml" \
+    && grep -q '  - local-issuer$' "${REPO_ROOT}/gitops/channels/local/tls/kustomization.yaml"; then
+    pass "TLS kustomization includes step-ca, step-issuer, and local issuer"
+  else
+    fail "TLS kustomization includes step-ca, step-issuer, and local issuer"
+  fi
+}
+
 assert_object_storage_infisical_bootstrap() {
   local script="${INFRA_DIR}/scripts/bootstrap-infisical-storage.sh"
   local storage_dir="${REPO_ROOT}/gitops/channels/local/object-storage/infisical"
@@ -2591,6 +2726,11 @@ echo ""
 echo "=== Slice 105.02 cert-manager raw manifest validation ==="
 
 assert_tls_cert_manager_manifests
+
+echo ""
+echo "=== Slice 105.03 step-ca and local issuer validation ==="
+
+assert_tls_step_ca_manifests
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="
