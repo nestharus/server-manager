@@ -397,6 +397,34 @@ assert_install_cluster_tools_check() {
   fi
 }
 
+assert_tool_version() {
+  local tool="$1"
+  local expected="$2"
+  local pattern="$3"
+  local raw_output
+  local output
+  local status
+
+  set +e
+  raw_output="$("$tool" --version 2>&1)"
+  status=$?
+  set -e
+  output="$(sed -n '1p' <<<"$raw_output")"
+
+  if [[ "$status" -eq 0 ]] && grep -Eq "$pattern" <<<"$output"; then
+    pass "${tool} --version returns ${expected} (${output//$'\n'/; })"
+  else
+    fail "${tool} --version returns ${expected} (${output//$'\n'/; })"
+  fi
+}
+
+assert_gitops_tool_versions() {
+  assert_tool_version "flux" "v2.8.6" '^flux version 2\.8\.6$'
+  assert_tool_version "sops" "v3.12.2" '^sops 3\.12\.2([[:space:]].*)?$'
+  assert_tool_version "age" "v1.3.1" '^v1\.3\.1$'
+  assert_tool_version "age-keygen" "v1.3.1" '^v1\.3\.1$'
+}
+
 assert_bring_up_script_help_works() {
   if bash "${INFRA_DIR}/scripts/bring-up-local-channel.sh" --help >/dev/null; then
     pass "bring-up-local-channel --help"
@@ -606,6 +634,7 @@ assert_executable "scripts/install-cluster-tools.sh"
 assert_executable "scripts/bring-up-local-channel.sh"
 assert_executable "scripts/delete-local-channel.sh"
 assert_install_cluster_tools_check
+assert_gitops_tool_versions
 assert_bring_up_script_help_works
 assert_delete_missing_local_cluster
 

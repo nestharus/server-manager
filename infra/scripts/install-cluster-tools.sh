@@ -2,6 +2,14 @@
 set -euo pipefail
 
 K3D_VERSION="v5.8.3"
+FLUX_VERSION="v2.8.6"
+SOPS_VERSION="v3.12.2"
+AGE_VERSION="v1.3.1"
+
+FLUX_SHA256="c53cc990ae266f7840f64c81515d701d8821d558a9062aa4211d71b38cf044be"
+SOPS_SHA256="14e2e1ba3bef31e74b70cf0b674f6443c80f6c5f3df15d05ffc57c34851b4998"
+AGE_SHA256="bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377"
+
 INSTALL_DIR="${HOME}/.local/bin"
 NO_COLOR=0
 MODE="check"
@@ -96,12 +104,87 @@ detect_k3d_asset() {
   esac
 }
 
+require_download_tools() {
+  local tool="$1"
+
+  command -v curl >/dev/null 2>&1 || die "curl is required to install ${tool}"
+  command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify ${tool}"
+}
+
+require_tar() {
+  local tool="$1"
+
+  command -v tar >/dev/null 2>&1 || die "tar is required to install ${tool}"
+}
+
+detect_linux_amd64() {
+  local tool="$1"
+  local kernel
+  local machine
+
+  kernel="$(uname -s)"
+  machine="$(uname -m)"
+
+  if [[ "$kernel" != "Linux" ]]; then
+    die "only Linux installs are supported for ${tool}; found ${kernel}"
+  fi
+
+  case "$machine" in
+    x86_64|amd64) ;;
+    *) die "only linux-amd64 installs are supported for ${tool}; found ${machine}" ;;
+  esac
+}
+
+verify_sha256() {
+  local file="$1"
+  local expected_sha="$2"
+  local description="$3"
+  local actual_sha
+
+  actual_sha="$(sha256sum "$file" | awk '{print $1}')"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    die "checksum mismatch for ${description}: expected ${expected_sha}, got ${actual_sha}"
+  fi
+}
+
 installed_k3d_version() {
   if ! command -v k3d >/dev/null 2>&1; then
     return 1
   fi
 
   k3d version 2>/dev/null | awk '/^k3d version / { print $3; exit }'
+}
+
+installed_flux_version() {
+  if ! command -v flux >/dev/null 2>&1; then
+    return 1
+  fi
+
+  flux --version 2>/dev/null | awk '/^flux version / { print "v" $3; exit }'
+}
+
+installed_sops_version() {
+  if ! command -v sops >/dev/null 2>&1; then
+    return 1
+  fi
+
+  sops --version 2>/dev/null | awk '/^sops / { print "v" $2; exit }'
+}
+
+installed_age_version() {
+  if ! command -v age >/dev/null 2>&1; then
+    return 1
+  fi
+
+  age --version 2>/dev/null | awk '{ print $1; exit }'
+}
+
+installed_age_keygen_version() {
+  if ! command -v age-keygen >/dev/null 2>&1; then
+    return 1
+  fi
+
+  age-keygen --version 2>/dev/null | awk '{ print $1; exit }'
 }
 
 check_k3d() {
@@ -121,53 +204,226 @@ check_k3d() {
   return 1
 }
 
+check_flux() {
+  local installed=""
+
+  if installed="$(installed_flux_version)" && [[ -n "$installed" ]]; then
+    if [[ "$installed" == "$FLUX_VERSION" ]]; then
+      echo "$(color "$GREEN" "OK"): flux ${installed}"
+      return 0
+    fi
+
+    echo "$(color "$YELLOW" "MISMATCH"): flux ${installed}; expected ${FLUX_VERSION}"
+    return 1
+  fi
+
+  echo "$(color "$YELLOW" "MISSING"): flux ${FLUX_VERSION}"
+  return 1
+}
+
+check_sops() {
+  local installed=""
+
+  if installed="$(installed_sops_version)" && [[ -n "$installed" ]]; then
+    if [[ "$installed" == "$SOPS_VERSION" ]]; then
+      echo "$(color "$GREEN" "OK"): sops ${installed}"
+      return 0
+    fi
+
+    echo "$(color "$YELLOW" "MISMATCH"): sops ${installed}; expected ${SOPS_VERSION}"
+    return 1
+  fi
+
+  echo "$(color "$YELLOW" "MISSING"): sops ${SOPS_VERSION}"
+  return 1
+}
+
+check_age() {
+  local installed=""
+  local installed_keygen=""
+  local status=0
+
+  if installed="$(installed_age_version)" && [[ -n "$installed" ]]; then
+    if [[ "$installed" == "$AGE_VERSION" ]]; then
+      echo "$(color "$GREEN" "OK"): age ${installed}"
+    else
+      echo "$(color "$YELLOW" "MISMATCH"): age ${installed}; expected ${AGE_VERSION}"
+      status=1
+    fi
+  else
+    echo "$(color "$YELLOW" "MISSING"): age ${AGE_VERSION}"
+    status=1
+  fi
+
+  if installed_keygen="$(installed_age_keygen_version)" && [[ -n "$installed_keygen" ]]; then
+    if [[ "$installed_keygen" == "$AGE_VERSION" ]]; then
+      echo "$(color "$GREEN" "OK"): age-keygen ${installed_keygen}"
+    else
+      echo "$(color "$YELLOW" "MISMATCH"): age-keygen ${installed_keygen}; expected ${AGE_VERSION}"
+      status=1
+    fi
+  else
+    echo "$(color "$YELLOW" "MISSING"): age-keygen ${AGE_VERSION}"
+    status=1
+  fi
+
+  return "$status"
+}
+
+check_all() {
+  local status=0
+
+  check_k3d || status=1
+  check_flux || status=1
+  check_sops || status=1
+  check_age || status=1
+
+  return "$status"
+}
+
 install_k3d() {
   local asset
   local expected_sha
   local url
   local tmpdir
   local tmpbin
-  local actual_sha
 
   asset="$(detect_k3d_asset)"
   expected_sha="$(required_sha256 "$asset")"
   url="https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-${asset}"
 
-  command -v curl >/dev/null 2>&1 || die "curl is required to install k3d"
-  command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify k3d"
+  require_download_tools "k3d"
 
   mkdir -p "$INSTALL_DIR"
   tmpdir="$(mktemp -d)"
-  trap '[[ -z "${tmpdir:-}" ]] || rm -rf "$tmpdir"' RETURN
   tmpbin="${tmpdir}/k3d"
 
   echo "Downloading k3d ${K3D_VERSION} from ${url}"
   curl -fsSL "$url" -o "$tmpbin"
 
-  actual_sha="$(sha256sum "$tmpbin" | awk '{print $1}')"
-  if [[ "$actual_sha" != "$expected_sha" ]]; then
-    die "checksum mismatch for k3d-${asset}: expected ${expected_sha}, got ${actual_sha}"
-  fi
+  verify_sha256 "$tmpbin" "$expected_sha" "k3d-${asset}"
 
   chmod 0755 "$tmpbin"
   mv "$tmpbin" "${INSTALL_DIR}/k3d"
+  rm -rf "$tmpdir"
   echo "$(color "$GREEN" "OK"): installed k3d ${K3D_VERSION} to ${INSTALL_DIR}/k3d"
+}
+
+install_flux() {
+  local version_without_v="${FLUX_VERSION#v}"
+  local url="https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/flux_${version_without_v}_linux_amd64.tar.gz"
+  local tmpdir
+  local archive
+  local tmpbin
+
+  detect_linux_amd64 "flux"
+  require_download_tools "flux"
+  require_tar "flux"
+
+  mkdir -p "$INSTALL_DIR"
+  tmpdir="$(mktemp -d)"
+  archive="${tmpdir}/flux.tar.gz"
+  tmpbin="${tmpdir}/flux"
+
+  echo "Downloading flux ${FLUX_VERSION} from ${url}"
+  curl -fsSL "$url" -o "$archive"
+  verify_sha256 "$archive" "$FLUX_SHA256" "flux linux-amd64 archive"
+
+  tar -xzf "$archive" -C "$tmpdir"
+  [[ -f "$tmpbin" ]] || die "flux archive did not contain ./flux"
+  install -m 0755 "$tmpbin" "${INSTALL_DIR}/flux"
+  rm -rf "$tmpdir"
+  echo "$(color "$GREEN" "OK"): installed flux ${FLUX_VERSION} to ${INSTALL_DIR}/flux"
+}
+
+install_sops() {
+  local url="https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64"
+  local tmpdir
+  local tmpbin
+
+  detect_linux_amd64 "sops"
+  require_download_tools "sops"
+
+  mkdir -p "$INSTALL_DIR"
+  tmpdir="$(mktemp -d)"
+  tmpbin="${tmpdir}/sops"
+
+  echo "Downloading sops ${SOPS_VERSION} from ${url}"
+  curl -fsSL "$url" -o "$tmpbin"
+  verify_sha256 "$tmpbin" "$SOPS_SHA256" "sops linux-amd64 binary"
+
+  install -m 0755 "$tmpbin" "${INSTALL_DIR}/sops"
+  rm -rf "$tmpdir"
+  echo "$(color "$GREEN" "OK"): installed sops ${SOPS_VERSION} to ${INSTALL_DIR}/sops"
+}
+
+install_age() {
+  local url="https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz"
+  local tmpdir
+  local archive
+  local tmpbin
+  local tmpkeygen
+
+  detect_linux_amd64 "age"
+  require_download_tools "age"
+  require_tar "age"
+
+  mkdir -p "$INSTALL_DIR"
+  tmpdir="$(mktemp -d)"
+  archive="${tmpdir}/age.tar.gz"
+
+  echo "Downloading age ${AGE_VERSION} from ${url}"
+  curl -fsSL "$url" -o "$archive"
+  verify_sha256 "$archive" "$AGE_SHA256" "age linux-amd64 archive"
+
+  tar -xzf "$archive" -C "$tmpdir"
+  tmpbin="$(find "$tmpdir" -type f -name age | head -n 1)"
+  tmpkeygen="$(find "$tmpdir" -type f -name age-keygen | head -n 1)"
+  [[ -n "$tmpbin" ]] || die "age archive did not contain age"
+  [[ -n "$tmpkeygen" ]] || die "age archive did not contain age-keygen"
+
+  install -m 0755 "$tmpbin" "${INSTALL_DIR}/age"
+  install -m 0755 "$tmpkeygen" "${INSTALL_DIR}/age-keygen"
+  rm -rf "$tmpdir"
+  echo "$(color "$GREEN" "OK"): installed age ${AGE_VERSION} and age-keygen ${AGE_VERSION} to ${INSTALL_DIR}"
+}
+
+install_missing_or_mismatched() {
+  if check_k3d; then
+    :
+  else
+    install_k3d
+  fi
+
+  if check_flux; then
+    :
+  else
+    install_flux
+  fi
+
+  if check_sops; then
+    :
+  else
+    install_sops
+  fi
+
+  if check_age; then
+    :
+  else
+    install_age
+  fi
 }
 
 main() {
   parse_args "$@"
 
   if [[ "$MODE" == "check" ]]; then
-    check_k3d
+    check_all
     return $?
   fi
 
-  if check_k3d; then
-    return 0
-  fi
-
-  install_k3d
-  check_k3d
+  install_missing_or_mismatched
+  check_all
 }
 
 main "$@"
