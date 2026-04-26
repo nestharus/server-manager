@@ -1,736 +1,617 @@
-# INIT-101 Phase 1 Research: Self-Managed k3s Control Cluster
+# INIT-102 Phase 1 Research: GitOps Substrate
 
-Scope: evidence-only research for replacing the archived INIT-008 VKE-shaped
-control-cluster substrate with self-managed k3s everywhere: k3d for the local
-channel and k3s on Vultr Cloud Compute VMs for remote channels.
+Scope: evidence-only research for INIT-102, the GitOps substrate that runs on
+top of INIT-101's k3s control cluster.
 
-Non-goal: this document does not choose the final implementation design. It
-records constraints, existing repo facts, upstream interfaces, risks, and open
-questions for the proposal phase.
+Non-goal: this document does not design the final implementation. It records
+repo facts, upstream contracts, local tool availability, risks, open questions,
+and proposal-phase inputs for Flux v2, Kustomize channel overlays, and
+SOPS+age bootstrap-only secrets.
 
 ## 0. Source Authority
 
-- D8 is the controlling decision. It resets Phase 5 around local-as-first
-  deployment, self-managed k3s everywhere, OpenTofu for Vultr primitives, and
-  cloud-init for remote VM k3s bootstrap. Citation: `DECISIONS.md:175-203`.
-- D8 supersedes VKE managed Kubernetes, kind as the local Kubernetes target,
-  fixed dev/staging/production roots, VKE/provider-vultr Crossplane app-cluster
-  compositions, and local-only/dry-run framing. Citation: `DECISIONS.md:207-249`.
-- D8 consequence: no VKE module, no VKE channel schema, no kind-only harness,
-  no SOPS-runtime framing, and no VKE Crossplane work should merge. Citation:
-  `DECISIONS.md:251-259`.
-- The environment-agnostic memory says local is a deployment target, not
-  verification or simulation. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:7-10`.
-- The local channel uses k3s in k3d, while remote channels use k3s on Vultr
-  Cloud Compute VMs. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:15-18`.
-- The memory explicitly forbids stubs, dry-run substitutes, kind-as-VKE
-  simulation, local-only verification as the goal, and env-specific rules where
-  channel parameterization can carry differences. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:29-37`.
-- The memory identifies INIT-008's VKE choice as a wrong result of the old
-  local-only framing and says to restore parity by switching to self-managed
-  k3s and dropping kind-vs-VKE asymmetry. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:62-77`.
-- The two-tier architecture memory preserves the control-cluster/app-cluster
-  separation: control cluster hosts platform controllers, not app workloads.
-  Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/two-tier-cluster-architecture.md:7-18`.
-- The same memory says app workloads belong on app clusters and that INIT-017
-  was the app-cluster provisioning owner in the old plan. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/two-tier-cluster-architecture.md:20-47`.
-- The channel-template memory rejects hard-coded environment roots and starts
-  from `infra/templates/platform-channel/`, `infra/channels/<id>/`, and
-  `infra/schemas/channel.schema.json`. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:7-8` and
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:50-56`.
-- The platform-stack memory locks Vultr, OpenTofu, Buildkite, Flux, Authentik,
-  OPAL/Cedar, Pomerium, Vultr Object Storage, and Vultr Object Storage remote
-  state, while its old VKE cluster row is superseded by D8. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/platform-stack.md:9-22`;
-  supersession citation: `DECISIONS.md:211-213`.
-- Phase 5 index names INIT-101 as the self-managed k3s control-cluster
-  initiative: k3d locally and OpenTofu plus Vultr VMs plus cloud-init for the
-  remote control-cluster contract. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:24-30`.
-- Phase 5 operating rules repeat the local-first, no-local-special-exceptions,
-  k3s-everywhere, wrong-shaped-work-deleted, and channel-template rules.
-  Citation: `product-strategy/tickets/PHASE_5_INDEX.md:96-120`.
-- Phase 5 index archives INIT-008 at commit `9f7090f` and says its VKE substrate
-  is discarded. Citation: `product-strategy/tickets/PHASE_5_INDEX.md:150-156`.
-- The phase-5 replan section for INIT-101 says the scope is self-managed k3s
-  everywhere; local channel creates k3d; remote channels use OpenTofu to
-  provision Vultr VMs and cloud-init to install k3s; VPC/firewall/object-state
-  backend/channel-template ideas remain where applicable. Citation:
-  `/home/nes/projects/server-manager/worktrees/phase-5-replan/.pipeline/replan.md:607-625`.
-- The replan says the VKE module, VKE roots, VKE channel schema, and
-  VKE-oriented docs are reference only and should not merge into the corrected
-  main path. Citation:
-  `/home/nes/projects/server-manager/worktrees/phase-5-replan/.pipeline/replan.md:202-211`.
-
-## 1. Current Repo State for the Control Cluster
-
-### 1.1 INIT-008 archive identity
-
-- The archived INIT-008 worktree is
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap`.
-  `git rev-parse --short HEAD` returns `9f7090f`. Command evidence: local
-  command run on 2026-04-25 in this session.
-- The archived commit subject is `fix: address INIT-008 CodeRabbit pass 5
-  cross-file consistency findings`. Command evidence: `git -C
-  /home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap log -1
-  --oneline`, 2026-04-25.
-- Phase 5 index matches this archive reference exactly. Citation:
-  `product-strategy/tickets/PHASE_5_INDEX.md:150-156`.
-
-### 1.2 INIT-008 infra survey
-
-- INIT-008 created `infra/bootstrap/state-backend/`, `infra/channels/`,
-  `infra/modules/platform-cluster/`, `infra/modules/platform-network/`,
-  `infra/roots/channels/dev/`, `infra/schemas/`, `infra/scripts/`,
-  `infra/templates/platform-channel/`, and `infra/tests/`. Citation:
-  local file listing from
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra`,
-  2026-04-25.
-- The archived `infra/channels/dev.yaml` has channel metadata:
-  `schema_version`, `id`, `parent`, `exposure`, `tenant`,
-  `allow_ephemeral_children`, and `enabled_platforms`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml:1-7`.
-- The same `dev.yaml` has a Vultr platform block with region `ewr` and VPC
-  subnet `10.40.0.0/20`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml:8-12`.
-- The current `dev.yaml` cluster block is VKE-shaped: `label`,
-  `kubernetes_version: v1.32.9+3`, a single `node_pools` array, managed
-  `ha_controlplanes`, and `enable_firewall`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml:13-21`.
-- The `dev.yaml` state block points at Vultr Object Storage state:
-  bucket `humility-tfstate`, key `channels/dev/terraform.tfstate`, region
-  `ewr`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml:22-25`.
-- The source schema requires root channels to include `platform`, `cluster`,
-  and `state`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/schemas/platform-channel.schema.json:68-99`.
-- The archived schema constrains `cluster.kubernetes_version` to a VKE-like
-  `vX.Y.Z+N` pattern, not a k3s release tag like `vX.Y.Z+k3s1`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/schemas/platform-channel.schema.json:145-148`.
-- The archived schema constrains `cluster.node_pools` to exactly one item.
-  Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/schemas/platform-channel.schema.json:149-157`.
-- The archived platform template currently calls `modules/platform-network`
-  and `modules/platform-cluster`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/templates/platform-channel/main.tf:1-20`.
-- The template passes VKE-specific variables such as
-  `cluster_kubernetes_version`, `node_plan`, `node_quantity`,
-  `ha_controlplanes`, and `enable_firewall`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/templates/platform-channel/main.tf:9-20`.
-- The archived `platform-cluster` module is explicitly documented as one VKE
-  cluster per environment. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-cluster/main.tf:1-2`.
-- The archived `platform-cluster` module provisions `vultr_kubernetes`, not
-  `vultr_instance`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-cluster/main.tf:50-64`.
-- The archived `platform-network` module provisions `vultr_vpc`, uses
-  region/subnet/mask variables, and outputs the VPC id and subnet attributes.
-  Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-network/main.tf:8-50`.
-- The archived state-backend bootstrap root provisions a
-  `vultr_object_storage` subscription and outputs S3 hostname/access/secret
-  values, with sensitive flags on keys. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/bootstrap/state-backend/main.tf:1-69`.
-- The archived `resolve_platform_channel.py` has reusable structural behavior:
-  source/resolved schema validation, YAML loading, parent lookup in active and
-  fixture channels, deep merge, ephemeral key generation, circular-parent guard,
-  and structured JSON errors. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/resolve_platform_channel.py:18-221`.
-- The archived `generate_channel_backend.py` turns resolved state fields into a
-  backend config with `bucket`, `key`, and `region`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/generate_channel_backend.py:14-37`.
-- The archived `generate_channel_tfvars.py` is structurally reusable but its
-  payload is VKE-shaped: it maps `cluster.kubernetes_version`,
-  `node_pools[0].plan`, `node_pools[0].count`, `ha_controlplanes`, and
-  `enable_firewall` to Terraform variables. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/generate_channel_tfvars.py:14-82`.
-- The archived harness checks toolchain, file existence, Terraform formatting,
-  Terraform validation, generated artifact drift, security assertions, and
-  channel resolver behavior. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/tests/validate_platform_bootstrap.sh:496-837`.
-
-### 1.3 Salvage/discard evidence from INIT-008
-
-- Salvageable: channel-template directory layout, because D8 preserves channel
-  templates and the channel-template memory names the same layout. Citations:
-  `DECISIONS.md:197-200`;
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:50-56`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/.pipeline/proposal.md:72-118`.
-- Salvageable: state-backend bootstrap concept, because D8 preserves Vultr
-  Object Storage for remote state and the archived root already models the
-  Object Storage subscription. Citations: `DECISIONS.md:191-192`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/bootstrap/state-backend/main.tf:1-69`;
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/platform-stack.md:15-16`.
-- Salvageable: VPC/network module concept, because D8 keeps Vultr cloud
-  primitives and remote VMs still need a Vultr network substrate. Citations:
-  `DECISIONS.md:189-192`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-network/main.tf:29-50`.
-- Salvageable with field changes: resolvers and generators, because their
-  inheritance/generation structure is independent of VKE but their field set is
-  not. Citations:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/resolve_platform_channel.py:143-189`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/generate_channel_tfvars.py:57-82`.
-- Salvageable with assertions rewritten: harness shape, because it already
-  covers toolchain, structure, generated drift, security, and channel-registry
-  behavior. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/tests/validate_platform_bootstrap.sh:496-837`.
-- Discard: `infra/modules/platform-cluster/`, because it is a
-  `vultr_kubernetes` VKE module and D8 says VKE is no longer the runtime
-  substrate. Citations:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-cluster/main.tf:50-64`;
-  `DECISIONS.md:189-190`;
-  `DECISIONS.md:211-213`.
-- Rewrite: `infra/templates/platform-channel/main.tf`, because it calls the
-  VKE module and passes VKE-shaped values. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/templates/platform-channel/main.tf:9-20`.
-- Rewrite: channel schemas and dev channel YAML, because they encode VKE
-  version and node-pool shape. Citations:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/schemas/platform-channel.schema.json:137-164`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml:13-21`.
-
-## 2. Self-Managed k3s - Local Mode with k3d
-
-### 2.1 What k3d is
-
-- k3d is a wrapper that runs k3s in Docker. Citation:
-  https://k3d.io/stable/
-- k3d supports single-node and multi-node k3s clusters in Docker for local
-  Kubernetes development. Citation: https://k3d.io/stable/
-- k3d requires Docker; k3d v5 requires Docker v20.10.5 or newer, and kubectl is
-  needed to interact with clusters. Citation: https://k3d.io/stable/
-- This matches the governing requirement that local uses k3s distribution via
-  k3d rather than kind. Citations:
-  `DECISIONS.md:216-217`;
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:17`.
-
-### 2.2 k3d installation evidence
-
-- k3d official docs support installing the latest release with:
-  `curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash`.
-  Citation: https://k3d.io/stable/
-- k3d official docs support pinning an install by setting `TAG`, for example:
-  `curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.0.0 bash`.
-  Citation: https://k3d.io/stable/
-- GitHub API check on 2026-04-25 reports latest k3d release `v5.8.3`,
-  published 2025-02-15. Citation:
-  https://github.com/k3d-io/k3d/releases/tag/v5.8.3; command evidence:
-  `curl -fsSL https://api.github.com/repos/k3d-io/k3d/releases/latest`.
-- Research implication for the proposal phase: a pinned install should use a
-  concrete k3d tag rather than floating `main`. Evidence: k3d docs support
-  `TAG`; current latest is `v5.8.3`. Citations:
-  https://k3d.io/stable/ and
-  https://github.com/k3d-io/k3d/releases/tag/v5.8.3.
-
-### 2.3 k3d cluster creation surface
-
-- `k3d cluster create NAME` creates a new k3s cluster with containerized nodes.
-  Citation: https://k3d.io/stable/usage/commands/k3d_cluster_create/
-- A k3d cluster consists of one or more k3s server containers, optionally a
-  load-balancer container, and optionally one or more k3s agent containers.
-  Citation: https://k3d.io/stable/usage/commands/k3d_cluster_create/
-- k3d supports `--servers` for the number of server nodes and `--agents` for
-  the number of agent nodes. Citation:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/
-- k3d supports `--api-port` to expose the Kubernetes API server through the
-  k3d load balancer. Citation:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/
-- k3d supports `--port` mappings from host to node containers through node
-  filters such as `loadbalancer` or `agent:0`. Citations:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/ and
-  https://k3d.io/stable/usage/exposing_services/
-- k3d supports `--volume` mounts into node containers. Citation:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/
-- k3d supports `--registry-create` to create and attach a k3d-managed registry,
-  and `--registry-use` to attach existing k3d-managed registries. Citation:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/
-
-### 2.4 Local topology evidence
-
-- D8 requires the local channel to produce a real local deployment target, not a
-  dry-run or render-only state. Citations: `DECISIONS.md:201-203`;
-  `product-strategy/tickets/PHASE_5_INDEX.md:98-104`.
-- The prompt allows local single-node to be fine while remote needs an HA
-  story. This document records that local single-server k3d is supported by
-  upstream; final local server/agent counts belong to proposal.
-- Local cluster name convention evidence from channel-template memory: channel
-  id is the environment identity and should replace hard-coded environment
-  names. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:24-40`
+- D8 is the controlling decision for INIT-102. Phase 5 is reset around
+  local-as-first-deployment, self-managed k3s everywhere, Flux as the GitOps
+  reconciler, SOPS+age as bootstrap-only, Infisical as runtime secrets, and
+  channel templates as the environment model. Citation: `DECISIONS.md:176-204`.
+- D8 supersedes kind as the Phase 5 local Kubernetes target and supersedes
+  SOPS+age as a runtime secret store. Citation: `DECISIONS.md:215-222`.
+- D8 also says MinIO bucket-watched Flux is superseded by Git-backed Flux.
+  Citation: `DECISIONS.md:229-230`.
+- D8 consequence: no VKE module, VKE schema, kind-only harness,
+  SOPS-runtime framing, or VKE Crossplane work should merge. Citation:
+  `DECISIONS.md:252-260`.
+- The environment-agnostic memory says local is a deployment target, not a
+  simulation; same code, components, and manifests run locally and remotely;
+  per-channel config carries differences. Citation:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:7-14`.
+- That memory says the GitOps layer is Flux reconciling a channel overlay in
+  both local and remote channels. Citation:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:15-20`.
+- The same memory explicitly forbids dry-run substitutes, kind-as-VKE
+  simulation, local-only verification as a goal, and environment-specific rules
+  where channel parameterization can carry the difference. Citation:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:29-43`.
+- It also records the prior mistake: treating secrets as SOPS-only was wrong;
+  Infisical is the runtime store. Citation:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:62-68`.
+- The channel-template memory rejects hard `infra/environments/dev`,
+  `staging`, and `production` roots and points at
+  `infra/templates/platform-channel/`, `infra/channels/<id>/channel.yaml`, and
+  a schema as the Phase 5 shape. Citation:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:7-8`
   and
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:67-78`.
-
-### 2.5 Local kubeconfig handling
-
-- By default, k3d updates the default kubeconfig with new cluster details and
-  sets the current context unless disabled. Citation:
-  https://k3d.io/stable/usage/kubeconfig/
-- k3d can emit kubeconfig with `k3d kubeconfig get mycluster > file`. Citation:
-  https://k3d.io/stable/usage/kubeconfig/
-- `k3d cluster delete mycluster` removes the cluster details from the default
-  kubeconfig and deletes the matching `$HOME/.k3d/` kubeconfig if it exists.
-  Citation: https://k3d.io/stable/usage/kubeconfig/
-- Proposal-phase relevance: local kubeconfig handling needs a channel-scoped
-  path or merge behavior because global current-context mutation is explicitly
-  called out by k3d docs. Citation: https://k3d.io/stable/usage/kubeconfig/.
-
-### 2.6 Local teardown/idempotency evidence
-
-- k3d has a first-class `cluster delete` command and deletion removes
-  kubeconfig entries. Citation: https://k3d.io/stable/usage/kubeconfig/.
-- k3d `cluster create` supports `--no-rollback` and otherwise has rollback
-  behavior on failure; `--wait` is enabled by default. Citation:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/.
-- Research implication: a local bring-up harness can verify create/delete/list
-  behavior through k3d commands, but the exact idempotent wrapper belongs in the
-  proposal/implementation phases.
-
-## 3. Self-Managed k3s - Remote Mode on Vultr VMs
-
-### 3.1 k3s install method and versioning evidence
-
-- K3s provides an install script at `https://get.k3s.io` for systemd/openrc
-  systems. Citation: https://docs.k3s.io/quick-start.
-- The standard single-node install command is
-  `curl -sfL https://get.k3s.io | sh -`. Citation:
-  https://docs.k3s.io/quick-start.
-- K3s install creates a service that restarts after reboot/process failure,
-  installs utilities including kubectl/crictl/ctr, and writes kubeconfig to
-  `/etc/rancher/k3s/k3s.yaml`. Citation: https://docs.k3s.io/quick-start.
-- A single-node K3s server is a fully functional Kubernetes cluster with
-  datastore, control-plane, kubelet, and container runtime components. Citation:
-  https://docs.k3s.io/quick-start.
-- Agents join with `K3S_URL` and `K3S_TOKEN`; the token lives at
-  `/var/lib/rancher/k3s/server/node-token` on the server. Citation:
-  https://docs.k3s.io/quick-start.
-- K3s install script supports `INSTALL_K3S_EXEC`, `K3S_` environment variables,
-  and trailing flags, and persists these into service configuration. Citation:
-  https://docs.k3s.io/installation/configuration.
-- K3s supports configuration files at `/etc/rancher/k3s/config.yaml` and
-  drop-ins under `/etc/rancher/k3s/config.yaml.d/*.yaml`. Citation:
-  https://docs.k3s.io/installation/configuration.
-- K3s manual upgrade docs support pinning to a specific version with
-  `INSTALL_K3S_VERSION=vX.Y.Z+k3s1`. Citation:
-  https://docs.k3s.io/upgrades/manual.
-- GitHub API check on 2026-04-25 reports latest k3s release
-  `v1.35.3+k3s1`, published 2026-03-28. Citation:
-  https://github.com/k3s-io/k3s/releases/tag/v1.35.3%2Bk3s1; command evidence:
-  `curl -fsSL https://api.github.com/repos/k3s-io/k3s/releases/latest`.
-- The prompt's example `v1.32.5+k3s1` matches the upstream k3s tag shape, but
-  current latest observed in this session is `v1.35.3+k3s1`. Citation:
-  https://github.com/k3s-io/k3s/releases/tag/v1.35.3%2Bk3s1.
-
-### 3.2 Remote HA and networking evidence
-
-- K3s embedded-etcd HA requires an odd number of server nodes for quorum.
-  Citation: https://docs.k3s.io/datastore/ha-embedded.
-- K3s embedded-etcd HA is composed of three or more server nodes, optional
-  agent nodes, and optionally a fixed registration address. Citation:
-  https://docs.k3s.io/datastore/ha-embedded.
-- The first HA server starts with `--cluster-init` and a shared token. Citation:
-  https://docs.k3s.io/datastore/ha-embedded.
-- K3s server nodes must match critical configuration flags, including network,
-  component-disable, and feature flags. Citation:
-  https://docs.k3s.io/datastore/ha-embedded.
-- K3s requirements list inbound TCP 2379-2380 between servers for embedded
-  etcd HA, TCP 6443 from agents to servers for supervisor/API, UDP 8472 for
-  Flannel VXLAN, and TCP 10250 for kubelet metrics/API. Citation:
-  https://docs.k3s.io/installation/requirements.
-- K3s small HA-server sizing table lists up to 10 nodes as 2 vCPU and 4 GB RAM
-  minimum for server nodes. Citation: https://docs.k3s.io/installation/requirements.
-- D8 does not decide single server vs embedded-etcd HA vs external DB; it only
-  decides self-managed k3s on Vultr VMs. Citation: `DECISIONS.md:186-194`.
-- Proposal blocker: remote HA topology is not fully decided in current project
-  sources; upstream supports both single-node and HA patterns, but D8 only
-  fixes k3s-on-VM substrate.
-
-### 3.3 Vultr VM provisioning surface
-
-- Vultr Terraform provider has a `vultr_instance` resource for creating and
-  managing virtual machine instances with configurable plans, regions, and
-  operating systems. Citation:
-  https://docs.vultr.com/reference/terraform/resources/instance.
-- `vultr_instance` supports `firewall_group_id`, `vpc_ids`,
-  `ssh_key_ids`, `user_data`, `hostname`, `tags`, and `label` attributes.
-  Citation: https://docs.vultr.com/reference/terraform/resources/instance.
-- Vultr docs say `user_data` is a generic store used by provisioning tools and
-  cloud OSes as configuration and is generally consumed once at launch. Citation:
-  https://docs.vultr.com/reference/terraform/resources/instance.
-- Vultr cloud-init article says Terraform can provision Vultr Cloud Servers and
-  initialize them with Cloud-Init. Citation:
-  https://docs.vultr.com/provision-a-vultr-cloud-server-with-terraform-and-cloud-init.
-- Vultr cloud-init article warns that applying the demo deploys actual cloud
-  resources and unused services should be destroyed. Citation:
-  https://docs.vultr.com/provision-a-vultr-cloud-server-with-terraform-and-cloud-init.
-- Vultr `vultr_vpc` creates, manages, and deletes VPC networks with region,
-  description, subnet, and mask. Citation:
-  https://docs.vultr.com/reference/terraform/resources/vpc.
-- Vultr `vultr_vpc2` is documented as deprecated and replaced by `vultr_vpc`.
-  Citation: https://docs.vultr.com/reference/terraform/resources/vpc2.
-- INIT-008's existing network module already uses `vultr_vpc`, not
-  `vultr_vpc2`. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-network/main.tf:29-34`.
-- GitHub API check on 2026-04-25 reports latest Vultr Terraform provider
-  release `v2.31.0`, published 2026-04-21. Citation:
-  https://github.com/vultr/terraform-provider-vultr/releases/tag/v2.31.0.
-- The locked memory says provider constraint `vultr/vultr ~> 2.30` and
-  OpenTofu `>= 1.8.0`; current provider latest is `v2.31.0`, so proposal must
-  either keep the existing constraint or update it explicitly. Citations:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/platform-stack.md:11`;
-  https://github.com/vultr/terraform-provider-vultr/releases/tag/v2.31.0.
-
-### 3.4 Vultr plans and minimum sizing evidence
-
-- Vultr public plans API was reachable without auth on 2026-04-25 at
-  `https://api.vultr.com/v2/plans?per_page=500`. Command evidence from this
-  session.
-- Observed EWR-capable candidate plans:
-  `vc2-1c-2gb` = 1 vCPU, 2048 MB RAM, 55 GB SSD, $10/month;
-  `vc2-2c-2gb` = 2 vCPU, 2048 MB RAM, 65 GB SSD, $15/month;
-  `vc2-2c-4gb` = 2 vCPU, 4096 MB RAM, 80 GB SSD, $20/month;
-  `vhf-2c-4gb` = 2 vCPU, 4096 MB RAM, 128 GB high-frequency disk, $24/month.
-  Command evidence: Vultr plans API query run 2026-04-25.
-- K3s small HA-server minimum is 2 vCPU and 4 GB RAM for up to 10 nodes.
-  Citation: https://docs.k3s.io/installation/requirements.
-- Evidence-based sizing implication: `vc2-2c-4gb` and `vhf-2c-4gb` meet the
-  upstream small HA-server CPU/RAM minimum; `vc2-1c-2gb` and `vc2-2c-2gb` do
-  not meet both CPU/RAM minimums for HA servers. Sources:
-  K3s requirements URL above plus Vultr plans API command evidence.
-- INIT-008 dev channel used `vc2-2c-4gb` for VKE node-pool nodes, which happens
-  to match the K3s small HA-server CPU/RAM minimum. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml:16-19`.
-- This is sizing evidence, not a remote topology decision.
-
-### 3.5 Remote kubeconfig retrieval evidence
-
-- K3s writes kubeconfig at `/etc/rancher/k3s/k3s.yaml` after install. Citation:
-  https://docs.k3s.io/quick-start.
-- K3sup fetches kubeconfig from a remote VM and updates it for workstation
-  kubectl access. Citation: https://github.com/alexellis/k3sup.
-- K3sup runs over SSH, installs k3s, fetches kubeconfig, and can join agents.
-  Citation: https://github.com/alexellis/k3sup.
-- Vultr Marketplace's k3s app documentation says its preconfigured image
-  exposes kubeconfig at `/root/k3s-public.yaml` after SSH login. Citation:
-  https://www.vultr.com/marketplace/apps/k3s/.
-- Research implication: remote kubeconfig retrieval has at least three evidence
-  paths: direct SSH copy of `/etc/rancher/k3s/k3s.yaml`, k3sup, and Vultr
-  Marketplace app behavior. The proposal must choose the project path.
-
-### 3.6 Known Vultr+k3s references
-
-- Official Vultr Marketplace has a k3s app that deploys a preconfigured k3s
-  environment with kubectl and helm. Citation:
-  https://www.vultr.com/marketplace/apps/k3s/.
-- The Vultr Marketplace app is not the same as OpenTofu+cloud-init bootstrap,
-  but it confirms Vultr-hosted VM k3s is an acknowledged Vultr path. Citation:
-  https://www.vultr.com/marketplace/apps/k3s/.
-- Greg Meszaros's 2020 article demonstrates k3sup installing a multi-node k3s
-  cluster on separate Vultr VMs with SSH keys and master/worker nodes. Citation:
-  https://gregmeszaros.medium.com/lightweight-kubernetes-cluster-on-vultr-com-7264e8fc03b1.
-- k3sup upstream is provider-agnostic but explicitly supports bootstrapping k3s
-  onto any VM, including through cloud-init, and supports HA/multi-master.
-  Citation: https://github.com/alexellis/k3sup.
-- Search found generic Terraform/k3s modules, for example
-  `xunleii/k3s/module`, that manage k3s on given machines, but the first
-  search pass did not confirm a current, official Vultr-specific Terraform k3s
-  module suitable as a project dependency. Citation:
-  https://registry.terraform.io/modules/xunleii/k3s/module/latest.
-- Research classification: confirmed Vultr-VM-based k3s references exist
-  (Vultr Marketplace, k3sup-on-Vultr article), but a maintained
-  OpenTofu/Vultr/k3s/cloud-init reference architecture was not confirmed in the
-  first-pass search.
-
-## 4. Channel Schema - k3s-Shaped Fields
-
-This section records evidence-backed schema pressure. Final schema is proposal
-work.
-
-- Current INIT-008 schema has `cluster.kubernetes_version` with VKE tag shape.
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:50-56`.
+- The channel-template memory specifically says Flux Kustomizations should
+  align with channels and that inheritance maps to Kustomize bases/overlays.
   Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/schemas/platform-channel.schema.json:145-148`.
-- Current INIT-008 dev channel uses `v1.32.9+3`, a VKE-shaped version value.
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:67-74`.
+- The two-tier architecture memory says the control/platform cluster hosts
+  platform controllers, including Flux, and does not host application
+  workloads. Citation:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/two-tier-cluster-architecture.md:7-18`.
+- The Phase 5 index names INIT-102 as "Flux, Kustomize channel overlays,
+  SOPS+age bootstrap-only, real reconciliation in local k3d." Citation:
+  `product-strategy/tickets/PHASE_5_INDEX.md:24-31`.
+- The Phase 5 operating rules repeat that Flux must reconcile the local
+  channel from this repository and that SOPS+age bootstraps only secrets needed
+  to start runtime secret management. Citation:
+  `product-strategy/tickets/PHASE_5_INDEX.md:96-130`.
+- The Phase 5 index archives INIT-009 as reference-only and says Flux,
+  Kustomize, and SOPS ideas are salvageable through INIT-102. Citation:
+  `product-strategy/tickets/PHASE_5_INDEX.md:150-156`.
+- The no-backwards-compatibility convention bans deprecated aliases, dual
+  implementations, transitional adapters, and partial migrations. Citation:
+  `~/ai/conventions/no-backwards-compatibility.md:1-24`.
+
+## 1. Current Repo State For GitOps
+
+### 1.1 INIT-101 control-cluster substrate
+
+- INIT-101's proposal says the local channel runs k3d, remote channels are
+  OpenTofu-managed Vultr Cloud Compute VMs bootstrapped by cloud-init, and the
+  done state is a real local k3d cluster with `kubectl get nodes` succeeding.
   Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml:13-16`.
-- Upstream k3s release tags use `vX.Y.Z+k3sN`; latest observed is
-  `v1.35.3+k3s1`. Citation:
-  https://github.com/k3s-io/k3s/releases/tag/v1.35.3%2Bk3s1.
-- D8 requires Kubernetes distribution to be self-managed k3s everywhere.
-  Citation: `DECISIONS.md:186-194`.
-- Environment-agnostic memory says local Kubernetes is k3s in k3d and remote
-  Kubernetes is k3s on Vultr Cloud Compute VMs. Citation:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:15-18`.
-- Research-backed top-level cluster fields required by D8:
-  `cluster.distribution = k3s`, `cluster.target = k3d-local | vultr-vms`,
-  and `cluster.k3s_version = vX.Y.Z+k3sN`. Citations:
-  `DECISIONS.md:186-194`;
-  https://github.com/k3s-io/k3s/releases/tag/v1.35.3%2Bk3s1.
-- For `vultr-vms`, field pressure comes from K3s topology and Vultr instance
-  resource shape: server count, server plan, agent count, agent plan, region,
-  VPC/firewall/SSH/user_data, and bootstrap token handling. Citations:
-  https://docs.k3s.io/datastore/ha-embedded;
-  https://docs.vultr.com/reference/terraform/resources/instance.
-- For `k3d-local`, field pressure comes from k3d flags: server count, agent
-  count, registry create/use/config, k3s image, kubeconfig behavior, port
-  mappings, and volumes. Citations:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/;
-  https://k3d.io/stable/usage/registries/;
-  https://k3d.io/stable/usage/kubeconfig/.
-- The prompt's proposed local fields
-  `cluster.k3d_servers`, `cluster.k3d_agents`, and
-  `cluster.k3d_registry_name` map directly to k3d `--servers`, `--agents`, and
-  `--registry-create/--registry-use` capabilities. Citation:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/.
-- The prompt's proposed remote fields `cluster.servers.count`,
-  `cluster.servers.plan`, `cluster.agents.count`, `cluster.agents.plan`, and
-  `cluster.region` map to K3s server/agent topology and Vultr `plan`/`region`.
-  Citations: https://docs.k3s.io/datastore/ha-embedded and
-  https://docs.vultr.com/reference/terraform/resources/instance.
-- The existing channel resolver structurally supports parent inheritance and
-  field overrides; the field names are what must change. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/resolve_platform_channel.py:143-189`.
-- The existing tfvars generator does not support target-specific payloads; it
-  assumes one VKE-shaped cluster payload. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/generate_channel_tfvars.py:14-82`.
-- Open question: whether schema version remains `1` with a clean replacement
-  before merge or bumps. No-backwards-compatibility rules forbid dual readers;
-  D8 says wrong-shaped work is reference-only. Citations:
-  `DECISIONS.md:204-205`;
-  `product-strategy/tickets/PHASE_5_INDEX.md:108-115`.
+  `/home/nes/projects/server-manager/worktrees/init-101-k3s-control-cluster/.pipeline/proposal.md:45-76`.
+- INIT-101 explicitly leaves Flux to INIT-102, Infisical to INIT-103, and
+  Crossplane to INIT-106. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-101-k3s-control-cluster/.pipeline/proposal.md:79-90`.
+- INIT-101's `infra/` shape includes channel schemas, `local.yaml`,
+  `dev.yaml`, `infra/templates/platform-channel/`, local and dev OpenTofu
+  roots, `platform-cluster-k3d`, `platform-cluster-vms`, and local bring-up
+  scripts. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-101-k3s-control-cluster/.pipeline/proposal.md:91-155`.
+- Current `infra/README.md` says `infra/` contains Vultr-locked OpenTofu,
+  self-managed k3s, channel templates, and local-first deployment scripts.
+  Citation: `infra/README.md:5-15`.
+- Current `infra/README.md` says required INIT-101 tools are OpenTofu `1.11.5`,
+  kubectl `>= 1.31`, Docker `>= 24`, Python `>= 3.10` with `jsonschema` and
+  `PyYAML`, and k3d `v5.8.3`. Citation: `infra/README.md:16-29`.
+- Current `infra/templates/platform-channel/main.tf` dispatches on
+  `cluster_target`: `k3d-local` calls `platform-cluster-k3d`, while
+  `vultr-vms` calls network plus `platform-cluster-vms`. Citation:
+  `infra/templates/platform-channel/main.tf:5-44`.
+- Current `infra/templates/platform-channel/variables.tf` accepts
+  `cluster_target` values `k3d-local` and `vultr-vms`, and constrains
+  `cluster_distribution` to `k3s`. Citation:
+  `infra/templates/platform-channel/variables.tf:6-24`.
+- Current `infra/channels/local.yaml` is a k3d-local channel with k3s
+  `v1.32.13+k3s1`, one server, one agent, registry `humility-local`, and state
+  key `channels/local/terraform.tfstate`. Citation: `infra/channels/local.yaml:1-19`.
+- Current `infra/channels/dev.yaml` is a Vultr VM channel with region `ewr`,
+  remote kubeconfig path `/root/humility-k3s.yaml`, one `vc2-2c-4gb` server,
+  zero agents, and state key `channels/dev/terraform.tfstate`. Citation:
+  `infra/channels/dev.yaml:1-27`.
+- Current `infra/schemas/platform-channel.schema.json` has no `gitops` block
+  and no Flux/SOPS fields. It defines metadata, `cluster`, and `state`.
+  Citation: `infra/schemas/platform-channel.schema.json:16-47`.
 
-## 5. Salvageable Structure from INIT-008
+### 1.2 Current GitOps material in this worktree
 
-- Reuse: `infra/templates/platform-channel/` as the template directory shape.
-  Evidence: channel-template memory names this shape, and INIT-008 implemented
-  it. Citations:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:50-56`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/.pipeline/proposal.md:90-95`.
-- Reuse: `infra/bootstrap/state-backend/`, because Object Storage remote state
-  remains. Citations:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/platform-stack.md:15-16`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/bootstrap/state-backend/main.tf:47-69`.
-- Reuse: `infra/modules/platform-network/`, because remote Vultr VM channels
-  still need a VPC and the module already uses `vultr_vpc`. Citations:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-network/main.tf:29-50`;
-  https://docs.vultr.com/reference/terraform/resources/vpc.
-- Discard: `infra/modules/platform-cluster/`, because it is VKE-specific.
-  Citations:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-cluster/main.tf:1-2`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-cluster/main.tf:50-64`;
-  `DECISIONS.md:211-213`.
-- Rewrite: `infra/templates/platform-channel/main.tf`, because it calls the
-  VKE module. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/templates/platform-channel/main.tf:9-20`.
-- Rewrite: channel YAML schemas, because they encode VKE version and node-pool
-  fields. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/schemas/platform-channel.schema.json:137-164`.
-- Reuse structurally: `resolve_platform_channel.py`, because parent lookup,
-  inheritance, fixture handling, and structured errors are not VKE-specific.
+- Contrary to the prompt's "no Flux manifests in tree" expectation, the current
+  worktree has a 38-file `k8s/` tree. Command evidence: `find k8s -type f |
+  wc -l` returned `38` on 2026-04-26.
+- That `k8s/` tree is not channel-template-shaped. Its active overlays are
+  hard-coded `dev`, `staging`, and `production`, each split into
+  `control-cluster` and `app-cluster`. Citation:
+  `k8s/tests/test_gitops_foundation.sh:217-248`.
+- The `k8s/` tree includes Flux CR objects in `gotk-sync.yaml`, but the source
+  URL is a placeholder `ssh://git@example.com/humility/discord.git`. Citation:
+  `k8s/clusters/dev/control-cluster/gotk-sync.yaml:1-25`.
+- The same placeholder URL appears in staging and production control/app
+  cluster roots. Citation:
+  `k8s/clusters/staging/control-cluster/gotk-sync.yaml:1-25` and
+  `k8s/clusters/production/control-cluster/gotk-sync.yaml:1-25`.
+- The current `k8s/` base includes generated ConfigMaps, namespaces, and
+  policy markers, but no vendored Flux controller install manifest. Citation:
+  `k8s/base/kustomization.yaml:1-7` and
+  `k8s/base/controllers/kustomization.yaml:1-11`.
+- The current `k8s/` roots include app-cluster paths before INIT-106 creates
+  application cluster provisioning. Citation:
+  `k8s/clusters/dev/app-cluster/gotk-sync.yaml:1-25`; controlling boundary:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/two-tier-cluster-architecture.md:20-47`.
+- The current `k8s/` validation test bans Buildkite direct cluster mutation and
+  validates Flux paths, which is conceptually salvageable as harness posture.
+  Citation: `k8s/tests/test_gitops_foundation.sh:197-254`.
+- The current worktree has no root-level `gitops/` directory. Command evidence:
+  `find gitops -maxdepth 3 -type f` returned no files on 2026-04-26.
+- The current worktree has no `.sops.yaml` and no `*.enc.yaml` files. Command
+  evidence: `find . -name '.sops.yaml' -o -name '*.enc.yaml'` returned no files
+  on 2026-04-26.
+- Current `.pipeline/` files in this worktree are stale INIT-101 artifacts:
+  `.pipeline/proposal.md` is titled "INIT-101 Phase 3 Proposal." Citation:
+  `.pipeline/proposal.md:1-4`.
+
+### 1.3 INIT-009 archived GitOps substrate
+
+- The archived INIT-009 worktree is
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate`,
+  branch `feat/init-009-gitops-substrate`, HEAD `027b3b6`. Command evidence:
+  `git -C ... rev-parse --short HEAD` and `git -C ... log -1 --oneline` on
+  2026-04-26.
+- INIT-009's proposal was bound to old decisions: local cluster was `kind`,
+  active manifests under root-level `gitops/`, SOPS recipients were
+  per-channel, and `k8s/` was deleted. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:26-36`.
+- Salvageable shape: INIT-009 proposed Flux on the control cluster,
+  channel-aligned Kustomize layout, local Git source for verification, and a
+  root-level `gitops/` tree. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:39-73`.
+- Wrong-shaped detail: INIT-009 used kind for local verification, now
+  superseded by D8's k3d/k3s requirement. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:382-390`
+  and `DECISIONS.md:215-218`.
+- Wrong-shaped detail: INIT-009 used `dev` as the active channel inherited from
+  the old INIT-008 control-cluster channel, while INIT-101 now provides
+  `local` as the real first deployment target. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/README.md:10-17`
+  and `infra/channels/local.yaml:1-19`.
+- Wrong-shaped detail: INIT-009 generated Flux `gotk-components.yaml` with
+  source, kustomize, helm, notification, image-reflector, and
+  image-automation controllers. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/bases/flux-system/gotk-components.yaml:1-14`.
+- Wrong-shaped detail: INIT-009's SOPS sample contained a placeholder age
+  recipient and an unencrypted placeholder Secret with empty `stringData`.
   Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/resolve_platform_channel.py:65-189`.
-- Reuse structurally but rewrite payload: `generate_channel_tfvars.py`, because
-  the current emitted keys are VKE-shaped. Citation:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/generate_channel_tfvars.py:14-82`.
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/.sops.yaml:17-24`
+  and
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/bootstrap-creds.enc.yaml:1-10`.
+- Salvageable SOPS custody notes: public recipient committed in `.sops.yaml`,
+  private key stored outside the repo, `SOPS_AGE_KEY_FILE` used for local
+  decryption, and add/remove/rotate runbook. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/README.md:7-35`.
+- Discard the SOPS-as-runtime framing. D8 says SOPS+age is bootstrap-only and
+  Infisical owns runtime secrets. Citation: `DECISIONS.md:196-198` and
+  `DECISIONS.md:219-222`.
 
-## 6. Toolchain Check
+## 2. Flux v2 Installation Contract
 
-- `tofu` is present at `/home/nes/.local/bin/tofu`. Command evidence:
-  `command -v tofu`, 2026-04-25.
-- `tofu version` reports `OpenTofu v1.11.5 on linux_amd64`. Command evidence:
-  `tofu version`, 2026-04-25.
-- `kubectl` is present at `/usr/local/bin/kubectl`. Command evidence:
-  `command -v kubectl`, 2026-04-25.
-- `kubectl version --client=true -o yaml` reports client `v1.34.1`,
-  git commit `93248f9ae092f571eb870b7664c534bfc7d00f03`, build date
-  `2025-09-09T19:44:50Z`, platform `linux/amd64`. Command evidence:
-  `kubectl version --client=true -o yaml`, 2026-04-25.
-- The same command reports embedded `kustomizeVersion: v5.7.1`. Command
-  evidence: `kubectl version --client=true -o yaml`, 2026-04-25.
-- `docker` is present at `/usr/bin/docker`. Command evidence:
-  `command -v docker`, 2026-04-25.
-- `docker --version` reports `Docker version 29.4.0, build 9d7ad9f`; `docker
-  info --format '{{json .ServerVersion}}'` reports `29.4.0`. Command evidence,
-  2026-04-25.
-- `k3d` is not present in `PATH`; `k3d --version` exits 127 with `command not
-  found`. Command evidence: `k3d --version`, 2026-04-25.
-- `k3s` is not present in `PATH`; `k3s --version` exits 127 with `command not
-  found`. Command evidence: `k3s --version`, 2026-04-25.
+### 2.1 Flux components and minimum controller set
 
-## 7. Known Risks and Open Questions
+- Flux documents four GitOps Toolkit controller families: source-controller,
+  kustomize-controller, helm-controller, and notification-controller. Citation:
+  https://fluxcd.io/flux/components/
+- source-controller is the API for sources such as Git repositories, Helm
+  repositories, Helm charts, OCI repositories, and Buckets. Citation:
+  https://fluxcd.io/flux/components/source/
+- kustomize-controller specializes in running continuous delivery pipelines for
+  infrastructure and workloads defined with Kubernetes manifests and assembled
+  with Kustomize. Citation: https://fluxcd.io/flux/components/kustomize/
+- The `Kustomization` API states that `.spec.interval` is required and defines
+  the interval at which reconciliation is performed. Citation:
+  https://fluxcd.io/flux/components/kustomize/kustomizations/
+- The `GitRepository` API states that `.spec.interval` is required and defines
+  how often the source is reconciled. Citation:
+  https://fluxcd.io/flux/components/source/gitrepositories/
+- INIT-102's minimum functional loop for raw manifests is source-controller
+  plus kustomize-controller: source-controller fetches the artifact, and
+  kustomize-controller applies a `Kustomization` path from that source.
+  Evidence chain: source-controller GitRepository docs plus kustomize-controller
+  Kustomization docs above.
+- helm-controller is needed for `HelmRelease` reconciliation, but INIT-102
+  explicitly excludes Helm/application workloads; later initiatives may add
+  Helm sources. Citation for Flux Helm API:
+  https://fluxcd.io/flux/components/helm/
+- notification-controller owns alerting/webhook receiver surfaces. INIT-117 owns
+  observability/notifications in the Phase 5 index. Citation:
+  `product-strategy/tickets/PHASE_5_INDEX.md:45` and
+  https://fluxcd.io/flux/components/notification/
+- OCIRepository is a source-controller CRD and can be used as a source artifact
+  for Kubernetes manifests, but Helm usage is separate and later. Citation:
+  https://fluxcd.io/flux/components/source/ocirepositories/
 
-### BLOCKS_PROPOSAL
+### 2.2 `flux install` versus `flux bootstrap`
 
-- Remote HA topology: D8 fixes k3s-on-Vultr-VMs but does not choose single
-  server, embedded-etcd HA, or external database. Evidence: D8 scope at
-  `DECISIONS.md:186-194`; K3s HA evidence at
-  https://docs.k3s.io/datastore/ha-embedded.
-- Fixed registration endpoint for remote HA: K3s HA docs allow an optional
-  fixed registration address, but current INIT-101 sources do not decide
-  whether that is a Vultr Load Balancer, reserved IP, one server address, or a
-  later component. Evidence: https://docs.k3s.io/datastore/ha-embedded and
-  Vultr resource list at https://docs.vultr.com/reference/terraform/resources.
-- k3s version pinning strategy: upstream supports exact
-  `INSTALL_K3S_VERSION`, channels, and current latest `v1.35.3+k3s1`, while
-  prompt examples use `v1.32.5+k3s1`. Evidence:
-  https://docs.k3s.io/upgrades/manual and
-  https://github.com/k3s-io/k3s/releases/tag/v1.35.3%2Bk3s1.
-- k3d version pinning strategy: k3d supports `TAG`, current latest is
-  `v5.8.3`, and k3d is absent locally. Evidence: https://k3d.io/stable/ and
-  command evidence from the toolchain check.
-- Provider version strategy: project memory says `vultr/vultr ~> 2.30`; latest
-  provider observed is `v2.31.0`. Evidence:
-  `~/.claude3/projects/-home-nes-projects-server-manager/memory/platform-stack.md:11`;
-  https://github.com/vultr/terraform-provider-vultr/releases/tag/v2.31.0.
-- Channel schema versioning: current schema is `schema_version: 1`; field shape
-  replacement is breaking, and no backwards compatibility is allowed. Evidence:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/schemas/platform-channel.schema.json:17-19`;
-  `product-strategy/tickets/PHASE_5_INDEX.md:108-115`.
-- Transition from archived INIT-008: D8 says wrong-shaped INIT-008 is reference
-  only, but this current worktree already has a stale `.pipeline/research.md`
-  from another slice before this research rewrite. Evidence:
-  `.pipeline/research.md` pre-write command evidence, 2026-04-25; D8 citation:
-  `DECISIONS.md:204-205`.
+- Flux installation docs expose `flux install` for installing Flux controllers
+  on a cluster. Citation: https://fluxcd.io/flux/installation/
+- The `flux install` command can export installation manifests instead of
+  applying them, allowing generated controller YAML to be committed and
+  reconciled. Citation: https://fluxcd.io/flux/cmd/flux_install/
+- Flux bootstrap docs describe bootstrap as installing Flux on a cluster and
+  configuring Flux to manage itself from a Git repository. Citation:
+  https://fluxcd.io/flux/installation/bootstrap/
+- The `flux bootstrap git` command is the generic bootstrap variant for a Git
+  repository. Citation: https://fluxcd.io/flux/cmd/flux_bootstrap_git/
+- Evidence implication: `flux bootstrap` combines initial cluster install with
+  Git repository wiring, while `flux install --export` separates controller
+  manifest generation from source/root `GitRepository` and `Kustomization`
+  objects.
+- Channel-template implication for proposal phase: if channel overlays own all
+  manifests in-tree, `flux install --export` gives a more explicit artifact
+  boundary; if the bootstrap CLI owns initial source/root creation, bootstrap
+  must be constrained so it does not rewrite repo layout outside the channel
+  template.
 
-### BLOCKS_IMPLEMENTATION
+### 2.3 Flux CRDs and fields relevant to INIT-102
 
-- k3d install is required before a local k3d cluster can be created; toolchain
-  check shows it absent. Command evidence: `k3d --version`, 2026-04-25.
-- k3s cloud-init idempotency needs exact user_data behavior. Vultr docs say
-  `user_data` is generally consumed once at launch; k3s docs say re-running the
-  installer can alter service config and missing previous options can be lost.
-  Citations:
-  https://docs.vultr.com/reference/terraform/resources/instance and
-  https://docs.k3s.io/installation/configuration.
-- Remote token handling requires a secure source for `K3S_TOKEN` and a
-  bootstrap/join sequence. Evidence: K3s docs require shared secret for HA and
-  agent joins. Citations: https://docs.k3s.io/datastore/ha-embedded and
-  https://docs.k3s.io/quick-start.
-- Firewall rules must map K3s requirements: 6443, 2379-2380 for embedded etcd,
-  8472/51820/51821 depending on flannel backend, 10250, and any operator SSH
-  path. Evidence: https://docs.k3s.io/installation/requirements and
-  https://docs.vultr.com/reference/terraform/resources/firewall_rule.
-- Remote kubeconfig retrieval needs a secure artifact path and redaction rules.
-  Evidence: K3s writes `/etc/rancher/k3s/k3s.yaml`; k3sup fetches kubeconfig;
-  Vultr Marketplace k3s uses `/root/k3s-public.yaml`. Citations:
-  https://docs.k3s.io/quick-start;
-  https://github.com/alexellis/k3sup;
-  https://www.vultr.com/marketplace/apps/k3s/.
-- Harness must create a real local k3d cluster as done state, not only
-  `tofu validate`; D8 and Phase 5 index require real local components. Citations:
-  `DECISIONS.md:201-203`;
-  `product-strategy/tickets/PHASE_5_INDEX.md:122-127`.
+- `GitRepository` supports Git sources, including `url`, `ref`, `interval`,
+  `secretRef`, and suspend behavior. Citation:
+  https://fluxcd.io/flux/components/source/gitrepositories/
+- Flux Git authentication docs cover SSH deploy keys, HTTPS basic auth/token,
+  and provider-specific bootstrap flows. Citation:
+  https://fluxcd.io/flux/installation/bootstrap/github/
+  and https://fluxcd.io/flux/components/source/gitrepositories/#secret-reference
+- `Kustomization` supports `sourceRef`, `path`, `interval`, `prune`, `wait`,
+  `timeout`, `dependsOn`, and decryption settings. Citation:
+  https://fluxcd.io/flux/components/kustomize/kustomizations/
+- `OCIRepository` provides source artifacts from OCI registries and supports
+  interval-driven reconciliation. Citation:
+  https://fluxcd.io/flux/components/source/ocirepositories/
+- `Bucket` sources exist, but D8 explicitly supersedes MinIO bucket-watched Flux
+  with Git-backed Flux. Citation: `DECISIONS.md:229-230` and
+  https://fluxcd.io/flux/components/source/buckets/
+- Reconciliation cadence is object-specific. The current stale `k8s/` tree uses
+  `GitRepository.spec.interval: 1m0s` and `Kustomization.spec.interval: 10m0s`.
+  Citation: `k8s/clusters/dev/control-cluster/gotk-sync.yaml:6-24`.
+- INIT-009's proposal used `GitRepository` `1m` and root `Kustomization` `5m`.
+  Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:280-291`.
+- Flux version pinning evidence: GitHub API reported latest Flux v2 release
+  `v2.8.6`, published 2026-04-21. Citation:
+  https://github.com/fluxcd/flux2/releases/tag/v2.8.6.
+- Flux-generated controller manifests carry controller image tags. INIT-009's
+  generated manifest labels `app.kubernetes.io/version: v2.8.0` and controller
+  components in comments. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/bases/flux-system/gotk-components.yaml:1-14`.
 
-### INFORMATIONAL
+## 3. Repo Layout For Channel Overlays
 
-- `vultr_vpc2` appears in Vultr resource docs but is deprecated in favor of
-  `vultr_vpc`; INIT-008 already used `vultr_vpc`. Citations:
-  https://docs.vultr.com/reference/terraform/resources/vpc2 and
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-network/main.tf:29-34`.
-- K3s includes a default ingress controller unless disabled or changed; ingress
-  choices are likely INIT-110/Kong territory, not INIT-101. Evidence:
-  k3d exposing-services docs mention k3s deploys Traefik by default; Phase 5
-  index assigns Kong ingress to INIT-110. Citations:
-  https://k3d.io/stable/usage/exposing_services/ and
-  `product-strategy/tickets/PHASE_5_INDEX.md:38`.
-- INIT-101 does not install Flux; INIT-102 owns GitOps substrate after INIT-101.
-  Citation: `product-strategy/tickets/PHASE_5_INDEX.md:29-30`.
-- INIT-101 does not define Crossplane app-cluster claims; INIT-106 owns
-  application cluster provisioning after INIT-101/102/103. Citation:
+- Kustomize's Kubernetes documentation describes a `kustomization.yaml` with
+  `resources`, `configMapGenerator`, `secretGenerator`, and patches to customize
+  Kubernetes objects. Citation:
+  https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization
+- The same documentation describes bases and overlays: a base can be reused by
+  multiple overlays, and overlays can customize names, labels, images, replicas,
+  and patches. Citation:
+  https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/#bases-and-overlays
+- The channel-template memory says channel inheritance maps to Kustomize
+  bases/overlays. Citation:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/channel-template-pattern.md:69-74`.
+- INIT-009's salvageable layout used root-level `gitops/`, `bases/`,
+  `channels/<channel-id>/`, and `secrets/<channel-id>/`. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/.pipeline/proposal.md:112-155`.
+- INIT-009's README describes `bases/` as reusable Kustomize bases and
+  `channels/` as channel overlays. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/README.md:55-69`.
+- Current stale `k8s/` has a base/overlay/root shape, but the overlay keys are
+  environment names (`dev`, `staging`, `production`) rather than channel ids.
+  Citation: `k8s/tests/test_gitops_foundation.sh:217-248`.
+- Current stale `k8s/` also includes `app-cluster` roots even though
+  app-cluster provisioning is later INIT-106. Citation:
+  `k8s/clusters/dev/app-cluster/kustomization.yaml:1-4` and
   `product-strategy/tickets/PHASE_5_INDEX.md:34`.
-- INIT-101 remote mode can stop at contract/plan evidence locally if proposal
-  scopes remote apply out, but local mode cannot stop at dry-run because D8
-  requires real local deployment target. Citations:
-  `DECISIONS.md:201-203`;
-  `/home/nes/projects/server-manager/worktrees/phase-5-replan/.pipeline/replan.md:607-625`.
+- Repo-layout evidence therefore supports these proposal-phase questions:
+  where to place the accepted GitOps root (`gitops/` versus reshaped `k8s/`);
+  how to name overlays by channel id; and whether the accepted INIT-102 scope
+  contains only `local` control-cluster material or also a remote `dev` plan
+  overlay.
+- Naming evidence from INIT-101: active channel ids are `local` and `dev`.
+  Citation: `infra/channels/local.yaml:1-7` and `infra/channels/dev.yaml:1-7`.
+- Path evidence from Flux: a Flux `Kustomization` points to a path within the
+  source artifact using `.spec.path`. Citation:
+  https://fluxcd.io/flux/components/kustomize/kustomizations/
+- Per-channel Flux Kustomization evidence: the current stale `k8s/` CR uses
+  path `./k8s/clusters/dev/control-cluster/manifests`, proving the existing
+  repo already expects one path per root. Citation:
+  `k8s/clusters/dev/control-cluster/gotk-sync.yaml:17-24`.
 
-## 8. Suggested Slice Decomposition Sketch
+## 4. SOPS+age Bootstrap-Only Contract
 
-This is a handoff sketch for proposal refinement, not final design approval.
+### 4.1 SOPS and age mechanics
 
-- SLICE-100: Replace INIT-008 substrate shape.
-  Evidence basis: VKE-specific module/schema/template/dev YAML are present in
-  INIT-008, and D8 says they must not merge. Citations:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/modules/platform-cluster/main.tf:50-64`;
-  `DECISIONS.md:251-259`.
-- SLICE-101: k3d local cluster bring-up surface.
-  Evidence basis: k3d supports channel-relevant server/agent/registry/kubeconfig
-  parameters, and the local channel must create a real cluster. Citations:
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/;
-  `product-strategy/tickets/PHASE_5_INDEX.md:122-127`.
-- SLICE-102: Vultr VM module plus cloud-init k3s bootstrap contract.
-  Evidence basis: `vultr_instance` supports plan, region, SSH keys, VPC ids,
-  firewall group, and `user_data`; K3s supports install script/config/env vars.
-  Citations:
-  https://docs.vultr.com/reference/terraform/resources/instance and
-  https://docs.k3s.io/installation/configuration.
-- SLICE-103: Channel template and channel root rewrite for k3s-shaped fields.
-  Evidence basis: existing template/root/generator structure is reusable, but
-  emitted fields are VKE-shaped. Citations:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/templates/platform-channel/main.tf:1-20`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/scripts/generate_channel_tfvars.py:14-82`.
-- SLICE-104: Local k3d bootstrap end-to-end verification.
-  Evidence basis: D8 requires real local components, k3d can create/delete
-  clusters and manage kubeconfig, and current k3d is absent. Citations:
-  `DECISIONS.md:201-203`;
-  https://k3d.io/stable/usage/kubeconfig/;
-  toolchain command evidence from 2026-04-25.
-- SLICE-105: Documentation and handoff.
-  Evidence basis: downstream INIT-102 and INIT-106 depend on INIT-101's control
-  cluster contract. Citation: `product-strategy/tickets/PHASE_5_INDEX.md:29-34`.
+- SOPS supports age recipients and stores encryption metadata in the encrypted
+  file. Citation: https://github.com/getsops/sops#encrypting-using-age.
+- SOPS supports `.sops.yaml` creation rules, including path-based matching and
+  configured recipients. Citation:
+  https://github.com/getsops/sops#using-sops-yaml-conf-to-select-kms-pgp-and-age-for-new-files.
+- SOPS supports `encrypted_regex`, allowing encryption to be scoped to YAML
+  fields such as `data` and `stringData`. Citation:
+  https://github.com/getsops/sops#encrypting-only-parts-of-a-file.
+- age provides `age-keygen` to generate age key pairs. Citation:
+  https://github.com/FiloSottile/age.
+- SOPS reads age private keys through `SOPS_AGE_KEY_FILE` or SOPS age key
+  configuration. Citation: https://github.com/getsops/sops#encrypting-using-age.
+- Flux SOPS integration requires a Kubernetes Secret in the same namespace as
+  the Kustomization, containing the age identity file, and the Kustomization
+  references it through `.spec.decryption.secretRef`. Citation:
+  https://fluxcd.io/flux/guides/mozilla-sops/
+- Flux docs show creating the SOPS age secret with `kubectl create secret
+  generic sops-age --namespace=flux-system --from-file=age.agekey=...`.
+  Citation: https://fluxcd.io/flux/guides/mozilla-sops/
+- Flux docs show `spec.decryption.provider: sops` and `secretRef.name:
+  sops-age` on a `Kustomization`. Citation:
+  https://fluxcd.io/flux/guides/mozilla-sops/
 
-## 9. Proposal-Phase Priority Items
+### 4.2 Bootstrap-only boundary
 
-- Priority 1: decide remote control-plane topology and registration endpoint:
-  single server versus embedded-etcd HA versus external DB, plus how agents and
-  operators reach the API. Evidence: K3s HA docs and D8 substrate decision.
-  Citations: https://docs.k3s.io/datastore/ha-embedded and `DECISIONS.md:186-194`.
-- Priority 2: decide exact k3s/k3d/provider pinning strategy. Evidence:
-  k3s latest `v1.35.3+k3s1`, k3d latest `v5.8.3`, Vultr provider latest
-  `v2.31.0`, project memory provider constraint `~> 2.30`, and k3d/k3s
-  upstream support for exact pins. Citations:
-  https://github.com/k3s-io/k3s/releases/tag/v1.35.3%2Bk3s1;
-  https://github.com/k3d-io/k3d/releases/tag/v5.8.3;
-  https://github.com/vultr/terraform-provider-vultr/releases/tag/v2.31.0;
-  https://k3d.io/stable/;
-  https://docs.k3s.io/upgrades/manual.
-- Priority 3: define the k3s-shaped channel schema and migration/deletion
-  boundary for INIT-008 artifacts without compatibility shims. Evidence:
-  current schema/dev YAML are VKE-shaped and Phase 5 forbids wrong-shaped
-  work. Citations:
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/schemas/platform-channel.schema.json:137-164`;
-  `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/channels/dev.yaml:13-21`;
-  `product-strategy/tickets/PHASE_5_INDEX.md:108-115`.
+- D8 says SOPS+age remains bootstrap-only and Infisical is the runtime secret
+  store. Citation: `DECISIONS.md:196-198`.
+- Phase 5 completion criteria say SOPS+age bootstraps only secrets needed to
+  start runtime secret management, and Infisical owns runtime secrets. Citation:
+  `product-strategy/tickets/PHASE_5_INDEX.md:126-130`.
+- INIT-103 owns Infisical runtime secret store, including Infisical,
+  Infisical Operator, InfisicalSecret CRDs, RBAC, and runtime secret ownership.
+  Citation: `product-strategy/tickets/PHASE_5_INDEX.md:31`.
+- Enforcement is by file content and ownership, not by SOPS itself. SOPS can
+  encrypt any YAML matched by `.sops.yaml`; INIT-102 must define which
+  bootstrap-tier files are allowed to exist.
+- Bootstrap-tier examples from the prompt: Flux Git deploy key and age
+  decryption key delivery. Boundary evidence: runtime app secrets are outside
+  INIT-102 and assigned to INIT-103. Citation:
+  `product-strategy/tickets/PHASE_5_INDEX.md:30-31`.
+- INIT-009's `gitops/secrets/dev/bootstrap-creds.enc.yaml` is not usable
+  evidence for real secret content because it contains placeholder empty
+  `stringData`. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/bootstrap-creds.enc.yaml:1-10`.
 
-## 10. Confirmed Reference URLs
+### 4.3 Key lifecycle evidence
 
-- k3d docs used: https://k3d.io/stable/,
-  https://k3d.io/stable/usage/commands/k3d_cluster_create/,
-  https://k3d.io/stable/usage/kubeconfig/,
-  https://k3d.io/stable/usage/registries/,
-  https://k3d.io/stable/usage/exposing_services/,
-  https://github.com/k3d-io/k3d/releases/tag/v5.8.3.
-- k3s docs used: https://docs.k3s.io/quick-start,
-  https://docs.k3s.io/installation/configuration,
-  https://docs.k3s.io/upgrades/manual,
-  https://docs.k3s.io/datastore/ha-embedded,
-  https://docs.k3s.io/installation/requirements,
-  https://github.com/k3s-io/k3s/releases/tag/v1.35.3%2Bk3s1.
-- Vultr docs used: https://docs.vultr.com/reference/terraform/resources,
-  https://docs.vultr.com/reference/terraform/resources/instance,
-  https://docs.vultr.com/reference/terraform/resources/vpc,
-  https://docs.vultr.com/reference/terraform/resources/vpc2,
-  https://docs.vultr.com/reference/terraform/resources/firewall_group,
-  https://docs.vultr.com/reference/terraform/resources/firewall_rule,
-  https://docs.vultr.com/reference/terraform/resources/object_storage,
-  https://docs.vultr.com/reference/terraform/resources/ssh_key,
-  https://docs.vultr.com/provision-a-vultr-cloud-server-with-terraform-and-cloud-init,
-  https://github.com/vultr/terraform-provider-vultr/releases/tag/v2.31.0.
-- Vultr+k3s references used: https://www.vultr.com/marketplace/apps/k3s/,
-  https://github.com/alexellis/k3sup,
-  https://gregmeszaros.medium.com/lightweight-kubernetes-cluster-on-vultr-com-7264e8fc03b1,
-  https://registry.terraform.io/modules/xunleii/k3s/module/latest.
+- Key generation procedure evidence from age/SOPS: operator runs `age-keygen`
+  to generate a private identity and extracts/records the public recipient for
+  `.sops.yaml`. Citation: https://github.com/FiloSottile/age and
+  https://github.com/getsops/sops#encrypting-using-age.
+- INIT-009's custody notes stored private keys at
+  `~/.config/sops/age/<channel>.txt` and committed public recipients in the
+  channel `.sops.yaml`. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/README.md:7-19`.
+- INIT-009's rotation notes add a new recipient, run `sops updatekeys`, remove
+  the old recipient, and update keys again. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/secrets/dev/README.md:27-35`.
+- Delivery chicken-and-egg: the cluster must receive the age private key as a
+  Kubernetes Secret before Flux can decrypt encrypted bootstrap files. Flux docs
+  explicitly create the secret outside Flux before SOPS decryption works.
+  Citation: https://fluxcd.io/flux/guides/mozilla-sops/.
+- This private-key Secret is itself not committed as cleartext. It is an
+  operator/bootstrap delivery action; the proposal phase must decide whether
+  that delivery is manual `kubectl create secret generic`, a Flux CLI helper,
+  or a channel-template post-install step.
+
+## 5. Local-First GitOps
+
+### 5.1 Hard question
+
+- Local-as-first-deployment requires Flux running in local k3d to reconcile a
+  real manifest from a source it can reach. Citation:
+  `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md:45-60`.
+- The local channel is `k3d-local`; it is not a dry-run or render-only target.
+  Citation: `infra/channels/local.yaml:8-15` and `infra/README.md:12-15`.
+- Flux `GitRepository` source URLs are fetched by source-controller running
+  inside the cluster, not by the operator's local shell. Citation:
+  https://fluxcd.io/flux/components/source/gitrepositories/.
+- The inner loop is therefore determined by how a k3d cluster sees the working
+  Git repository.
+
+### 5.2 Options
+
+- Option A: Point Flux at GitHub or another hosted Git endpoint. Evidence:
+  Flux first-class bootstrap providers include GitHub, and GitRepository can use
+  HTTPS or SSH auth. Citation:
+  https://fluxcd.io/flux/installation/bootstrap/github/ and
+  https://fluxcd.io/flux/components/source/gitrepositories/.
+- Option A tradeoff: every local reconciliation requires commit/push or a
+  hosted branch update before Flux can see changes. This conflicts with the
+  prompt's concern about slow GitHub round-trips for local iteration.
+- Option B: Run a local Git server, either in-cluster or on the host with k3d
+  networking. Evidence: Flux GitRepository only needs a reachable Git URL;
+  INIT-009's bootstrap script used an in-cluster `git daemon` service at
+  `git://git-local.git-system.svc.cluster.local/server-manager.git`. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/scripts/bootstrap-flux.sh:4-24`
+  and
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/channels/dev/patches/flux-source-local.yaml:1-7`.
+- Option B tradeoff: it adds a local Git service lifecycle, branch/bundle
+  seeding, and trust/auth decisions. The evidence also shows it avoids GitHub,
+  Vultr, real DNS, and hosted Git for proof. Citation:
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/scripts/bootstrap-flux.sh:4-9`.
+- Option C: Use Flux `OCIRepository` with a local OCI registry. Evidence:
+  source-controller supports OCIRepository sources, and k3d can create or use
+  local registries. Citations:
+  https://fluxcd.io/flux/components/source/ocirepositories/ and
+  https://k3d.io/stable/usage/registries/.
+- Option C tradeoff: D8 says Git-backed Flux, so OCI may be acceptable as a
+  source-controller mechanism only if the proposal treats Git as authoritative
+  and OCI as a local artifact transport. Citation: `DECISIONS.md:229-230`.
+- Option D: Mount the local repo path into source-controller. Evidence:
+  source-controller's documented source APIs are GitRepository, OCIRepository,
+  Bucket, HelmRepository, and HelmChart, not arbitrary mounted host paths.
+  Citation: https://fluxcd.io/flux/components/source/.
+- Option D tradeoff: it depends on controller deployment mutation and host-path
+  coupling; no upstream Flux source API evidence supports it as a normal
+  GitOps source.
+
+### 5.3 Research recommendation for proposal phase
+
+- Recommended local-first source approach: local Git server, preferably
+  in-cluster or host-reachable from k3d, seeded from the current worktree.
+- Rationale: it preserves GitRepository semantics, keeps Git as the source
+  type, avoids GitHub push round-trips, and is already partially prototyped in
+  archived INIT-009. Citations:
+  https://fluxcd.io/flux/components/source/gitrepositories/ and
+  `/home/nes/projects/server-manager/worktrees/init-009-gitops-substrate/gitops/scripts/bootstrap-flux.sh:4-24`.
+- This recommendation is not final design. Proposal phase still must choose
+  the concrete service lifecycle, auth posture, branch naming, and cleanup
+  behavior, and must verify it in k3d rather than kind.
+
+## 6. Channel-Template Integration
+
+- Current `infra/templates/platform-channel/main.tf` is the dispatch point for
+  channel cluster targets. Citation: `infra/templates/platform-channel/main.tf:1-44`.
+- Current template variables do not include GitOps source URL, branch/ref,
+  manifest path, Flux version, SOPS age Secret name, or reconciliation interval.
+  Citation: `infra/templates/platform-channel/variables.tf:1-120`.
+- Current source schema has no `gitops` field. Citation:
+  `infra/schemas/platform-channel.schema.json:16-47`.
+- Current resolved/channel generator must therefore change if INIT-102 wants
+  per-channel GitOps settings to be validated and emitted into roots. Evidence:
+  generator/resolver ownership in INIT-101 layout: `infra/README.md:31-75`.
+- Possible schema additions for proposal consideration: `gitops.git_url`,
+  `gitops.git_ref`, `gitops.path`, `gitops.source_kind`, `gitops.interval`,
+  `gitops.flux_version`, `gitops.sops_age_secret_name`, and
+  `gitops.decryption_secret_namespace`.
+- Boundary concern: the `gitops` block should carry Flux source and bootstrap
+  decryption metadata only. Runtime secret provider fields belong to INIT-103
+  Infisical, not INIT-102. Citation:
+  `product-strategy/tickets/PHASE_5_INDEX.md:30-31`.
+- Integration shape evidence from INIT-101: local bring-up creates the cluster
+  and kubeconfig, while INIT-101 anti-scope names GitOps reconciliation and
+  Flux installation as INIT-102. Citation: `infra/README.md:84-109` and
+  `infra/README.md:170-181`.
+- Proposal-phase question: Flux installation could be modeled as a new
+  OpenTofu-adjacent module/post-install step or as a separate script invoked
+  after cluster bring-up. Evidence only: INIT-101 uses scripts for local k3d
+  lifecycle and modules for cluster resources. Citation:
+  `infra/README.md:84-109` and
+  `infra/templates/platform-channel/main.tf:15-26`.
+- Terraform/OpenTofu cannot safely hide user-visible cluster mutations in this
+  repo without explicit contracts; however INIT-102's visible effect is local
+  cluster mutation, not Discord Tier 3. Citation for local cluster done state:
+  `product-strategy/tickets/PHASE_5_INDEX.md:98-130`.
+
+## 7. Toolchain Check
+
+### 7.1 Local availability on 2026-04-26
+
+- `flux`: not installed. Command evidence: `flux --version` returned
+  `command not found`.
+- `sops`: not installed. Command evidence: `sops --version` returned
+  `command not found`.
+- `age`: not installed. Command evidence: `age --version` returned
+  `command not found`.
+- `age-keygen`: not installed. Command evidence: `age-keygen --version`
+  returned `command not found`.
+- `tofu`: installed as `/home/nes/.local/bin/tofu`; `tofu version` reports
+  OpenTofu `v1.11.5`.
+- `kubectl`: installed as `/usr/local/bin/kubectl`; `kubectl version
+  --client=true` reports client `v1.34.1` and embedded Kustomize `v5.7.1`.
+- standalone `kustomize`: not installed. Command evidence: `kustomize version`
+  returned `command not found`.
+- `k3d`: installed as `/home/nes/.local/bin/k3d`; `k3d version` reports
+  `v5.8.3` and default k3s `v1.31.5-k3s1`.
+- Docker: installed as `/usr/bin/docker`; `docker --version` reports
+  `29.4.0`.
+- INIT-101's k3d installer check passes: `bash infra/scripts/install-cluster-tools.sh
+  --check --no-color` returned `OK: k3d v5.8.3`.
+
+### 7.2 Version pins to consider
+
+- Flux latest official GitHub release on 2026-04-26 is `v2.8.6`, published
+  2026-04-21. Citation: https://github.com/fluxcd/flux2/releases/tag/v2.8.6.
+- SOPS latest official GitHub release on 2026-04-26 is `v3.12.2`, published
+  2026-03-18. Citation: https://github.com/getsops/sops/releases/tag/v3.12.2.
+- age latest official GitHub release on 2026-04-26 is `v1.3.1`, published
+  2025-12-28. Citation: https://github.com/FiloSottile/age/releases/tag/v1.3.1.
+- Kustomize latest official standalone release on 2026-04-26 is
+  `kustomize/v5.8.1`, published 2026-02-09. Citation:
+  https://github.com/kubernetes-sigs/kustomize/releases/tag/kustomize/v5.8.1.
+- INIT-101 pins k3d `v5.8.3` in its installer. Citation:
+  `infra/scripts/install-cluster-tools.sh:1-5`.
+- INIT-101 required tools still apply: OpenTofu, kubectl, Docker, Python,
+  jsonschema/PyYAML, and k3d. Citation: `infra/README.md:16-29`.
+
+## 8. Known Risks And Open Questions
+
+### 8.1 BLOCKS_PROPOSAL
+
+- Local source decision: proposal cannot be precise without choosing between
+  GitHub round-trip, local Git server, OCI artifact source, or a controller
+  mount hack. Evidence and tradeoffs are in Section 5.
+- Accepted GitOps directory disposition: proposal must decide whether to delete
+  the stale `k8s/` tree, replace it with root-level `gitops/`, or reshape
+  `k8s/` into channel terminology. Current evidence: 38 stale files in `k8s/`,
+  no `gitops/`, no `.sops.yaml`.
+- Flux component set: proposal must decide whether INIT-102 installs only
+  source-controller and kustomize-controller or includes the default
+  helm-controller/notification-controller set. Evidence: Flux components docs
+  plus INIT-102 anti-scope excluding Helm apps and notifications.
+- Channel schema additions: proposal must define whether GitOps config lives in
+  `infra/channels/*.yaml` and what fields are INIT-102-owned versus
+  INIT-103-owned.
+
+### 8.2 BLOCKS_IMPLEMENTATION
+
+- Toolchain installer must add pinned `flux`, `sops`, `age`, and `age-keygen`
+  because none are installed locally.
+- SOPS bootstrap must solve the age private-key delivery chicken-and-egg before
+  any encrypted bootstrap file can reconcile.
+- Local k3d cluster availability must be verified before Flux reconciliation
+  tests can run. INIT-101's cluster-mode harness exists, but this research did
+  not create or mutate a cluster.
+- The chosen local Git source must be reachable from inside k3d and must be
+  seedable from the current worktree/branch without requiring GitHub pushes.
+- Any generated Flux controller manifest must be pinned to a concrete Flux
+  release and checked against the toolchain version.
+
+### 8.3 INFORMATIONAL
+
+- Helm controller can be deferred unless a later INIT needs `HelmRelease`.
+  INIT-102 can document that Helm CRDs/controllers are not part of the minimum
+  raw-manifest loop.
+- Notification controller can be deferred to INIT-117, which owns
+  observability. Citation: `product-strategy/tickets/PHASE_5_INDEX.md:45`.
+- Multi-tenancy and Flux RBAC boundaries can be deferred to INIT-115/116 unless
+  Flux's bootstrap permissions create an immediate security problem. Citation:
+  `product-strategy/tickets/PHASE_5_INDEX.md:43-44`.
+- Runtime secrets must not leak into SOPS just because SOPS is available.
+  The boundary is ownership/content review, not a technical limitation in SOPS.
+- The stale `k8s/` tree's Buildkite mutation guard is useful evidence for a
+  future harness, but its environment triad is wrong-shaped. Citation:
+  `k8s/tests/test_gitops_foundation.sh:197-254`.
+
+## 9. Suggested Slice Decomposition Sketch
+
+- SLICE-102.01: Toolchain installer. Evidence target: pinned `flux`, `sops`,
+  `age`, `age-keygen`, plus checks for existing INIT-101 tools.
+- SLICE-102.02: Accepted GitOps repo layout and Flux base manifests. Evidence
+  target: remove or quarantine stale `k8s/`, create channel-aligned layout, and
+  pin Flux controller manifest version.
+- SLICE-102.03: SOPS+age bootstrap-only procedure. Evidence target:
+  `.sops.yaml`, encrypted bootstrap-tier sample/fixture, age key custody docs,
+  and age private-key Secret delivery path.
+- SLICE-102.04: Channel-template integration. Evidence target: channel schema
+  fields for Flux source/path/ref/version/decryption secret and generated
+  per-channel config.
+- SLICE-102.05: Local-first GitOps loop. Evidence target: Flux in real local
+  k3d reconciles a real manifest from the chosen local Git source.
+- SLICE-102.06: Harness and handoff docs. Evidence target: assertions for Flux
+  health, source readiness, Kustomization readiness, reconciled test manifest,
+  and clear INIT-103 Infisical boundary.
+
+## 10. Evidence Summary For Proposal Phase
+
+- Highest-priority proposal item 1: choose the local source mechanism. The
+  research recommendation is a local Git server because it preserves
+  GitRepository semantics and avoids GitHub round-trips.
+- Highest-priority proposal item 2: decide the accepted repo layout and stale
+  `k8s/` disposition. Current state has stale hard-environment GitOps material
+  but no accepted channel-aligned `gitops/` layout.
+- Highest-priority proposal item 3: define the bootstrap-secret boundary and
+  age key delivery. Flux cannot decrypt SOPS files until an age private key
+  Secret exists in-cluster.
+- Toolchain availability summary: missing `flux`, `sops`, `age`, and
+  `age-keygen`; available OpenTofu `1.11.5`, kubectl `1.34.1` with embedded
+  Kustomize `5.7.1`, k3d `5.8.3`, and Docker `29.4.0`; standalone Kustomize
+  absent.
+- Recommended local-first GitOps source approach: local Git server seeded from
+  the current worktree. Rationale: Git-backed Flux remains the source model,
+  k3d can reach an in-cluster or host-exposed endpoint, and archived INIT-009
+  already tested the shape conceptually with `git://git-local...`; proposal
+  must redo it against k3d and current channel names.
