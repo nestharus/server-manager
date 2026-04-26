@@ -173,6 +173,107 @@ PY
   assert_executable "scripts/bootstrap-sops-age-key.sh"
 }
 
+assert_gitops_channel_schema_rendering() {
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/gitops"
+  local local_resolved="${tmp_dir}/local.resolved.json"
+  local dev_resolved="${tmp_dir}/dev.resolved.json"
+  local out_dir="${REPO_ROOT}/.tmp/gitops-source/local"
+  local before
+  local after
+  local render_status
+  local rerender_status
+  local py_bin
+
+  if ! py_bin="$(python_bin)"; then
+    fail "python interpreter available for GitOps rendering"
+    return
+  fi
+
+  rm -rf "$tmp_dir" "${REPO_ROOT}/.tmp/gitops-source"
+  mkdir -p "$tmp_dir"
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel local --out "$local_resolved" \
+    && "$py_bin" - "$local_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "source_kind": "git",
+    "git_url": "git://git-local.git-system.svc.cluster.local:9418/server-manager.git",
+    "git_ref": "refs/heads/main",
+    "path": "./gitops/channels/local",
+    "kustomization_name": "humility-local",
+    "kustomization_namespace": "flux-system",
+    "interval": "1m",
+    "retry_interval": "1m",
+    "prune": True,
+    "wait": True,
+}
+if data.get("gitops") != expected:
+    raise SystemExit(f"unexpected gitops block: {data.get('gitops')!r}")
+PY
+  then
+    pass "local channel resolves with operator-supplied gitops block"
+  else
+    fail "local channel resolves with operator-supplied gitops block"
+  fi
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel dev --out "$dev_resolved" \
+    && "$py_bin" - "$dev_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if "gitops" in data:
+    raise SystemExit("dev must omit gitops in INIT-102")
+PY
+  then
+    pass "dev channel validates without gitops block"
+  else
+    fail "dev channel validates without gitops block"
+  fi
+
+  set +e
+  "$py_bin" "${INFRA_DIR}/scripts/render-gitops-source.py" --channel local --out "$out_dir" >/dev/null
+  render_status=$?
+  set -e
+
+  if [[ "$render_status" -eq 0 ]]; then
+    pass "render-gitops-source local exits 0"
+  else
+    fail "render-gitops-source local exits 0"
+    return
+  fi
+
+  for file in \
+    "gitops/sources/local/gitrepository.yaml" \
+    "gitops/sources/local/kustomization.yaml" \
+    "gitops/sources/local/kustomization.kustomize.yaml" \
+    "gitops/channels/local/generated/gitops-snapshot-marker.yaml"; do
+    if [[ -f "${out_dir}/${file}" ]]; then
+      pass "rendered: ${file}"
+    else
+      fail "missing rendered file: ${file}"
+    fi
+  done
+
+  before="$(find "$out_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
+  set +e
+  "$py_bin" "${INFRA_DIR}/scripts/render-gitops-source.py" --channel local --out "$out_dir" >/dev/null
+  rerender_status=$?
+  set -e
+  after="$(find "$out_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
+
+  if [[ "$rerender_status" -eq 0 && "$before" == "$after" ]]; then
+    pass "render-gitops-source is byte-identical on rerun"
+  else
+    fail "render-gitops-source is byte-identical on rerun"
+  fi
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -760,6 +861,9 @@ echo "=== Slice 102.02 GitOps layout and Flux lockfile validation ==="
 
 assert_gitops_flux_components
 assert_repo_path_absent "k8s"
+assert_file_exists "scripts/render-gitops-source.py"
+assert_executable "scripts/render-gitops-source.py"
+assert_gitops_channel_schema_rendering
 
 echo ""
 echo "=== Slice 102.03 SOPS+age bootstrap sentinel validation ==="
