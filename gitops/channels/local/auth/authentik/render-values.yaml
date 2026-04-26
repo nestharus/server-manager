@@ -10,6 +10,9 @@ authentik:
     port: 5432
 postgresql:
   enabled: false
+blueprints:
+  configMaps:
+    - authentik-init-114-blueprint
 server:
   replicas: 1
   ingress:
@@ -54,4 +57,3 @@ worker:
     limits:
       cpu: "1"
       memory: 1Gi
-

@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: authentik-init-114-blueprint
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: authentik
+    platform.humility.gg/init: "114"
+data:
+  init-114-local-users.yaml: |
+    version: 1
+    metadata:
+      name: init-114-local-users
+      labels:
+        blueprints.goauthentik.io/instantiate: "true"
+        blueprints.goauthentik.io/description: "INIT-114 local sample user"
+    entries:
+      - model: authentik_core.group
+        state: present
+        identifiers:
+          name: Humility Local Users
+        attrs:
+          name: Humility Local Users
+          is_superuser: false
+      - model: authentik_core.user
+        state: present
+        identifiers:
+          username: sample
+        attrs:
+          username: sample
+          name: Humility Sample User
+          email: !Env [SAMPLE_USER_EMAIL, sample@local.humility.local]
+          password: !Env [SAMPLE_USER_PASSWORD]
+          is_active: true
+          groups:
+            - !Find [authentik_core.group, [name, Humility Local Users]]
