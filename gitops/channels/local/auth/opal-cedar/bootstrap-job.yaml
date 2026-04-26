@@ -33,7 +33,7 @@ spec:
             - /bin/sh
             - -ec
             - |
-              until curl -fsS http://opal-client:7000/healthcheck; do
+              until curl -fsS http://opal-client:8180/v1/policies >/dev/null; do
                 sleep 2
               done
               curl -fsS -X PUT \

@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opal-client
+spec:
+  template:
+    spec:
+      containers:
+        - name: opal-client
+          readinessProbe:
+            $patch: replace
+            tcpSocket:
+              port: opa
+            failureThreshold: 5
+            initialDelaySeconds: 5
+            timeoutSeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            $patch: replace
+            tcpSocket:
+              port: opa
+            failureThreshold: 5
+            timeoutSeconds: 10
+            periodSeconds: 30

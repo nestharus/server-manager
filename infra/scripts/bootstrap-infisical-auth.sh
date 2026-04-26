@@ -415,6 +415,10 @@ generate_standard_base64_secret() {
   openssl rand -base64 "${1:-32}" | tr -d '\n'
 }
 
+generate_pomerium_signing_key() {
+  openssl ecparam -genkey -name prime256v1 -noout
+}
+
 need_command kubectl
 need_command curl
 need_command jq
@@ -460,11 +464,11 @@ set_secret_if_absent "$POMERIUM_PATH" "OIDC_CLIENT_SECRET" "$(generate_secret)"
 if [[ "$ROTATE_POMERIUM_SECRETS" == "true" ]]; then
   set_secret "$POMERIUM_PATH" "SHARED_SECRET" "$(generate_standard_base64_secret 32)"
   set_secret "$POMERIUM_PATH" "COOKIE_SECRET" "$(generate_standard_base64_secret 32)"
-  set_secret "$POMERIUM_PATH" "SIGNING_KEY" "$(generate_secret 96)"
+  set_secret "$POMERIUM_PATH" "SIGNING_KEY" "$(generate_pomerium_signing_key)"
 else
   set_secret_if_absent "$POMERIUM_PATH" "SHARED_SECRET" "$(generate_standard_base64_secret 32)"
   set_secret_if_absent "$POMERIUM_PATH" "COOKIE_SECRET" "$(generate_standard_base64_secret 32)"
-  set_secret_if_absent "$POMERIUM_PATH" "SIGNING_KEY" "$(generate_secret 96)"
+  set_secret_if_absent "$POMERIUM_PATH" "SIGNING_KEY" "$(generate_pomerium_signing_key)"
 fi
 
 log "Infisical project ${PROJECT_SLUG} auth paths are bootstrapped for channel ${CHANNEL_REQUEST}"
