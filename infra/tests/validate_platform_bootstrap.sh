@@ -3247,6 +3247,214 @@ PY
   done
 }
 
+assert_cluster_security_channel_schema() {
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/cluster-security-channel"
+  local local_resolved="${tmp_dir}/local.resolved.json"
+  local registry="${tmp_dir}/channels"
+  local py_bin
+
+  if ! py_bin="$(python_bin)"; then
+    fail "python interpreter available for cluster security channel validation"
+    return
+  fi
+
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel local --out "$local_resolved" \
+    && "$py_bin" - "$local_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+security = data.get("security")
+expected = {
+    "pod_security": {
+        "system_enforce": "baseline",
+        "app_enforce": "restricted",
+        "system_namespaces": [
+            "cert-manager",
+            "crossplane-system",
+            "flux-system",
+            "git-system",
+            "step-ca-system",
+            "step-issuer-system",
+        ],
+        "restricted_namespaces": [
+            "cert-manager-test",
+            "humility-gitops-sentinel",
+            "infisical-sample",
+            "infisical-system",
+            "minio-system",
+            "platform-app-clusters",
+        ],
+        "local_privileged_namespaces": ["app-cluster-system"],
+    },
+    "network_policy": {
+        "default_deny_namespaces": [
+            "cert-manager-test",
+            "humility-gitops-sentinel",
+            "infisical-sample",
+            "infisical-system",
+            "minio-system",
+            "platform-app-clusters",
+        ],
+    },
+}
+if security != expected:
+    raise SystemExit(f"unexpected security block: {security!r}")
+PY
+  then
+    pass "local channel resolves with required cluster security block"
+  else
+    fail "local channel resolves with required cluster security block"
+  fi
+
+  if "$py_bin" - "${INFRA_DIR}/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import resolve_platform_channel as resolver
+
+resolved = resolver.resolve_channel("local-child")
+if resolved.get("security", {}).get("pod_security", {}).get("app_enforce") != "restricted":
+    raise SystemExit(f"local-child did not inherit security: {resolved.get('security')!r}")
+PY
+  then
+    pass "local child channel inherits security block"
+  else
+    fail "local child channel inherits security block"
+  fi
+
+  rm -rf "$registry"
+  cp -R "${INFRA_DIR}/channels" "$registry"
+  if "$py_bin" - "${registry}/local.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data.pop("security", None)
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+  then
+    if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+      fail "local k3d channel without security fails schema validation"
+    else
+      pass "local k3d channel without security fails schema validation"
+    fi
+  else
+    fail "local k3d channel without security fails schema validation"
+  fi
+
+  for alias in pod_security networkpolicies network_policies security_policy; do
+    rm -rf "$registry"
+    cp -R "${INFRA_DIR}/channels" "$registry"
+    if "$py_bin" - "${registry}/local.yaml" "$alias" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+alias = sys.argv[2]
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data[alias] = {"rejected": True}
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+    then
+      if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+        fail "security alias ${alias} is rejected"
+      else
+        pass "security alias ${alias} is rejected"
+      fi
+    else
+      fail "security alias ${alias} is rejected"
+    fi
+  done
+}
+
+assert_cluster_security_namespace_labels() {
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/cluster-security-namespaces.yaml"
+  local py_bin
+
+  : >"$rendered"
+  for file in \
+    "${REPO_ROOT}/gitops/sources/local/git-daemon.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/object-storage/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/infisical/server/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/infisical/sample/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/tls/cert-manager/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/tls/step-ca/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/tls/step-issuer/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/tls/sample-certificate/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/app-clusters/crossplane/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/app-clusters/claims/namespace.yaml" \
+    "${REPO_ROOT}/gitops/channels/local/app-clusters/provider-configs/namespace.yaml"; do
+    cat "$file" >>"$rendered"
+    printf '\n---\n' >>"$rendered"
+  done
+  pass "collected local namespace manifests for PSS labels"
+
+  if ! py_bin="$(python_bin)"; then
+    fail "local Namespace manifests carry PSS labels"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = []
+for path in sys.argv[1:]:
+    docs.extend(doc for doc in yaml.safe_load_all(Path(path).read_text(encoding="utf-8")) if isinstance(doc, dict))
+
+namespaces = {
+    doc.get("metadata", {}).get("name"): doc.get("metadata", {}).get("labels", {})
+    for doc in docs
+    if doc.get("kind") == "Namespace"
+}
+expected = {
+    "cert-manager": "baseline",
+    "crossplane-system": "baseline",
+    "git-system": "baseline",
+    "step-ca-system": "baseline",
+    "step-issuer-system": "baseline",
+    "cert-manager-test": "restricted",
+    "humility-gitops-sentinel": "restricted",
+    "infisical-sample": "restricted",
+    "infisical-system": "restricted",
+    "minio-system": "restricted",
+    "platform-app-clusters": "restricted",
+    "app-cluster-system": "privileged",
+}
+for namespace, enforce in expected.items():
+    labels = namespaces.get(namespace)
+    if labels is None:
+        raise SystemExit(f"Namespace/{namespace} missing")
+    if labels.get("pod-security.kubernetes.io/enforce") != enforce:
+        raise SystemExit(f"Namespace/{namespace} enforce mismatch: {labels!r}")
+    if "pod-security.kubernetes.io/warn" not in labels or "pod-security.kubernetes.io/audit" not in labels:
+        raise SystemExit(f"Namespace/{namespace} missing warn/audit labels: {labels!r}")
+if namespaces["app-cluster-system"].get("platform.humility.gg/local-security-exception") != "docker-socket-provisioner":
+    raise SystemExit("app-cluster-system exception label missing")
+PY
+  then
+    pass "local Namespace manifests carry PSS labels"
+  else
+    fail "local Namespace manifests carry PSS labels"
+  fi
+
+  if grep -q 'pod-security.kubernetes.io/enforce=baseline' "${INFRA_DIR}/scripts/install-flux-for-channel.sh" \
+    && grep -q 'pod-security.kubernetes.io/warn=restricted' "${INFRA_DIR}/scripts/install-flux-for-channel.sh"; then
+    pass "Flux install labels flux-system with PSS baseline"
+  else
+    fail "Flux install labels flux-system with PSS baseline"
+  fi
+}
+
 assert_app_cluster_manifests() {
   local app_dir="${REPO_ROOT}/gitops/channels/local/app-clusters"
   local remote_dir="${REPO_ROOT}/gitops/contracts/remote/app-clusters"
@@ -3556,6 +3764,12 @@ echo ""
 echo "=== Slice 106.02 Crossplane app-cluster manifest validation ==="
 
 assert_app_cluster_manifests
+
+echo ""
+echo "=== Slice 107.02 cluster security channel and PSS validation ==="
+
+assert_cluster_security_channel_schema
+assert_cluster_security_namespace_labels
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="

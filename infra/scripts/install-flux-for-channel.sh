@@ -122,6 +122,11 @@ wait_for_flux_controllers() {
   log "Waiting for Flux controllers"
   kubectl_cmd wait --for=condition=Established crd/gitrepositories.source.toolkit.fluxcd.io --timeout="$WAIT_TIMEOUT"
   kubectl_cmd wait --for=condition=Established crd/kustomizations.kustomize.toolkit.fluxcd.io --timeout="$WAIT_TIMEOUT"
+  kubectl_cmd label namespace flux-system \
+    pod-security.kubernetes.io/enforce=baseline \
+    pod-security.kubernetes.io/warn=restricted \
+    pod-security.kubernetes.io/audit=restricted \
+    --overwrite >/dev/null
   kubectl_cmd -n flux-system rollout status deployment/source-controller --timeout="$WAIT_TIMEOUT"
   kubectl_cmd -n flux-system rollout status deployment/kustomize-controller --timeout="$WAIT_TIMEOUT"
 }

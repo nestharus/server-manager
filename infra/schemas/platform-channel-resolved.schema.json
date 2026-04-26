@@ -66,6 +66,9 @@
     },
     "app_cluster": {
       "$ref": "#/$defs/appCluster"
+    },
+    "security": {
+      "$ref": "#/$defs/security"
     }
   },
   "allOf": [
@@ -94,7 +97,8 @@
           "object_storage",
           "tls",
           "dns",
-          "app_cluster"
+          "app_cluster",
+          "security"
         ],
         "properties": {
           "object_storage": {
@@ -1019,6 +1023,69 @@
         "server_plan": {
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "namespaceList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "uniqueItems": true
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pod_security",
+        "network_policy"
+      ],
+      "properties": {
+        "pod_security": {
+          "$ref": "#/$defs/podSecurity"
+        },
+        "network_policy": {
+          "$ref": "#/$defs/networkPolicy"
+        }
+      }
+    },
+    "podSecurity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system_enforce",
+        "app_enforce",
+        "system_namespaces",
+        "restricted_namespaces"
+      ],
+      "properties": {
+        "system_enforce": {
+          "const": "baseline"
+        },
+        "app_enforce": {
+          "const": "restricted"
+        },
+        "system_namespaces": {
+          "$ref": "#/$defs/namespaceList"
+        },
+        "restricted_namespaces": {
+          "$ref": "#/$defs/namespaceList"
+        },
+        "local_privileged_namespaces": {
+          "$ref": "#/$defs/namespaceList"
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default_deny_namespaces"
+      ],
+      "properties": {
+        "default_deny_namespaces": {
+          "$ref": "#/$defs/namespaceList"
         }
       }
     }

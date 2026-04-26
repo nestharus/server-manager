@@ -2,3 +2,8 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: app-cluster-system
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline
+    platform.humility.gg/local-security-exception: docker-socket-provisioner
