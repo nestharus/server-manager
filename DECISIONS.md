@@ -172,3 +172,90 @@ writing.
   track.
 - If any default is later corrected by the user, the proposal must be
   revised and the full risk gate rerun.
+## D8 - 2026-04-26 - Environment-agnostic Phase 5 reset: local-as-first-deployment and self-managed k3s everywhere
+
+**Context**: Phase 5 was originally planned from a shallow read of platform
+proposals. INIT-008 shipped a VKE-shaped substrate, INIT-009 shipped
+kind/local-verification-shaped GitOps, and INIT-017 began VKE-focused
+Crossplane work. The prior-decisions audit found 70 decisions with 12 missing,
+5 contradicted, and 8 superseded. The governing correction is now recorded in
+`environment-agnostic-stack.md`: local is a deployment target, not a simulation;
+same components run locally and remotely; channels carry provider and endpoint
+config.
+
+**Decision**:
+1. Phase 5 is reset around an environment-agnostic stack. The local channel is
+   the first deployment target.
+2. Kubernetes is self-managed k3s everywhere: k3d locally and k3s on Vultr
+   Cloud Compute VMs remotely. VKE is no longer the workload/runtime substrate.
+3. OpenTofu provisions Vultr cloud primitives and remote VMs; cloud-init
+   bootstraps k3s on those VMs.
+4. Crossplane remains the app-cluster fleet control plane, but it provisions
+   k3s-on-VM app clusters, not VKE clusters.
+5. Flux remains the GitOps reconciler.
+6. SOPS+age remains bootstrap-only. Infisical is the runtime secret store.
+7. Channel templates remain the environment model. Per-channel config carries
+   target type, object-storage endpoint, DNS provider, TLS issuer, Infisical
+   endpoint, Buildkite queue/agent target, Discord guild class, and resource
+   sizing.
+8. Every Phase 5 initiative must deploy a real component into the local
+   channel as its done state. Render-only, stub-provider, dry-run-only, and
+   local-exception designs are not accepted.
+9. Wrong-shaped INIT-008, INIT-009, and paused INIT-017 work are preserved as
+   reference branches only and are not merged into the main path.
+
+**Supersedes**:
+1. Hetzner / kube-hetzner / k3s-via-kube-hetzner as specific tooling. k3s
+   remains; Hetzner and kube-hetzner do not. Superseded by D8 self-managed k3s
+   on Vultr VMs.
+2. VKE managed Kubernetes as the workload/runtime substrate. Superseded by D8
+   k3s on k3d/Vultr VMs.
+3. D7's VKE-specific cluster target. Vultr and OpenTofu survive; VKE does not.
+4. The old `local-only verification` framing. Superseded by local-as-first
+   deployment in `environment-agnostic-stack.md` and D8.
+5. kind as the local Kubernetes target for Phase 5. Superseded by k3d because
+   k3d runs k3s.
+6. SOPS+age as a runtime secret store. Superseded by SOPS+age bootstrap-only
+   plus Infisical runtime secrets.
+7. SealedSecrets. Superseded by SOPS+age bootstrap-only plus Infisical runtime
+   secrets.
+8. Dagger and GitLab CI as canonical CI/CD. Superseded by Buildkite.
+9. Kafka, Debezium, and Redis as the deployment/CI bus. Deferred indefinitely;
+   Buildkite plus Flux is the deployment path.
+10. JFrog and Harbor as Phase 5 image-registry/platform requirements.
+    Superseded by a simpler registry decision to be ratified in INIT-108,
+    with GHCR as the recommended default.
+11. MinIO claim buses and bucket-watched Flux. Superseded by Git-backed Flux;
+    MinIO survives only as local S3-compatible object storage.
+12. Fixed `infra/environments/{dev,staging,production}/` roots. Superseded by
+    channel templates.
+13. Separate hard `dev`, `staging`, and `production` environments. Superseded
+    by channels with exposure, parent, tenant, and endpoint/provider config.
+14. Provider-native-only object storage as an app-facing abstraction.
+    Superseded by an S3-compatible layer: MinIO local, Vultr Object Storage
+    remote.
+15. VKE/provider-vultr Crossplane app-cluster compositions. Superseded by
+    k3s-on-Vultr-VM compositions and local k3d-compatible local-channel
+    behavior.
+16. Linkerd/service mesh as an inherited Phase 5 default. Superseded by an
+    explicit INIT-115 decision: no service mesh unless the proposal/risk gate
+    accepts it.
+17. VictoriaMetrics/Elastic/Kafka/StackStorm observability/AIOps as the Phase
+    5 default. Superseded by INIT-117's recommended Prometheus/Grafana/
+    Alertmanager/OpenTelemetry/Loki stack unless its proposal changes that
+    through the normal gate.
+18. Cloudflare edge/WAF/origin shielding as part of the minimum DNS/TLS
+    initiative. INIT-105 owns DNS automation; Cloudflare edge security is
+    deferred unless separately scheduled.
+
+**Consequences**:
+- INIT-100 through INIT-117 replace the old INIT-008 through INIT-017 main
+  path.
+- No VKE module, VKE channel schema, kind-only harness, SOPS-runtime framing,
+  or VKE Crossplane work should be merged.
+- Future per-INIT proposals cite D8 and `environment-agnostic-stack.md` as
+  controlling sources.
+- Any initiative that cannot deploy a real local-channel component must stop
+  in proposal/risk and choose a different component.
+```
+
