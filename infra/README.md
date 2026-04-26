@@ -20,6 +20,7 @@ OpenTofu-managed infrastructure for the Humility platform.
     │   └── platform-channel/
     ├── roots/
     │   └── channels/
+    │       ├── local/        # Local k3d first-deployment root
     │       └── dev/          # Remote Vultr VM plan surface
     └── tests/
 
@@ -66,6 +67,8 @@ bash infra/scripts/delete-local-channel.sh
 ## Notes
 
 - `local` is the local k3d target for first deployment work.
+- `infra/roots/channels/local/` uses an operator-local OpenTofu backend for
+  first deployment. Remote channels use generated S3-compatible backend config.
 - `dev` is the remote Vultr VM k3s channel declaration.
 - `infra/roots/channels/dev/channel.auto.tfvars.json` intentionally commits
   `vultr_ssh_key_ids` as an empty list. Operators populate Vultr SSH key IDs at
