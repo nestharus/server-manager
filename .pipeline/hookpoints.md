@@ -1,194 +1,476 @@
-# SLICE-013 Phase 5: Hookpoints
+# INIT-101 Phase 5 Hookpoint Research
 
-Inputs used:
-- `.pipeline/proposal.md` revision 3
-- `.pipeline/synthesis.md` D1-D12 binding
-- `plans/risk/slice-013-{audit,scope,shortcut}.md` all LOW
-- `product-strategy/tickets/SLICE-013.md`
+Inputs verified:
+- Current worktree: `/home/nes/projects/server-manager/worktrees/init-101-k3s-control-cluster`
+- Branch: `feat/init-101-k3s-control-cluster`
+- Base visible in log: `feat/init-100-phase-5-reset` at `eb2e434`
+- Proposal: `.pipeline/proposal.md`, 927 lines, SLICE-101.01 through SLICE-101.06
+- Synthesis: `.pipeline/synthesis.md`, D1 through D12
+- Research: `.pipeline/research.md`
+- Reference only: `/home/nes/projects/server-manager/worktrees/init-008-platform-bootstrap/infra/`
+- No-backwards-compatibility convention: `~/ai/conventions/no-backwards-compatibility.md`
 
-Implementation rule: this slice replaces the legacy chapter substrate in place. Do not keep compatibility aliases, dual routes, parked in-memory code, or legacy integer id behavior.
+Scope rule: INIT-008 is a shape reference only. Do not merge the branch. Do not
+park VKE artifacts in-tree. Delete retired files from this worktree.
 
-## Full File List
+## Current Repo State
 
-| WU | Action | File | Purpose | Specific hook points |
-|---|---|---|---|---|
-| WU-018 | CREATE | `migrations/versions/wu-018_chapter_templates.py` | Add template family lineage to existing `chapter_templates`. | `upgrade()`: `CREATE EXTENSION IF NOT EXISTS pgcrypto`, add nullable `template_family_id`, `version`, backfill each existing row to its own family/version 1, set NOT NULL, create `uq_chapter_templates__family_version` and `ix_chapter_templates__family`. `downgrade()`: drop index/constraint columns in reverse. |
-| WU-019 | CREATE | `migrations/versions/wu-019_chapter_lifecycle.py` | Persist chapters, chapter transitions, and seed Discord provisioner grants. | `upgrade()`: create `chapters`, create `chapter_transitions`, create indexes, insert active global grant for `grantee_id='discord-provisioner'` with `chapter.read`, `chapter.write`, `chapter_template.read`. `downgrade()`: delete that seed grant, drop transition table, drop chapter table. |
-| WU-019 | MODIFY/REPLACE | `services/api/app/contracts/chapters.py` | Replace integer-id/update/archive contract with persisted lifecycle contract. | Delete `ChapterStatus`, `ChapterUpdate`, enum import, `slug`, `discord_*_id` fields. Add `ChapterState`, `ChapterId`, `ChapterDiscordResources`, `ChapterCreate`, `ChapterRead`, `ChapterTransitionRequest`, `ChapterResourcesPatchRequest`, `ChapterTransitionRead`, typed errors. Update `__all__`. |
-| WU-018 | MODIFY | `services/api/app/contracts/chapter_templates.py` | Add immutable versioning contract. | Add `template_family_id`, `version` to `ChapterTemplateRead`; add `ChapterTemplatePatch`; add `ChapterTemplateNotFoundError`, `StaleTemplateVersionError`, `ChapterTemplatePatchEmptyError`; preserve `schema_version`; keep `ChapterTemplateCreate` free of caller-supplied `template_family_id`. |
-| WU-020 | CREATE | `services/discord/app/contracts/chapters.py` | Discord-local provisioning result/step contract. | Public surface: `ProvisioningStep`, `ChapterProvisionResult`, `ChapterProvisioningError` if needed by handler tests. Keep this daemon-local; API chapter contracts remain in `services/api`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/interactions.py` | Add deferred-ack seam to interaction contract. | Extend `InteractionEnvelope` only if needed to carry a raw interaction/ack handle, or add protocol `InteractionAcknowledger`. Keep `InteractionHandler` async. Update `__all__`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/api_transport.py` | Allow actor/If-Match headers on API calls. | Add `headers: dict[str, str] | None = None` to `ApiTransportRequest` so chapter provisioning can send `X-Actor-*` and `If-Match` without raw httpx. |
-| WU-019 | MODIFY/REPLACE | `services/api/app/repositories/chapters.py` | Replace in-memory repository with Postgres accessors. | Delete `ChapterRepository`, `InMemoryChapterRepository`, `ChapterRecord`, `StalePreconditionError`, `replace`, timezone imports, `ChapterStatus` import. Add `fetch_chapter`, `fetch_chapter_for_update`, `insert_chapter`, `_update_chapter_state`, `_merge_chapter_discord_resources`; `ChapterNotFoundError` now takes `str`. |
-| WU-018 | MODIFY | `services/api/app/repositories/chapter_templates.py` | Persist and lock template versions. | Extend `insert_chapter_template` and `fetch_chapter_template` select/insert columns. Add `fetch_chapter_template_for_update`, `fetch_current_template_family_version_for_update`, `insert_template_version`. Use `SELECT ... FOR UPDATE` for family locking. |
-| WU-019 | CREATE | `services/api/app/repositories/chapter_transitions.py` | Query/write chapter transition projection rows. | Public surface: `insert_chapter_transition`, `list_chapter_transitions`, optional `fetch_chapter_transition`. All write calls receive active `Connection`. |
-| WU-019 | MODIFY/REPLACE | `services/api/app/services/chapters.py` | Replace old `ChapterService` class with mutation-backed lifecycle functions. | Delete `ChapterService`, `_heads`, `_format_etag`, `_record_to_payload`, `_compute_diff`, `_check_precondition`, `_to_read`, in-memory store imports. Add `create_chapter`, `read_chapter`, `transition_chapter`, `patch_chapter_discord_resources`, `_verify_transition`, `_verify_provisioning_complete`, `_chapter_from_row`, `_make_mutation_request`, `_enqueue_failed_provisioning_effect`. Use `mutate_entity()`. |
-| WU-018 | MODIFY | `services/api/app/services/chapter_templates.py` | Make template create actor-aware and add PATCH-as-new-version. | Change `_make_request` to accept `ActorIdentity`; change `create_chapter_template(db, request, actor)` to version/family v1; preserve `read_chapter_template`; add `patch_chapter_template(db, template_id, request, actor)`; catch unique-index `IntegrityError` as stale 412. |
-| WU-019 | MODIFY/REPLACE | `services/api/app/api/v1/endpoints/chapters.py` | Replace legacy chapter routes with lifecycle routes. | Delete `list_chapters`, `update_chapter`, `archive_chapter`, `ChapterUpdate`, `ChapterService`, `get_chapter_service`, integer `chapter_id`. Add `_parse_if_match`, `_db`, `_set_etag`, typed error mapper. Routes: `POST ""`, `GET "/{chapter_id}"`, `POST "/{chapter_id}/transitions"`, `PATCH "/{chapter_id}/discord-resources"`. Add `RequireAuthority` and `get_current_actor`. |
-| WU-018 | CREATE | `services/api/app/api/v1/endpoints/chapter_templates.py` | Template create/read/patch HTTP API. | Public surface: `router`; helpers `_db`, `_map_template_error`. Routes: `POST /api/v1/chapter-templates`, `GET /api/v1/chapter-templates/{template_id}`, `PATCH /api/v1/chapter-templates/{template_id}`. Use `RequireAuthority` and actor dependency. |
-| WU-018 | MODIFY | `services/api/app/api/v1/router.py` | Mount chapter template routes. | Import `chapter_templates`; add `router.include_router(chapter_templates.router, tags=["chapter-templates"])`. Keep existing `chapters` include but it now points to replacement lifecycle router. |
-| WU-019 | MODIFY | `services/api/app/core/factory.py` | Remove legacy in-memory chapter wiring. | Delete imports of `InMemoryActionStore`, `InMemoryStateChangeStore`, `ChapterRepository`, `InMemoryChapterRepository`, `ChapterService`. Remove `chapter_repository`, `action_store`, `state_change_store` parameters. Remove `app.state.activity_action_store`, `app.state.activity_state_change_store`, `app.state.chapter_service` unless another non-legacy test still requires them. Keep `app.state.db` and scheduler wiring. |
-| WU-019 | MODIFY | `services/api/app/core/dependencies.py` | Remove in-memory service dependency. | Delete `ChapterService` import and `get_chapter_service`. Keep `get_current_actor` and `RequireAuthority`. |
-| WU-020 | CREATE | `services/discord/app/commands/chapters.py` | Register `provision_chapter` command handler. | Public surface: `PROVISION_CHAPTER_COMMAND`, `register_chapter_commands(bot)`. Calls `bot.register_interaction_handler("provision_chapter", provision_chapter_handler)`. |
-| WU-020 | MODIFY | `services/discord/app/commands/__init__.py` | Export chapter registration. | Import/export `register_chapter_commands` if tests import from `app.commands`. Preserve `InteractionRegistry` export. |
-| WU-020 | CREATE | `services/discord/app/handlers/chapters.py` | Sequential Discord provisioning workflow. | Public surface: `provision_chapter_handler`, `check_required_bot_permissions`, `derive_resource_names`/slug helper if test needs it. Handler: ack deferred before API calls, GET chapter, transition to `provisioning`, create/reuse category/roles/channels, PATCH resources after each success, transition to `active`, on failure transition to `provisioning_failed`. |
-| WU-020 | MODIFY | `services/discord/app/handlers/__init__.py` | Export chapter handler symbols if tests import package-level handlers. | Add `provision_chapter_handler` and permission helper to `__all__` only if needed. |
-| WU-020 | MODIFY | `services/discord/app/infrastructure/api_client.py` | Propagate actor and precondition headers. | In `ApiClient.call`, merge `request.headers` with correlation/causation headers. Caller-supplied `X-Correlation-Id` must not override ambient correlation. Actor headers are supplied by WU-020 calls. |
-| WU-020 | MODIFY | `services/discord/app/core/bot.py` | Support deferred acknowledgement and command registration context. | `HumilityBot.dispatch_interaction`: expose raw interaction response/defer path to handler through envelope or an ack protocol; do not send a second immediate response if already deferred and follow-up path is used. Existing `register_interaction_handler` remains. |
-| WU-020 | MODIFY | `services/discord/app/__main__.py` | Install chapter command registration before sync/start. | `build_bot_with_registry`: create `HumilityBot`, call `register_chapter_commands(bot)`, return bot. Keep `sync_command_tree` behavior. |
-| WU-020 | MODIFY | `services/discord/app/contracts/runtime_settings.py` | Document required bot permissions in read contract. | Add `required_bot_permissions: tuple[str, ...] = ("MANAGE_ROLES", "MANAGE_CHANNELS", "VIEW_CHANNEL")` to `DiscordSettingsRead`. No new env var. |
-| WU-020 | MODIFY | `services/discord/app/core/settings.py` | Populate runtime settings read model. | `Settings.to_read()` passes the default required permission tuple through `DiscordSettingsRead`. |
+The current `infra/` tree is the old origin-main shape:
 
-## 1. Migrations
-
-| WU | Action | File | Hook points |
-|---|---|---|---|
-| WU-018 | CREATE | `migrations/versions/wu-018_chapter_templates.py` | `revision = "wu_018_chapter_templates"`, `down_revision = "wu_014_authority_api"`. Use Alembic `op.add_column`, SQL backfill via `gen_random_uuid()`, `op.alter_column`, `op.create_index`. |
-| WU-019 | CREATE | `migrations/versions/wu-019_chapter_lifecycle.py` | `revision = "wu_019_chapter_lifecycle"`, `down_revision = "wu_018_chapter_templates"`. Use Postgres JSONB and UUID types. Seed grant using actual `authority_grants` columns: `id`, `grantee_id`, `scope_kind`, `scope_id`, `permissions`, `expires_at`, `revoked_at`, `revoked_by`, `revocation_reason`, `predecessor_grant_id`. |
-
-Migration tests must prove:
-- Upgrade creates lineage columns and backfills existing templates as version 1.
-- `(template_family_id, version)` uniqueness exists.
-- `chapters` and `chapter_transitions` exist with the four-state check only.
-- `discord-provisioner` grant is active and global with exactly the permissions needed for WU-020.
-
-## 2. Contracts
-
-| WU | Action | File | Public surface / hook points |
-|---|---|---|---|
-| WU-019 | MODIFY/REPLACE | `services/api/app/contracts/chapters.py` | Export `ChapterState = Literal["proposed", "provisioning", "active", "provisioning_failed"]`, `ChapterId = str`, `ChapterDiscordResources`, `ChapterCreate`, `ChapterRead`, `ChapterTransitionRequest`, `ChapterResourcesPatchRequest`, `ChapterTransitionRead`, `ChapterNotFoundError`, `InvalidChapterTransitionError`, `IncompleteProvisioningError`. No `ChapterStatus`, `ChapterUpdate`, integer ids, `slug`, or archive shapes. |
-| WU-018 | MODIFY | `services/api/app/contracts/chapter_templates.py` | `ChapterTemplateRead` gains `template_family_id: UUID`, `version: int`. `ChapterTemplatePatch` has `expected_current_version` plus optional `name`, `channel_structure`, `role_structure`, `default_permission_intents`; validator rejects empty patch and wrong `schema_version`. Export typed errors. |
-| WU-020 | CREATE | `services/discord/app/contracts/chapters.py` | Export daemon-local provisioning result contract used by handler tests. Suggested symbols: `ProvisioningStep`, `ChapterProvisionResult`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/interactions.py` | Add only the minimum deferred-ack contract needed by handler/bot. Suggested symbols if used: `InteractionAcknowledger` protocol with `defer(ephemeral: bool = True)`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/api_transport.py` | `ApiTransportRequest` adds optional `headers` field. Existing response/error public surface remains unchanged. |
-
-## 3. Repositories
-
-| WU | Action | File | Hook points |
-|---|---|---|---|
-| WU-019 | MODIFY/REPLACE | `services/api/app/repositories/chapters.py` | Functions: `insert_chapter(connection, row)`, `fetch_chapter(connection, chapter_id)`, `fetch_chapter_for_update(connection, chapter_id)`, `_update_chapter_state(connection, chapter_id, state)`, `_merge_chapter_discord_resources(connection, chapter_id, resources)`. Use `Jsonb`. No classes or protocols. |
-| WU-018 | MODIFY | `services/api/app/repositories/chapter_templates.py` | Modify `insert_chapter_template` and `fetch_chapter_template`; create `fetch_chapter_template_for_update`, `fetch_current_template_family_version_for_update`, `insert_template_version`. |
-| WU-019 | CREATE | `services/api/app/repositories/chapter_transitions.py` | Public surface: `insert_chapter_transition(connection, row)`, `list_chapter_transitions(connection, chapter_id)`. Projection only; `activity_actions` remains authoritative. |
-
-## 4. Services
-
-| WU | Action | File | Hook points |
-|---|---|---|---|
-| WU-019 | MODIFY/REPLACE | `services/api/app/services/chapters.py` | Functions: `create_chapter(db, request, actor) -> tuple[ChapterRead, MutationResult]`, `read_chapter(db, chapter_id) -> tuple[ChapterRead, str]`, `transition_chapter(db, chapter_id, request, actor, expected_version) -> tuple[ChapterRead, MutationResult]`, `patch_chapter_discord_resources(db, chapter_id, request, actor, expected_version) -> tuple[ChapterRead, MutationResult]`. Helpers: `_verify_provisioning_complete`, `_build_template_snapshot`, `_chapter_from_row`, `_make_mutation_request`, `_enqueue_failed_provisioning_effect`, `_merge_resources`. |
-| WU-018 | MODIFY | `services/api/app/services/chapter_templates.py` | Functions affected: `_make_request`, `create_chapter_template`, `read_chapter_template`. New `patch_chapter_template`. `create_chapter_template` now receives actor and stores `template_family_id = template_id`, `version = 1`. |
-
-Chapter service invariants:
-- All writes go through `mutate_entity`.
-- `transition_chapter(... to_state="active")` must call `_verify_provisioning_complete` before writing transition or state.
-- Failed transition uses repository-level `enqueue_effect(connection, ...)` on the same active connection.
-- Payload allowlists are explicit for create, transition, and resource patch.
-
-## 5. Endpoints
-
-| WU | Action | File | Hook points |
-|---|---|---|---|
-| WU-019 | MODIFY/REPLACE | `services/api/app/api/v1/endpoints/chapters.py` | Route functions: `create_chapter`, `get_chapter`, `transition_chapter_endpoint`, `patch_chapter_discord_resources_endpoint`. Delete legacy route functions `list_chapters`, `update_chapter`, `archive_chapter`. Imports change from `get_chapter_service`/`ChapterService` to `PostgresDatabase`, `get_current_actor`, `RequireAuthority`, lifecycle service functions. |
-| WU-018 | CREATE | `services/api/app/api/v1/endpoints/chapter_templates.py` | Route functions: `create_chapter_template_endpoint`, `get_chapter_template`, `patch_chapter_template_endpoint`. Maps stale version to 412, not-found to 404, empty patch to 422 or 400, schema mismatch to existing explicit error behavior. |
-| WU-018 | MODIFY | `services/api/app/api/v1/router.py` | Import `chapter_templates`; include router. |
-
-Endpoint policy:
-- Template POST/PATCH: `RequireAuthority("chapter_template.write", "global")`
-- Template GET: `RequireAuthority("chapter_template.read", "global")`
-- Chapter POST/transition/resource patch: `RequireAuthority("chapter.write", "global")`
-- Chapter GET: `RequireAuthority("chapter.read", "global")`
-- Transition/resource patch require `If-Match`; missing 428, stale 412.
-
-## 6. Factory and Dependencies
-
-| WU | Action | File | Hook points |
-|---|---|---|---|
-| WU-019 | MODIFY | `services/api/app/core/factory.py` | `create_api_app` signature removes chapter repository and in-memory stores. It only accepts `settings` and optional `db`. App state keeps `settings`, `db`, scheduler. Delete `app.state.chapter_service`, `app.state.activity_action_store`, `app.state.activity_state_change_store` if no non-legacy caller remains. |
-| WU-019 | MODIFY | `services/api/app/core/dependencies.py` | Delete `get_chapter_service` and `ChapterService` import. Leave authority dependencies unchanged. |
-
-Tests currently reading `app.state.activity_action_store` or `app.state.activity_state_change_store` must be rewritten to query Postgres `activity_actions` / `activity_state_changes`, or deleted if they only prove the legacy chapter proof-of-concept.
-
-## 7. Discord Service
-
-| WU | Action | File | Hook points |
-|---|---|---|---|
-| WU-020 | CREATE | `services/discord/app/commands/chapters.py` | `register_chapter_commands(bot)` registers `provision_chapter`. No Discord-visible mutation happens at registration. |
-| WU-020 | MODIFY | `services/discord/app/commands/__init__.py` | Re-export registration only if needed by startup/tests. |
-| WU-020 | CREATE | `services/discord/app/handlers/chapters.py` | Handler owns ack, permission preflight, API sequencing, Discord resource creation/reuse, resource PATCH, success/failure transitions. Do not create raw `httpx` clients. |
-| WU-020 | MODIFY | `services/discord/app/handlers/__init__.py` | Optional export hook. |
-| WU-020 | MODIFY | `services/discord/app/infrastructure/api_client.py` | Merge request headers into outbound call. This is the actual existing path; do not create `services/discord/app/api_client.py` as a shim. |
-| WU-020 | MODIFY | `services/discord/app/core/bot.py` | Support deferred ack/follow-up contract without breaking existing registry dispatch tests. |
-| WU-020 | MODIFY | `services/discord/app/__main__.py` | `build_bot_with_registry` installs chapter commands before `sync_command_tree`. |
-| WU-020 | MODIFY | `services/discord/app/contracts/runtime_settings.py` | Add required permissions tuple to read model. |
-| WU-020 | MODIFY | `services/discord/app/core/settings.py` | Include required permissions in `Settings.to_read()`. |
-
-Discord handler API call order:
-1. Ack deferred.
-2. `GET /api/v1/chapters/{chapter_id}` with `X-Actor-Kind: service`, `X-Actor-Id: discord-provisioner`.
-3. `POST /api/v1/chapters/{chapter_id}/transitions` to `provisioning` with `If-Match`.
-4. For each discovered/created category/role/channel: `PATCH /api/v1/chapters/{chapter_id}/discord-resources` with latest ETag.
-5. On complete resources: transition to `active`.
-6. On failure: persist known resources if API reachable, then transition to `provisioning_failed`; API enqueues the deferred effect.
-
-## 8. Tests
-
-| WU | Action | File | Purpose / hook points |
-|---|---|---|---|
-| WU-019 | DELETE | `services/api/tests/test_chapters.py` | Legacy integer-id, direct PATCH, list, archive, and in-memory ETag tests. Replace coverage in `test_chapter_lifecycle.py`. |
-| WU-019 | DELETE | `services/api/tests/test_contracts_chapters.py` | Legacy `ChapterStatus`, slug, update contract tests. Replace coverage in `test_contracts_chapter_lifecycle.py`. |
-| WU-018 | CREATE | `services/api/tests/test_chapter_templates.py` | Endpoint/service tests for POST, GET, PATCH new-version behavior, stale 412, concurrent PATCH race, authority guard. |
-| WU-019 | CREATE | `services/api/tests/test_chapter_lifecycle.py` | Chapter create/read, transitions, resource patch merge, active completeness, optimistic locking, failed transition deferred effect, seeded service-actor grants. |
-| WU-019 | CREATE | `services/api/tests/test_contracts_chapter_lifecycle.py` | Contract tests for `ChapterState`, UUID-string `ChapterId`, `ChapterCreate`, `ChapterRead`, `ChapterTransitionRequest`, `ChapterResourcesPatchRequest`, `ChapterDiscordResources`. |
-| WU-018/WU-019 | CREATE | `services/api/tests/test_chapter_migrations.py` | Migration assertions for WU-018 lineage columns/indexes and WU-019 chapter tables/grant seed. |
-| WU-020 | CREATE | `services/discord/tests/test_chapter_provisioning.py` | Handler success, deferred ack before API calls, permission preflight, name rediscovery after failed PATCH, partial failure, actor/originating-user headers/body. |
-| WU-018 | MODIFY | `services/api/tests/test_chapter_template_foundation.py` | Add `version` and `template_family_id` to `ChapterTemplateRead` fixtures and DB assertions; keep no-in-place-update assertion but allow `patch_chapter_template` as create-new-version surface. |
-| WU-019 | MODIFY | `services/api/tests/conftest.py` | Add `chapters` and `chapter_transitions` to `GOVERNANCE_TABLES` reset list after migrations create them. |
-| WU-019 | MODIFY | `services/api/tests/test_endpoints_chapters_stubs.py` | Replace expected routes with lifecycle routes; remove `GET /api/v1/chapters`, `PATCH /api/v1/chapters/{chapter_id}`, `/archive`; add transitions and discord-resources paths. |
-| WU-019 | MODIFY | `services/api/tests/test_conftest.py` | Replace reachability checks for legacy chapter routes with new guarded lifecycle route expectations or remove chapter-specific reachability from generic fixture tests. |
-| WU-019 | MODIFY | `services/api/tests/test_activity_model.py` | Remove or rewrite the old "chapters-as-first-aggregate" proof-of-concept section that depends on in-memory stores, direct update, archive, slug, and integer ids. New assertions should query persisted mutation tables if retained. |
-| WU-019 | MODIFY | `services/api/tests/test_authority_enforcement.py` | Rename test-only route/permission away from `/archive` and `chapter.archive` if final grep invariant uses broad `/archive`/`chapter.archive` zero-count. Use `chapter.write` on a neutral test route. |
-| WU-019 | MODIFY | `services/api/tests/test_authority_override_audit.py` | Same neutral-route rename as authority enforcement tests. |
-| WU-020 | MODIFY | `services/discord/tests/test_api_transport.py` | Add coverage that request headers are sent with correlation headers and cannot override correlation. |
-| WU-020 | MODIFY | `services/discord/tests/test_api_context.py` | Add end-to-end assertion for service actor headers where `ApiTransportRequest.headers` includes `X-Actor-Kind`/`X-Actor-Id`. |
-| WU-020 | MODIFY | `services/discord/tests/test_interaction_framework.py` | Adjust dispatch tests for deferred ack/follow-up behavior while preserving registry audit context. |
-| WU-020 | MODIFY | `services/discord/tests/test_bot.py` | Add bot-level test for deferred response seam if implemented in `HumilityBot`. |
-| WU-020 | MODIFY | `services/discord/tests/test_main.py` | Assert `build_bot_with_registry` registers chapter command handlers before sync. |
-| WU-020 | MODIFY | `services/discord/tests/test_settings.py` | Assert `DiscordSettingsRead.required_bot_permissions` default and no new env var. |
-| WU-020 | MODIFY | `services/discord/tests/conftest.py` | Extend mock interaction/guild/Discord objects for deferred ack, permission bits, categories, roles, channels, and creation calls. |
-
-## 9. Legacy Deletions
-
-These are not standalone file deletions except for the two legacy test files above. They are required removals inside replacement files:
-
-| WU | Location | Delete |
-|---|---|---|
-| WU-019 | `services/api/app/contracts/chapters.py` | `ChapterStatus`, `ChapterUpdate`, integer `id`, `slug`, `discord_category_id`, `discord_officer_role_id`, `discord_member_role_id`, archived status. |
-| WU-019 | `services/api/app/repositories/chapters.py` | `ChapterRepository`, `InMemoryChapterRepository`, `ChapterRecord`, in-memory dict, `_next_id`, `archive`. |
-| WU-019 | `services/api/app/services/chapters.py` | `ChapterService`, in-memory stores, `_heads`, `list_chapters`, `update_chapter`, `archive_chapter`, direct action/state-store append logic. |
-| WU-019 | `services/api/app/api/v1/endpoints/chapters.py` | `GET /api/v1/chapters`, `PATCH /api/v1/chapters/{chapter_id}`, `POST /api/v1/chapters/{chapter_id}/archive`, integer path params. |
-| WU-019 | `services/api/app/core/factory.py` | `chapter_repository`, `action_store`, `state_change_store`, `app.state.chapter_service`, legacy activity stores if only used by chapter proof tests. |
-| WU-019 | `services/api/app/core/dependencies.py` | `get_chapter_service`. |
-
-Rationale: revision 3 requires atomic replacement. Keeping the legacy substrate would create duplicate route semantics, incompatible id types, duplicate chapter state owners, and mixed `aggregate_type="chapter"` id forms.
-
-## 10. Final Grep Invariants
-
-After implementation, these commands must return zero matches:
-
-```bash
-rg -n "InMemoryChapterRepository|class ChapterRecord|ChapterStatus|ChapterUpdate" services/api
-rg -n "class ChapterService|get_chapter_service|app\\.state\\.chapter_service" services/api
-rg -n "archive_chapter|/archive|chapter\\.archive" services/api
-rg -n "chapter_id: int|dict\\[int, ChapterRecord\\]|discord_category_id|discord_officer_role_id|discord_member_role_id" services/api
-test ! -e services/discord/app/api_client.py
+```text
+infra/
+  README.md
+  bootstrap/state-backend/main.tf
+  environments/dev/backend.tfbackend
+  environments/dev/main.tf
+  environments/production/backend.tfbackend
+  environments/production/main.tf
+  environments/staging/backend.tfbackend
+  environments/staging/main.tf
+  modules/platform-cluster/main.tf
+  modules/platform-network/main.tf
+  tests/validate_platform_bootstrap.sh
 ```
 
-Allowed nonzero legacy-adjacent strings:
-- `slug` in root-level historical daemon tests and config code outside `services/api` is unrelated to the SLICE-013 API chapter contract.
-- `InMemoryActionStore` and `InMemoryStateChangeStore` may remain in the activity substrate if still used outside the legacy chapter service. They must not be imported by `services/api/app/services/chapters.py` or wired for chapter service state in `factory.py`.
+The worktree does not contain INIT-008 channel roots, schemas, templates, or
+scripts. Those concepts must be recreated from scratch using the reference
+worktree as a template.
 
-## 11. Implementation Order
+Current reusable files:
 
-1. WU-018 tests/contracts/migration/repository/service/endpoint/router.
-2. WU-019 tests/contracts/migration/repositories/service/endpoint/factory/dependencies, deleting legacy tests and legacy code in the same commit slice.
-3. WU-020 Discord contracts/api transport/handler/command/startup/settings/tests.
-4. Run grep invariants, then targeted API and Discord test suites.
+| Path | Disposition | Evidence |
+|---|---|---|
+| `infra/bootstrap/state-backend/main.tf` | REUSE | Same Object Storage subscription root shape. Diff from INIT-008 is comment-only; current file is active in this branch. |
+| `infra/modules/platform-network/main.tf` | REUSE | Byte-identical to INIT-008 `platform-network/main.tf`; uses `vultr_vpc`. |
+| `infra/tests/validate_platform_bootstrap.sh` | REWRITE | Active harness asserts VKE and hard env roots. Keep helper structure only. |
+| `infra/README.md` | REWRITE | Active README names VKE module and `infra/environments/dev`. |
+
+Current retired files:
+
+| Path | Why retired |
+|---|---|
+| `infra/modules/platform-cluster/main.tf` | VKE module; declares `resource "vultr_kubernetes" "platform"`. |
+| `infra/environments/dev/main.tf` | Hard environment root; calls `../../modules/platform-cluster`. |
+| `infra/environments/dev/backend.tfbackend` | Hard environment backend; state key `infra/dev/terraform.tfstate`. |
+| `infra/environments/staging/main.tf` | Hard environment root; calls `../../modules/platform-cluster`. |
+| `infra/environments/staging/backend.tfbackend` | Hard environment backend; state key `infra/staging/terraform.tfstate`. |
+| `infra/environments/production/main.tf` | Hard environment root; calls `../../modules/platform-cluster`. |
+| `infra/environments/production/backend.tfbackend` | Hard environment backend; state key `infra/production/terraform.tfstate`. |
+
+## BLOCKS_IMPLEMENTATION
+
+Two naming/shape conflicts must be resolved before implementation starts:
+
+1. `.pipeline/proposal.md` ships both `infra/channels/local.yaml` and
+   `infra/channels/dev.yaml`, plus `infra/roots/channels/local/` and
+   `infra/roots/channels/dev/`. The requested Phase 5 hookpoint output says the
+   post-INIT-101 tree should show `infra/channels/dev.yaml` and
+   `infra/roots/channels/dev/` only. This is not a codebase fact; it is a
+   proposal-vs-instruction conflict. Implementation must choose whether the
+   real local k3d channel id is `local` or `dev`.
+2. `.pipeline/proposal.md` names the idempotent teardown script
+   `infra/scripts/delete-local-channel.sh`. The requested final tree names
+   `infra/scripts/tear-down-local-channel.sh`. Implementation must choose one
+   public script path before tests are written.
+
+Everything else maps cleanly to existing files and deletions.
+
+## SLICE-101.01 - Discard VKE substrate and introduce k3s channel contract
+
+Proposal dependencies: INIT-100 only.
+
+| Path | Action | Rationale | Existing content notes |
+|---|---|---|---|
+| `infra/schemas/platform-channel.schema.json` | CREATE | New source channel contract with k3s-shaped fields. | Absent in current branch; INIT-008 schema is VKE-shaped and accepts `cluster.kubernetes_version`, `node_pools`, `ha_controlplanes`, `enable_firewall`. |
+| `infra/schemas/platform-channel-resolved.schema.json` | CREATE | New resolved channel contract after inheritance. | Absent in current branch; INIT-008 resolved schema is VKE-shaped. |
+| `infra/channels/local.yaml` | CREATE | Proposal's local k3d done-state channel. | Absent. Conflicts with requested final tree if `dev.yaml` is intended to be the local channel. |
+| `infra/channels/dev.yaml` | CREATE | Remote Vultr VM plan channel, or local channel if conflict resolves that way. | Absent. INIT-008 `dev.yaml` is VKE-shaped; rewrite completely. |
+| `infra/channels/fixtures/local-child.yaml` | CREATE | Fixture for local inheritance/ephemeral behavior. | Absent; INIT-008 fixture names differ and payloads are VKE-shaped. |
+| `infra/channels/fixtures/dev-child.yaml` | CREATE | Fixture for dev inheritance/ephemeral behavior. | Absent; rewrite from INIT-008 inheritance fixture shape. |
+| `infra/channels/fixtures/ephemeral-disabled.yaml` | CREATE | Negative fixture for child spawning. | INIT-008 has same concept but VKE payload; copy structure only. |
+| `infra/channels/fixtures/missing-parent.yaml` | CREATE | Negative fixture for resolver errors. | INIT-008 file can be copied structurally; parent field remains the useful part. |
+| `infra/channels/fixtures/circular-a.yaml` | CREATE | Negative fixture for cycle detection. | INIT-008 file can be copied structurally. |
+| `infra/channels/fixtures/circular-b.yaml` | CREATE | Negative fixture for cycle detection. | INIT-008 file can be copied structurally. |
+| `infra/scripts/resolve_platform_channel.py` | CREATE | Channel inheritance, validation, and resolved JSON output. | Absent; INIT-008 resolver structure is useful but CLI currently takes `--channel`, while proposal examples also use a path form. Pick one contract and update tests. |
+| `infra/scripts/validate_platform_channels.py` | CREATE | Validates active and fixture channels. | Absent; INIT-008 validator shape useful, forbidden files and assertions need k3s update. |
+| `infra/modules/platform-cluster/main.tf` | DELETE | Delete VKE substrate, no forwarding module. | Active file declares `vultr_kubernetes`, VKE outputs, VKE variables. |
+| `infra/environments/dev/main.tf` | DELETE | Delete hard environment root. | Active file calls `../../modules/platform-cluster`. |
+| `infra/environments/dev/backend.tfbackend` | DELETE | Delete hard environment backend. | Active file uses `infra/dev/terraform.tfstate`. |
+| `infra/environments/staging/main.tf` | DELETE | Delete hard environment root. | Active file calls `../../modules/platform-cluster`. |
+| `infra/environments/staging/backend.tfbackend` | DELETE | Delete hard environment backend. | Active file uses `infra/staging/terraform.tfstate`. |
+| `infra/environments/production/main.tf` | DELETE | Delete hard environment root. | Active file calls `../../modules/platform-cluster`. |
+| `infra/environments/production/backend.tfbackend` | DELETE | Delete hard environment backend. | Active file uses `infra/production/terraform.tfstate`. |
+| `infra/README.md` | MODIFY | Remove VKE and hard environment instructions. | Current README names `platform-cluster/` and `infra/environments/dev`. |
+| `.gitignore` | MODIFY | Ignore generated channel material. | Must cover `infra/channels/*/.generated/` without ignoring committed roots/lockfiles. |
+
+File count: CREATE 12, MODIFY 2, DELETE 7.
+
+## SLICE-101.02 - k3d local cluster module, scripts, and reachability harness
+
+Proposal dependencies: SLICE-101.01.
+
+| Path | Action | Rationale | Existing content notes |
+|---|---|---|---|
+| `infra/modules/platform-cluster-k3d/main.tf` | CREATE | OpenTofu local/k3d surface. | Absent; must not call VKE or create render-only stand-ins. |
+| `infra/modules/platform-cluster-k3d/variables.tf` | CREATE | Contract for channel id, cluster name, k3s version, server/agent counts, ports/volumes. | Absent. |
+| `infra/modules/platform-cluster-k3d/outputs.tf` | CREATE | Expose cluster name and kubeconfig path data consumed by scripts/template. | Absent. |
+| `infra/modules/platform-cluster-k3d/versions.tf` | CREATE | Provider/version requirements for local module. | Absent. |
+| `infra/scripts/install-cluster-tools.sh` | CREATE | A-7 closure; idempotent installer/checker for k3d `v5.8.3`. | Absent. Must report missing `k3d` today. |
+| `infra/scripts/bring-up-local-channel.sh` | CREATE | Creates real local k3d cluster and writes channel kubeconfig. | Absent. Must not mutate global kubectl context. |
+| `infra/scripts/delete-local-channel.sh` | CREATE | Proposal teardown path; delete `humility-local` and generated kubeconfig. | Absent. Conflicts with requested `tear-down-local-channel.sh` name. |
+| `infra/scripts/tear-down-local-channel.sh` | CREATE? | Requested final tree path for teardown. | Absent. Only create this instead of `delete-local-channel.sh` if conflict is resolved that way. |
+| `infra/tests/validate_platform_bootstrap.sh` | MODIFY | Replace VKE/env assertions with toolchain, k3d, kubeconfig, and reachability checks. | Current harness asserts `modules/platform-cluster/main.tf`, `environments/dev`, and `vultr_kubernetes`. |
+| `infra/README.md` | MODIFY | Document local channel bring-up and teardown commands. | Current README is environment-root oriented. |
+| `.gitignore` | MODIFY | Ignore generated kubeconfig and transient channel artifacts. | Confirm generated paths do not hide committed roots. |
+
+File count if proposal path is kept: CREATE 7, MODIFY 3, DELETE 0.
+If requested teardown name supersedes proposal: CREATE 7, MODIFY 3, DELETE 0,
+but the created script path is `tear-down-local-channel.sh`, not
+`delete-local-channel.sh`.
+
+## SLICE-101.03 - Vultr VM module and cloud-init k3s bootstrap plan surface
+
+Proposal dependencies: SLICE-101.01.
+
+| Path | Action | Rationale | Existing content notes |
+|---|---|---|---|
+| `infra/modules/platform-cluster-vms/main.tf` | CREATE | Remote plan surface using `vultr_instance`, not VKE. | Absent. Must not preserve old VKE variable aliases. |
+| `infra/modules/platform-cluster-vms/variables.tf` | CREATE | Remote VM variable contract. | Absent. Risk notes require `os_id`/cloud-init image handling and sensitive marking for user-data material. |
+| `infra/modules/platform-cluster-vms/outputs.tf` | CREATE | Expose server ids, addresses, and remote kubeconfig path. | Absent. |
+| `infra/modules/platform-cluster-vms/versions.tf` | CREATE | Vultr provider constraint `~> 2.30`. | Absent. |
+| `infra/modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl` | CREATE | Cloud-init template for official k3s installer. | Absent. Must use strict failure behavior, not silent `runcmd` success. |
+| `infra/modules/platform-network/main.tf` | MODIFY | Reuse VPC module but adjust environment wording to channel wording if needed. | Current content is byte-identical to INIT-008 and says "one VPC per environment". |
+| `infra/modules/platform-network/versions.tf` | CREATE | Add provider constraint separated from `main.tf`. | Absent in current branch; copy verbatim from INIT-008 if still valid. |
+| `infra/templates/platform-channel/main.tf` | CREATE | Template needs conditional target dispatch to k3d or Vultr VM modules. | Absent; INIT-008 template calls VKE module and must be rewritten. |
+| `infra/templates/platform-channel/variables.tf` | CREATE | Variables for k3s-shaped channel payload. | Absent; INIT-008 variables are VKE-shaped. |
+| `infra/templates/platform-channel/outputs.tf` | CREATE | Channel-scoped outputs such as kubeconfig path and endpoint references. | Absent; INIT-008 outputs expose VKE endpoint/id. |
+| `infra/templates/platform-channel/versions.tf` | CREATE | Required providers and OpenTofu version. | Absent; copy structure, preserve Vultr `~> 2.30`. |
+| `infra/roots/channels/dev/main.tf` | CREATE | Generated/committed dev channel root for remote plan validation. | Absent. INIT-008 root is VKE-shaped. |
+| `infra/roots/channels/dev/backend.tfbackend` | CREATE | Generated backend config for dev channel state. | Absent; INIT-008 key shape `channels/dev/terraform.tfstate` survives. |
+| `infra/roots/channels/dev/channel.auto.tfvars.json` | CREATE | Generated k3s/Vultr VM tfvars. | Absent; INIT-008 tfvars contain VKE fields. |
+| `infra/roots/channels/dev/.terraform.lock.hcl` | CREATE | Committed provider lock for dev root. | Absent in current branch; INIT-008 lockfile is a provider-lock shape reference only. |
+| `infra/tests/validate_platform_bootstrap.sh` | MODIFY | Add remote plan-surface checks. | Current harness validates old `environments/dev`. |
+
+File count: CREATE 14, MODIFY 2, DELETE 0.
+
+## SLICE-101.04 - Channel template and generated root rewrite
+
+Proposal dependencies: SLICE-101.01 and SLICE-101.03.
+
+| Path | Action | Rationale | Existing content notes |
+|---|---|---|---|
+| `infra/templates/platform-channel/main.tf` | MODIFY | Finalize target dispatch and module calls after both modules exist. | Created in 101.03 if proposal order is followed; otherwise CREATE here. |
+| `infra/templates/platform-channel/variables.tf` | MODIFY | Finalize variable surface from resolved channel JSON. | Must exclude VKE names. |
+| `infra/templates/platform-channel/outputs.tf` | MODIFY | Finalize outputs for local and remote consumers. | Must not expose VKE-only outputs. |
+| `infra/templates/platform-channel/versions.tf` | MODIFY | Ensure provider constraints and no backend/provider blocks in module template. | INIT-008 version file is structurally useful. |
+| `infra/roots/channels/local/main.tf` | CREATE | Proposal local generated root for k3d target. | Absent; conflicts with requested final tree if no local root should exist. |
+| `infra/roots/channels/local/backend.tfbackend` | CREATE | Proposal local backend config. | Absent. Need confirm whether local root uses local state or S3 backend. |
+| `infra/roots/channels/local/channel.auto.tfvars.json` | CREATE | Proposal local generated tfvars. | Absent. |
+| `infra/roots/channels/local/.terraform.lock.hcl` | CREATE | Proposal local root lockfile. | Absent. |
+| `infra/roots/channels/dev/main.tf` | MODIFY | Generated/committed dev root should be byte-identical after generator. | Absent now; created in 101.03 if proposal order is followed. |
+| `infra/roots/channels/dev/backend.tfbackend` | MODIFY | Generated backend drift target. | Absent now. |
+| `infra/roots/channels/dev/channel.auto.tfvars.json` | MODIFY | Generated tfvars drift target. | Absent now. |
+| `infra/roots/channels/dev/.terraform.lock.hcl` | MODIFY | Provider lockfile committed and drift-checked. | Absent now. |
+| `infra/scripts/generate_channel_backend.py` | CREATE | Render backend config from resolved channel. | Absent; INIT-008 generator structure survives. |
+| `infra/scripts/generate_channel_tfvars.py` | CREATE | Render k3s-shaped `channel.auto.tfvars.json`. | Absent; INIT-008 generator emits VKE tfvars and must be rewritten. |
+| `infra/scripts/spawn_platform_channel.py` | CREATE | Spawn ephemeral child channel under `.tmp/`. | Absent; INIT-008 safety shape is reusable. |
+| `infra/tests/validate_platform_bootstrap.sh` | MODIFY | Add generator drift checks for committed roots. | Current harness has no channel generator checks. |
+
+File count: CREATE 7, MODIFY 9, DELETE 0.
+
+## SLICE-101.05 - Local k3d bootstrap end-to-end verification
+
+Proposal dependencies: SLICE-101.02 and SLICE-101.04.
+
+| Path | Action | Rationale | Existing content notes |
+|---|---|---|---|
+| `infra/scripts/bring-up-local-channel.sh` | MODIFY | Harden idempotency, stale generated-state detection, and real API reachability. | Created in 101.02. |
+| `infra/scripts/delete-local-channel.sh` | MODIFY | Harden no-op second teardown. | Created in 101.02 if proposal name wins. |
+| `infra/scripts/tear-down-local-channel.sh` | MODIFY? | Harden no-op second teardown if requested name wins. | Do not keep both teardown scripts as compatibility aliases. |
+| `infra/tests/validate_platform_bootstrap.sh` | MODIFY | Must prove `kubectl get nodes` against channel kubeconfig and expected node shape. | Current harness must be replaced, not extended. |
+| `infra/tests/README.md` | CREATE | Optional, only if harness usage needs local test documentation. | Absent. Do not create if `infra/README.md` is sufficient. |
+| `infra/README.md` | MODIFY | Document done-state proof and cleanup. | Current README is stale. |
+| `.gitignore` | MODIFY | Confirm generated kubeconfig/state ignores. | No compatibility exceptions. |
+
+File count with optional test README: CREATE 1, MODIFY 5, DELETE 0.
+Minimum file count without optional README: CREATE 0, MODIFY 5, DELETE 0.
+
+## SLICE-101.06 - Documentation and INIT-102 handoff
+
+Proposal dependencies: SLICE-101.05.
+
+| Path | Action | Rationale | Existing content notes |
+|---|---|---|---|
+| `infra/README.md` | MODIFY | Final operator documentation for k3s/k3d channel pattern. | Current README names VKE and hard environments. |
+| `docs/deployment-substrate.md` | CREATE? | Only if existing docs need a stable substrate reference beyond infra README. | No exact file exists today. If created, keep it concise and point to D8. |
+| `.pipeline/implementation.md` | MODIFY | Record slice status if implementation stage uses it. | Exists today; not inspected for hookpoint ownership. |
+| `DECISIONS.md` | MODIFY? | Only for a mechanical D8 cross-reference, no new decision expected. | D8 already exists and names k3s/k3d/Vultr VMs. |
+
+File count if docs page is added and DECISIONS is untouched: CREATE 1,
+MODIFY 2, DELETE 0. Minimum count: CREATE 0, MODIFY 2, DELETE 0.
+
+## INIT-008 Reference Salvage
+
+Use INIT-008 for structure, not content. Equivalent INIT-101 paths are in this
+worktree.
+
+| INIT-008 path or concept | Disposition | INIT-101 equivalent | Notes |
+|---|---|---|---|
+| `infra/README.md` | DISCARD | `infra/README.md` | VKE/channel text is stale. Rewrite around D8, local k3d, remote plan-only boundary. |
+| `infra/bootstrap/state-backend/main.tf` | COPY-AND-MODIFY | `infra/bootstrap/state-backend/main.tf` | Branch already has this root. INIT-008 differs only in comment wording; keep active branch root unless docs wording is corrected. |
+| `infra/bootstrap/state-backend/.terraform.lock.hcl` | COPY-AND-MODIFY | `infra/bootstrap/state-backend/.terraform.lock.hcl` | Current branch lacks lockfile. Generate with current OpenTofu/provider, do not blindly copy if provider hashes differ. |
+| `infra/channels/dev.yaml` | DISCARD CONTENT, COPY SHAPE | `infra/channels/dev.yaml` | YAML layout survives; VKE fields do not. |
+| `infra/channels/fixtures/circular-a.yaml` | COPY-AND-MODIFY | `infra/channels/fixtures/circular-a.yaml` | Cycle concept survives; ensure required source schema fields match k3s schema. |
+| `infra/channels/fixtures/circular-b.yaml` | COPY-AND-MODIFY | `infra/channels/fixtures/circular-b.yaml` | Same as circular-a. |
+| `infra/channels/fixtures/dev-pr-123.yaml` | COPY-AND-MODIFY | `infra/channels/fixtures/dev-child.yaml` or equivalent | Ephemeral child fixture shape survives; name should match new fixture scheme. |
+| `infra/channels/fixtures/e2e-from-dev.yaml` | COPY-AND-MODIFY | `infra/channels/fixtures/dev-child.yaml` | Inheritance override concept survives; VKE cluster label override does not. |
+| `infra/channels/fixtures/e2e-pr-1234.yaml` | COPY-AND-MODIFY | `infra/channels/fixtures/local-child.yaml` or dev child fixture | Tenant child concept survives. |
+| `infra/channels/fixtures/ephemeral-disabled.yaml` | COPY-AND-MODIFY | `infra/channels/fixtures/ephemeral-disabled.yaml` | Negative spawn fixture survives; rewrite cluster payload. |
+| `infra/channels/fixtures/missing-parent.yaml` | COPY-AND-MODIFY | `infra/channels/fixtures/missing-parent.yaml` | Missing-parent concept survives. |
+| `infra/modules/platform-cluster/main.tf` | DISCARD | none | VKE module using `vultr_kubernetes`. Deleted, replaced by k3d and VM modules. |
+| `infra/modules/platform-cluster/versions.tf` | DISCARD | none | Do not keep forwarding module or VKE provider lock surface. |
+| `infra/modules/platform-network/main.tf` | COPY-VERBATIM / REUSE | `infra/modules/platform-network/main.tf` | Current file is byte-identical. Optional comments may shift from environment to channel. |
+| `infra/modules/platform-network/versions.tf` | COPY-VERBATIM | `infra/modules/platform-network/versions.tf` | Current branch lacks it; provider constraint remains `~> 2.30`. |
+| `infra/roots/channels/dev/main.tf` | DISCARD CONTENT, COPY SHAPE | `infra/roots/channels/dev/main.tf` | Root module wrapper shape survives; VKE variables do not. |
+| `infra/roots/channels/dev/backend.tfbackend` | COPY-AND-MODIFY | `infra/roots/channels/dev/backend.tfbackend` | State key shape survives; generated by new backend generator. |
+| `infra/roots/channels/dev/channel.auto.tfvars.json` | DISCARD CONTENT, COPY SHAPE | `infra/roots/channels/dev/channel.auto.tfvars.json` | Must emit k3s/Vultr VM fields, not VKE fields. |
+| `infra/roots/channels/dev/.terraform.lock.hcl` | COPY-AND-MODIFY | `infra/roots/channels/dev/.terraform.lock.hcl` | Generate with current root/provider graph. |
+| `infra/schemas/platform-channel.schema.json` | DISCARD CONTENT, COPY SHAPE | `infra/schemas/platform-channel.schema.json` | JSON Schema structure survives; VKE fields removed. |
+| `infra/schemas/platform-channel-resolved.schema.json` | DISCARD CONTENT, COPY SHAPE | `infra/schemas/platform-channel-resolved.schema.json` | Same as source schema. |
+| `infra/scripts/resolve_platform_channel.py` | COPY-AND-MODIFY | `infra/scripts/resolve_platform_channel.py` | Keep structured errors, inheritance, fixture lookup; update CLI if path-based invocation is required. |
+| `infra/scripts/validate_platform_channels.py` | COPY-AND-MODIFY | `infra/scripts/validate_platform_channels.py` | Keep active/fixture registry checks; update assertions for k3s targets. |
+| `infra/scripts/generate_channel_backend.py` | COPY-AND-MODIFY | `infra/scripts/generate_channel_backend.py` | Keep backend render pattern; update input contract if resolver accepts channel YAML directly. |
+| `infra/scripts/generate_channel_tfvars.py` | COPY-AND-MODIFY | `infra/scripts/generate_channel_tfvars.py` | Rewrite payload completely; old `cluster_kubernetes_version`, `node_plan`, `node_quantity`, `ha_controlplanes`, `enable_firewall` are forbidden. |
+| `infra/scripts/spawn_platform_channel.py` | COPY-AND-MODIFY | `infra/scripts/spawn_platform_channel.py` | Keep `.tmp/` safety and no writes under active `infra/channels` or `infra/roots`. |
+| `infra/templates/platform-channel/main.tf` | DISCARD CONTENT, COPY SHAPE | `infra/templates/platform-channel/main.tf` | Rewrite module calls to `platform-cluster-k3d` and `platform-cluster-vms`. |
+| `infra/templates/platform-channel/variables.tf` | DISCARD CONTENT, COPY SHAPE | `infra/templates/platform-channel/variables.tf` | Rewrite variable names and validations. |
+| `infra/templates/platform-channel/outputs.tf` | DISCARD CONTENT, COPY SHAPE | `infra/templates/platform-channel/outputs.tf` | Rewrite outputs for k3d/k3s VM surfaces. |
+| `infra/templates/platform-channel/versions.tf` | COPY-AND-MODIFY | `infra/templates/platform-channel/versions.tf` | Keep OpenTofu/provider shape, but provider set may differ for local module. |
+| `infra/tests/validate_platform_bootstrap.sh` | COPY-AND-MODIFY | `infra/tests/validate_platform_bootstrap.sh` | Keep helper style and sections; rewrite assertions around k3s channel contract and real local cluster. |
+| `infra/tests/conftest.py` and API/Discord runtime tests | COPY-VERBATIM / LEAVE | Existing same paths in current branch | These are service tests unrelated to infra substrate. Do not churn them. |
+
+## Origin-Main Artifact Deletion Plan
+
+| Path | Delete owner | Active references to update |
+|---|---|---|
+| `infra/modules/platform-cluster/main.tf` | SLICE-101.01 | `infra/tests/validate_platform_bootstrap.sh`, `infra/README.md`, and hard env roots. |
+| `infra/modules/platform-cluster/` | SLICE-101.01 | Remove directory after file deletion. No forwarding replacement. |
+| `infra/environments/dev/main.tf` | SLICE-101.01 | Current root calls VKE module and VKE variables. |
+| `infra/environments/dev/backend.tfbackend` | SLICE-101.01 | Current key is `infra/dev/terraform.tfstate`; channels use `channels/<id>/terraform.tfstate`. |
+| `infra/environments/staging/main.tf` | SLICE-101.01 | Current root calls VKE module. |
+| `infra/environments/staging/backend.tfbackend` | SLICE-101.01 | Current key is `infra/staging/terraform.tfstate`. |
+| `infra/environments/production/main.tf` | SLICE-101.01 | Current root calls VKE module. |
+| `infra/environments/production/backend.tfbackend` | SLICE-101.01 | Current key is `infra/production/terraform.tfstate`. |
+| `infra/environments/` | SLICE-101.01 | Remove empty directory after child roots are deleted. |
+
+Origin-main deletion count: 7 tracked files plus 2 now-empty directories
+(`infra/modules/platform-cluster/` and `infra/environments/`).
+
+## Cross-Reference Grep
+
+Command used:
+
+```bash
+grep -rn "platform-cluster\|vultr_kubernetes\|infra/environments\|environments/dev\|environments/staging\|environments/production\|kubernetes_version\|node_pools\|ha_controlplanes\|enable_firewall" infra .pipeline docs DECISIONS.md README.md 2>/dev/null
+```
+
+Active infra hits that require implementation updates:
+
+| Hit | Owner | Required handling |
+|---|---|---|
+| `infra/modules/platform-cluster/main.tf` VKE variables/resources/outputs | SLICE-101.01 | Delete file and directory. |
+| `infra/environments/dev/main.tf` VKE module call and VKE variables | SLICE-101.01 | Delete root. |
+| `infra/environments/staging/main.tf` VKE module call and VKE variables | SLICE-101.01 | Delete root. |
+| `infra/environments/production/main.tf` VKE module call and VKE variables | SLICE-101.01 | Delete root. |
+| `infra/tests/validate_platform_bootstrap.sh` old file list, VKE assertions, env validation | SLICE-101.02 through 101.05 | Rewrite harness; do not leave old assertions. |
+| `infra/README.md` VKE module and env-root instructions | SLICE-101.01, final in 101.06 | Rewrite. |
+
+Pipeline docs, risk docs, synthesis, research, proposal, and `DECISIONS.md`
+also contain VKE terms as historical evidence. Those are not active code
+references. SLICE-101.06 docs grep must avoid false failures by scoping
+forbidden terms to active infra/docs where appropriate.
+
+## Toolchain Prerequisite Verification
+
+| Tool | Status | Evidence | Slice owner |
+|---|---|---|---|
+| `tofu` | PRESENT | `OpenTofu v1.11.5` | Existing prerequisite. |
+| `kubectl` | PRESENT | client `v1.34.1`; embedded `kustomizeVersion: v5.7.1` | Existing prerequisite. |
+| standalone `kustomize` | MISSING | `kustomize: command not found` | Not required for INIT-101 if kubectl embedded kustomize is the intended surface. |
+| `docker` | PRESENT | `Docker version 29.4.0` | Existing prerequisite for k3d. |
+| `k3d` | MISSING | `k3d: command not found` | SLICE-101.02 installer/check owns this. |
+| `k3s` binary | MISSING | `k3s: command not found` | Not required locally; real Linux VM bootstrap installs it through cloud-init. |
+
+## New `infra/` Shape After INIT-101
+
+Proposal-derived shape, with conflicts annotated:
+
+```text
+infra/
+  README.md
+  bootstrap/state-backend/
+    main.tf
+    .terraform.lock.hcl
+  modules/
+    platform-network/
+      main.tf
+      versions.tf
+    platform-cluster-k3d/
+      main.tf
+      variables.tf
+      outputs.tf
+      versions.tf
+    platform-cluster-vms/
+      main.tf
+      variables.tf
+      outputs.tf
+      versions.tf
+      cloud-init/k3s-server.yaml.tftpl
+  templates/platform-channel/
+    main.tf
+    variables.tf
+    outputs.tf
+    versions.tf
+  channels/
+    local.yaml        # proposal; conflicts with requested dev-only shape
+    dev.yaml
+    fixtures/
+      local-child.yaml
+      dev-child.yaml
+      ephemeral-disabled.yaml
+      missing-parent.yaml
+      circular-a.yaml
+      circular-b.yaml
+  schemas/
+    platform-channel.schema.json
+    platform-channel-resolved.schema.json
+  roots/channels/
+    local/            # proposal; conflicts with requested tree if omitted
+      main.tf
+      backend.tfbackend
+      channel.auto.tfvars.json
+      .terraform.lock.hcl
+    dev/
+      main.tf
+      backend.tfbackend
+      channel.auto.tfvars.json
+      .terraform.lock.hcl
+  scripts/
+    install-cluster-tools.sh
+    resolve_platform_channel.py
+    spawn_platform_channel.py
+    validate_platform_channels.py
+    generate_channel_backend.py
+    generate_channel_tfvars.py
+    bring-up-local-channel.sh
+    delete-local-channel.sh       # proposal name
+    tear-down-local-channel.sh    # requested name; choose one, not both
+  tests/
+    validate_platform_bootstrap.sh
+```
+
+Required absences after INIT-101:
+
+```text
+infra/environments/
+infra/modules/platform-cluster/
+gitops/
+secrets handling
+object storage workloads
+cert-manager / DNS
+Crossplane
+```
+
+## Risk-Deferred LOW Observations
+
+Risk files present in this worktree:
+- `plans/risk/init-101-audit.md`: gate status LOW, no audit findings.
+- `plans/risk/init-101-scope.md`: gate status LOW, soft observation that
+  post-INIT-117 remote deployment work lacks a concrete successor INIT id.
+- `plans/risk/init-101-shortcut.md`: gate status LOW, implementation-tightening
+  notes S1 through S7.
+
+Track these during hookpoint-to-implementation handoff:
+
+| ID | Severity in file | Implementation handling |
+|---|---|---|
+| S1 | MEDIUM | Cloud-init install path must fail hard; do not allow `curl` failure followed by successful `cp`/`chmod`. |
+| S2 | MEDIUM | Document accepted upstream installer integrity tradeoff or implement installer verification. |
+| S3 | LOW | Prefer "deployment" wording over "verification" where the local channel is the done state. |
+| S4 | LOW | Add `os_id` or equivalent cloud-init-capable image selection to remote VM contract. |
+| S5 | LOW | Name the successor for first real remote k3s apply/kubeconfig retrieval, or list constituent successors consistently. |
+| S6 | LOW | Resolve `bootstrap.token` asymmetry: omit for INIT-101 or define schema/module/template handling. |
+| S7 | LOW | Mark user-data/bootstrap variables sensitive where applicable and prevent plan/log leakage. |
+
+These observations do not block hookpoint mapping, but S1/S2/S4/S6/S7 belong
+to SLICE-101.03, S3/S5 belong to SLICE-101.06, and script/test language in
+SLICE-101.05 should avoid fake-completion framing.
+
+## Implementation DAG
+
+Proposal DAG:
+
+```text
+INIT-100
+  -> SLICE-101.01
+      -> SLICE-101.02
+      -> SLICE-101.03
+          -> SLICE-101.04
+      -> SLICE-101.04
+          -> SLICE-101.05
+              -> SLICE-101.06
+```
+
+Verified order:
+
+1. SLICE-101.01 must run first. It deletes active VKE/env artifacts and creates
+   the k3s channel contract so later slices cannot depend on old names.
+2. SLICE-101.02 can run after 101.01 because it needs the local channel
+   contract and writes the k3d module/scripts.
+3. SLICE-101.03 can run after 101.01 because it needs the k3s channel contract
+   and owns remote VM module shape.
+4. SLICE-101.04 depends on both 101.01 and 101.03. It needs schema and remote
+   module variables before generators can emit final roots.
+5. SLICE-101.05 depends on 101.02 and 101.04. It needs scripts plus generated
+   local root/channel artifacts before real local bootstrap proof.
+6. SLICE-101.06 depends on 101.05 because docs must describe the proven local
+   done state, not the intended one.
+
+DAG conflicts:
+- No cycle or missing dependency found.
+- File ownership overlap is intentional for `infra/tests/validate_platform_bootstrap.sh`,
+  `infra/README.md`, and `infra/templates/platform-channel/*.tf`; each later
+  slice refines checks or docs after new substrate exists.
+- The local-channel naming conflict and teardown-script naming conflict above
+  must be resolved before test/code agent separation, because contracts/tests
+  need stable public paths.
+
+## Summary Counts
+
+Per-slice file counts:
+
+| Slice | CREATE | MODIFY | DELETE |
+|---|---:|---:|---:|
+| SLICE-101.01 | 12 | 2 | 7 |
+| SLICE-101.02 | 7 | 3 | 0 |
+| SLICE-101.03 | 14 | 2 | 0 |
+| SLICE-101.04 | 7 | 9 | 0 |
+| SLICE-101.05 | 0-1 | 5 | 0 |
+| SLICE-101.06 | 0-1 | 2 | 0 |
+
+Origin-main deletion count: 7 tracked files, plus removal of the retired
+`infra/modules/platform-cluster/` and `infra/environments/` directories after
+their tracked files are gone.
+
+BLOCKS_IMPLEMENTATION flags:
+- `BLOCKS_IMPLEMENTATION: local channel id/root conflict`
+- `BLOCKS_IMPLEMENTATION: teardown script path conflict`
+
+Toolchain status:
+- `tofu`: present, `1.11.5`
+- `kubectl`: present, `1.34.1`
+- embedded kustomize: present, `5.7.1`
+- standalone `kustomize`: missing
+- `docker`: present, `29.4.0`
+- `k3d`: missing; SLICE-101.02 owns installer/check
+- `k3s`: missing; not required for local k3d
