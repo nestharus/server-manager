@@ -142,7 +142,7 @@ rules = data.get("creation_rules") if isinstance(data, dict) else None
 if not isinstance(rules, list) or len(rules) != 1:
     raise SystemExit("expected exactly one creation_rule")
 rule = rules[0]
-if rule.get("path_regex") != r"^gitops/.*\.enc\.yaml$":
+if rule.get("path_regex") != r"^gitops/bootstrap/.*\.enc\.yaml$":
     raise SystemExit("creation_rule path_regex mismatch")
 if rule.get("encrypted_regex") != "^(data|stringData)$":
     raise SystemExit("creation_rule encrypted_regex mismatch")

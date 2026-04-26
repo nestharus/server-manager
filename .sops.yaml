@@ -2,6 +2,6 @@
 # Replace this placeholder recipient with the operator's real age public key,
 # then re-encrypt gitops/bootstrap/sops-sentinel.enc.yaml during bootstrap.
 creation_rules:
-  - path_regex: ^gitops/.*\.enc\.yaml$
+  - path_regex: ^gitops/bootstrap/.*\.enc\.yaml$
     encrypted_regex: ^(data|stringData)$
     age: age1yv0ad3agu5wsahpplc0slswfv8d3jr6sh860eqjqnz2ra2m6uclq7d5g4c
