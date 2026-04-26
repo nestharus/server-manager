@@ -12,6 +12,9 @@ stringData:
     REDIS_URL: ENC[AES256_GCM,data:xvSN1RQ7Ks8WgCBbaVfdz3dIGyF0QRzLYjgClWMWwcRFUsiYTVSr3ZcWrk11AN7Det4=,iv:FdkthtwV8TPX2lwCzdZINqZYKv2Oqg+hzQIXF4soZ6w=,tag:GFaAjTj8d63LKnthiGYNFg==,type:str]
     INFISICAL_AUTO_BOOTSTRAP_EMAIL: ENC[AES256_GCM,data:YFFmj4t86j0hVlEa8v3QK1MfWAI=,iv:Qv1xDN+SAV6r5did2bYkCfDUDywj3gnaM5rNxiVtkek=,tag:gh37E4XmxKlkhTO0BoFSzA==,type:str]
     INFISICAL_AUTO_BOOTSTRAP_PASSWORD: ENC[AES256_GCM,data:edd+M5LtZSPmn5LoQLe0OYwu+isGTnvcPUr5CvADkGWgAbMyl+AOa+zZ3OxkIgJr,iv:Oty+YcPQjDNaRjOS5uSXqyXdrXFDWrl2USypJV9vtj4=,tag:2FQc9RTErSBOwX8x+4zV1w==,type:str]
+    POSTGRES_PASSWORD: ENC[AES256_GCM,data:fcFRdg==,iv:cKmWHzfrvx6vWEaEhg2kCBVREgT0g1Ll0K9QQIHWLsI=,tag:p0FveqsGuiQZm2JPhp4mUQ==,type:str]
+    POSTGRES_POSTGRES_PASSWORD: ENC[AES256_GCM,data:XUFO3g==,iv:Xjlf+ydYNUG4sg6zy7HSkVWUrk9ZfRdn1nLcz3gBAPM=,tag:oLAzmmGiY2OWjByILtBLaQ==,type:str]
+    REDIS_PASSWORD: ENC[AES256_GCM,data:o8rYCu6G1tvnWljjFZzjQA==,iv:XqCYjSiySln/X8ITXjj4XOUJ2blQ1ZKp/3Bcoo263JQ=,tag:94DOMFyLZdMem93W31XgLA==,type:str]
 sops:
     age:
         - recipient: age1yv0ad3agu5wsahpplc0slswfv8d3jr6sh860eqjqnz2ra2m6uclq7d5g4c
@@ -23,7 +26,7 @@ sops:
             ZEpHbndSTzJRemU0SC9pcm1RT0xCVkkKwOVd48CHb3D8ARMAMNtTbYAuHIn96t4n
             1tFEtk9xT8zRLyo4g7IxUGCkO3l7k1Zjo1XXtgiEQmBMMzw1Ze6l7w==
             -----END AGE ENCRYPTED FILE-----
-    lastmodified: "2026-04-26T11:04:03Z"
-    mac: ENC[AES256_GCM,data:a4PLU3p2Ti+UjkWfV4/WJdQimLT1roYZOz0MaEF2g3QJSyr2Pea2TqylFJ26zaGCxZEAoY+QOuAvE3eHxEytWLtCHjfRx0fU5o5Dw2QeiZ9w4/ac+iytddLuOzLm6QCmQ/wvHOYlp/T1m3NfChW+zNOa5m6Vp1VD+1fGD9FfPZk=,iv:ztNA7mcWsdwZ7WWz8eFuCUb3JCrqzQWjsh+sGLnEedo=,tag:BuJEipmNbFXDnyzv5eNyNA==,type:str]
+    lastmodified: "2026-04-26T11:56:55Z"
+    mac: ENC[AES256_GCM,data:vVcAA0aL9E0JjOu6PabiAAWG4tFVQO4K0UoJKcy/ox/AEBjB4tKQJp8nhrlpfGRNDNBhpelOVRv32ChN4PHG1a8mDWt4+Rjx+8//fORF/YS1qlyAEw7KM820TGfmO8N+UTy05TQOyLMDXhFEQbfDooecfq1+poB1j9fNwcfsDpg=,iv:6vx1b7vK/IiU+uLj5wY67RfrLnC2hGmOtTrUaYF0Pmo=,tag:zmrA8AMzkZ1FYhd4T5y6UA==,type:str]
     encrypted_regex: ^(data|stringData)$
     version: 3.12.2

@@ -194,6 +194,9 @@ Boundary: SOPS+age stays bootstrap-only. The only encrypted bootstrap files are
 the Flux sentinel and Infisical server bootstrap Secret under
 `gitops/bootstrap/`. Infisical owns runtime secrets, including downstream
 application, object storage, database, Discord, and service credentials.
+The local Infisical chart references `Secret/infisical-server-bootstrap` for
+the server connection strings and the bundled Postgres/Redis passwords; rendered
+manifests must not commit chart-default credential literals.
 
 ## GitOps Substrate
 

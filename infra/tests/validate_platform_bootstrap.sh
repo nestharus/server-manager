@@ -615,6 +615,95 @@ PY
     fail "Infisical server image pins"
   fi
 
+  if [[ -n "${py_bin:-}" ]] && "$py_bin" - "${server_dir}/render-values.yaml" "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+values = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+rendered = list(yaml.safe_load_all(Path(sys.argv[2]).read_text(encoding="utf-8")))
+
+postgres = values["postgresql"]
+redis = values["redis"]
+assert postgres["auth"]["existingSecret"] == "infisical-server-bootstrap"
+assert postgres["auth"]["secretKeys"]["userPasswordKey"] == "POSTGRES_PASSWORD"
+assert postgres["auth"]["secretKeys"]["adminPasswordKey"] == "POSTGRES_POSTGRES_PASSWORD"
+assert postgres["useExistingPostgresSecret"]["existingConnectionStringSecret"]["name"] == "infisical-server-bootstrap"
+assert postgres["useExistingPostgresSecret"]["existingConnectionStringSecret"]["key"] == "DB_CONNECTION_URI"
+assert redis["auth"]["existingSecret"] == "infisical-server-bootstrap"
+assert redis["auth"]["existingSecretPasswordKey"] == "REDIS_PASSWORD"
+
+for document in rendered:
+    if not isinstance(document, dict):
+        continue
+    metadata = document.get("metadata") or {}
+    if document.get("kind") == "Secret" and metadata.get("name") in {"postgresql", "redis"}:
+        raise SystemExit("rendered chart must not create credential Secret with literal data")
+    if document.get("kind") != "Deployment" or metadata.get("name") != "infisical-infisical-standalone-infisical":
+        continue
+    env = document["spec"]["template"]["spec"]["containers"][0]["env"]
+    refs = {
+        item["name"]: item.get("valueFrom", {}).get("secretKeyRef")
+        for item in env
+        if item.get("name") in {"DB_CONNECTION_URI", "REDIS_URL"}
+    }
+    assert refs == {
+        "DB_CONNECTION_URI": {"name": "infisical-server-bootstrap", "key": "DB_CONNECTION_URI"},
+        "REDIS_URL": {"name": "infisical-server-bootstrap", "key": "REDIS_URL"},
+    }
+    break
+else:
+    raise SystemExit("Infisical server Deployment not found")
+PY
+  then
+    pass "Infisical server credentials reference SOPS bootstrap Secret"
+  else
+    fail "Infisical server credentials reference SOPS bootstrap Secret"
+  fi
+
+  if [[ -n "${py_bin:-}" ]] && "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+namespaced = {
+    "ConfigMap",
+    "Deployment",
+    "NetworkPolicy",
+    "PersistentVolumeClaim",
+    "Role",
+    "RoleBinding",
+    "Secret",
+    "Service",
+    "ServiceAccount",
+    "StatefulSet",
+}
+
+missing = []
+for document in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")):
+    if not isinstance(document, dict) or document.get("kind") not in namespaced:
+        continue
+    metadata = document.get("metadata") or {}
+    if metadata.get("namespace") != "infisical-system":
+        missing.append(f"{document.get('kind')}/{metadata.get('name')}")
+
+if missing:
+    raise SystemExit(f"missing namespace: {missing}")
+PY
+  then
+    pass "Infisical server namespaced resources set explicit namespace"
+  else
+    fail "Infisical server namespaced resources set explicit namespace"
+  fi
+
+  if grep -q '^namespace:' "${server_dir}/kustomization.yaml"; then
+    fail "Infisical server kustomization avoids namespace transformer"
+  else
+    pass "Infisical server kustomization avoids namespace transformer"
+  fi
+
   before="$(find "$server_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
   set +e
   render_output="$(bash "${INFRA_DIR}/scripts/render-infisical-manifests.sh" --check 2>&1)"
@@ -648,7 +737,6 @@ assert_infisical_operator_raw_manifests() {
   local py_bin
 
   assert_repo_file_exists "gitops/channels/local/infisical/operator/kustomization.yaml"
-  assert_repo_file_exists "gitops/channels/local/infisical/operator/namespace.yaml"
   assert_repo_file_exists "gitops/channels/local/infisical/operator/render-values.yaml"
   assert_repo_file_exists "gitops/channels/local/infisical/operator/rendered/secrets-operator-0.10.32.yaml"
 
@@ -724,6 +812,53 @@ PY
     pass "Infisical Operator image pin"
   else
     fail "Infisical Operator image pin"
+  fi
+
+  if [[ -n "${py_bin:-}" ]] && "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+cluster_scoped = {
+    "ClusterRole",
+    "ClusterRoleBinding",
+    "CustomResourceDefinition",
+    "Namespace",
+}
+namespaced = {
+    "Deployment",
+    "Role",
+    "RoleBinding",
+    "Service",
+    "ServiceAccount",
+}
+
+failures = []
+for document in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")):
+    if not isinstance(document, dict):
+        continue
+    kind = document.get("kind")
+    metadata = document.get("metadata") or {}
+    namespace = metadata.get("namespace")
+    if kind in cluster_scoped and namespace is not None:
+        failures.append(f"cluster-scoped {kind}/{metadata.get('name')} has namespace")
+    if kind in namespaced and namespace != "infisical-system":
+        failures.append(f"namespaced {kind}/{metadata.get('name')} missing infisical-system")
+
+if failures:
+    raise SystemExit("; ".join(failures))
+PY
+  then
+    pass "Infisical Operator scopes cluster and namespaced resources explicitly"
+  else
+    fail "Infisical Operator scopes cluster and namespaced resources explicitly"
+  fi
+
+  if grep -q '^namespace:' "${operator_dir}/kustomization.yaml"; then
+    fail "Infisical Operator kustomization avoids namespace transformer"
+  else
+    pass "Infisical Operator kustomization avoids namespace transformer"
   fi
 
   before="$(find "$operator_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
@@ -1213,7 +1348,7 @@ cluster_target_secret_synced() {
   local decoded
 
   encoded="$(kubectl --kubeconfig "$kubeconfig_path" -n infisical-sample get secret infisical-local-sample -o jsonpath='{.data.INFISICAL_SAMPLE_KEY}' 2>/dev/null || true)"
-  decoded="$(printf '%s' "$encoded" | base64 --decode 2>/dev/null || true)"
+  decoded="$(printf '%s' "$encoded" | base64 -d 2>/dev/null || true)"
   if [[ "$decoded" == "infisical-local-ready" ]]; then
     pass "target Secret/infisical-local-sample contains expected INFISICAL_SAMPLE_KEY"
   else

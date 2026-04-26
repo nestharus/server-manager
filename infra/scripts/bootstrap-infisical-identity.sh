@@ -4,7 +4,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 INFRA_DIR="${REPO_ROOT}/infra"
 
-CHANNEL="local"
+CHANNEL_REQUEST="local"
+CHANNEL=""
 KUBECONFIG_ARG=()
 ROTATE=0
 LOCAL_PORT="18080"
@@ -77,7 +78,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --channel)
       [[ $# -ge 2 ]] || die "--channel requires a value"
-      CHANNEL="$2"
+      CHANNEL_REQUEST="$2"
       shift
       ;;
     --kubeconfig)
@@ -120,7 +121,7 @@ json_field() {
 secret_value() {
   local key="$1"
   local value
-  value="$(kubectl_cmd -n "$SERVER_NAMESPACE" get secret "$BOOTSTRAP_SECRET_NAME" -o "jsonpath={.data.${key}}" | base64 --decode)"
+  value="$(kubectl_cmd -n "$SERVER_NAMESPACE" get secret "$BOOTSTRAP_SECRET_NAME" -o "jsonpath={.data.${key}}" | base64 -d)"
   [[ -n "$value" ]] || die "Secret/${BOOTSTRAP_SECRET_NAME} key ${key} is empty"
   printf '%s' "$value"
 }
@@ -129,8 +130,9 @@ resolve_channel_infisical() {
   local resolved
   resolved="$(mktemp)"
   TEMP_FILES+=("$resolved")
-  python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel "$CHANNEL" --out "$resolved" >/dev/null
+  python3 "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel "$CHANNEL_REQUEST" --out "$resolved" >/dev/null
 
+  CHANNEL="$(jq -er '.id' "$resolved")"
   PROJECT_SLUG="$(jq -er '.infisical.project_id' "$resolved")"
   PROJECT_NAME="$PROJECT_SLUG"
   ENVIRONMENT_SLUG="$(jq -er '.infisical.environment' "$resolved")"
@@ -407,11 +409,11 @@ ensure_universal_auth() {
 
 existing_ua_secret_value() {
   local key="$1"
-  kubectl_cmd -n "$UA_SECRET_NAMESPACE" get secret "$UA_SECRET_NAME" -o "jsonpath={.data.${key}}" 2>/dev/null | base64 --decode || true
+  kubectl_cmd -n "$UA_SECRET_NAMESPACE" get secret "$UA_SECRET_NAME" -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d || true
 }
 
 target_secret_value() {
-  kubectl_cmd -n "infisical-sample" get secret "infisical-local-sample" -o "jsonpath={.data.${SAMPLE_SECRET_NAME}}" 2>/dev/null | base64 --decode || true
+  kubectl_cmd -n "infisical-sample" get secret "infisical-local-sample" -o "jsonpath={.data.${SAMPLE_SECRET_NAME}}" 2>/dev/null | base64 -d || true
 }
 
 runtime_already_bootstrapped() {

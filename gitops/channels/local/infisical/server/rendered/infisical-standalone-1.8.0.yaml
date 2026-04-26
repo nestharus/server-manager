@@ -92,33 +92,6 @@ metadata:
     release: infisical
 ---
 apiVersion: v1
-kind: Secret
-metadata:
-  name: postgresql
-  namespace: infisical-system
-  labels:
-    app.kubernetes.io/instance: infisical
-    app.kubernetes.io/name: postgresql
-    app.kubernetes.io/version: 16.2.0
-type: Opaque
-data:
-  postgres-password: cm9vdA==
-  password: cm9vdA==
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: redis
-  namespace: infisical-system
-  labels:
-    app.kubernetes.io/instance: infisical
-    app.kubernetes.io/name: redis
-    app.kubernetes.io/version: 7.2.4
-type: Opaque
-data:
-  redis-password: bXlzZWNyZXRwYXNzd29yZA==
----
-apiVersion: v1
 kind: ConfigMap
 metadata:
   name: redis-configuration
@@ -373,6 +346,7 @@ metadata:
     component: infisical
     app: infisical-standalone
     release: infisical
+  namespace: infisical-system
 spec:
   type: ClusterIP
   selector:
@@ -392,6 +366,7 @@ metadata:
     component: infisical
     app: infisical-standalone
     release: infisical
+  namespace: infisical-system
 spec:
   replicas: 1
   selector:
@@ -421,9 +396,15 @@ spec:
         - containerPort: 8080
         env:
         - name: DB_CONNECTION_URI
-          value: postgresql://infisical:root@postgresql:5432/infisicalDB
+          valueFrom:
+            secretKeyRef:
+              name: infisical-server-bootstrap
+              key: DB_CONNECTION_URI
         - name: REDIS_URL
-          value: redis://default:mysecretpassword@redis-master:6379
+          valueFrom:
+            secretKeyRef:
+              name: infisical-server-bootstrap
+              key: REDIS_URL
         envFrom:
         - secretRef:
             name: infisical-server-bootstrap
@@ -515,13 +496,13 @@ spec:
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: postgresql
-              key: password
+              name: infisical-server-bootstrap
+              key: POSTGRES_PASSWORD
         - name: POSTGRES_POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: postgresql
-              key: postgres-password
+              name: infisical-server-bootstrap
+              key: POSTGRES_POSTGRES_PASSWORD
         - name: POSTGRES_DATABASE
           value: infisicalDB
         - name: POSTGRESQL_ENABLE_LDAP
@@ -622,7 +603,7 @@ spec:
         checksum/configmap: 86bcc953bb473748a3d3dc60b7c11f34e60c93519234d4c37f42e22ada559d47
         checksum/health: aff24913d801436ea469d8d374b2ddb3ec4c43ee7ab24663d5f8ff1a1b6991a9
         checksum/scripts: 560c33ff34d845009b51830c332aa05fa211444d1877d3526d3599be7543aaa5
-        checksum/secret: eeb160790803c81dc8e6200a1e1ec7b65d55c8052cb94b69fa9143ff8f74453a
+        checksum/secret: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
     spec:
       securityContext:
         fsGroup: 1001
@@ -676,8 +657,8 @@ spec:
         - name: REDIS_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: redis
-              key: redis-password
+              name: infisical-server-bootstrap
+              key: REDIS_PASSWORD
         - name: REDIS_TLS_ENABLED
           value: 'no'
         - name: REDIS_PORT
