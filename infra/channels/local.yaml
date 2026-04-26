@@ -138,6 +138,7 @@ security:
     restricted_namespaces:
       - cert-manager-test
       - humility-gitops-sentinel
+      - buildkite-agent
       - infisical-sample
       - infisical-system
       - minio-system
@@ -148,6 +149,7 @@ security:
     default_deny_namespaces:
       - cert-manager-test
       - humility-gitops-sentinel
+      - buildkite-agent
       - infisical-sample
       - infisical-system
       - minio-system

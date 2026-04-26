@@ -1,0 +1,32 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: buildkite-agent
+  namespace: buildkite-agent
+  labels:
+    app.kubernetes.io/name: buildkite-agent
+    platform.humility.gg/init: "109"
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: buildkite-agent
+  namespace: buildkite-agent
+  labels:
+    app.kubernetes.io/name: buildkite-agent
+    platform.humility.gg/init: "109"
+subjects:
+  - kind: ServiceAccount
+    name: buildkite-agent
+    namespace: buildkite-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: buildkite-agent

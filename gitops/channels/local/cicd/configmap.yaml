@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: buildkite-cicd-channel
+  namespace: buildkite-agent
+  labels:
+    app.kubernetes.io/name: buildkite-agent
+    platform.humility.gg/init: "109"
+data:
+  provider: buildkite
+  queue: cicd-local
+  pipelineFile: .buildkite/pipeline.yml
+  localMode: emulated
+  tokenProject: platform-cicd
+  tokenPath: /buildkite/local
