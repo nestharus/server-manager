@@ -1125,6 +1125,105 @@ PY
   fi
 }
 
+assert_remote_tls_dns_contracts() {
+  local contract_dir="${REPO_ROOT}/gitops/contracts/remote/tls-dns"
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/remote-tls-dns-rendered.yaml"
+  local py_bin
+
+  for file in \
+    "gitops/contracts/remote/tls-dns/kustomization.yaml" \
+    "gitops/contracts/remote/tls-dns/namespace.yaml" \
+    "gitops/contracts/remote/tls-dns/infisical/kustomization.yaml" \
+    "gitops/contracts/remote/tls-dns/infisical/cloudflare-api-token-infisicalsecret.yaml" \
+    "gitops/contracts/remote/tls-dns/external-dns/kustomization.yaml" \
+    "gitops/contracts/remote/tls-dns/external-dns/render-values.yaml" \
+    "gitops/contracts/remote/tls-dns/external-dns/rendered/external-dns-1.20.0.yaml" \
+    "gitops/contracts/remote/tls-dns/acme/kustomization.yaml" \
+    "gitops/contracts/remote/tls-dns/acme/letsencrypt-staging-clusterissuer.yaml"; do
+    assert_repo_file_exists "$file"
+  done
+
+  mkdir -p "$(dirname "$rendered")"
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$contract_dir" >"$rendered"; then
+    pass "kubectl kustomize remote TLS/DNS contract"
+  else
+    fail "kubectl kustomize remote TLS/DNS contract"
+    return
+  fi
+
+  if grep -q 'contracts/remote' "${REPO_ROOT}/gitops/channels/local/kustomization.yaml"; then
+    fail "remote TLS/DNS contract is not referenced by local channel"
+  else
+    pass "remote TLS/DNS contract is not referenced by local channel"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "remote TLS/DNS rendered contract"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+by_kind_name = {(doc.get("kind"), doc.get("metadata", {}).get("name")): doc for doc in docs}
+
+if by_kind_name.get(("Namespace", "external-dns-system")) is None:
+    raise SystemExit("Namespace/external-dns-system missing")
+
+infisical = by_kind_name.get(("InfisicalSecret", "cloudflare-api-token"))
+if infisical is None:
+    raise SystemExit("InfisicalSecret/cloudflare-api-token missing")
+spec = infisical.get("spec", {})
+scope = spec.get("authentication", {}).get("universalAuth", {}).get("secretsScope", {})
+target = spec.get("managedSecretReference", {})
+if scope.get("projectSlug") != "platform-dns" or scope.get("secretsPath") != "/dns/dev":
+    raise SystemExit(f"Cloudflare token must come from Infisical platform-dns /dns/dev: {scope!r}")
+if target.get("secretName") != "cloudflare-api-token" or target.get("secretNamespace") != "external-dns-system":
+    raise SystemExit(f"Cloudflare target Secret mismatch: {target!r}")
+
+deployment = by_kind_name.get(("Deployment", "external-dns"))
+if deployment is None:
+    raise SystemExit("Deployment/external-dns missing")
+containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+if not containers:
+    raise SystemExit("Deployment/external-dns has no containers")
+container = containers[0]
+if container.get("image") != "registry.k8s.io/external-dns/external-dns:v0.20.0":
+    raise SystemExit(f"ExternalDNS image pin mismatch: {container.get('image')!r}")
+args = container.get("args", [])
+required_args = [
+    "--provider=cloudflare",
+    "--policy=upsert-only",
+    "--registry=txt",
+    "--txt-owner-id=humility-dev",
+    "--domain-filter=humility.example",
+]
+for arg in required_args:
+    if arg not in args:
+        raise SystemExit(f"ExternalDNS missing arg: {arg}")
+env = {item.get("name"): item for item in container.get("env", [])}
+ref = env.get("CF_API_TOKEN", {}).get("valueFrom", {}).get("secretKeyRef", {})
+if ref != {"name": "cloudflare-api-token", "key": "CF_API_TOKEN"}:
+    raise SystemExit(f"ExternalDNS CF_API_TOKEN ref mismatch: {ref!r}")
+
+issuer = by_kind_name.get(("ClusterIssuer", "letsencrypt-staging"))
+if issuer is None:
+    raise SystemExit("ClusterIssuer/letsencrypt-staging missing")
+acme = issuer.get("spec", {}).get("acme", {})
+if acme.get("server") != "https://acme-staging-v02.api.letsencrypt.org/directory":
+    raise SystemExit(f"ACME server must be staging: {acme!r}")
+solver = acme.get("solvers", [{}])[0].get("dns01", {}).get("cloudflare", {}).get("apiTokenSecretRef", {})
+if solver != {"name": "cloudflare-api-token", "key": "CF_API_TOKEN"}:
+    raise SystemExit(f"ACME Cloudflare token ref mismatch: {solver!r}")
+PY
+  then
+    pass "remote TLS/DNS rendered contract"
+  else
+    fail "remote TLS/DNS rendered contract"
+  fi
+}
+
 assert_object_storage_infisical_bootstrap() {
   local script="${INFRA_DIR}/scripts/bootstrap-infisical-storage.sh"
   local storage_dir="${REPO_ROOT}/gitops/channels/local/object-storage/infisical"
@@ -2803,6 +2902,11 @@ echo ""
 echo "=== Slice 105.04 CoreDNS local domain validation ==="
 
 assert_dns_coredns_manifests
+
+echo ""
+echo "=== Slice 105.05 remote ExternalDNS and ACME contract validation ==="
+
+assert_remote_tls_dns_contracts
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="
