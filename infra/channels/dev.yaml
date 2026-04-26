@@ -67,6 +67,30 @@ cicd:
   infisical_path: /buildkite/dev
   local_pipeline_file: .buildkite/pipeline.yml
   local_mode: emulated
+ingress:
+  provider: kong
+  gateway_namespace: kong-system
+  chart_name: kong/kong
+  chart_version: 3.2.0
+  gateway_image: kong:3.9
+  controller_image: kong/kubernetes-ingress-controller:3.5
+  ingress_class_name: kong
+  gateway_deployment_name: kong-kong
+  proxy_service_name: kong-kong-proxy
+  proxy_service_type: LoadBalancer
+  local_dns_namespace: local
+  local_domain: humility.local
+  remote_domain: humility.gg
+  local_cluster_issuer_name: humility-local-step-ca
+  remote_cluster_issuer_name: letsencrypt-staging
+  default_service:
+    name: minio
+    namespace: minio-system
+    service_port: 9000
+    local_host: minio.local.humility.local
+    remote_host: minio.dev.humility.gg
+    tls_secret_name: minio-dev-ingress-tls
+    proof_path: /minio/health/ready
 tls:
   provider: acme
   remote_cluster_issuer_name: letsencrypt-staging
