@@ -64,6 +64,9 @@
     "object_storage": {
       "$ref": "#/$defs/objectStorage"
     },
+    "image_registry": {
+      "$ref": "#/$defs/imageRegistry"
+    },
     "tls": {
       "$ref": "#/$defs/tls"
     },
@@ -119,6 +122,7 @@
           "gitops",
           "infisical",
           "object_storage",
+          "image_registry",
           "tls",
           "dns",
           "app_cluster",
@@ -317,6 +321,65 @@
                 }
               }
             }
+          },
+          "image_registry": {
+            "required": [
+              "provider",
+              "registry_url",
+              "push_url",
+              "pull_url",
+              "repository_prefix",
+              "credentials",
+              "pull_through_cache",
+              "sample"
+            ],
+            "properties": {
+              "provider": {
+                "const": "local-docker-registry"
+              },
+              "registry_url": {
+                "const": "k3d-humility-local:5000"
+              },
+              "push_url": {
+                "const": "localhost:5000"
+              },
+              "pull_url": {
+                "const": "k3d-humility-local:5000"
+              },
+              "repository_prefix": {
+                "const": "local"
+              },
+              "credentials": {
+                "properties": {
+                  "required": {
+                    "const": false
+                  }
+                }
+              },
+              "pull_through_cache": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  },
+                  "implementation": {
+                    "const": "distribution-proxy"
+                  }
+                }
+              },
+              "sample": {
+                "properties": {
+                  "app": {
+                    "const": "registry-smoke"
+                  },
+                  "tag": {
+                    "const": "init-108"
+                  },
+                  "namespace": {
+                    "const": "registry-smoke"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -433,6 +496,67 @@
               },
               "infisical_path": {
                 "pattern": "^/dns/[a-z0-9][a-z0-9-]*/$"
+              }
+            }
+          },
+          "image_registry": {
+            "required": [
+              "provider",
+              "registry_url",
+              "push_url",
+              "pull_url",
+              "repository_prefix",
+              "credentials",
+              "pull_through_cache",
+              "sample"
+            ],
+            "properties": {
+              "provider": {
+                "const": "vultr-container-registry"
+              },
+              "registry_url": {
+                "pattern": "^[a-z]{3}\\.vultrcr\\.com/[a-z0-9][a-z0-9-]*$"
+              },
+              "push_url": {
+                "pattern": "^[a-z]{3}\\.vultrcr\\.com/[a-z0-9][a-z0-9-]*$"
+              },
+              "pull_url": {
+                "pattern": "^[a-z]{3}\\.vultrcr\\.com/[a-z0-9][a-z0-9-]*$"
+              },
+              "credentials": {
+                "properties": {
+                  "required": {
+                    "const": true
+                  },
+                  "secret_name": {
+                    "const": "vultr-cr-credentials"
+                  },
+                  "secret_namespace": {
+                    "const": "app-runtime"
+                  },
+                  "dockerconfigjson_key": {
+                    "const": ".dockerconfigjson"
+                  },
+                  "infisical_project": {
+                    "const": "platform-registry"
+                  },
+                  "infisical_path": {
+                    "pattern": "^/registry/[a-z0-9][a-z0-9-]*$"
+                  }
+                }
+              },
+              "pull_through_cache": {
+                "properties": {
+                  "enabled": {
+                    "const": false
+                  },
+                  "implementation": {
+                    "const": "none"
+                  },
+                  "mirrors": {
+                    "maxItems": 0
+                  }
+                }
               }
             }
           }
@@ -827,6 +951,280 @@
         "infisical_path": {
           "type": "string",
           "pattern": "^/object-storage/[a-z0-9][a-z0-9-]*/$"
+        }
+      }
+    },
+    "imageRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "registry_url",
+        "push_url",
+        "pull_url",
+        "repository_prefix",
+        "credentials",
+        "pull_through_cache",
+        "sample"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "local-docker-registry",
+            "vultr-container-registry"
+          ]
+        },
+        "registry_url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._/-]+)?$"
+        },
+        "push_url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._/-]+)?$"
+        },
+        "pull_url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._/-]+)?$"
+        },
+        "repository_prefix": {
+          "$ref": "#/$defs/channelId"
+        },
+        "credentials": {
+          "$ref": "#/$defs/imageRegistryCredentials"
+        },
+        "pull_through_cache": {
+          "$ref": "#/$defs/imageRegistryCache"
+        },
+        "sample": {
+          "$ref": "#/$defs/imageRegistrySample"
+        }
+      }
+    },
+    "imageRegistryCredentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "secret_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "dockerconfigjson_key": {
+          "const": ".dockerconfigjson"
+        },
+        "infisical_project": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/registry/[a-z0-9][a-z0-9-]*$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "required": {
+                "const": true
+              }
+            },
+            "required": [
+              "required"
+            ]
+          },
+          "then": {
+            "required": [
+              "secret_name",
+              "secret_namespace",
+              "dockerconfigjson_key",
+              "infisical_project",
+              "infisical_path"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "required": {
+                "const": false
+              }
+            },
+            "required": [
+              "required"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "secret_name"
+                  ]
+                },
+                {
+                  "required": [
+                    "secret_namespace"
+                  ]
+                },
+                {
+                  "required": [
+                    "dockerconfigjson_key"
+                  ]
+                },
+                {
+                  "required": [
+                    "infisical_project"
+                  ]
+                },
+                {
+                  "required": [
+                    "infisical_path"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "imageRegistryCache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "implementation",
+        "mirrors"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "implementation": {
+          "type": "string",
+          "enum": [
+            "distribution-proxy",
+            "none"
+          ]
+        },
+        "mirrors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/imageRegistryMirror"
+          },
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "implementation": {
+                "const": "distribution-proxy"
+              }
+            },
+            "required": [
+              "mirrors"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": false
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "implementation": {
+                "const": "none"
+              },
+              "mirrors": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "imageRegistryMirror": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry",
+        "cache_name",
+        "host_port",
+        "remote_url"
+      ],
+      "properties": {
+        "registry": {
+          "type": "string",
+          "enum": [
+            "docker.io",
+            "quay.io",
+            "ghcr.io"
+          ]
+        },
+        "cache_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "host_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "remote_url": {
+          "type": "string",
+          "pattern": "^https://[^\\s/]+(?:/[^\\s]*)?$"
+        }
+      }
+    },
+    "imageRegistrySample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app",
+        "tag",
+        "namespace"
+      ],
+      "properties": {
+        "app": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
         }
       }
     },
