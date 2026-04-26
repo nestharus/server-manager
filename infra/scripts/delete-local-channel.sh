@@ -75,6 +75,11 @@ elif field == "cluster_name":
     print(data["cluster"]["k3d"].get("cluster_name") or f"humility-{data['id']}")
 elif field == "kubeconfig_path":
     print(data["cluster"].get("kubeconfig_path") or f"~/.kube/humility-{data['id']}.yaml")
+elif field == "registry_cache_names":
+    for mirror in data.get("image_registry", {}).get("pull_through_cache", {}).get("mirrors", []):
+        print(mirror["cache_name"])
+elif field == "registry_name":
+    print(data["cluster"]["k3d"]["registry_name"])
 else:
     raise SystemExit(f"unknown field: {field}")
 PY
@@ -118,10 +123,52 @@ cleanup_flux_resources() {
   fi
 }
 
+delete_registry_caches() {
+  local cache_name
+  local names
+  local container_name
+
+  names="$(resolve_field registry_cache_names)"
+  [[ -n "$names" ]] || return 0
+
+  while IFS= read -r cache_name; do
+    [[ -n "$cache_name" ]] || continue
+    container_name="k3d-${cache_name}"
+    if docker inspect "$container_name" >/dev/null 2>&1; then
+      log "Deleting registry cache '${container_name}'"
+      docker rm -f "$container_name" >/dev/null 2>&1 || true
+      docker volume rm "${container_name}-data" >/dev/null 2>&1 || true
+    elif k3d registry get "$container_name" >/dev/null 2>&1 || k3d registry get "$cache_name" >/dev/null 2>&1; then
+      log "Deleting registry cache '${container_name}'"
+      k3d registry delete "$container_name" >/dev/null 2>&1 || k3d registry delete "$cache_name" >/dev/null 2>&1 || true
+    else
+      log "registry cache '${container_name}' already gone"
+    fi
+  done <<<"$names"
+}
+
+delete_local_registry() {
+  local registry_name
+  local container_name
+
+  registry_name="$(resolve_field registry_name)"
+  [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]] || return 0
+
+  container_name="k3d-${registry_name}"
+  if docker inspect "$container_name" >/dev/null 2>&1; then
+    log "Deleting local image registry '${container_name}'"
+    docker rm -f "$container_name" >/dev/null 2>&1 || true
+    docker volume rm "${container_name}-data" >/dev/null 2>&1 || true
+  else
+    log "local image registry '${container_name}' already gone"
+  fi
+}
+
 main() {
   parse_args "$@"
 
   command -v k3d >/dev/null 2>&1 || die "k3d is required; run infra/scripts/install-cluster-tools.sh --install"
+  command -v docker >/dev/null 2>&1 || die "docker is required to remove registry caches"
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required to resolve channels"
 
   RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST")"
@@ -141,10 +188,14 @@ main() {
   if cluster_exists; then
     delete_nested_app_clusters
     cleanup_flux_resources
+    delete_local_registry
+    delete_registry_caches
     log "Deleting k3d cluster '${cluster_name}'"
     k3d cluster delete "$cluster_name"
   else
     log "k3d cluster '${cluster_name}' already gone"
+    delete_local_registry
+    delete_registry_caches
   fi
 
   if [[ -f "$kubeconfig_path" ]]; then
