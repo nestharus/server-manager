@@ -91,6 +91,15 @@ assert_path_absent() {
   fi
 }
 
+assert_repo_path_absent() {
+  local path="$1"
+  if [[ ! -e "${REPO_ROOT}/${path}" ]]; then
+    pass "absent: ${path}"
+  else
+    fail "still exists: ${path}"
+  fi
+}
+
 assert_file_contains() {
   local file="$1"
   local pattern="$2"
@@ -100,6 +109,53 @@ assert_file_contains() {
     pass "$description"
   else
     fail "$description"
+  fi
+}
+
+assert_gitops_flux_components() {
+  local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
+  local deployment_count
+  local unexpected_deployment_count
+
+  if [[ -f "$file" ]]; then
+    pass "exists: gitops/flux/gotk-components.yaml"
+  else
+    fail "missing: gitops/flux/gotk-components.yaml"
+    return
+  fi
+
+  deployment_count="$(grep -c '^kind: Deployment$' "$file" || true)"
+  if [[ "$deployment_count" == "2" ]]; then
+    pass "Flux lockfile has exactly 2 Deployments"
+  else
+    fail "Flux lockfile has exactly 2 Deployments"
+  fi
+
+  if awk 'BEGIN { RS = "---"; found = 0 } /kind:[[:space:]]*Deployment/ && /name:[[:space:]]*source-controller/ { found = 1 } END { exit found ? 0 : 1 }' "$file"; then
+    pass "Flux lockfile includes source-controller Deployment"
+  else
+    fail "Flux lockfile includes source-controller Deployment"
+  fi
+
+  if awk 'BEGIN { RS = "---"; found = 0 } /kind:[[:space:]]*Deployment/ && /name:[[:space:]]*kustomize-controller/ { found = 1 } END { exit found ? 0 : 1 }' "$file"; then
+    pass "Flux lockfile includes kustomize-controller Deployment"
+  else
+    fail "Flux lockfile includes kustomize-controller Deployment"
+  fi
+
+  unexpected_deployment_count="$(
+    awk '
+      BEGIN { RS = "---"; count = 0 }
+      /kind:[[:space:]]*Deployment/ && /name:[[:space:]]*(helm-controller|notification-controller|image-reflector-controller|image-automation-controller)/ {
+        count += 1
+      }
+      END { print count }
+    ' "$file"
+  )"
+  if [[ "$unexpected_deployment_count" == "0" ]]; then
+    pass "Flux lockfile excludes helm/notification/image controller Deployments"
+  else
+    fail "Flux lockfile excludes helm/notification/image controller Deployments"
   fi
 }
 
@@ -637,6 +693,12 @@ assert_install_cluster_tools_check
 assert_gitops_tool_versions
 assert_bring_up_script_help_works
 assert_delete_missing_local_cluster
+
+echo ""
+echo "=== Slice 102.02 GitOps layout and Flux lockfile validation ==="
+
+assert_gitops_flux_components
+assert_repo_path_absent "k8s"
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create
