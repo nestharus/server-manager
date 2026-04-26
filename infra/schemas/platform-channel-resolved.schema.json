@@ -24,10 +24,17 @@
     },
     "exposure": {
       "type": "string",
-      "enum": ["prod", "stage", "dev"]
+      "enum": [
+        "prod",
+        "stage",
+        "dev"
+      ]
     },
     "tenant": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "pattern": "^[a-z0-9][a-z0-9-]*$"
     },
     "allow_ephemeral_children": {
@@ -50,6 +57,12 @@
     },
     "object_storage": {
       "$ref": "#/$defs/objectStorage"
+    },
+    "tls": {
+      "$ref": "#/$defs/tls"
+    },
+    "dns": {
+      "$ref": "#/$defs/dns"
     }
   },
   "allOf": [
@@ -62,13 +75,23 @@
                 "const": "k3d-local"
               }
             },
-            "required": ["target"]
+            "required": [
+              "target"
+            ]
           }
         },
-        "required": ["cluster"]
+        "required": [
+          "cluster"
+        ]
       },
       "then": {
-        "required": ["gitops", "infisical", "object_storage"],
+        "required": [
+          "gitops",
+          "infisical",
+          "object_storage",
+          "tls",
+          "dns"
+        ],
         "properties": {
           "object_storage": {
             "properties": {
@@ -97,6 +120,74 @@
                 "const": "/object-storage/local/"
               }
             }
+          },
+          "tls": {
+            "required": [
+              "provider",
+              "local_cluster_issuer_name",
+              "step_ca_namespace",
+              "step_ca_service_name",
+              "step_issuer_namespace",
+              "sample_certificate_namespace",
+              "sample_certificate_name",
+              "local_domain"
+            ],
+            "properties": {
+              "provider": {
+                "const": "step-ca"
+              },
+              "local_cluster_issuer_name": {
+                "const": "humility-local-step-ca"
+              },
+              "step_ca_namespace": {
+                "const": "step-ca-system"
+              },
+              "step_ca_service_name": {
+                "const": "step-ca"
+              },
+              "step_issuer_namespace": {
+                "const": "step-issuer-system"
+              },
+              "sample_certificate_namespace": {
+                "const": "cert-manager-test"
+              },
+              "sample_certificate_name": {
+                "const": "humility-local-sample"
+              },
+              "local_domain": {
+                "const": "humility.local"
+              }
+            }
+          },
+          "dns": {
+            "required": [
+              "provider",
+              "local_domain",
+              "cluster_domain",
+              "coredns_configmap_namespace",
+              "coredns_configmap_name",
+              "sample_lookup_name"
+            ],
+            "properties": {
+              "provider": {
+                "const": "coredns"
+              },
+              "local_domain": {
+                "const": "humility.local"
+              },
+              "cluster_domain": {
+                "const": "cluster.local"
+              },
+              "coredns_configmap_namespace": {
+                "const": "kube-system"
+              },
+              "coredns_configmap_name": {
+                "const": "coredns"
+              },
+              "sample_lookup_name": {
+                "const": "minio.minio-system.humility.local"
+              }
+            }
           }
         }
       }
@@ -110,10 +201,14 @@
                 "const": "vultr-vms"
               }
             },
-            "required": ["target"]
+            "required": [
+              "target"
+            ]
           }
         },
-        "required": ["cluster"]
+        "required": [
+          "cluster"
+        ]
       },
       "then": {
         "properties": {
@@ -135,8 +230,76 @@
                 "pattern": "^/object-storage/[a-z0-9][a-z0-9-]*/$"
               }
             }
+          },
+          "tls": {
+            "required": [
+              "provider",
+              "remote_cluster_issuer_name",
+              "acme_server",
+              "acme_email",
+              "cloudflare_api_token_secret_name",
+              "cloudflare_api_token_secret_namespace"
+            ],
+            "properties": {
+              "provider": {
+                "const": "acme"
+              },
+              "remote_cluster_issuer_name": {
+                "const": "letsencrypt-staging"
+              },
+              "acme_server": {
+                "const": "https://acme-staging-v02.api.letsencrypt.org/directory"
+              },
+              "acme_email": {
+                "type": "string",
+                "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+              },
+              "cloudflare_api_token_secret_name": {
+                "const": "cloudflare-api-token"
+              },
+              "cloudflare_api_token_secret_namespace": {
+                "const": "external-dns-system"
+              }
+            }
+          },
+          "dns": {
+            "required": [
+              "provider",
+              "domain",
+              "external_dns_owner_id",
+              "cloudflare_api_token_secret_name",
+              "cloudflare_api_token_secret_namespace",
+              "infisical_project",
+              "infisical_path"
+            ],
+            "properties": {
+              "provider": {
+                "const": "cloudflare"
+              },
+              "domain": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+              },
+              "external_dns_owner_id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              "cloudflare_api_token_secret_name": {
+                "const": "cloudflare-api-token"
+              },
+              "cloudflare_api_token_secret_namespace": {
+                "const": "external-dns-system"
+              },
+              "infisical_project": {
+                "const": "platform-dns"
+              },
+              "infisical_path": {
+                "pattern": "^/dns/[a-z0-9][a-z0-9-]*/$"
+              }
+            }
           }
-        }
+        },
+        "required": []
       }
     }
   ],
@@ -149,7 +312,10 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["docker", "kubernetes"]
+        "enum": [
+          "docker",
+          "kubernetes"
+        ]
       },
       "uniqueItems": true
     },
@@ -160,7 +326,11 @@
     "cluster": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["distribution", "k3s_version", "target"],
+      "required": [
+        "distribution",
+        "k3s_version",
+        "target"
+      ],
       "properties": {
         "distribution": {
           "const": "k3s"
@@ -171,7 +341,10 @@
         },
         "target": {
           "type": "string",
-          "enum": ["k3d-local", "vultr-vms"]
+          "enum": [
+            "k3d-local",
+            "vultr-vms"
+          ]
         },
         "k3d": {
           "$ref": "#/$defs/k3d"
@@ -187,9 +360,13 @@
               "const": "k3d-local"
             }
           },
-          "required": ["k3d"],
+          "required": [
+            "k3d"
+          ],
           "not": {
-            "required": ["vultr_vms"]
+            "required": [
+              "vultr_vms"
+            ]
           }
         },
         {
@@ -198,9 +375,13 @@
               "const": "vultr-vms"
             }
           },
-          "required": ["vultr_vms"],
+          "required": [
+            "vultr_vms"
+          ],
           "not": {
-            "required": ["k3d"]
+            "required": [
+              "k3d"
+            ]
           }
         }
       ]
@@ -208,7 +389,11 @@
     "k3d": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["servers", "agents", "registry_name"],
+      "required": [
+        "servers",
+        "agents",
+        "registry_name"
+      ],
       "properties": {
         "servers": {
           "type": "integer",
@@ -227,7 +412,11 @@
     "vultrVms": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["region", "servers", "agents"],
+      "required": [
+        "region",
+        "servers",
+        "agents"
+      ],
       "properties": {
         "region": {
           "$ref": "#/$defs/region"
@@ -241,7 +430,10 @@
           "default": "/root/humility-k3s.yaml"
         },
         "firewall_name": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "default": null
         },
@@ -259,7 +451,10 @@
     "serverVmPool": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["count", "plan"],
+      "required": [
+        "count",
+        "plan"
+      ],
       "properties": {
         "count": {
           "type": "integer",
@@ -274,7 +469,10 @@
     "agentVmPool": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["count", "plan"],
+      "required": [
+        "count",
+        "plan"
+      ],
       "properties": {
         "count": {
           "type": "integer",
@@ -305,7 +503,11 @@
     "state": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["bucket", "key", "region"],
+      "required": [
+        "bucket",
+        "key",
+        "region"
+      ],
       "properties": {
         "bucket": {
           "type": "string",
@@ -345,7 +547,9 @@
       "properties": {
         "source_kind": {
           "type": "string",
-          "enum": ["git"]
+          "enum": [
+            "git"
+          ]
         },
         "git_url": {
           "type": "string",
@@ -424,7 +628,9 @@
         },
         "auth_method": {
           "type": "string",
-          "enum": ["universal-auth"]
+          "enum": [
+            "universal-auth"
+          ]
         },
         "universal_auth_secret_name": {
           "type": "string",
@@ -460,7 +666,10 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["minio", "vultr-object-storage"]
+          "enum": [
+            "minio",
+            "vultr-object-storage"
+          ]
         },
         "endpoint": {
           "type": "string",
@@ -491,6 +700,130 @@
         "infisical_path": {
           "type": "string",
           "pattern": "^/object-storage/[a-z0-9][a-z0-9-]*/$"
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "step-ca",
+            "acme"
+          ]
+        },
+        "local_cluster_issuer_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "step_ca_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "step_ca_service_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "step_issuer_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "sample_certificate_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "sample_certificate_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "local_domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "remote_cluster_issuer_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "acme_server": {
+          "type": "string",
+          "format": "uri"
+        },
+        "acme_email": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        },
+        "cloudflare_api_token_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "cloudflare_api_token_secret_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        }
+      }
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "coredns",
+            "cloudflare"
+          ]
+        },
+        "local_domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "cluster_domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "coredns_configmap_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "coredns_configmap_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "sample_lookup_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "external_dns_owner_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "cloudflare_api_token_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "cloudflare_api_token_secret_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "infisical_project": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/dns/[a-z0-9][a-z0-9-]*/$"
         }
       }
     }

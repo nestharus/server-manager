@@ -34,4 +34,19 @@ object_storage:
   credentials_secret_namespace: app-runtime
   infisical_project: platform-storage
   infisical_path: /object-storage/dev/
+tls:
+  provider: acme
+  remote_cluster_issuer_name: letsencrypt-staging
+  acme_server: https://acme-staging-v02.api.letsencrypt.org/directory
+  acme_email: platform-admin@humility.example
+  cloudflare_api_token_secret_name: cloudflare-api-token
+  cloudflare_api_token_secret_namespace: external-dns-system
+dns:
+  provider: cloudflare
+  domain: humility.example
+  external_dns_owner_id: humility-dev
+  cloudflare_api_token_secret_name: cloudflare-api-token
+  cloudflare_api_token_secret_namespace: external-dns-system
+  infisical_project: platform-dns
+  infisical_path: /dns/dev/
 # gitops is deliberately omitted for INIT-102; dev keeps the single-cluster remote posture until remote Flux wiring is scoped.
