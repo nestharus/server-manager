@@ -124,6 +124,7 @@ kubectl_cmd -n cert-manager-test get secret humility-local-sample-tls -o jsonpat
 log "PASS: Secret/humility-local-sample-tls contains tls.crt"
 
 kubectl_cmd -n cert-manager-test delete pod tls-dns-lookup --ignore-not-found >/dev/null
+kubectl_cmd -n cert-manager-test wait --for=delete pod/tls-dns-lookup --timeout=60s >/dev/null 2>&1 || true
 kubectl_cmd -n cert-manager-test run tls-dns-lookup \
   --restart=Never \
   --image=busybox:1.37.0 \

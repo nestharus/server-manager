@@ -5,7 +5,7 @@ sources:
   - ingress
 policy: upsert-only
 registry: txt
-txtOwnerId: humility-dev
+txtOwnerId: humility-${channel_id}
 domainFilters:
   - humility.example
 interval: 1m

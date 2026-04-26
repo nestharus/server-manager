@@ -7,6 +7,8 @@ KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
 PORT="19000"
 PORT_FORWARD_PID=""
 ROUNDTRIP_TMP_DIR=""
+RETAINED_KEY=""
+RETAINED_CLEANED_UP=0
 
 usage() {
   cat <<'EOF'
@@ -34,7 +36,17 @@ stop_port_forward() {
   fi
 }
 
+cleanup_retained_object() {
+  if [[ -z "${RETAINED_KEY:-}" || "$RETAINED_CLEANED_UP" -eq 1 ]]; then
+    return
+  fi
+
+  mc rm "local-minio/humility-local-sample/${RETAINED_KEY}" >/dev/null 2>&1 || true
+  RETAINED_CLEANED_UP=1
+}
+
 cleanup() {
+  cleanup_retained_object
   stop_port_forward
   if [[ -n "${ROUNDTRIP_TMP_DIR:-}" ]]; then
     rm -rf "$ROUNDTRIP_TMP_DIR"
@@ -231,6 +243,7 @@ S3_BUCKET="humility-local-sample" \
 retained_body="${tmpdir}/retained.txt"
 retained_download="${tmpdir}/retained-download.txt"
 retained_key="init-104-roundtrip/retained-${$}.txt"
+RETAINED_KEY="$retained_key"
 printf 'init-104 retained durability sample\n' >"$retained_body"
 mc cp "$retained_body" "local-minio/humility-local-sample/${retained_key}" >/dev/null
 log "PASS: Retained durability object uploaded"
@@ -248,5 +261,5 @@ mc_alias local-minio "$access_key" "$secret_key_value"
 mc ls local-minio/humility-local-sample >/dev/null
 mc cp "local-minio/humility-local-sample/${retained_key}" "$retained_download" >/dev/null
 cmp -s "$retained_body" "$retained_download" || die "retained durability object content mismatch"
-mc rm "local-minio/humility-local-sample/${retained_key}" >/dev/null
+cleanup_retained_object
 log "PASS: Pod-restart durability verified"
