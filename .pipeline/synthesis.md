@@ -1,679 +1,680 @@
-# INIT-103 Synthesis
+# INIT-104 Synthesis
 
-This synthesis binds INIT-103's design decisions before the proposal phase.
+This synthesis binds INIT-104's design decisions before the proposal phase.
 Each D-record names the decision, the research evidence supporting it, the
 alternatives rejected, and the consequence for the proposal phase and
 downstream INITs. Synthesis is grounded in research only; no decision below
 introduces design specifics beyond what is needed to bind the choice.
 
-Source: `worktrees/init-103-infisical-runtime-secrets/.pipeline/research.md`.
-Section references below use that file unless otherwise noted. INIT-102's
-binding contract is at
-`worktrees/init-102-gitops-substrate/.pipeline/proposal.md` and its synthesis
-D-records D1..D11 at
-`worktrees/init-102-gitops-substrate/.pipeline/synthesis.md`.
+Source: `worktrees/init-104-object-storage/.pipeline/research.md` (sections
+referenced as `research §N.M`; evidence ids referenced as `[E#]`). Binding
+priors:
+
+- INIT-103 proposal `worktrees/init-103-infisical-runtime-secrets/.pipeline/proposal.md` (channel `infisical` block, sample sync proof).
+- INIT-103 implementation `worktrees/init-103-infisical-runtime-secrets/.pipeline/implementation.md` §INIT-104 Handoff (object-storage credential contract, project `platform-storage`, path `/object-storage/<channel>/...`).
+- INIT-102 proposal `worktrees/init-102-gitops-substrate/.pipeline/proposal.md` D2 (Flux components: only `source-controller` + `kustomize-controller`; no `helm-controller`, no `HelmRelease`).
+- `DECISIONS.md` D8 (local-as-first-deployment, k3s everywhere, Infisical runtime, channels, real-local done state, MinIO survives only as the local S3 backend with Vultr Object Storage as the remote).
+- `~/.claude3/projects/-home-nes-projects-server-manager/memory/environment-agnostic-stack.md` (same stack runs locally and remotely; per-channel YAML carries provider/endpoint/credential differences).
 
 ## Decision Records
 
-### D1 — D-INFISICAL-INSTALL
+### D1 — D-MINIO-INSTALL
 
-**Decision**: INIT-103 installs the Infisical server through **raw committed
-manifests** under `gitops/channels/local/infisical-server/`, rendered at
-implementation time from the upstream Infisical Helm chart
-(`infisical-helm-charts/infisical-standalone`) via `helm template`. The
-rendered output is reviewed, pinned, and committed; Flux's
-`kustomize-controller` applies it through the existing local channel
-`Kustomization/humility-local`. No `HelmRelease`, no `OCIRepository`, no
-runtime Helm fetch.
+**Decision**: INIT-104 installs MinIO into the local k3d channel as **raw
+authored Kustomize manifests** under
+`gitops/channels/local/object-storage/minio/`, in the shape of a
+single-node `Deployment` (or `StatefulSet` with `replicas: 1`) plus a
+`PersistentVolumeClaim`, a `ClusterIP` `Service` exposing the API port, the
+namespace, and a Kubernetes `Secret` materialised by the storage
+`InfisicalSecret` (D4). The MinIO Operator/Tenant path and the community
+Helm chart are not used. The first-party AIStor Operator chart is not
+used.
 
-**Evidence**: research §2.4, §8.3. INIT-102's reconciler shape (Flux
-`source-controller` + `kustomize-controller` only, no `helm-controller`)
-forces raw manifests at runtime (research §2.4; INIT-102 proposal §1, §7;
-INIT-102 synthesis D2). Upstream Helm and Kustomize sources both exist
-(research §2.4, §3.5); rendering Helm to raw manifests gives a reviewable
-diff and preserves upstream defaults (resource requests, PVC sizes,
-init/probe shapes per research §2.1, §2.3).
+**Evidence**: research §2.1 (three packaging shapes documented: raw
+manifests, community chart, Operator) [E38, E39, E40, E42], §2.2 (local
+done state needs only a real S3-compatible endpoint, not HA durability;
+single-node container shape is documented for development/evaluation;
+INIT-102 substrate has source-controller + kustomize-controller only and
+no Helm controller; current local channel reconciliation is plain
+Kustomize, not HelmRelease) [E2, E4, E11, E17, E20, E25, E38, E39, E40,
+E42], §10.3 (the lowest-moving-parts local shape is namespace + Secret +
+PVC + workload + Service + post-readiness bucket Job; raw shape matches
+the existing Flux substrate) [E16, E17, E25, E26, E41, E43, E44].
+Reinforced by INIT-102 D2 forbidding `helm-controller`/`HelmRelease`.
 
 **Alternatives rejected**:
-- `HelmRelease` via `helm-controller`: forbidden by INIT-102 D2 (controller
-  excluded from vendored Flux components).
-- `OCIRepository`-backed source: INIT-102 substrate exposes only
-  `GitRepository` source — the in-cluster Git daemon (INIT-102 D4) is the
-  only seeded source.
-- Hand-author manifests from the env-var contract (research §2.2): more
-  error-prone than rendering the upstream chart and loses upstream PVC,
-  probe, and resource defaults (research §2.1, §2.3).
+- MinIO Operator + Tenant CRDs: brings Operator-managed CRDs and
+  AdminJob machinery and the AIStor Operator chart requires a license
+  value; net moving parts exceed the proof contract (research §2.1
+  [E39, E40, E45]).
+- Community Helm chart rendered to YAML: the README explicitly says the
+  chart is community maintained and not guaranteed by MinIO, and its
+  defaults (16Gi memory request, 500Gi PVC) are oversized for local k3d
+  (research §2.1, §2.3 [E42, E43]). Rendering to raw YAML is also
+  redundant against authored manifests for a single-Pod local proof.
+- AIStor Operator + AIStor object-store chart: requires a license value
+  (research §2.1 [E40]); not justified for the local proof contract.
 
-**Consequence**: Implementation needs `helm` available at render time
-(currently missing per research §8.1). Rendered output is committed at a
-pinned chart version. Upgrade is an explicit re-render + commit, not a
-runtime fetch. Channel overlay layout extends INIT-102's
-`gitops/channels/local/` per D8 below.
+**Consequence**: INIT-104 owns and reviews the MinIO manifests directly.
+Upgrades are an explicit re-author or re-pin in tree, not a runtime fetch
+(matches the INIT-103 render-and-commit precedent). No new Flux
+components or CRDs are introduced. The proposal phase must specify the
+exact workload kind (`Deployment` vs `StatefulSet`), a local-appropriate
+PVC size, resource requests/limits compatible with the one-server/one-agent
+local k3d shape (research §2.3 [E21, E42, E43]), and probe shapes.
 
 ---
 
-### D2 — D-OPERATOR-INSTALL
+### D2 — D-MINIO-COMPONENTS
 
-**Decision**: INIT-103 installs the Infisical Kubernetes Operator the same
-way as the server: **raw committed manifests** under
-`gitops/channels/local/infisical-operator/`, rendered at implementation time
-from the upstream operator Helm chart
-(`infisical-helm-charts/secrets-operator` v0.10.32). All six v0.10.32 CRDs
-ship in the rendered set because CRDs are cluster-scoped and the chart owns
-their installation; only `InfisicalSecret` is exercised by the INIT-103
-proof (D9 below).
+**Decision**: For the local channel, INIT-104 ships **MinIO API only**:
+the server process exposing the S3-compatible API on port `9000` through a
+`ClusterIP` `Service`. The MinIO Console is **not** deployed in INIT-104.
+No `Ingress`, no `LoadBalancer`, no host-network exposure.
 
-**Evidence**: research §3.5 (operator chart at v0.10.32; raw `config/`
-Kustomize tree also exists), §8.3 (raw manifests through Flux without Helm
-runtime), §3.2 (six CRDs in the v0.10.32 repo: `InfisicalSecret`,
-`InfisicalPushSecret`, `InfisicalDynamicSecret`, `ClusterGenerator`,
-`Password`, `UUID`). The operator chart's image-tag/appVersion mismatch
-(chart v0.10.32 vs values manager image `v0.10.31`, research §3.5) is an
-implementation-time verification item; the rendered manifest pins the actual
-image used.
+**Evidence**: research §2.4 (API port `9000`, console port `9001`, both
+supported as ClusterIP; the requested internal endpoint
+`http://minio.minio-system.svc.cluster.local:9000` matches ClusterIP API
+on port 9000) [E16, E43], §7.1 (console exposure is optional for local
+proof; evidence requires API round-trip only) [E4, E11, E43], §9.3
+INFORMATIONAL (Console can remain internal unless a later route/ingress
+initiative exposes it) [E43].
 
 **Alternatives rejected**:
-- `HelmRelease` via `helm-controller`: forbidden by INIT-102 D2.
-- Direct apply of upstream `kubectl-install/install-secrets-operator.yaml`
-  (research §2.4): a single opaque blob, harder to review, no version
-  pinning of constituent images.
-- Upstream `config/` Kustomize tree as the source of truth (research §2.4,
-  §3.5): viable but produces less-canonical defaults than the chart and
-  diverges from D1's chart-render shape; keeping a single render path keeps
-  the implementation surface small.
-- Subset of CRDs: CRDs are cluster-scoped and the chart installs them as a
-  set; cherry-picking would require maintaining a divergent CRD selector
-  with no proven benefit for the INIT-103 proof.
+- Server + Console exposed on `9001`: not required by the local proof
+  contract; pulls in a second Service and port surface that no INIT-104
+  consumer needs (research §7.1 [E4, E11, E43]).
+- Public Console exposure: gated by ingress and TLS work that is INIT-105
+  / later, and out of scope here (D11 below).
 
-**Consequence**: SLICE-103.01 owns operator render and pin. The same
-`helm template` workflow used in D1 covers both renders. The cluster-wide
-CRD set is acceptable here because the operator's CR scope is namespaced
-(research §3.4) and tenant isolation is INIT-116's concern.
+**Consequence**: The local proof asserts only the API path. If a future
+initiative needs the Console, it adds a second Service and (when
+needed) ingress without re-shaping INIT-104.
 
 ---
 
-### D3 — D-OPERATOR-AUTH
+### D3 — D-BUCKET-CREATION
 
-**Decision**: For INIT-103's first local proof, the Infisical Operator
-authenticates to Infisical using **Universal Auth (UA)**. The
-`InfisicalSecret` CR uses `authentication.universalAuth` with a
-`credentialsRef` to a Kubernetes Secret containing `clientId` and
-`clientSecret`. Project scope is bound by `secretsScope.projectId`,
-`secretsScope.envSlug`, and `secretsScope.secretsPath`. Native Kubernetes
-Auth and service-token auth are not used in INIT-103.
+**Decision**: Initial bucket creation for the local channel is a
+**post-readiness Kubernetes `Job`** in `minio-system` that runs the
+official MinIO `mc` client image with `mc alias set` followed by
+`mc mb --ignore-existing` against the in-cluster MinIO Service. The Job
+is reconciled by Flux as part of the channel overlay, idempotent on
+re-apply, and creates exactly one sample bucket (D9). Init containers
+embedded in the MinIO Pod and the Operator `AdminJob` are not used. The
+community-chart `makeBucketJob` is not used (D1 excludes the chart).
 
-**Evidence**: research §4.2, §4.4, §3.3. UA carries explicit project scope
-in the CRD (`projectId`, `envSlug`, `secretsPath`; research §3.3, §4.2),
-returns short-lived access tokens with TTL (default 7200s, research §4.2),
-and supports periodic-token renewal that mitigates static-credential risk
-after the initial bootstrap (research §4.2). UA's required bootstrap input
-(a single Kubernetes Secret with `clientId`/`clientSecret`) maps directly
-to the channel schema fields enumerated in research §5.2. Service-token auth
-is functionally simpler at the CRD level but leaves a fully static token
-(research §4.1) and the sample CRD shape ties scope to the token's own
-permissions rather than carrying explicit project IDs (research §4.1).
-Native Kubernetes Auth requires Infisical to be pre-configured to trust the
-specific cluster's service accounts (research §4.3), which adds first-run
-configuration without reducing the chicken-and-egg burden (research §6.2).
+**Evidence**: research §2.5 (`mc mb` creates buckets on MinIO and other
+S3-compatible services; supports `--ignore-existing` for idempotent jobs;
+a non-Operator raw manifest path can use an ordinary Kubernetes Job
+running `mc` after readiness) [E43, E44], §10.3 (post-readiness bucket
+Job is the lowest-moving-parts mechanism that fits the existing Flux
+substrate) [E16, E17, E25, E26, E41, E43, E44], §9.3 INFORMATIONAL (S3
+PUT does not auto-create buckets; bucket creation is explicit) [E44, E47,
+E55], §2.5 (Operator `AdminJob` requires the Operator path, which D1
+rejects) [E45].
 
 **Alternatives rejected**:
-- Service token: deprecated direction for new identities; static credential
-  with no rotation; CRD scope tied to token, weaker fit for channel-driven
-  project/env binding (research §3.3, §4.1).
-- Native Kubernetes Auth: requires the Infisical instance to be
-  pre-configured with allowed service accounts/namespaces and (when no
-  central token reviewer JWT exists) `system:auth-delegator` on the
-  Operator's SA (research §4.3); the same first-run admin/identity setup is
-  still needed before the Operator can authenticate, with no offsetting
-  simplification for INIT-103's local proof (research §4.4, §6.2, §6.3).
-- Multiple auth methods on one CR: research §3.3 says only one method
-  should be defined per `InfisicalSecret`.
+- Init container on the MinIO Pod: couples bucket bootstrap to the data
+  Pod's lifecycle, blocks readiness, and violates idempotent re-apply
+  semantics on `mc` failure modes (research §2.5 [E43, E44]).
+- Operator `AdminJob`: requires the Operator path that D1 rejects
+  (research §2.5 [E45]).
+- Boto3 / `aws s3 mb` Job: feasible against the same API (research §3.4,
+  §4.1 [E48, E55, E56, E57]), but `mc mb --ignore-existing` is the
+  documented idempotent primitive; choosing one image keeps the bucket
+  Job's tool surface narrow.
+- Sample round-trip script as the bucket creator: the harness round-trip
+  (D9) asserts state; it does not create state in production paths.
 
-**Consequence**: SLICE-103.04 (bootstrap) and SLICE-103.05 (sample
-`InfisicalSecret`) consume the same UA credential delivery. Channel schema
-fields for UA secret name/namespace and project/env/path are bound in D8.
-INIT-104+ inherit the UA pattern (D10).
+**Consequence**: INIT-104 introduces `mc` to two surfaces: the in-cluster
+bucket Job image (D11) and the host toolchain (D12). The Job authenticates
+with the MinIO root credentials synced by D4. The proposal phase must
+choose whether the Job runs once at install or as a `Job` re-applied by
+Flux on each reconcile cycle (idempotent either way under
+`--ignore-existing`), and must specify the readiness wait mechanism
+(initContainer netcat / `mc ready` / explicit `kubectl wait` pre-step).
 
 ---
 
-### D4 — D-SECRET-ZERO
+### D4 — D-CREDENTIAL-FLOW
 
-**Decision**: Bootstrap is split into two distinct deliveries:
+**Decision**: Object-storage credentials flow exclusively through Infisical
+via an `InfisicalSecret` custom resource per channel, materialising into a
+Kubernetes `Secret` consumed by MinIO and any in-cluster client (e.g., the
+bucket Job in D3). For the local channel, the binding is:
 
-1. **Infisical server root secrets** (`ENCRYPTION_KEY`, `AUTH_SECRET`,
-   `SITE_URL`, `DB_CONNECTION_URI`, `REDIS_URL`): committed as a
-   SOPS-encrypted Secret at
-   `gitops/bootstrap/infisical-server-bootstrap.enc.yaml`, decrypted by
-   Flux during the bootstrap-tier reconcile, applied into namespace
-   `infisical-system` as `Secret/infisical-server-bootstrap`, and consumed
-   by the server Deployment via `envFrom`. This is bootstrap-tier because
-   the server cannot start without these values (research §2.2, §6.2, §7.1)
-   and SOPS already owns the bootstrap-tier delivery channel established by
-   INIT-102 D5/D6.
+- Infisical project: `platform-storage`.
+- Infisical environment: `local`.
+- Infisical path: `/object-storage/local/`.
+- Infisical secret keys: `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`.
+- Target Kubernetes `Secret` namespace: `minio-system`.
+- Target Kubernetes `Secret` name: `minio-root` (one canonical name; the
+  exact key casing inside the Secret matches the Infisical key names so
+  MinIO's `envFrom`/`env` references resolve directly).
+- Universal Auth source for the storage `InfisicalSecret`: a dedicated
+  INIT-104 Machine Identity (see D5), not the INIT-103
+  `infisical-operator-auth` UA.
+- `creationPolicy: Owner` on the `InfisicalSecret`, matching the proven
+  INIT-103 pattern.
+- `InfisicalSecret` layout: **one CR per provider key set per channel**
+  (recursive sync over the channel-scoped path, with that path containing
+  exactly the intended keys). Splitting MinIO keys vs Vultr keys across
+  channels is a per-channel matter, not multiple CRs in the same channel.
 
-2. **Operator UA credential** (`clientId`, `clientSecret`): generated
-   **post-server-startup** by a one-shot bootstrap script
-   (`infra/scripts/bootstrap-infisical-identity.sh`) that runs the
-   `infisical` CLI against the running server to (a) create the initial
-   admin (using server `INFISICAL_AUTO_BOOTSTRAP_*` env vars per research
-   §2.2 auto-bootstrap evidence, OR via CLI signup — final mechanism is a
-   proposal-phase open question), (b) create the bootstrap project,
-   environment, sample secret, and Machine Identity, and (c) write the
-   resulting UA credential as `Secret/infisical-operator-auth` in the
-   operator namespace via `kubectl apply` directly (not via Git, not via
-   SOPS). The Secret is **not committed** in any form because its existence
-   depends on the server already running and creating the identity, and
-   because rotation is owned by INIT-115, not INIT-103.
-
-**Evidence**: research §6.2 (server root secrets exist before runtime sync;
-operator credentials exist before runtime sync), §2.2 (env-var contract for
-server; chart's auto-bootstrap fields exist as evidence of a supported
-shape but were not validated end-to-end), §6.3 (first-run admin/project/
-identity setup is required before Operator sync can succeed), §7.3
-(bootstrap classification of server root secrets and operator credentials
-is the proposal-phase open question being closed here), §1.3 (current SOPS
-boundary forbids additional encrypted files without explicit allowlist
-extension).
+**Evidence**: research §1.3 (INIT-103 handoff binds project
+`platform-storage`, path `/object-storage/<channel>/...`, local keys
+`MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, expected local consumer namespace
+`minio-system`) [E16], §5.1, §5.2 (project/environment/path sync mechanics
+proven by the INIT-103 sample; existing CR pattern uses
+`secrets.infisical.com/v1alpha1`, `credentialsRef.secretName` /
+`secretNamespace`, and `creationPolicy: Owner`) [E16, E26, E27, E28],
+§5.4 (object-storage credentials are runtime-only Infisical data and the
+SOPS linter would reject them if they ever appeared in `gitops/bootstrap/`)
+[E16, E17, E19, E29, E30], §6.2 (candidate channel fields:
+`credentials_secret_name`, `credentials_secret_namespace`, `infisical_path`)
+[E16].
 
 **Alternatives rejected**:
-- Both secrets via SOPS-committed files: viable for server root, but the
-  operator UA credential cannot be generated until the server is running,
-  which forces a re-encrypt-and-commit step inside the bring-up flow that
-  pollutes Git history with bootstrap byproducts and tangles INIT-103 with
-  Git-write authority it does not own.
-- Both secrets via direct `kubectl apply` (no SOPS): the server root must
-  be reproducible across operators and clean cluster rebuilds; SOPS gives
-  that reproducibility while keeping the boundary explicit. Manual creation
-  drifts across operators and breaks INIT-102's channel-template-as-source-
-  of-truth shape.
-- Chart `autoBootstrap.enabled: true` writing `infisical-bootstrap-secret`
-  (research §2.2): the chart-supported shape exists but research did not
-  validate its end-to-end behavior; INIT-103 binds the explicit two-step
-  delivery instead of relying on unverified chart automation.
+- SOPS-encrypted Kubernetes Secret for MinIO root: forbidden by D8 and the
+  SOPS linter's runtime-secret-shaped rejection rules; `MINIO_ROOT_PASSWORD`
+  matches the linter's reject pattern (research §5.4 [E16, E17, E19,
+  E29, E30]).
+- Hardcoded literal credentials in any Kustomize resource: same boundary.
+- One recursive `InfisicalSecret` covering both MinIO and Vultr keys at
+  `/object-storage/`: collapses environment scoping, defeats per-channel
+  parameterization, and contradicts the channel-id-as-environment shape
+  in the handoff (research §1.3 [E16]).
+- `includeAllSecrets: true` over `/object-storage/` (the parent): pulls
+  cross-channel keys into a single Secret; rejected for the same reason.
 
-**Consequence**: SLICE-103.04 owns the SOPS-encrypted server bootstrap file
-and the post-server-startup identity bootstrap script. The SOPS boundary
-linter must be extended to allow the new bootstrap file (D5). The operator
-UA credential is intentionally absent from Git; the harness verifies its
-presence in the cluster but never reads its values (D9). Because the UA
-credential lives outside Git, every clean rebuild re-runs the identity
-bootstrap script (idempotency required).
+**Consequence**: INIT-104 authors `InfisicalSecret` resources at
+`gitops/channels/local/object-storage/infisical/` (or a sibling location
+under `gitops/channels/local/object-storage/`). The MinIO Pod consumes
+`Secret/minio-root` via `envFrom: secretRef: name: minio-root`. The
+bucket Job consumes the same Secret. No application code reads MinIO
+root credentials; application credentials are out of scope for INIT-104
+and are deferred to INIT-115 (D11).
 
 ---
 
-### D5 — D-SOPS-BOUNDARY-EXTEND
+### D5 — D-INFISICAL-BOOTSTRAP
 
-**Decision**: INIT-103 extends INIT-102's SOPS bootstrap boundary by adding
-**exactly one** additional allowed encrypted file path:
+**Decision**: Local Infisical seeding is extended by a **new sibling
+script** to `infra/scripts/bootstrap-infisical-identity.sh` —
+`infra/scripts/bootstrap-infisical-storage.sh` — invoked by
+`infra/scripts/bring-up-local-channel.sh` after the Infisical server is
+ready and after the INIT-103 identity bootstrap. The new script is
+idempotent and:
+
+1. Creates project `platform-storage` if absent.
+2. Ensures environment `local` exists in that project.
+3. Creates folder `/object-storage/local/` if absent.
+4. Seeds initial values for `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`
+   under that path, generating cryptographically strong values on first
+   run; subsequent runs leave existing values in place (idempotent).
+5. Creates a dedicated INIT-104 Machine Identity scoped to
+   `platform-storage`, mints its Universal Auth credentials, and writes
+   them into a Kubernetes Secret in `infisical-system` with a name
+   distinct from the INIT-103 UA Secret (e.g.,
+   `infisical-storage-operator-auth`).
+
+A dedicated sibling script (rather than extending
+`bootstrap-infisical-identity.sh`) keeps INIT-103's identity-bootstrap
+surface unchanged and matches its single-responsibility shape.
+
+**Evidence**: research §5.1 (project `platform-storage` is bound but
+unbootstrapped today; current local sample is in `platform-local`)
+[E16, E26, E27], §1.3 (INIT-104 has an open choice between reusing
+INIT-103 UA or creating an INIT-104-owned Machine Identity; UA Secret
+not added to `gitops/bootstrap/`) [E16, E17], §1.2 (INIT-103 bootstrap
+is channel-driven and idempotent; provides the template) [E15, E26, E27,
+E28], §9.2 BLOCKS_IMPLEMENTATION (bootstrapping `platform-storage` is a
+prerequisite of INIT-104 implementation) [E16, E27, E28].
+
+**Alternatives rejected**:
+- Reuse `infisical-operator-auth` for storage sync: violates least
+  privilege — INIT-103's UA is scoped to `platform-local`; a UA scoped
+  to `platform-storage` is the correct seam (research §5.1 [E16]).
+- Extend `bootstrap-infisical-identity.sh` in place: bloats the
+  identity-bootstrap responsibility and couples INIT-104 changes to
+  INIT-103's contract (research §1.2 [E28]).
+- Store storage credentials in `gitops/bootstrap/` SOPS files: forbidden
+  by D4 and the SOPS linter (research §5.4 [E16, E17, E29, E30]).
+
+**Consequence**: `infra/scripts/bring-up-local-channel.sh` and the
+local-cluster harness gain a new pre-Flux step. The harness asserts
+that the Machine Identity Secret exists in `infisical-system` and the
+storage `InfisicalSecret` reaches `Ready` (D9). The remote channel's
+storage credential seeding is owned by the operator runbook for that
+channel (D7), not by `bootstrap-infisical-storage.sh` (which is local).
+
+---
+
+### D6 — D-S3-SDK-CONTRACT
+
+**Decision**: The same-S3-SDK contract for application code and harness
+clients is the five-tuple **(endpoint, region, access_key, secret_key,
+bucket)**, sourced from a Kubernetes Secret per consumer namespace.
+The Secret keys are exactly:
 
 ```
-gitops/bootstrap/infisical-server-bootstrap.enc.yaml
+S3_ENDPOINT_URL    # e.g., http://minio.minio-system.svc.cluster.local:9000 (local)
+S3_REGION          # e.g., us-east-1
+S3_ACCESS_KEY_ID   # provider-agnostic alias
+S3_SECRET_ACCESS_KEY
+S3_BUCKET          # e.g., humility-local-sample (local)
 ```
 
-Updated allowlist for `infra/scripts/lint-sops-boundary.py`:
+For the **local proof only**, the application-facing Secret may equal
+`Secret/minio-root` (root credentials) under the endpoint/bucket envs
+above; least-privilege application keys are deferred to INIT-115.
+INIT-104 only ships the **MinIO root** Secret materialisation (D4). The
+canonical application-facing Secret name is `s3-credentials` per consumer
+namespace, but INIT-104 does not create application-namespace Secrets;
+that mapping is owned by INIT-111/112/113 consumers.
 
-```python
-ALLOWED_ENCRYPTED_FILES = {
-    "gitops/bootstrap/sops-sentinel.enc.yaml",              # INIT-102 D5
-    "gitops/bootstrap/infisical-server-bootstrap.enc.yaml", # INIT-103 D5
-}
+**Evidence**: research §3.3 (Boto3 supports `endpoint_url`, `region_name`,
+`aws_access_key_id`, `aws_secret_access_key`; AWS CLI supports
+`--endpoint-url`; Vultr requires HTTPS + Signature V4) [E47, E50, E55,
+E56, E57], §4.1 (one app SDK path; Boto3 covers MinIO + Vultr;
+`mc`/AWS CLI cover proof) [E32–E34, E42, E44, E48, E55, E56, E57], §4.4
+(common minimum config = endpoint + access key + secret key + region +
+bucket; app code does not branch on provider) [E16, E47, E56, E57],
+§9.4 (open: addressing style; open: app credentials vs root) [E16, E41,
+E43, E47, E57].
+
+**Alternatives rejected**:
+- Provider-prefixed env names (`MINIO_ROOT_USER` / `VULTR_OS_ACCESS_KEY`)
+  in application config: leaks provider identity into application code
+  and violates the "same SDK code" parity in
+  `environment-agnostic-stack.md` and D8 (research §1.1 [E2, E3, E9,
+  E10]). The provider-prefixed names exist in **Infisical key names**
+  for clarity at the secret-store boundary (D4), but consumers see the
+  generic `S3_*` aliases.
+- Two SDKs (one for MinIO, one for Vultr): redundant; Boto3 covers both
+  (research §3.3, §4.1).
+- Auto-detect addressing style per endpoint: the proposal phase pins
+  addressing style to **path-style for the local MinIO endpoint** and
+  **virtual-host style for the Vultr endpoint** via SDK config carried
+  in channel YAML; `auto` is rejected because behaviour differs across
+  SDK versions (research §3.3 [E47, E57]).
+
+**Consequence**: The harness round-trip (D9) and any later application
+client read `S3_*` env vars from a single Secret. Channel YAML carries
+addressing-style and region per channel (D7). INIT-104 does not add an
+application S3 wrapper; the wrapper lands when INIT-111/112/113 first
+need it, with the SDK contract above.
+
+---
+
+### D7 — D-CHANNEL-SCHEMA-EXT
+
+**Decision**: A new top-level `object_storage` block is added to both
+`infra/schemas/platform-channel.schema.json` and
+`infra/schemas/platform-channel-resolved.schema.json`,
+`additionalProperties: false`, alongside the existing `cluster`, `state`,
+`gitops`, and `infisical` blocks. `schema_version` remains `1`; the
+addition is purely additive. Required fields:
+
 ```
-
-The runtime-secret-shaped key reject patterns established in INIT-102
-(`infisical*`, `discord*token`, `password`, `secret_access_key`, `api_key`)
-remain. They are refined to **whitelist the bootstrap-tier server keys
-inside the new allowlisted file only**:
-
-- Allowed inside `gitops/bootstrap/infisical-server-bootstrap.enc.yaml`:
-  `ENCRYPTION_KEY`, `AUTH_SECRET`, `SITE_URL`, `DB_CONNECTION_URI`,
-  `REDIS_URL`, and (if used) `INFISICAL_AUTO_BOOTSTRAP_EMAIL` /
-  `INFISICAL_AUTO_BOOTSTRAP_PASSWORD`.
-- Still rejected anywhere (including any addition to this file): per-tenant
-  runtime secrets, Discord tokens, application DB credentials, application
-  API keys, Operator UA credentials (`infisical*token`,
-  `infisical*clientSecret`), MinIO/Vultr Object Storage credentials.
-
-The encrypted-fields scope (`encrypted_regex: ^(data|stringData)$`) and the
-`gitops/bootstrap/` directory containment rule are inherited unchanged.
-
-**Evidence**: research §1.3 (current INIT-102 boundary forbids additional
-encrypted files without explicit allowlist extension), §7.1, §7.2, §7.3
-(server root secrets are bootstrap-classified because the server cannot
-start without them; operator credentials are deliberately *not* in scope
-because they are generated post-startup per D4). INIT-102 proposal §6 binds
-the lint as a failing invariant, not a review convention; extending the
-allowlist is the only authorized path.
-
-**Alternatives rejected**:
-- Allow any `gitops/bootstrap/*.enc.yaml`: drops the named-file invariant
-  that makes the boundary auditable; future bootstrap files would slip in
-  without explicit ratification.
-- Add the operator UA credential to the allowlist: rejected by D4 (the
-  credential is generated post-startup and not committed).
-- Move runtime-secret guards into a per-file exclusion table: heavier than
-  the current allowed-file-set + reject-pattern shape; not warranted by
-  research evidence.
-
-**Consequence**: SLICE-103.04 owns the linter change and a corresponding
-test fixture. INIT-102's harness assertion that the lint fails on
-non-allowlisted encrypted files (INIT-102 proposal §12) carries forward;
-the INIT-103 harness adds a positive assertion that the new bootstrap file
-decrypts successfully and produces the expected
-`Secret/infisical-server-bootstrap`.
-
----
-
-### D6 — D-INFISICAL-COMPONENTS
-
-**Decision**: INIT-103 ships the following Infisical server components in
-the local channel done state:
-
-- **Backend application** (the standalone `infisical/infisical` image, which
-  bundles backend + frontend per research §2.1).
-- **PostgreSQL** in-cluster, PVC-backed (D7 below).
-- **Redis** in-cluster, PVC-backed.
-- **Infisical Operator** (D2).
-- **Cluster-scoped CRDs** from the operator chart render (D2).
-- **One `InfisicalSecret` CR** + its managed target Kubernetes Secret as the
-  reconciliation proof (D9).
-
-Deferred (explicitly not in INIT-103 done state):
-
-- High-availability replicas (chart default `replicaCount: 2` per research
-  §2.1, §2.3; INIT-103 pins `replicaCount: 1` for proof footprint).
-- External managed PostgreSQL/Redis (production guidance per research §2.1,
-  §2.3, §9.3; out of scope for first local proof).
-- SMTP, telemetry, audit log shipping (research §9.3).
-- `InfisicalPushSecret`, `InfisicalDynamicSecret`, `ClusterGenerator`,
-  `Password`, `UUID` *exercise* (CRDs are installed per D2 but no CRs are
-  authored in INIT-103; research §9.3).
-- Workload auto-reload annotations (workloads owned by INIT-113; research
-  §3.1, §9.3).
-- Public ingress / TLS (owned by INIT-105; in-cluster Service URL only for
-  INIT-103 — see D8).
-
-**Evidence**: research §2.1 (component inventory), §2.3 (resource
-footprint), §3.2 (CRD set), §9.3 (informational deferrals).
-
-**Alternatives rejected**:
-- Skip Redis: not supported by docs (research §2.1, §2.2 — Redis URL is
-  required configuration).
-- External managed Postgres/Redis for local: contradicts environment-
-  agnostic memory (local self-hosts the same components as remote) and
-  adds out-of-cluster dependencies INIT-103 does not own.
-- Frontend as a separate Deployment: the standalone image bundles backend +
-  frontend (research §2.1); a split shape adds without evidence.
-- Author all six CRDs but cherry-pick controllers: rejected by D2.
-
-**Consequence**: SLICE-103.02 owns the rendered server manifest set and
-pins `replicaCount: 1` against the chart default. SLICE-103.05 authors a
-single `InfisicalSecret` CR; downstream INITs add their own CRs without
-changing INIT-103.
-
----
-
-### D7 — D-DATA-PLANE
-
-**Decision**: Infisical's local PostgreSQL and Redis run **in-cluster,
-PVC-backed**, rendered from the upstream chart with PVC sizes pinned to
-chart defaults (`8Gi` Postgres, `8Gi` Redis per research §2.1). Storage
-class resolves to k3d's default storage class (`local-path` provisioner,
-verified at harness time). This is INIT-103's Postgres for Infisical only;
-INIT-111's application data plane Postgres is a distinct, later concern
-and shares no resources with this instance.
-
-**Evidence**: research §2.1, §2.3, §6.1. Self-hosted Infisical requires
-Postgres and Redis (research §2.1, §2.2, §2.3). SQLite is not a documented
-self-hosted storage option (research §2.3, §6.1). Helm chart defaults
-provision in-cluster PVC-backed Postgres and Redis (research §2.1, §2.3),
-with the explicit doc warning that the Postgres PVC contains encrypted
-secrets and must not be deleted unless data loss is intended (research
-§2.1). Environment-agnostic memory says local self-hosts the same
-components as remote.
-
-**Alternatives rejected**:
-- SQLite: not documented by Infisical (research §2.3, §6.1).
-- External managed Postgres/Redis: contradicts environment-agnostic
-  memory and adds out-of-cluster dependencies INIT-103 does not own
-  (research §6.1, §9.3).
-- emptyDir / no PVC: the docs list unbound PVCs as a common pending-Pod
-  cause and warn that Postgres data is stateful and security-sensitive
-  (research §2.1, §2.3).
-- Bundling INIT-103's Postgres with INIT-111's application Postgres: the
-  Postgres images, schemas, and security boundaries differ; sharing would
-  couple unrelated INITs (research §1.1 dependency ordering).
-
-**Consequence**: SLICE-103.02 includes PVC manifests in the rendered output.
-SLICE-103.06 (harness) asserts that both PVCs reach `Bound`, and that the
-storage class is the expected default. Operators must not delete the
-`infisical-system` namespace without first acknowledging Postgres data
-loss.
-
----
-
-### D8 — D-CHANNEL-SCHEMA-EXT
-
-**Decision**: Add a top-level `infisical` block to both
-`infra/schemas/platform-channel.schema.json` and the resolved channel
-schema, with the following fields (all required when the block is present;
-the block is required when `cluster.target == "k3d-local"`):
-
-- `infisical.server_url` — base URL the Operator uses as `hostAPI`
-  (e.g., `http://infisical.infisical-system.svc.cluster.local:8080` for
-  k3d-local).
-- `infisical.project_id` — Infisical project identifier
-  (`secretsScope.projectId`).
-- `infisical.environment` — Infisical environment slug
-  (`secretsScope.envSlug`, e.g., `local`).
-- `infisical.secrets_path` — root secrets path
-  (`secretsScope.secretsPath`, default `/`).
-- `infisical.auth_method` — enum `universal-auth` (only value accepted in
-  INIT-103; `service-token` and `kubernetes-auth` reserved for future).
-- `infisical.universal_auth_secret_name` — Kubernetes Secret name holding
-  `clientId` + `clientSecret` (default `infisical-operator-auth`).
-- `infisical.universal_auth_secret_namespace` — namespace of the credential
-  Secret (default `infisical-system`).
-- `infisical.operator_namespace` — namespace where the Operator runs
-  (default `infisical-system`).
-- `infisical.resync_interval` — `syncConfig.resyncInterval`
-  (default `60s`).
+provider                      enum: ["minio", "vultr-os"]
+endpoint                      uri
+region                        string
+addressing_style              enum: ["path", "virtual"]
+bucket                        string (canonical sample/app bucket for the channel)
+infisical_project             string (default: "platform-storage")
+infisical_environment         string (defaults to channel id)
+infisical_secrets_path        string (default: "/object-storage/<channel>/")
+universal_auth_secret_name    string (default: "infisical-storage-operator-auth")
+universal_auth_secret_namespace string (default: "infisical-system")
+credentials_secret_name       string (default: "minio-root" local; "vultr-os" remote)
+credentials_secret_namespace  string (default: "minio-system" local)
+```
 
 Per-target conditionals:
 
-- `cluster.target == "k3d-local"`: `infisical` block **required**; same
-  shape as INIT-102's `gitops`-required-when-`k3d-local` pattern.
-- `cluster.target == "vultr-vms"`: `infisical` block **optional** in
-  INIT-103 (deferred until a remote-channel slice installs Flux + Infisical
-  on the remote target, paralleling INIT-102's `gitops` treatment for
-  `dev`).
+- `cluster.target == "k3d-local"` requires `gitops`, `infisical`,
+  **and `object_storage`**, with `object_storage.provider == "minio"`,
+  `endpoint` matching the cluster-internal pattern
+  `^http://minio\..*\.svc\.cluster\.local:9000$`, and
+  `addressing_style == "path"`.
+- `cluster.target == "vultr-vms"` makes `object_storage` **optional**
+  in INIT-104 (consistent with INIT-103's treatment of `infisical` for
+  remote). When present, `provider == "vultr-os"` and `endpoint` must
+  match `^https://[a-z]{3}1\.vultrobjects\.com$`,
+  `addressing_style == "virtual"`.
 
-`schema_version` remains `1` because the addition is additive and existing
-valid `vultr-vms` channels remain valid without it (mirrors INIT-102 D7).
+`infra/scripts/resolve_platform_channel.py`,
+`infra/scripts/validate_platform_channels.py`, and
+`infra/channels/fixtures/local-child.yaml` are extended to validate
+inherited `object_storage` fields under the same channel-resolution
+pattern INIT-103 uses for `infisical`.
 
-**Evidence**: research §5.1 (current schema baseline; strict additive
-top-level block pattern), §5.2 (CRD-supported field enumeration with E23,
-E35 citations), §5.3 (local self-hosts same components; remote is Vultr-
-locked; per-channel endpoint config differs). DECISIONS.md D8 says channel
-config carries Infisical endpoint. INIT-102 synthesis D7 establishes the
-"strict additive top-level block, required for `k3d-local`, optional for
-`vultr-vms`" pattern that INIT-103 reuses verbatim.
+**Evidence**: research §6.1 (existing schema is strict
+`additionalProperties: false`; local conditional already requires
+`gitops`/`infisical`; resolver already validates inherited Infisical
+fields) [E20, E23, E24, E28], §6.2 (candidate fields and conditionals
+itemised) [E2, E6, E16, E21, E22, E43, E47, E50, E51, E56], §6.3 (open:
+required for every channel vs `k3d-local` first; open: bucket prefix
+shape) [E10, E21, E22, E35], §3.2 (Vultr endpoint pattern
+`<region>1.vultrobjects.com`) [E47, E50, E51], §1.4 (no
+`object_storage` in current local or dev YAML) [E21, E22].
 
 **Alternatives rejected**:
-- `project_slug` instead of `project_id`: both are CRD-supported (research
-  §3.3, §5.2); `project_id` is more stable across project renames and
-  matches the binding "explicit `project_id`" from research §4.2.
-- A separate `auth` sub-object containing nested `universal_auth.*` fields:
-  flatter shape matches INIT-102's `gitops` block (no nested objects);
-  consistency wins.
-- `service-token` accepted as a valid `auth_method` value in INIT-103: D3
-  binds UA only; accepting other values now would let bad config through
-  schema validation.
-- Separate `infisical/channels/*.yaml` file: violates channel-template
-  single-source-of-truth (INIT-102 synthesis D7 rejected the analogous
-  split for `gitops`).
+- Bump `schema_version` to `2`: not warranted; addition is additive
+  with conditional requirements (research §6.1 [E23, E24]).
+- Require `object_storage` for `vultr-vms` in INIT-104: current `dev`
+  channel lacks GitOps/Infisical, so the storage block has no
+  reconciler to consume it yet (research §5.3, §6.3 [E22]). Remote
+  enforcement lands when remote GitOps lands.
+- Store `infisical_path` as channel-derived only (no field): hides a
+  validatable invariant that the channel id appears in the path
+  (research §6.2 [E16, E21, E22]); explicit field with pattern
+  validation is stronger.
+- Store credentials inline in channel YAML: forbidden by D4.
 
-**Consequence**: SLICE-103.03 owns the schema change, resolver updates,
-fixture additions, and validator tests. The resolved channel JSON feeds
-both the rendered `InfisicalSecret` CR and any per-channel substitution in
-the server install (e.g., `SITE_URL`). The `infisical.server_url` is a
-cluster-internal Service URL until INIT-105 ships DNS/TLS; remote exposure
-is a later handoff (research §5.3).
+**Consequence**: `infra/channels/local.yaml` gains a concrete
+`object_storage` block; `infra/channels/dev.yaml` may add an aspirational
+block but does not have to. Tests under `infra/tests/` add schema
+positive/negative cases. Pattern validations document the local
+in-cluster Service URL and the Vultr regional endpoint shape.
+
+---
+
+### D8 — D-VULTR-OS-CONTRACT
+
+**Decision**: For `vultr-vms` channels, the remote object-storage
+contract is:
+
+- **Endpoint**: `https://<region>1.vultrobjects.com`, where `<region>`
+  is the three-letter Vultr region prefix that matches the channel's
+  declared cluster region (e.g., `ewr1.vultrobjects.com` for region
+  `ewr`).
+- **Addressing style**: virtual-host.
+- **Auth**: S3 access key + secret key, Signature V4, HTTPS only.
+- **Credentials**: stored in Infisical at
+  `/object-storage/<channel>/VULTR_OS_ACCESS_KEY` and
+  `/object-storage/<channel>/VULTR_OS_SECRET_KEY`, materialised by an
+  `InfisicalSecret` into a Kubernetes Secret in the consumer namespace
+  for that channel.
+- **Subscription / bucket provisioning**: out of band of INIT-104's
+  Flux/Kustomize path. Bucket creation for remote channels is owned
+  by the operator runbook, executed via Vultr Console, `vultr-cli`, or
+  the `vultr_object_storage` Terraform resource. INIT-104 does **not**
+  ship Terraform for Vultr OS subscriptions.
+- **Documentation only in INIT-104**: the remote contract is documented
+  in `infra/README.md` and `gitops/README.md`. No remote `Flux` /
+  `InfisicalSecret` resources are committed for `vultr-vms` channels in
+  INIT-104.
+
+**Evidence**: research §3.1, §3.2 (provisioning paths: Console / API /
+CLI / Terraform; endpoint pattern; region examples; current `dev`
+channel uses `ewr`) [E22, E46, E47, E49, E50, E51], §3.3 (auth, S3
+keys, HTTPS, Signature V4) [E16, E47, E50], §3.4 (compatibility matrix
+supports Create/Put/Get/Delete/List; bucket name limits 3–63 chars;
+default 100-bucket subscription limit) [E48, E53], §5.3 (remote
+channel GitOps/Infisical install is currently omitted in `dev`, so
+remote apply remains outside INIT-104 local proof) [E16, E22, E26].
+
+**Alternatives rejected**:
+- Ship `vultr_object_storage` Terraform under `infra/` in INIT-104:
+  out of scope; remote provisioning belongs to a remote-onboarding
+  initiative once remote Flux exists (research §5.3 [E22]).
+- Auto-create remote buckets via S3 SDK on first PUT: Vultr does not
+  auto-create on PUT in the cited evidence (research §9.4 [E47, E48,
+  E55]).
+- Inherit MinIO credential keys (`MINIO_ROOT_USER`/`PASSWORD`) for
+  Vultr: the Infisical handoff binds distinct provider-prefixed key
+  names, and the SDK contract (D6) re-aliases them to `S3_*` at the
+  consumer Secret (research §1.3 [E16]).
+
+**Consequence**: INIT-104's surface for `vultr-vms` is documentation +
+schema, not Flux manifests. When a remote channel is later onboarded,
+the same channel-schema/InfisicalSecret pattern lands without
+re-shaping INIT-104.
 
 ---
 
 ### D9 — D-LOCAL-CONTRACT
 
-**Decision**: "Real local Infisical reconciliation" is proven by the
-following six harness assertions, run in order against a live k3d cluster
-that has already passed INIT-102's substrate harness:
+**Decision**: "Real local S3 round-trip" as a binding harness assertion
+means **all** of the following conditions hold simultaneously, executed
+by `infra/tests/validate_object_storage_local.sh` invoked from
+`infra/tests/validate_platform_bootstrap.sh --cluster`:
 
-1. `Deployment/infisical` in `infisical-system` reports
-   `.status.availableReplicas == .spec.replicas` (= 1 per D6).
-2. The chart-rendered Postgres workload in `infisical-system` is Ready and
-   `PVC/<infisical-postgresql-data>` is `Bound`. Same assertion for
-   `infisical-redis`. Exact resource names follow the chart render and are
-   pinned in SLICE-103.02.
-3. `Deployment/<infisical-secrets-operator>` (operator chart name) in
-   `infisical-system` reports `.status.availableReplicas == .spec.replicas`.
-4. `Secret/infisical-operator-auth` in `infisical-system` exists and
-   contains non-empty `clientId` and `clientSecret` keys (values not
-   logged).
-5. `InfisicalSecret/infisical-local-sample` in namespace `infisical-sample`
-   reports `status.conditions[type=Ready].status == "True"` with current
-   `observedGeneration`.
-6. `Secret/infisical-local-sample` in namespace `infisical-sample` exists
-   and contains key `INFISICAL_SAMPLE_KEY` decoding to value
-   `infisical-local-ready` (the deterministic seed value the bootstrap
-   script wrote into the Infisical project at path `/sample`, environment
-   `local`).
+1. `Namespace/minio-system` exists.
+2. The MinIO workload Pod in `minio-system` is `Ready`.
+3. `Service/minio` in `minio-system` exposes port `9000` (ClusterIP).
+4. `InfisicalSecret/minio-root` (or the canonical name chosen in the
+   proposal) is `Ready` and `Secret/minio-root` exists in `minio-system`
+   with `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` keys non-empty.
+5. The bucket Job (D3) has reached `Complete`.
+6. The canonical sample bucket `humility-local-sample` exists, verified
+   by an in-cluster `mc ls` against the MinIO Service.
+7. A PUT of a small known-content object (e.g., `health.txt` containing
+   a fixed UTF-8 string) succeeds.
+8. A GET of the same object returns byte-identical content.
+9. A DELETE of the object succeeds and a follow-up GET returns the
+   expected 404-class error.
+10. Re-running the harness is idempotent: bucket creation, object
+    PUT/GET/DELETE, and Secret existence remain consistent on the
+    second invocation.
 
-The bootstrap script (`infra/scripts/bootstrap-infisical-identity.sh`)
-must run between (1)–(2) and (3)–(6); it provisions the admin user, the
-`platform` organization, the `local` project, the `local` environment, the
-sample secret at `/sample/INFISICAL_SAMPLE_KEY=infisical-local-ready`, the
-Machine Identity, and the UA credential applied as
-`Secret/infisical-operator-auth`.
+The PUT/GET/DELETE step uses `mc` from a one-shot
+`Job`/`kubectl run` inside the cluster (no host network exposure
+required), authenticated by `Secret/minio-root`. The harness does not
+expose MinIO outside the cluster.
 
-**Evidence**: research §6.4 (real reconciliation proof must include server
-ready, operator ready, `InfisicalSecret` CR, target Kubernetes Secret),
-§3.1, §3.3 (`managedKubeSecretReferences` defines target Secret delivery),
-§6.3 (first-run admin/project/identity required before Operator sync can
-succeed), §6.1 (PVC binding is a documented common failure mode and must
-be asserted). INIT-102 proposal §12 sets the precedent for live-cluster
-assertions over render-only checks.
+**Evidence**: research §7.1 (real local proof: Pod Ready, ClusterIP
+endpoint, credentials via Infisical-synced Secret) [E4, E11, E16, E17,
+E19, E20, E25, E29, E30, E43], §7.2 (sample bucket; explicit creation
+via `mc mb`/Boto3/AdminJob; PUT + GET with content verification, not
+just HTTP success) [E4, E11, E43, E44, E45, E48, E55, E56, E57], §7.3
+(harness extends existing local-cluster path; distinguishes missing
+`mc` from missing `aws`) [E20, E44, E57, E58], §1.1 (D8 done state
+requires real component reconciled by Flux into the local channel)
+[E2, E4, E8, E11].
 
 **Alternatives rejected**:
-- Render-only verification (`flux build` / `kustomize build`): forbidden by
-  D8 environment-agnostic frame and INIT-102 D11 precedent.
-- Skip the sample-Secret round-trip and assert only Operator readiness:
-  leaves the runtime sync path unverified end-to-end.
-- Read the operator UA Secret values: leaks bootstrap material into harness
-  logs without strengthening the proof.
-- Exercise `InfisicalPushSecret` or `InfisicalDynamicSecret`: deferred per
-  D6.
+- HTTP-200 only on PUT/GET: doesn't prove byte fidelity (research §7.2
+  [E48, E55]).
+- Boto3 round-trip from the host: forces an SDK install on the host
+  toolchain that INIT-104 has otherwise avoided; `mc`-in-cluster keeps
+  the proof tooling co-located with the data plane (research §7.3
+  [E20, E44, E58]).
+- Skip DELETE: leaves the bucket dirty across re-runs and weakens the
+  idempotency assertion (research §7.2 [E48]).
 
-**Consequence**: SLICE-103.06 owns the harness extension. The harness
-script is layered on top of `infra/tests/validate_gitops_substrate.sh` from
-INIT-102; it does not duplicate INIT-102 assertions. The bootstrap script
-must be idempotent (re-running it on an already-bootstrapped server is a
-no-op).
+**Consequence**: The harness gains a new script and one or two
+in-cluster Jobs (or `kubectl run` invocations). Bucket creation is in
+the data path (D3); the harness only verifies it, plus runs the
+PUT/GET/DELETE proof. The harness emits exit code 0 only when **all**
+ten conditions pass.
 
 ---
 
-### D10 — D-INIT-104-HANDOFF
+### D10 — D-INIT-105-HANDOFF
 
-**Decision**: INIT-104 (object storage: MinIO local + Vultr Object Storage
-remote) consumes Infisical via:
+**Decision**: INIT-104 does **not** depend on INIT-105 (cert-manager /
+DNS / TLS). The local MinIO endpoint is plain `http://` over a
+`ClusterIP` Service — no TLS, no DNS rewrite, no Ingress. The remote
+`vultr-vms` endpoint is HTTPS, but Vultr Object Storage terminates TLS
+at the provider; no in-cluster TLS asset is required to reach it. The
+single forward-looking note carried into INIT-105 is: **if a remote
+Infisical instance is later self-hosted on a `vultr-vms` channel and
+served behind Ingress + TLS, the storage `InfisicalSecret`'s `server_url`
+inherits whatever scheme/host that remote Infisical exposes** — which is
+INIT-103's `infisical.server_url` field (already in the channel schema),
+not anything INIT-104 owns.
 
-- **Project**: `platform-storage` (separate from the `local` bootstrap
-  project to keep the storage credential surface namespaced).
-- **Environment**: per-channel envSlug (`local` for k3d-local; future
-  remote envSlug for Vultr-VM channels).
-- **Secrets path**: `/object-storage` (channel-target-agnostic; the
-  contained keys differ per target).
-- **Authentication**: same UA pattern as D3, with INIT-104 either reusing
-  the INIT-103-bootstrapped UA credential or provisioning its own Machine
-  Identity scoped to `platform-storage`. INIT-103 binds the *interface*
-  (UA + project/env/path); INIT-104 binds the identity scoping decision.
-- **Expected keys per environment**:
-  - Local (k3d): `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`.
-  - Remote (Vultr): `VULTR_OS_ACCESS_KEY`, `VULTR_OS_SECRET_KEY`.
-- **Operator namespace**: `infisical-system` (D8 default); INIT-104
-  authors `InfisicalSecret` CRs in its own application namespace
-  (e.g., `minio-system`) referencing the operator namespace by the channel
-  schema's `infisical.operator_namespace` field.
-
-INIT-103 does **not** create the `platform-storage` project, the storage
-secrets, or the INIT-104 `InfisicalSecret` CR. INIT-104 owns those.
-INIT-103 only guarantees the contract surface they will consume.
-
-**Evidence**: research §1.1 (INIT-104 depends on INIT-103 for MinIO
-credentials through Infisical; INIT-111 depends on INIT-103 for DB
-credentials; INIT-113 depends on INIT-103 for workload secrets), §10
-(SLICE-103.07 documentation and INIT-104 handoff), §3.3 (CRD-level support
-for project/env/path scoping), §5.2 (channel schema fields supporting
-multi-project usage by downstream INITs).
+**Evidence**: research §2.4 (local API on ClusterIP `:9000`,
+plain HTTP) [E16, E43], §3.3 (Vultr requires HTTPS but terminates TLS
+provider-side) [E47, E50], §5.3 (remote channel GitOps/Infisical install
+is currently omitted) [E22], §1.1 (D8 environment-agnostic stack notes
+that remote Infisical is the remote channel's concern) [E2, E3, E5, E9].
 
 **Alternatives rejected**:
-- Single shared project for all consumers: collapses tenant boundaries
-  ahead of INIT-116 and forces every later INIT to reason about cross-
-  project secret leakage.
-- INIT-103 pre-creating the `platform-storage` project: violates ownership
-  (the storage project's content is INIT-104's concern), and INIT-103
-  cannot anticipate every consumer's project shape.
-- Tying INIT-104 to a different auth method (service token / Kubernetes
-  Auth): inconsistent with D3 and forces INIT-104 to ship its own
-  identity-bootstrap path.
+- Make INIT-104 depend on INIT-105 for in-cluster TLS to MinIO: not
+  required for any consumer; ClusterIP traffic stays in-cluster
+  (research §2.4 [E43]).
+- Pre-emptively wire `https://` to MinIO via cert-manager: out of
+  scope; an ingress/TLS initiative may add it later without re-shaping
+  INIT-104.
 
-**Consequence**: SLICE-103.07 documents this handoff in `gitops/README.md`
-and `infra/README.md`. INIT-104's proposal phase consumes this binding;
-INIT-103 ships nothing INIT-104-specific.
+**Consequence**: INIT-104 ships and merges before INIT-105.
 
 ---
 
-### D11 — D-VERSION-PINS
+### D11 — D-ANTI-SCOPE (binding)
 
-**Decision**: Pinned versions (latest stable as of 2026-04-26):
+**Decision**: The following are explicitly **not** done by INIT-104:
 
-- **Infisical server image**: `infisical/infisical:v0.151.0` — chart-docs
-  reference value (research §2.1); confirmed the stable choice for
-  INIT-103; re-pin is an explicit edit. Implementation must verify against
-  latest GitHub releases at render time and document the verified tag in
-  the rendered manifest filename or annotation.
-- **Infisical Kubernetes Operator image**:
-  `infisical/kubernetes-operator:v0.10.32` — latest tagged release on
-  2026-04-26 (research §3.5). The chart's `values.yaml` shows manager image
-  `v0.10.31` against chart `v0.10.32` (research §3.5); implementation
-  verifies which image actually deploys and pins the verified tag,
-  defaulting to `v0.10.32` if the values mismatch is a chart bug.
-- **Infisical Operator chart**: chart version `v0.10.32` (rendered into
-  raw manifests at implementation time).
-- **Infisical server chart**:
-  `infisical-helm-charts/infisical-standalone` at the latest stable chart
-  version available on 2026-04-26 (verify at render time; pin in the
-  rendered manifest filename or annotation).
-- **PostgreSQL image**: `postgres:14-alpine` — matches the upstream Docker
-  Compose evidence (research §2.1, §2.3) and is the chart's documented
-  Postgres major.
-- **Redis image**: `redis:7-alpine` — explicit version pin replaces the
-  upstream Compose's bare `redis` (research §2.1) for reproducibility.
-- **Infisical CLI** (used by `bootstrap-infisical-identity.sh`):
-  `v0.43.78` — latest as of 2026-04-24 (research §8.2, E34, E37). Added to
-  `infra/scripts/install-cluster-tools.sh` alongside INIT-102's tool pins.
-- **Helm CLI** (implementation-time only; not installed in cluster, used
-  only to render upstream charts to raw committed manifests): pin to
-  latest stable `v3.x` at implementation time. Helm is a render-time tool,
-  not a runtime tool, so its presence in `install-cluster-tools.sh` is
-  optional rather than required for cluster bring-up.
+- cert-manager, step-ca, ACME, TLS issuers (INIT-105).
+- DNS automation, ExternalDNS, CoreDNS rewrites (INIT-105).
+- Ingress, public exposure, MinIO Console exposure, Pomerium routes.
+- Crossplane, app-cluster fleet provisioning (INIT-017 / equivalent).
+- Application workloads (`api`, `discord`) and their S3 wrappers
+  (INIT-111 / INIT-112 / INIT-113).
+- Authentik, OPAL/Cedar policy, tenant isolation (INIT-115).
+- Backup/restore against MinIO and Vultr OS (INIT-112).
+- Observability (Prometheus, Grafana, Loki, Alertmanager, OpenTelemetry)
+  (INIT-117).
+- CI/CD, Buildkite agent integration (INIT-110 / INIT-114).
+- Container registry decisions (INIT-108).
+- Remote-channel Flux install, remote `InfisicalSecret` reconciliation,
+  remote MinIO/Vultr OS subscription provisioning, remote bucket
+  provisioning (later remote-onboarding initiative).
+- Application-scoped least-privilege S3 access keys; rotation; bucket
+  policies (INIT-115).
+- Schema bump to `schema_version: 2`.
+- Helm controller, `HelmRelease`, MinIO Operator/Tenant CRDs, AdminJob,
+  community MinIO chart (D1, D3).
+- Public Console / public API exposure of MinIO (D2).
+- Application Secrets in application namespaces (D6).
 
-**Evidence**: research §2.1 (server image and Postgres tag), §3.5
-(operator chart and image evidence including version mismatch), §8.1
-(local toolchain availability snapshot), §8.2 (latest Infisical CLI
-v0.43.78 on 2026-04-24), §9.2 (need to verify exact image tags at
-implementation time because docs example `v0.151.0` may lag latest).
+**Evidence**: research §1.1 (D8 says local-as-first-deployment with
+real components; remote and other initiatives are scoped separately)
+[E8, E10, E11], §1.4 (`infra/README.md` lists object storage and
+MinIO as INIT-104/112 anti-scope so far) [E20], §5.3, §6.3 (remote
+GitOps/Infisical/object_storage are outside INIT-104) [E10, E21, E22],
+§9 risks and Appendix B Non-Solution Boundary [E20, E25, E16, E17,
+E19, E32, E33, E34, E46, E47].
+
+**Consequence**: The proposal phase rejects scope additions that
+match this list. Any reviewer comment requesting one of the above
+items is redirected to the owning INIT.
+
+---
+
+### D12 — D-VERSION-PINS
+
+**Decision**: INIT-104 pins the following versions, idempotently
+installed and version-checked by `infra/scripts/install-cluster-tools.sh`
+and referenced from rendered manifests:
+
+- **MinIO server image**:
+  `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z`. The `quay.io/minio`
+  registry path matches the chart values reference, but no chart is
+  used. The exact `RELEASE.<timestamp>` tag is selected at proposal
+  time as the most recent stable upstream release on or before the
+  worktree's research date (`2026-04-26`); the decision binds the
+  registry and the use of a `RELEASE.<timestamp>` pinned tag, not a
+  floating `:latest`.
+- **MinIO `mc` image** (for the in-cluster bucket Job): same
+  `RELEASE.<timestamp>` family, image `quay.io/minio/mc`.
+- **Host `mc` CLI**: same `RELEASE.<timestamp>` family as the image,
+  installed by `install-cluster-tools.sh` at a pinned version (e.g.,
+  via the `mc` binary download URL by release tag); `sha256` recorded
+  alongside the binary URL, matching the existing toolchain pinning
+  pattern.
+- **AWS CLI**: documented as optional host tooling, not pinned. Already
+  present at `aws-cli/2.34.6` per research §8.1 [E58]. The harness uses
+  `mc` (in-cluster) as the canonical client (D9), not the host AWS CLI.
+
+The proposal phase locks the exact `RELEASE.<timestamp>` strings and
+SHAs.
+
+**Evidence**: research §2.3 (chart values reference `quay.io/minio/minio`
+and `quay.io/minio/mc` with `RELEASE.<date>`-style tags; project pins
+versions in scripts and rendered YAML rather than floating) [E13, E31,
+E41, E43], §8.1 (existing toolchain pinning pattern in
+`install-cluster-tools.sh`) [E31, E59], §8.2 (`mc` missing from PATH on
+2026-04-26; AWS CLI present at `aws-cli/2.34.6`) [E31, E44, E57, E58].
 
 **Alternatives rejected**:
-- `infisical/infisical:latest`: explicitly warned against by chart docs
-  (research §2.1).
-- `bitnamilegacy/postgresql` chart-bundled image: viable but heavier; the
-  upstream Compose's `postgres:14-alpine` is sufficient, smaller, and a
-  documented contract (research §2.1, §2.3).
-- Pin chart but float image tags: defeats reproducibility; raw committed
-  manifests must encode every image tag explicitly.
+- Floating `:latest`: contradicts existing pinning pattern (research
+  §8.1 [E13, E31]).
+- Pin `mc` only as image, leaving host without `mc`: harness is
+  in-cluster (D9), so a host `mc` is technically optional; nonetheless,
+  pinning the host `mc` keeps the local development experience parallel
+  to the in-cluster client and supports manual debugging (research
+  §7.3, §8.2 [E20, E44, E57, E58]).
+- Pin AWS CLI as a hard install dep: redundant with `mc`; AWS CLI is
+  already present and remains optional (research §8.2 [E57, E58]).
 
-**Consequence**: SLICE-103.01 (toolchain) installs the Infisical CLI pin.
-SLICE-103.02 (server render) commits the verified server image tag.
-SLICE-103.01 (operator render) commits the verified operator image tag.
-The harness asserts the running images match the pinned tags at run time
-(prevents drift if a chart re-render changes a default).
+**Consequence**: `infra/scripts/install-cluster-tools.sh` gains an
+idempotent install block for `mc` matching the pattern used by the
+INIT-103 entries for Helm and Infisical CLI. The MinIO and `mc` image
+references in committed manifests are exact `RELEASE.<timestamp>` tags
+plus image SHA digests where the upstream registry exposes them.
 
 ---
 
 ## Anti-scope (binding)
 
-INIT-103 explicitly does **not** do any of the following. Each item is
-deferred to the named successor or out of scope entirely.
-
-- **Crossplane**, control-cluster Crossplane provider/configuration, and
-  any application-cluster provisioning (INIT-106).
-- **Object storage** (MinIO local, Vultr Object Storage remote, S3
-  buckets, bucket lifecycle, `InfisicalSecret` CRs for storage
-  credentials): INIT-104.
-- **cert-manager**, **DNS automation**, **TLS issuance**, ingress
-  controllers, and public Infisical exposure (INIT-105 / INIT-110).
-- **Application data plane** Postgres (the application database, distinct
-  from INIT-103's Infisical Postgres): INIT-111.
-- **Application workloads** (Discord daemon, API service, beta-guild
-  runtime, workload `InfisicalSecret` CRs other than the INIT-103 sample
-  proof): INIT-113.
-- **Auth** (Authentik, OIDC, OPAL/Cedar policy, Pomerium routes): INIT-114.
-- **Access policy** for Infisical itself, age key rotation, Operator
-  credential rotation, break-glass: INIT-115.
-- **Tenant isolation**, namespace boundary model, per-tenant
-  `InfisicalSecret` delegation, Operator namespace scoping
-  (`scopedNamespaces` / `scopedRBAC`): INIT-116.
-- **Observability**, notifications, alerts, dashboards, OTLP collectors,
-  Flux `notification-controller`: INIT-117.
-- **CI/CD**, Buildkite agents, image build/push: INIT-108 / INIT-109.
-- **Backup/restore** for the Infisical Postgres PVC: INIT-112.
-- **`HelmRelease`** reconciliation and `helm-controller`: forbidden by
-  INIT-102 D2.
-- **`OCIRepository`-backed sources** for Infisical manifests: INIT-102
-  wires only `GitRepository`.
-- **Remote `dev`/Vultr-VM channel** Infisical installation: deferred until
-  remote Flux is wired (paralleling INIT-102's `dev` deferral).
-- **High-availability** Infisical server (multi-replica), **external
-  managed Postgres/Redis**: deferred (research §2.1, §9.3).
-- **`InfisicalPushSecret`**, **`InfisicalDynamicSecret`**,
-  **`ClusterGenerator`**, **`Password`**, **`UUID`** *exercise* (CRDs
-  installed per D2, but no CRs authored).
-- **Workload auto-reload** annotations (deferred to consumer INITs).
-- **SMTP**, telemetry, audit log shipping for Infisical (research §9.3).
-- **Multi-project** seeding (the only INIT-103-created project is the
-  `local` bootstrap project; all other projects are owned by their
-  consumer INITs per D10).
-- **Runtime secrets in SOPS** of any kind (boundary inherited from INIT-102
-  D5; the D5 extension here is bootstrap-tier only).
+The full anti-scope list is bound by **D11**. In summary, INIT-104 does
+not ship: cert-manager, DNS automation, Ingress/public exposure,
+Crossplane, application workloads, Authentik / access policy,
+backup/restore, observability, CI/CD, container registry decisions,
+remote-channel Flux/Infisical/MinIO/Vultr OS provisioning, application
+S3 wrappers, application-scoped S3 access keys, MinIO Operator/Tenant,
+helm-controller / `HelmRelease`, schema bump to v2, or MinIO Console
+exposure.
 
 ## Open questions (to resolve in proposal phase)
 
-- **Bootstrap script ordering**: exact placement of
-  `bootstrap-infisical-identity.sh` relative to Flux's first reconcile —
-  whether it runs as a Kubernetes `Job` reconciled by Flux (gated on
-  server readiness) or as a host-side step in `bring-up-local-channel.sh`
-  after the server Pod is Ready but before the operator `InfisicalSecret`
-  is applied.
-- **Server `INFISICAL_AUTO_BOOTSTRAP_*` env vars vs. CLI bootstrap**:
-  whether to use the chart's auto-bootstrap fields (research §2.2,
-  unverified) for admin creation, or to drive everything through
-  `infisical user create`-style CLI calls. D4 binds the *outcome*; the
-  *mechanism* inside the bootstrap script is a proposal-phase choice.
-- **Helm install shape**: whether `helm` is added to
-  `install-cluster-tools.sh` as a required cluster tool (so any operator
-  can re-render upstream charts) or kept as an implementation-only tool
-  documented in `infra/README.md`.
-- **Namespace layout**: whether server, operator, and sample workload
-  share one `infisical-system` namespace or split into `infisical-system`
-  (server + operator) and `infisical-sample` (the proof workload). D9
-  assumes the split; the proposal must confirm.
-- **Render source for the server**: chart vs. authored-from-env-contract
-  (research §2.4 leaves both viable). D1 binds chart-render; the proposal
-  documents the render command and the chart values overrides.
-- **Operator scope**: cluster-wide watch (chart default per research §3.4)
-  vs. `scopedNamespaces` to `infisical-sample`. D6 leaves cluster-wide
-  acceptable for INIT-103; INIT-116 owns the eventual scoping. The
-  proposal confirms.
-- **Storage class assertion**: whether the harness pins the expected
-  storage class name (`local-path` for k3d) or accepts any default. D9
-  assumes the default; explicit pin would catch drift earlier.
-- **Sample-secret seed value source**: whether `infisical-local-ready` is
-  hard-coded in the bootstrap script (current binding) or carried in the
-  channel YAML for parity with INIT-102's sentinel ConfigMap shape.
-- **First-run idempotency model**: how `bootstrap-infisical-identity.sh`
-  detects "already bootstrapped" — by querying the Infisical API for the
-  organization/project, by checking for the `Secret/infisical-operator-auth`
-  in-cluster, or both.
+These items are research-blocked or design-decision-grade open and must
+be settled in the proposal, not later:
 
----
-
-**File**: `worktrees/init-103-infisical-runtime-secrets/.pipeline/synthesis.md`
+- **OPEN-01 — Workload kind**: `Deployment` vs `StatefulSet` for the
+  single-node MinIO Pod, and the implied PVC binding semantics under
+  reschedule/upgrade. Research §2.2–§2.3 supports either; the choice
+  drives PVC, probe, and rollout shape.
+- **OPEN-02 — Local PVC size and resource requests**: The community
+  chart defaults (16Gi memory, 500Gi PVC) are oversized for k3d; the
+  toy setup documents 512Mi memory; INIT-104 must pin a project-specific
+  number (research §2.3 [E21, E42, E43]).
+- **OPEN-03 — Bucket Job lifecycle**: a one-shot Kubernetes `Job`
+  (re-create on Flux re-apply via `Job`-name churn or `force: true`) vs
+  a Job re-applied on each reconcile under `--ignore-existing`. Both
+  are idempotent; pick one explicitly (research §2.5, §10.3 [E43,
+  E44]).
+- **OPEN-04 — `kubectl wait` vs probe-driven readiness**: The bucket
+  Job needs MinIO ready before `mc mb`; choose between an init-container
+  netcat wait, an `mc ready` probe, or an explicit
+  `kubectl wait pod --for=condition=ready` orchestration step in the
+  bring-up script (research §2.5, §7.2 [E43, E44]).
+- **OPEN-05 — Sample bucket name**: bind exactly `humility-local-sample`
+  vs a channel-derived name like `<channel>-sample` (research §4.2,
+  §7.2 [E4, E11, E44]); the resolved name appears in `object_storage.bucket`
+  in `infra/channels/local.yaml`.
+- **OPEN-06 — Local region literal**: `us-east-1` (Boto3 default
+  expectation), `local`, or an explicit channel-defined value (research
+  §9.4 [E44, E50, E56]).
+- **OPEN-07 — `dev` channel `object_storage` block**: ship an
+  aspirational block now (no reconciler, but documents intent) vs leave
+  absent until remote GitOps lands (research §6.3 [E22]).
+- **OPEN-08 — Bootstrap script idempotency for credential rotation**:
+  on subsequent runs, does `bootstrap-infisical-storage.sh` ever
+  rotate `MINIO_ROOT_PASSWORD`? Default is no; rotation is INIT-115's
+  problem (research §9.4 [E16]).
+- **OPEN-09 — Application Secret materialisation**: INIT-104 does not
+  create application-namespace Secrets, but the proposal phase should
+  state explicitly which downstream INIT (INIT-111 vs INIT-115) owns
+  the application-facing `Secret/s3-credentials` template (research
+  §4.4 [E35, E36, E37]).
+- **OPEN-10 — Round-trip client placement**: a one-shot `Job` vs
+  `kubectl run --rm` for the harness round-trip (research §7.2, §7.3
+  [E20, E44, E57, E58]); both work, choose for readability of harness
+  logs.
