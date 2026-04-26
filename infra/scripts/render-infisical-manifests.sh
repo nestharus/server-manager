@@ -411,7 +411,7 @@ assert_no_helm_runtime_objects() {
 assert_image_set() {
   local path="$1"
   shift
-  "$PYTHON_BIN" - "$path" "${EXPECTED_IMAGES[@]}" <<'PY'
+  "$PYTHON_BIN" - "$path" "$@" <<'PY'
 import sys
 from pathlib import Path
 
@@ -511,19 +511,15 @@ render_operator "$tmp_operator_rendered"
 
 assert_no_helm_runtime_objects "$tmp_server_rendered"
 assert_no_helm_runtime_objects "$tmp_operator_rendered"
-EXPECTED_IMAGES=("${SERVER_EXPECTED_IMAGES[@]}")
-assert_image_set "$tmp_server_rendered" >/dev/null
-EXPECTED_IMAGES=("${OPERATOR_EXPECTED_IMAGES[@]}")
-assert_image_set "$tmp_operator_rendered" >/dev/null
+assert_image_set "$tmp_server_rendered" "${SERVER_EXPECTED_IMAGES[@]}" >/dev/null
+assert_image_set "$tmp_operator_rendered" "${OPERATOR_EXPECTED_IMAGES[@]}" >/dev/null
 assert_crd_set "$tmp_operator_rendered" "${OPERATOR_EXPECTED_CRDS[@]}" >/dev/null
 
 if [[ "$CHECK_ONLY" -eq 1 ]]; then
   if cmp -s "$tmp_server_rendered" "$SERVER_RENDERED" && cmp -s "$tmp_operator_rendered" "$OPERATOR_RENDERED"; then
     echo "Infisical manifests are current."
-    EXPECTED_IMAGES=("${SERVER_EXPECTED_IMAGES[@]}")
-    assert_image_set "$tmp_server_rendered"
-    EXPECTED_IMAGES=("${OPERATOR_EXPECTED_IMAGES[@]}")
-    assert_image_set "$tmp_operator_rendered"
+    assert_image_set "$tmp_server_rendered" "${SERVER_EXPECTED_IMAGES[@]}"
+    assert_image_set "$tmp_operator_rendered" "${OPERATOR_EXPECTED_IMAGES[@]}"
     assert_crd_set "$tmp_operator_rendered" "${OPERATOR_EXPECTED_CRDS[@]}"
     exit 0
   fi
@@ -539,8 +535,6 @@ cp "$tmp_server_rendered" "$SERVER_RENDERED"
 cp "$tmp_operator_rendered" "$OPERATOR_RENDERED"
 echo "Rendered ${SERVER_RENDERED#"$REPO_ROOT"/}"
 echo "Rendered ${OPERATOR_RENDERED#"$REPO_ROOT"/}"
-EXPECTED_IMAGES=("${SERVER_EXPECTED_IMAGES[@]}")
-assert_image_set "$SERVER_RENDERED"
-EXPECTED_IMAGES=("${OPERATOR_EXPECTED_IMAGES[@]}")
-assert_image_set "$OPERATOR_RENDERED"
+assert_image_set "$SERVER_RENDERED" "${SERVER_EXPECTED_IMAGES[@]}"
+assert_image_set "$OPERATOR_RENDERED" "${OPERATOR_EXPECTED_IMAGES[@]}"
 assert_crd_set "$OPERATOR_RENDERED" "${OPERATOR_EXPECTED_CRDS[@]}"

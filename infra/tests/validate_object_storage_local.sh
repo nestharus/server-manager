@@ -6,6 +6,7 @@ ROUNDTRIP="${REPO_ROOT}/infra/scripts/test-s3-roundtrip.sh"
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
 PORT="19000"
 PORT_FORWARD_PID=""
+ROUNDTRIP_TMP_DIR=""
 
 usage() {
   cat <<'EOF'
@@ -26,10 +27,17 @@ die() {
   exit 1
 }
 
-cleanup() {
+stop_port_forward() {
   if [[ -n "${PORT_FORWARD_PID:-}" ]] && kill -0 "$PORT_FORWARD_PID" >/dev/null 2>&1; then
     kill "$PORT_FORWARD_PID" >/dev/null 2>&1 || true
     wait "$PORT_FORWARD_PID" >/dev/null 2>&1 || true
+  fi
+}
+
+cleanup() {
+  stop_port_forward
+  if [[ -n "${ROUNDTRIP_TMP_DIR:-}" ]]; then
+    rm -rf "$ROUNDTRIP_TMP_DIR"
   fi
 }
 
@@ -100,23 +108,7 @@ wait_minio_ready_pod() {
   local attempt
 
   for attempt in $(seq 1 120); do
-    if kubectl_cmd -n minio-system get pods -l app.kubernetes.io/name=minio -o json 2>/dev/null | python3 -c '
-import json
-import sys
-
-try:
-    payload = json.load(sys.stdin)
-except Exception:
-    raise SystemExit(1)
-
-for pod in payload.get("items", []):
-    if pod.get("status", {}).get("phase") != "Running":
-        continue
-    for condition in pod.get("status", {}).get("conditions", []):
-        if condition.get("type") == "Ready" and str(condition.get("status")) == "True":
-            raise SystemExit(0)
-raise SystemExit(1)
-'; then
+    if minio_ready_pod >/dev/null; then
       return 0
     fi
     sleep 3
@@ -126,6 +118,29 @@ raise SystemExit(1)
   return 1
 }
 
+minio_ready_pod() {
+  kubectl_cmd -n minio-system get pods -l app.kubernetes.io/name=minio -o json 2>/dev/null | python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+for pod in payload.get("items", []):
+    if pod.get("metadata", {}).get("deletionTimestamp"):
+        continue
+    if pod.get("status", {}).get("phase") != "Running":
+        continue
+    for condition in pod.get("status", {}).get("conditions", []):
+        if condition.get("type") == "Ready" and str(condition.get("status")) == "True":
+            print(pod.get("metadata", {}).get("name", ""))
+            raise SystemExit(0)
+raise SystemExit(1)
+'
+}
+
 secret_key() {
   local key="$1"
   kubectl_cmd -n minio-system get secret minio-root -o "jsonpath={.data.${key}}" | base64 -d
@@ -133,10 +148,13 @@ secret_key() {
 
 start_port_forward() {
   local log_file="${REPO_ROOT}/.tmp/minio-port-forward.log"
+  local pod
 
   mkdir -p "${REPO_ROOT}/.tmp"
   : >"$log_file"
-  kubectl_cmd -n minio-system port-forward --address 127.0.0.1 service/minio "${PORT}:9000" >"$log_file" 2>&1 &
+  pod="$(minio_ready_pod)" || die "no Ready MinIO pod available for port-forward"
+  [[ -n "$pod" ]] || die "no Ready MinIO pod available for port-forward"
+  kubectl_cmd -n minio-system port-forward --address 127.0.0.1 "pod/${pod}" "${PORT}:9000" >"$log_file" 2>&1 &
   PORT_FORWARD_PID="$!"
 
   for _ in $(seq 1 60); do
@@ -195,8 +213,8 @@ kubectl_cmd -n minio-system wait job/create-sample-bucket --for=condition=Comple
 log "PASS: Job/create-sample-bucket Complete"
 
 start_port_forward
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"; cleanup' EXIT
+ROUNDTRIP_TMP_DIR="$(mktemp -d)"
+tmpdir="$ROUNDTRIP_TMP_DIR"
 export MC_CONFIG_DIR="${tmpdir}/mc"
 mc_alias local-minio "$access_key" "$secret_key_value"
 
@@ -223,7 +241,7 @@ kubectl_cmd -n minio-system wait deployment/minio --for=condition=Available --ti
 wait_minio_ready_pod
 phase="$(kubectl_cmd -n minio-system get pvc minio-data -o jsonpath='{.status.phase}')"
 [[ "$phase" == "Bound" ]] || die "PersistentVolumeClaim/minio-data phase after restart is ${phase}"
-cleanup
+stop_port_forward
 PORT_FORWARD_PID=""
 start_port_forward
 mc_alias local-minio "$access_key" "$secret_key_value"
