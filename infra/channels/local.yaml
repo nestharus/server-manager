@@ -30,3 +30,13 @@ gitops:
   retry_interval: 1m
   prune: true
   wait: true
+infisical:
+  server_url: http://infisical.infisical-system.svc.cluster.local:8080
+  project_id: platform-local
+  environment: local
+  secrets_path: /sample
+  auth_method: universal-auth
+  universal_auth_secret_name: infisical-operator-auth
+  universal_auth_secret_namespace: infisical-system
+  operator_namespace: infisical-system
+  resync_interval: 60s

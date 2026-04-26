@@ -4,4 +4,6 @@ resources:
   - namespace.yaml
   - generated/gitops-snapshot-marker.yaml
   - ../../bootstrap/sops-sentinel.enc.yaml
-  - infisical
+  - infisical/server
+  - infisical/operator
+  - infisical/sample
