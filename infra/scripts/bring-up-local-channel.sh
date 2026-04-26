@@ -158,7 +158,7 @@ all_nodes_ready() {
   local output
 
   output="$(kubectl --kubeconfig "$kubeconfig_path" get nodes --no-headers 2>/dev/null)" || return 1
-  awk 'NF && $2 != "Ready" { bad = 1 } END { exit bad }' <<<"$output"
+  awk 'BEGIN { bad = 0 } NF && $2 != "Ready" { bad = 1 } END { exit (bad || NR == 0) ? 1 : 0 }' <<<"$output"
 }
 
 verify_kubectl_reachability() {

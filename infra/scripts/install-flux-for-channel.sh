@@ -135,7 +135,8 @@ wait_for_git_daemon() {
 
 seed_git_daemon() {
   local pod
-  local repo_path="/srv/git/humility-local.git"
+  local repo_name="humility-${CHANNEL_ID}.git"
+  local repo_path="/srv/git/${repo_name}"
   local seed_path="/tmp/humility-gitops-seed"
 
   pod="$(git_daemon_pod)"

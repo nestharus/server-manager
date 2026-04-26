@@ -100,14 +100,14 @@ manifest_dir="${REPO_ROOT}/.tmp/sops-age-secret"
 manifest_path="${manifest_dir}/${CHANNEL_ID}.yaml"
 mkdir -p "$manifest_dir"
 
-kubectl "${KUBECONFIG_ARG[@]}" create secret generic "$SECRET_NAME" \
+kubectl ${KUBECONFIG_ARG[@]+"${KUBECONFIG_ARG[@]}"} create secret generic "$SECRET_NAME" \
   --namespace "$SECRET_NAMESPACE" \
   --from-file=age.agekey="${KEY_FILE}" \
   --dry-run=client \
   -o yaml > "$manifest_path"
 
-if kubectl "${KUBECONFIG_ARG[@]}" get namespace "$SECRET_NAMESPACE" >/dev/null 2>&1; then
-  kubectl "${KUBECONFIG_ARG[@]}" apply -f "$manifest_path"
+if kubectl ${KUBECONFIG_ARG[@]+"${KUBECONFIG_ARG[@]}"} get namespace "$SECRET_NAMESPACE" >/dev/null 2>&1; then
+  kubectl ${KUBECONFIG_ARG[@]+"${KUBECONFIG_ARG[@]}"} apply -f "$manifest_path"
 else
   echo "Cluster namespace ${SECRET_NAMESPACE} is not reachable; wrote Secret manifest: ${manifest_path}"
 fi
