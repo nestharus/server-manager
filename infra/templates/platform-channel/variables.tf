@@ -90,12 +90,31 @@ variable "vultr_agent_count" {
 
 variable "vultr_agent_plan" {
   type        = string
-  default     = "vc2-1c-2gb"
-  description = "Vultr plan for k3s agent VMs. Default: vc2-1c-2gb."
+  default     = "vc2-2c-4gb"
+  description = "Vultr plan for k3s agent VMs. Default: vc2-2c-4gb."
 }
 
 variable "vultr_ssh_key_ids" {
   type        = list(string)
   default     = []
   description = "Operator-supplied Vultr SSH key IDs for apply-capable remote channels. Default: empty list."
+}
+
+variable "vultr_allowed_ssh_cidrs" {
+  type        = list(string)
+  default     = []
+  description = "CIDRs allowed to reach SSH on remote VMs. Default: empty list."
+}
+
+variable "vultr_remote_kubeconfig_path" {
+  type        = string
+  default     = "/root/humility-k3s.yaml"
+  description = "Path where cloud-init copies the server kubeconfig. Default: /root/humility-k3s.yaml."
+}
+
+variable "vultr_firewall_name" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Optional explicit firewall group name. Default: null."
 }

@@ -11,12 +11,16 @@ cluster:
   target: vultr-vms
   vultr_vms:
     region: ewr
+    allowed_ssh_cidrs: []
+    remote_kubeconfig_path: /root/humility-k3s.yaml
+    firewall_name: null
+    ssh_key_ids: []
     servers:
       count: 1
       plan: vc2-2c-4gb
     agents:
       count: 0
-      plan: vc2-1c-2gb
+      plan: vc2-2c-4gb
 state:
   bucket: humility-tfstate
   key: channels/dev/terraform.tfstate

@@ -152,15 +152,46 @@
         "region": {
           "$ref": "#/$defs/region"
         },
+        "allowed_ssh_cidrs": {
+          "$ref": "#/$defs/cidrList"
+        },
+        "remote_kubeconfig_path": {
+          "type": "string",
+          "minLength": 1,
+          "default": "/root/humility-k3s.yaml"
+        },
+        "firewall_name": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "default": null
+        },
+        "ssh_key_ids": {
+          "$ref": "#/$defs/stringList"
+        },
         "servers": {
-          "$ref": "#/$defs/vmPool"
+          "$ref": "#/$defs/serverVmPool"
         },
         "agents": {
-          "$ref": "#/$defs/vmPool"
+          "$ref": "#/$defs/agentVmPool"
         }
       }
     },
-    "vmPool": {
+    "serverVmPool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "plan"],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "plan": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "agentVmPool": {
       "type": "object",
       "additionalProperties": false,
       "required": ["count", "plan"],
@@ -174,6 +205,22 @@
           "minLength": 1
         }
       }
+    },
+    "cidrList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}$"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
     },
     "state": {
       "type": "object",
@@ -190,6 +237,11 @@
         },
         "region": {
           "$ref": "#/$defs/region"
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "default": "https://ewr1.vultrobjects.com"
         }
       }
     }

@@ -11,12 +11,15 @@ from typing import Any
 from resolve_platform_channel import ChannelError, write_error
 
 
-S3_BACKEND_KEYS = ("bucket", "key", "region")
+S3_BACKEND_KEYS = ("bucket", "key", "region", "endpoint")
 
 
 def _load_resolved(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError as exc:
+        raise ChannelError("file_not_found", "resolved", f"resolved channel file not found: {path}") from exc
     if not isinstance(data, dict):
         raise ValueError("resolved channel JSON must contain an object")
     return data
@@ -30,6 +33,9 @@ def _required_mapping(value: Any, name: str) -> dict[str, Any]:
 
 def _state_value(state: dict[str, Any], key: str) -> str:
     value = state.get(key)
+    if key == "endpoint" and value is None:
+        region = _state_value(state, "region")
+        value = f"https://{region}1.vultrobjects.com"
     if not isinstance(value, str) or not value:
         raise ValueError(f"state.{key} must be a non-empty string")
     return value
@@ -55,6 +61,7 @@ def render_backend(resolved: dict[str, Any]) -> str:
 
     state = _required_mapping(resolved.get("state"), "state")
     lines = [f'{key} = "{_state_value(state, key)}"' for key in S3_BACKEND_KEYS]
+    lines.append("skip_credentials_validation = true")
     return "\n".join(lines) + "\n"
 
 
@@ -73,6 +80,9 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(render_backend(resolved), encoding="utf-8")
         return 0
+    except ChannelError as exc:
+        write_error(exc)
+        return 1
     except (ValueError, KeyError, json.JSONDecodeError) as exc:
         write_error(ChannelError("schema_invalid", "resolved", str(exc)))
         return 1

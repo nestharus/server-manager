@@ -29,14 +29,16 @@ module "cluster_vms" {
   source = "../../modules/platform-cluster-vms"
   count  = var.cluster_target == "vultr-vms" ? 1 : 0
 
-  channel_id   = var.channel_id
-  cluster_name = local.cluster_name
-  region       = var.vultr_region
-  vpc_id       = var.cluster_target == "vultr-vms" ? module.network[0].vpc_id : ""
-  k3s_version  = var.cluster_k3s_version
-  server_count = var.vultr_server_count
-  server_plan  = var.vultr_server_plan
-  agent_count  = var.vultr_agent_count
-  agent_plan   = var.vultr_agent_plan
-  ssh_key_ids  = var.vultr_ssh_key_ids
+  channel_id             = var.channel_id
+  region                 = var.vultr_region
+  vpc_id                 = var.cluster_target == "vultr-vms" ? module.network[0].vpc_id : ""
+  k3s_version            = var.cluster_k3s_version
+  server_count           = var.vultr_server_count
+  server_plan            = var.vultr_server_plan
+  agent_count            = var.vultr_agent_count
+  agent_plan             = var.vultr_agent_plan
+  ssh_key_ids            = var.vultr_ssh_key_ids
+  allowed_ssh_cidrs      = var.vultr_allowed_ssh_cidrs
+  remote_kubeconfig_path = var.vultr_remote_kubeconfig_path
+  firewall_name          = var.vultr_firewall_name
 }

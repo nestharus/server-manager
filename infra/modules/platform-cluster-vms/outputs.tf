@@ -1,9 +1,13 @@
 output "server_ids" {
-  value = vultr_instance.server[*].id
+  value = concat(vultr_instance.server[*].id, vultr_instance.server_joiner[*].id)
 }
 
 output "server_ipv4" {
-  value = vultr_instance.server[*].main_ip
+  value = concat(vultr_instance.server[*].main_ip, vultr_instance.server_joiner[*].main_ip)
+}
+
+output "server_internal_ip" {
+  value = concat(vultr_instance.server[*].internal_ip, vultr_instance.server_joiner[*].internal_ip)
 }
 
 output "agent_ids" {
@@ -15,6 +19,6 @@ output "k3s_token" {
   sensitive = true
 }
 
-output "kubeconfig_path" {
-  value = "/var/lib/rancher/k3s/server/cred/admin.kubeconfig (operator scp's from server)"
+output "remote_kubeconfig_path" {
+  value = var.remote_kubeconfig_path
 }

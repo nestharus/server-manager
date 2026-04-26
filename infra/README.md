@@ -78,7 +78,8 @@ drift-checked by the harness. `cluster.target` dispatches through
 registry `humility-local`, and kubeconfig `~/.kube/humility-local.yaml`.
 
 `dev` resolves to `vultr-vms`, k3s `v1.32.13+k3s1`, region `ewr`, one
-`vc2-2c-4gb` server, zero agents, and empty `vultr_ssh_key_ids`.
+`vc2-2c-4gb` server, zero agents, empty `vultr_ssh_key_ids`, and empty
+`vultr_allowed_ssh_cidrs`.
 
 ## Local Channel Bring-Up
 
