@@ -145,6 +145,7 @@ def _render_source_manifests(out: Path, channel_id: str, gitops: dict[str, Any])
                 "path": _required_string(gitops.get("path"), "gitops.path"),
                 "prune": _required_bool(gitops.get("prune"), "gitops.prune"),
                 "wait": _required_bool(gitops.get("wait"), "gitops.wait"),
+                "force": True,
                 "sourceRef": {
                     "kind": "GitRepository",
                     "name": source_name,

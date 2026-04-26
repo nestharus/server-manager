@@ -9,6 +9,17 @@ bootstrap:
     repository: cr.smallstep.com/smallstep/step-ca-bootstrap
     tag: "latest@sha256:5270356cf91596afe18478eab60c6c0866b2cc62618f282d42827e58f84d6eae"
     pullPolicy: IfNotPresent
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsGroup: 1000
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
 ca:
   name: Humility Local CA
   dns: step-ca.step-ca-system.svc.cluster.local,step-ca.step-ca-system,step-ca,127.0.0.1
@@ -23,11 +34,44 @@ ca:
   bootstrap:
     postInitHook: |
       step ca provisioner add acme --type ACME --ca-config "$(step path)/config/ca.json"
+  init:
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      readOnlyRootFilesystem: true
+      runAsGroup: 1000
+      runAsNonRoot: true
+      runAsUser: 1000
+      seccompProfile:
+        type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      add:
+        - NET_BIND_SERVICE
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsGroup: 1000
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
 resources:
   requests:
     cpu: 50m
     memory: 128Mi
   limits:
+    cpu: 250m
     memory: 512Mi
 serviceaccount:
   create: true
+podSecurityContext:
+  runAsUser: 1000
+  runAsNonRoot: true
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault

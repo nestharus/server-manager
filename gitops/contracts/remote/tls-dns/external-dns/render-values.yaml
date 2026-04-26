@@ -22,7 +22,10 @@ resources:
     cpu: 20m
     memory: 64Mi
   limits:
+    cpu: 100m
     memory: 128Mi
 serviceAccount:
   create: true
   name: external-dns
+  automountServiceAccountToken: true
+automountServiceAccountToken: true

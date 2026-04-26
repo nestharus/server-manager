@@ -22658,6 +22658,7 @@ spec:
         app.kubernetes.io/version: v1.20.2
     spec:
       serviceAccountName: cert-manager-cainjector
+      automountServiceAccountToken: true
       enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
@@ -22682,8 +22683,14 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
+          runAsGroup: 1001
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
         resources:
           limits:
+            cpu: 100m
             memory: 256Mi
           requests:
             cpu: 10m
@@ -22719,6 +22726,7 @@ spec:
         app.kubernetes.io/version: v1.20.2
     spec:
       serviceAccountName: cert-manager
+      automountServiceAccountToken: true
       enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
@@ -22747,6 +22755,11 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
+          runAsGroup: 1001
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -22754,6 +22767,7 @@ spec:
               fieldPath: metadata.namespace
         resources:
           limits:
+            cpu: 100m
             memory: 256Mi
           requests:
             cpu: 10m
@@ -22799,6 +22813,7 @@ spec:
         app.kubernetes.io/version: v1.20.2
     spec:
       serviceAccountName: cert-manager-webhook
+      automountServiceAccountToken: true
       enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
@@ -22850,6 +22865,11 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
+          runAsGroup: 1001
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -22857,6 +22877,7 @@ spec:
               fieldPath: metadata.namespace
         resources:
           limits:
+            cpu: 100m
             memory: 256Mi
           requests:
             cpu: 10m
@@ -23018,6 +23039,7 @@ spec:
     spec:
       restartPolicy: OnFailure
       serviceAccountName: cert-manager-startupapicheck
+      automountServiceAccountToken: true
       enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
@@ -23038,10 +23060,22 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
+          runAsGroup: 1001
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
         env:
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        resources:
+          limits:
+            cpu: 50m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
       nodeSelector:
         kubernetes.io/os: linux

@@ -29,6 +29,11 @@ securityContext:
   runAsGroup: 1000
   runAsNonRoot: true
   allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
   capabilities:
     drop:
       - ALL
+  seccompProfile:
+    type: RuntimeDefault
+volumes: []
+volumeMounts: []

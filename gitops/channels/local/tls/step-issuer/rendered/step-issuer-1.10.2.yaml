@@ -549,6 +549,7 @@ spec:
         app.kubernetes.io/version: 0.10.2
     spec:
       serviceAccountName: step-issuer-controller-manager
+      automountServiceAccountToken: true
       containers:
       - image: cr.step.sm/smallstep/step-issuer:0.10.2
         imagePullPolicy: IfNotPresent
@@ -563,9 +564,12 @@ spec:
           capabilities:
             drop:
             - ALL
+          readOnlyRootFilesystem: true
           runAsGroup: 1000
           runAsNonRoot: true
           runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
         resources:
           limits:
             cpu: 100m
@@ -573,8 +577,8 @@ spec:
           requests:
             cpu: 20m
             memory: 64Mi
-        volumeMounts: null
-      volumes: null
       terminationGracePeriodSeconds: 10
       securityContext:
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
