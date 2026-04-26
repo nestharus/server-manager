@@ -1,0 +1,9 @@
+.git
+.pytest_cache
+.ruff_cache
+.tmp
+**/__pycache__
+**/*.pyc
+product-strategy/*.pdf
+gitops/channels/local/**/rendered
+
