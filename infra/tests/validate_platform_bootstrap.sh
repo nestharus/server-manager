@@ -3612,6 +3612,10 @@ local_docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(enco
 remote_docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[2]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
 docs = local_docs + remote_docs
 by_kind_name = {(doc.get("kind"), doc.get("metadata", {}).get("name")): doc for doc in docs}
+by_kind_namespace_name = {
+    (doc.get("kind"), doc.get("metadata", {}).get("namespace"), doc.get("metadata", {}).get("name")): doc
+    for doc in docs
+}
 
 for kind, name in {
     ("Namespace", "crossplane-system"),
@@ -3636,6 +3640,27 @@ if packages.get("provider-kubernetes") != "xpkg.upbound.io/crossplane-contrib/pr
     raise SystemExit(packages)
 if packages.get("provider-vultr") != "xpkg.upbound.io/crossplane-contrib/provider-vultr:v0.2.0":
     raise SystemExit(packages)
+
+for doc in docs:
+    if doc.get("kind") == "ClusterRoleBinding" and doc.get("metadata", {}).get("name") == "provider-kubernetes-cluster-admin":
+        raise SystemExit("provider-kubernetes cluster-admin binding must not exist")
+
+role = by_kind_namespace_name.get(("Role", "app-cluster-system", "provider-kubernetes-appcluster-jobs"))
+binding = by_kind_namespace_name.get(("RoleBinding", "app-cluster-system", "provider-kubernetes-appcluster-jobs"))
+if role is None or binding is None:
+    raise SystemExit("provider-kubernetes app-cluster-system Role/RoleBinding missing")
+resources = {
+    (tuple(rule.get("apiGroups", [])), tuple(rule.get("resources", [])), tuple(rule.get("verbs", [])))
+    for rule in role.get("rules", [])
+}
+if not any("batch" in groups and "jobs" in resources_ and "create" in verbs and "delete" in verbs for groups, resources_, verbs in resources):
+    raise SystemExit(f"provider-kubernetes Role does not manage Jobs: {role.get('rules')!r}")
+subject = binding.get("subjects", [{}])[0]
+if subject != {"kind": "ServiceAccount", "name": "provider-kubernetes", "namespace": "crossplane-system"}:
+    raise SystemExit(f"provider-kubernetes RoleBinding subject mismatch: {subject!r}")
+role_ref = binding.get("roleRef", {})
+if role_ref.get("kind") != "Role" or role_ref.get("name") != "provider-kubernetes-appcluster-jobs":
+    raise SystemExit(f"provider-kubernetes RoleBinding roleRef mismatch: {role_ref!r}")
 
 provider_config = by_kind_name[("ProviderConfig", "default")]
 secret_ref = provider_config.get("spec", {}).get("credentials", {}).get("secretRef", {})
