@@ -22,9 +22,9 @@ Required tools: OpenTofu `1.11.5`, kubectl `>= 1.31`, Docker `>= 24`,
 Python `>= 3.10` with `jsonschema` and `PyYAML`, k3d `v5.8.3`, Flux
 `v2.8.6`, Helm `v3.20.2`, SOPS `v3.12.2`, age/age-keygen `v1.3.1`,
 Infisical CLI `v0.43.78`, and MinIO Client
-`RELEASE.2025-08-13T08-35-41Z`. The `step` CLI and `cmctl` are useful for
-manual diagnosis, but INIT-105 validation uses Kubernetes resources and does
-not require either host binary.
+`RELEASE.2025-08-13T08-35-41Z`. The `step`, `cmctl`, and `crossplane` CLIs are
+useful for manual diagnosis, but INIT-105 and INIT-106 validation use
+Kubernetes resources and do not require those host binaries.
 
 Verify or install the pinned local cluster and GitOps toolchain:
 
@@ -117,6 +117,23 @@ The script resolves `local.yaml`, creates `humility-local` if needed, writes
 `~/.kube/humility-local.yaml`, and verifies one server plus one agent. A second
 run is a no-op when the live cluster matches the channel contract. The delete
 script is idempotent when the cluster and kubeconfig are absent.
+
+INIT-106 mounts `/var/run/docker.sock` into the local control-cluster nodes so
+the Crossplane local AppCluster composition can create a nested k3d app cluster
+from a Kubernetes Job. This is local-only proof machinery, not the security
+baseline. `delete-local-channel.sh` deletes `humility-local-app` before deleting
+`humility-local`.
+
+Focused AppCluster proof after local bring-up:
+
+```bash
+bash infra/tests/validate_app_clusters_local.sh \
+  --kubeconfig ~/.kube/humility-local.yaml
+```
+
+Expected proof points are Crossplane Deployments Available, provider packages
+Healthy=True, `AppCluster/local-sample` Ready=True, and nested k3d cluster
+`humility-local-app` nodes Ready.
 
 ## Runtime Secrets (Infisical)
 
