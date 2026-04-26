@@ -1,2104 +1,927 @@
-# SLICE-022 Phase 3 Proposal: Compliance Rule Evaluation With Evidence
-
+# INIT-101 Phase 3 Proposal: Self-Managed k3s Control Cluster
 ## Binding sources
-
-- `.pipeline/synthesis.md` — D1–D15 (binding).
-- `.pipeline/research.md` — Phase 1 evidence.
-- `product-strategy/tickets/SLICE-022.md` — AC1–AC4, WU grid, Code Boundary.
-- `AGENTS.md` — Live Server Principle, No Backwards Compatibility,
-  Test/Code Agent separation, migration discipline.
-
-This proposal is bound to D1–D15. Mechanics may vary inside those
-boundaries; scope and shape may not. Migration head advances
-`wu_038 → wu_039 → wu_040a → wu_041a` (D12). Consequence vocabulary is
-`"review"` / `"under_review"` — no `probation` enum or column (D1).
-
+- `.pipeline/research.md` - Phase 1 evidence for replacing the archived
+  VKE-shaped INIT-008 substrate with k3s/k3d/Vultr-VMs.
+- `.pipeline/synthesis.md` - Phase 2 synthesis, D1-D12, stale-material
+  disposition, and six implementation slices.
+- `worktrees/phase-5-replan/.pipeline/replan.md` - Section 5, INIT-101
+  corrected Phase 5 scope.
+- `DECISIONS.md` D8 - environment-agnostic Phase 5 reset:
+  local-as-first-deployment and self-managed k3s everywhere.
+- `memory/environment-agnostic-stack.md` - local is a deployment target, not a
+  dry-run or simulation.
+- `memory/two-tier-cluster-architecture.md` - control cluster hosts platform
+  controllers; application workloads wait for app clusters.
+- `memory/channel-template-pattern.md` - channels replace hard
+  `dev/staging/production` roots and carry provider/endpoint config.
+- `memory/platform-stack.md` - Vultr, OpenTofu, Vultr Object Storage remote
+  state, Buildkite, and Flux remain locked; VKE is superseded by D8.
+- `worktrees/init-008-platform-bootstrap/.pipeline/proposal.md` - closest
+  proposal shape precedent and source for salvage/discard boundaries.
+- `worktrees/init-008-platform-bootstrap/infra/` - reference copy of the
+  VKE-shaped substrate to salvage structurally or discard.
+- `product-strategy/tickets/INIT-001.md` - ticket-ready initiative framing
+  shape.
+- `~/ai/conventions/no-backwards-compatibility.md` - old VKE field/module/root
+  shape is deleted, not adapted.
+- `~/ai/conventions/no-deferred-stubs.md` - postponed work must be explicit
+  anti-scope with a named successor, not a placeholder.
+This proposal is bound to synthesis decisions D1-D12:
+- D1: k3s is pinned to `v1.32.13+k3s1`.
+- D2: k3d is pinned to `v5.8.3`.
+- D3: local k3d cluster names are `humility-<channel_id>`.
+- D4: local topology is one k3d server and one k3d agent.
+- D5: remote INIT-101 topology is a single k3s server.
+- D6: remote server plan default is `vc2-2c-4gb`.
+- D7: Vultr provider constraint remains `~> 2.30`.
+- D8: channel schema is replaced with k3s-shaped fields.
+- D9: remote bootstrap is cloud-init plus the official k3s installer.
+- D10: kubeconfig retrieval is channel-scoped.
+- D11: Vultr Object Storage state-backend bootstrap is reused unchanged.
+- D12: active VKE-shaped INIT-008 artifacts are deleted in this branch.
+No proposal section may preserve VKE compatibility, substitute dry-runs for
+the real local cluster, or turn future remote work into checked-in stubs.
 ---
-
-## §1 — AC mapping
-
-### AC1 — Authority-gated compliance rule CRUD with OCC (WU-039)
-
-1. **Migration** `migrations/versions/wu-039_compliance_rules.py` — creates
-   `compliance_rules` per D2 (see §2).
-2. **Contracts** `services/api/app/contracts/compliance.py`:
-   `ComplianceRuleCreate`, `ComplianceRuleUpdate`, `ComplianceRuleRead`,
-   plus error classes `ComplianceRuleNotFoundError`,
-   `DuplicateActiveComplianceRuleError` (see §3).
-3. **Repository** `services/api/app/repositories/compliance.py`:
-   `create_rule`, `update_rule`, `list_rules_by_chapter`, `get_rule`,
-   `_fetch_rule_for_update` (see §4).
-4. **Service** `services/api/app/services/compliance.py`:
-   `create_rule(db, request, *, actor)`,
-   `update_rule(db, rule_id, request, expected_version, *, actor)`
-   (see §5). Authority: `compliance_rule.write` at chapter scope.
-   Mutations flow through `mutate_entity` with
-   `aggregate_type="compliance_rule"` and constants from §9.
-5. **Endpoints** `services/api/app/api/v1/endpoints/compliance/rules.py`:
-   `POST /api/v1/compliance/rules`, `PATCH /api/v1/compliance/rules/{id}`,
-   `GET /api/v1/compliance/rules`. If-Match strong ETag on PATCH; 412 on
-   stale OCC (see §8).
-6. **Tests** `services/api/tests/test_compliance_rules.py` per D14 (see §10).
-
-### AC2 — Evidence submission persists pending, extraction is separate (WU-040A + WU-040B-extract)
-
-1. **Migration** `migrations/versions/wu-040a_compliance_evidence.py` —
-   creates `evidence_submissions` per D3 (see §2).
-2. **Contracts** `services/api/app/contracts/compliance.py`
-   (`EvidenceSubmissionCreate`, `EvidenceSubmissionRead`); separate
-   `services/api/app/contracts/compliance_extraction.py`
-   (`EvidenceExtractionRead`) per ticket Code Boundary.
-3. **Repository** (`services/api/app/repositories/compliance.py`):
-   `create_evidence`, `get_evidence`, `update_evidence_after_extraction`.
-4. **Services**:
-   - `services/api/app/services/compliance.py` adds
-     `submit_evidence(db, request, *, actor)` — authority
-     `compliance_evidence.submit`, inserts row with
-     `extraction_status='pending'` (actor is spoof-proof via
-     `ActorIdentity`; `submitted_by_member_id` is populated from
-     `actor.actor_id`, never from the request body).
-   - `services/api/app/services/compliance_extraction.py` adds
-     `trigger_extraction(db, evidence_id, *, actor, ocr_provider)` —
-     authority `compliance_evidence.extract`, synchronously invokes the
-     OCR provider (D5), persists result or failure.
-   - OCR boundary `services/api/app/infrastructure/ocr.py` (see §6).
-5. **Endpoints**:
-   - `services/api/app/api/v1/endpoints/compliance/evidence.py` —
-     `POST /api/v1/compliance/evidence`,
-     `GET /api/v1/compliance/evidence/{id}`.
-   - `services/api/app/api/v1/endpoints/compliance/evidence_extract.py` —
-     `POST /api/v1/compliance/evidence/{id}/extract`.
-6. **Tests** `services/api/tests/test_compliance_evidence.py` and
-   `services/api/tests/test_compliance_ocr_extract.py` per D14 (§10).
-
-### AC3 — Officer correction preserves originals with OCC (WU-040B-correct)
-
-1. **Contracts** `services/api/app/contracts/compliance_corrections.py`:
-   `OfficerCorrectionRequest`, `OfficerCorrectionRead`,
-   `CorrectionNotPermittedStatusError` (see §3).
-2. **Repository** (`services/api/app/repositories/compliance.py`):
-   `update_evidence_correction` — writes overlay columns only; never
-   touches `raw_text` or `attachment_ref`.
-3. **Service** `services/api/app/services/compliance_corrections.py`:
-   `correct_evidence(db, evidence_id, request, expected_version, *, actor)`
-   — authority `compliance_evidence.correct`, guards
-   `extraction_status IN ('completed','failed','corrected')` (409
-   otherwise), OCC via `mutate_entity`, sets `extracted_fields_corrected`,
-   `corrected_by_member_id = actor.actor_id` (spoof-proof),
-   `corrected_at`, `correction_reason`, transitions status to
-   `'corrected'` (see §5).
-4. **Endpoint**
-   `services/api/app/api/v1/endpoints/compliance/evidence_correct.py`:
-   `POST /api/v1/compliance/evidence/{id}/correct`. If-Match required;
-   412 on stale; 409 on `pending`/`running`; 422 on blank reason.
-5. **Tests** `services/api/tests/test_compliance_ocr_correct.py` per D14.
-
-### AC4 — Scheduled evaluation is idempotent; consequences route through roster (WU-041A + WU-041B)
-
-1. **Migration** `migrations/versions/wu-041a_compliance_evaluations.py` —
-   creates `compliance_evaluations` per D7 and seeds the
-   `compliance-evaluator` service actor grant per D11 (see §2).
-2. **Contracts** (`services/api/app/contracts/compliance.py`):
-   `ComplianceEvaluationRead`, `ComplianceEvaluationReviewRequest`, plus
-   error classes (see §3).
-3. **Repository**:
-   `create_evaluation` (with `ON CONFLICT DO NOTHING`),
-   `get_evaluation`, `list_evaluations_by_rule_period`,
-   `update_evaluation_review`.
-4. **Services**:
-   - `services/api/app/services/compliance_review.py`:
-     `get_evaluation(db, evaluation_id, *, actor)` (authority
-     `compliance_evaluation.read`),
-     `review_evaluation(db, evaluation_id, request, expected_version,
-     *, actor)` (authority `compliance_evaluation.review`, OCC).
-   - `services/api/app/services/compliance.py`:
-     `run_scheduled_compliance_evaluations(db, *, now, batch_size)` —
-     enumerates active rules across chapters, computes periods (D9),
-     inserts idempotent rows, evaluates on insert only, dispatches
-     consequences through the roster service (D10).
-5. **Worker** `services/api/app/tasks/compliance.py` wires
-   `compliance_evaluation_worker_tick` with root audit context per
-   SLICE-020 R2 (see §7).
-6. **Endpoints**
-   `services/api/app/api/v1/endpoints/compliance/evaluations.py`:
-   `GET /api/v1/compliance/evaluations/{id}`,
-   `POST /api/v1/compliance/evaluations/{id}/review`. Manual trigger
-   `POST /api/v1/compliance/evaluations/run` lives in
-   `services/api/app/api/v1/endpoints/compliance/evaluations_run.py`.
-   Authority: the endpoint checks `compliance_evaluation.review`
-   against the operator — the manual trigger is an operator surface,
-   not an internal-substrate write (D11: `.write` is internal-only).
-   Internal mutations executed by the invoked service use the
-   `compliance-evaluator` service actor's `.write` grant. Operator
-   attribution is preserved by threading the operator actor as
-   `originating_actor` on the roster transition call (§5 / R4);
-   audit trail records both (correlation_id shared between
-   `compliance_evaluation.create` and `roster_entry.transition`).
-   Intended for operator backfill / smoke tests.
-7. **Tests** `services/api/tests/test_compliance_review_api.py` and
-   `services/api/tests/test_compliance_evaluation_worker.py` per D14.
-
+## 1. Executive summary
+INIT-101 establishes the self-managed k3s control-cluster substrate for Phase
+5. The local channel runs k3d, which is k3s in Docker, and remote channels are
+represented as OpenTofu-managed Vultr Cloud Compute VMs bootstrapped by
+cloud-init using the standard `curl -sfL https://get.k3s.io | sh -` install
+path. This is the replacement for INIT-008's VKE-shaped substrate. The done
+state is concrete: a real local k3d cluster is up, a channel-scoped kubeconfig
+is retrieved, and the harness proves `kubectl get nodes` succeeds against that
+kubeconfig.
+The proposal keeps the pieces of INIT-008 that matched the corrected
+architecture and discards the pieces that encoded VKE. Salvageable structure
+includes the channel-template directory layout, the channel resolver/generator
+script shape, the Vultr Object Storage state-backend bootstrap module, the
+Vultr VPC/network module concept, and the validation harness pattern. VKE
+cluster code, VKE-shaped channel fields, VKE-shaped generated tfvars, hard
+environment roots, and render-only completion criteria are deleted rather than
+wrapped.
+Ticket-ready framing mirrors INIT-001. **Subsystem:** Deployment substrate;
+control-cluster bootstrap. **Phase:** Phase 5 reset successor, replacing
+archived INIT-008. **Executive priority:** critical path for INIT-102 through
+INIT-117. Flux, Infisical, Crossplane, DNS/TLS, app workloads, and later
+control-plane operations all depend on an environment-agnostic control-cluster
+contract that works locally first and can be parameterized for remote channels
+later. **Proposal mechanism:** use the same k3s distribution family locally
+and remotely, express the target through channel config, and verify the local
+deployment with a real cluster before any remote apply exists.
+This initiative intentionally stops short of remote deployment. The remote
+Vultr VM/cloud-init path must validate and plan, but INIT-101 does not spend
+Vultr resources or fetch a remote kubeconfig. That boundary is not a dry-run
+substitute for local work: local k3d is the first deployment target and must
+come up as the completion proof. Remote apply, remote HA, Flux, Crossplane,
+Infisical, DNS, TLS, and application workloads are named successor work.
 ---
-
-## §2 — Migration plan
-
-Chain (D12, linear off `wu_038`):
-
+## 2. Architecture
+### 2.1 Control-cluster boundary
+INIT-101 owns the control-cluster substrate only.
+The control cluster is the platform cluster that later hosts:
+- Flux, installed by INIT-102.
+- Infisical runtime secret store, installed by INIT-103.
+- Crossplane, installed by INIT-106.
+- Control-plane DNS/TLS/security/observability components from later INITs.
+It does not host application workloads in INIT-101. The API service, Discord
+daemon, data plane, app ingress, app auth, and workload observability wait for
+application clusters and later Phase 5 initiatives. This preserves the
+two-tier architecture while updating the old memory's VKE references to D8's
+k3s-on-k3d/Vultr-VM substrate.
+### 2.2 Repo layout after INIT-101
+The implementation leaves `infra/` in this shape:
+```text
+infra/
+  README.md
+  schemas/
+    platform-channel.schema.json
+    platform-channel-resolved.schema.json
+  channels/
+    local.yaml
+    dev.yaml
+    fixtures/
+      local-child.yaml
+      dev-child.yaml
+      ephemeral-disabled.yaml
+      missing-parent.yaml
+      circular-a.yaml
+      circular-b.yaml
+  templates/
+    platform-channel/
+      main.tf
+      variables.tf
+      outputs.tf
+      versions.tf
+  roots/
+    channels/
+      local/
+        main.tf
+        backend.tfbackend
+        channel.auto.tfvars.json
+      dev/
+        main.tf
+        backend.tfbackend
+        channel.auto.tfvars.json
+  bootstrap/
+    state-backend/
+      main.tf
+      versions.tf
+  modules/
+    platform-network/
+      main.tf
+      versions.tf
+    platform-cluster-k3d/
+      main.tf
+      variables.tf
+      outputs.tf
+      versions.tf
+    platform-cluster-vms/
+      main.tf
+      variables.tf
+      outputs.tf
+      versions.tf
+      cloud-init/
+        k3s-server.yaml.tftpl
+  scripts/
+    resolve_platform_channel.py
+    spawn_platform_channel.py
+    generate_channel_backend.py
+    generate_channel_tfvars.py
+    validate_platform_channels.py
+    bring-up-local-channel.sh
+    delete-local-channel.sh
+  tests/
+    validate_platform_bootstrap.sh
 ```
-wu_038_permission_intent_expiry
-  → wu_039_compliance_rules
-    → wu_040a_compliance_evidence
-      → wu_041a_compliance_evaluations
+The old roots and module are removed:
+```text
+infra/environments/dev/
+infra/environments/staging/
+infra/environments/production/
+infra/modules/platform-cluster/
 ```
-
-File naming mirrors shipped convention: dashed filename, underscored
-`revision` identifier (e.g., filename
-`migrations/versions/wu-039_compliance_rules.py`, revision
-`"wu_039_compliance_rules"`). Each downgrade is a `pass` no-op per the
-Live Server Principle (matches `wu-038_permission_intent_expiry.py:76–79`).
-
-### `wu-039_compliance_rules.py` — WU-039
-
-```sql
-CREATE TABLE compliance_rules (
-    id UUID PRIMARY KEY,
-    chapter_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    cadence_kind TEXT NOT NULL,
-    cadence_params JSONB NOT NULL DEFAULT '{}'::jsonb,
-    evaluation_window_days INTEGER NOT NULL,
-    evidence_requirements JSONB NOT NULL,
-    consequence_kind TEXT NOT NULL,
-    consequence_params JSONB NOT NULL DEFAULT '{}'::jsonb,
-    active BOOLEAN NOT NULL DEFAULT TRUE,
-    archived_at TIMESTAMPTZ NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT compliance_rules_cadence_kind_valid
-        CHECK (cadence_kind IN ('weekly','monthly','quarterly')),
-    CONSTRAINT compliance_rules_consequence_kind_valid
-        CHECK (consequence_kind IN ('review','under_review')),
-    CONSTRAINT compliance_rules_evaluation_window_positive
-        CHECK (evaluation_window_days > 0 AND evaluation_window_days <= 365),
-    CONSTRAINT compliance_rules_evidence_requirements_is_array
-        CHECK (jsonb_typeof(evidence_requirements) = 'array')
-);
-
-CREATE UNIQUE INDEX ux_compliance_rules__chapter_active_name
-    ON compliance_rules (chapter_id, name)
-    WHERE archived_at IS NULL;
-
-CREATE INDEX ix_compliance_rules__chapter_active
-    ON compliance_rules (chapter_id)
-    WHERE active = TRUE AND archived_at IS NULL;
+No `legacy/`, `archived/`, symlink, forwarding module, deprecated alias, or
+dual schema reader remains. The reference copy is the
+`feat/init-008-platform-bootstrap` branch and its worktree, not an active
+directory in this branch.
+### 2.3 Channel schema
+The source schema remains:
+```text
+infra/schemas/platform-channel.schema.json
 ```
-
-Versioning lives in `aggregate_heads` per D2; no dedicated `version`
-column.
-
-### `wu-040a_compliance_evidence.py` — WU-040A
-
-```sql
-CREATE TABLE evidence_submissions (
-    id UUID PRIMARY KEY,
-    rule_id UUID NOT NULL REFERENCES compliance_rules(id),
-    member_id TEXT NOT NULL,
-    chapter_id TEXT NOT NULL,
-    attachment_ref TEXT NOT NULL,
-    raw_text TEXT NULL,
-    extracted_fields JSONB NULL,
-    extracted_fields_corrected JSONB NULL,
-    extraction_status TEXT NOT NULL,
-    extraction_confidence NUMERIC(5,4) NULL,
-    extraction_error TEXT NULL,
-    submitted_by_member_id TEXT NOT NULL,
-    submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    corrected_by_member_id TEXT NULL,
-    corrected_at TIMESTAMPTZ NULL,
-    correction_reason TEXT NULL,
-    CONSTRAINT evidence_submissions_attachment_ref_non_blank
-        CHECK (char_length(attachment_ref) > 0),
-    CONSTRAINT evidence_submissions_extraction_status_valid
-        CHECK (extraction_status IN
-            ('pending','running','completed','failed','corrected')),
-    CONSTRAINT evidence_submissions_confidence_bounded
-        CHECK (extraction_confidence IS NULL
-               OR (extraction_confidence >= 0 AND extraction_confidence <= 1)),
-    CONSTRAINT evidence_submissions_completed_requires_ocr
-        CHECK (extraction_status <> 'completed'
-               OR (raw_text IS NOT NULL AND extracted_fields IS NOT NULL)),
-    CONSTRAINT evidence_submissions_failed_requires_error
-        CHECK (extraction_status <> 'failed'
-               OR extraction_error IS NOT NULL),
-    CONSTRAINT evidence_submissions_corrected_requires_overlay
-        CHECK (extraction_status <> 'corrected'
-               OR (extracted_fields_corrected IS NOT NULL
-                   AND corrected_by_member_id IS NOT NULL
-                   AND correction_reason IS NOT NULL))
-);
-
-CREATE INDEX ix_evidence_submissions__rule_member
-    ON evidence_submissions (rule_id, member_id, submitted_at DESC);
-
-CREATE INDEX ix_evidence_submissions__chapter_period
-    ON evidence_submissions (chapter_id, submitted_at);
+The resolved schema remains:
+```text
+infra/schemas/platform-channel-resolved.schema.json
 ```
-
-### `wu-041a_compliance_evaluations.py` — WU-041A
-
-```sql
-CREATE TABLE compliance_evaluations (
-    id UUID PRIMARY KEY,
-    rule_id UUID NOT NULL REFERENCES compliance_rules(id),
-    rule_version BIGINT NOT NULL,
-    chapter_id TEXT NOT NULL,
-    member_id TEXT NOT NULL,
-    period_start DATE NOT NULL,
-    period_end DATE NOT NULL,
-    result TEXT NOT NULL,
-    consequence_applied TEXT NOT NULL,
-    review_status TEXT NOT NULL,
-    reviewer_id TEXT NULL,
-    review_reason TEXT NULL,
-    reviewed_at TIMESTAMPTZ NULL,
-    evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    evidence_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-    CONSTRAINT compliance_evaluations_result_valid
-        CHECK (result IN ('compliant','violation','insufficient_evidence')),
-    CONSTRAINT compliance_evaluations_consequence_valid
-        CHECK (consequence_applied IN
-            ('none','review_queued','under_review_applied')),
-    CONSTRAINT compliance_evaluations_review_status_valid
-        CHECK (review_status IN
-            ('pending','approved','overridden','not_required')),
-    CONSTRAINT compliance_evaluations_period_ordered
-        CHECK (period_end >= period_start),
-    CONSTRAINT compliance_evaluations_rule_version_positive
-        CHECK (rule_version >= 1)
-);
-
-CREATE UNIQUE INDEX ux_compliance_evaluations__member_rule_period
-    ON compliance_evaluations (member_id, rule_id, period_start, period_end);
-
-CREATE INDEX ix_compliance_evaluations__rule_period
-    ON compliance_evaluations (rule_id, period_start);
-
-CREATE INDEX ix_compliance_evaluations__review_pending
-    ON compliance_evaluations (chapter_id, evaluated_at DESC)
-    WHERE review_status = 'pending';
+The schema version remains `1`, but the field shape is a clean replacement.
+This follows D8 and the no-backwards-compatibility rule: there is no old VKE
+reader for `schema_version: 1`, because the wrong-shaped work never becomes
+the accepted main-path contract.
+Top-level source fields stay channel-shaped: `schema_version`, `id`, `parent`,
+`exposure`, `tenant`, `allow_ephemeral_children`, `enabled_platforms`,
+`platform`, `cluster`, and `state`. `schema_version` accepts only `1`;
+channel ids use `^[a-z0-9][a-z0-9-]*$`; `exposure` is `prod`, `stage`, or
+`dev`; `enabled_platforms` accepts `kubernetes` for INIT-101.
+The required k3s replacement fields are:
+- `platform.provider: local | vultr`, plus provider-specific region, network,
+  and object-storage endpoint fields.
+- `cluster.distribution: k3s`.
+- `cluster.target: k3d-local | vultr-vms`.
+- `cluster.k3s_version`, matching `vX.Y.Z+k3sN`.
+- `cluster.kubeconfig_path`, always channel-scoped.
+- For `k3d-local`: `k3d.cluster_name`, `servers`, `agents`,
+  `registry_name`, `api_port`, `port_mappings`, and `volumes`.
+- For `vultr-vms`: `vultr.region`, network, firewall, `servers.count`,
+  `servers.plan`, `agents.count`, `agents.plan`, `ssh_key_ids`, and
+  `bootstrap` with install version, remote kubeconfig path, and token input.
+- `state.backend: local | s3-compatible`, with bucket/key/region/endpoint
+  fields appropriate to that backend.
+Resolved channels must contain concrete inherited values, no unresolved parent
+links for OpenTofu consumption, and `additionalProperties: false` everywhere
+unless a field is explicitly documented open. Generated tfvars consume the
+resolved schema only.
+### 2.4 Initial channels
+INIT-101 ships two active channel declarations:
+```text
+infra/channels/local.yaml
+infra/channels/dev.yaml
 ```
-
-**Service-actor seed** (same migration, mirrors
-`wu-038_permission_intent_expiry.py:36–73`):
-
-```python
-_EVALUATOR_PERMISSIONS = (
-    '["compliance_rule.read",'
-    '"compliance_evaluation.write",'
-    '"roster.transition"]'
-)
-
-op.execute(
-    f"""
-    INSERT INTO authority_grants (
-        id, grantee_id, scope_kind, scope_id, permissions,
-        expires_at, revoked_at, revoked_by, revocation_reason,
-        predecessor_grant_id
-    )
-    SELECT
-        gen_random_uuid(),
-        'compliance-evaluator',
-        'global',
-        NULL,
-        '{_EVALUATOR_PERMISSIONS}'::jsonb,
-        NULL, NULL, NULL, NULL, NULL
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM authority_grants
-        WHERE grantee_id = 'compliance-evaluator'
-          AND scope_kind = 'global'
-          AND scope_id IS NULL
-          AND permissions @> '{_EVALUATOR_PERMISSIONS}'::jsonb
-          AND permissions <@ '{_EVALUATOR_PERMISSIONS}'::jsonb
-          AND revoked_at IS NULL
-          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-    )
-    """
-)
+`local.yaml` is the done-state channel: `provider: local`,
+`cluster.target: k3d-local`, `cluster.k3s_version: v1.32.13+k3s1`,
+`cluster.kubeconfig_path: infra/channels/local/.generated/kubeconfig.yaml`,
+`k3d.cluster_name: humility-local`, `k3d.servers: 1`, `k3d.agents: 1`, local
+state, and optional local registry/API-port/port/volume fields.
+`dev.yaml` is the remote Vultr VM plan channel: `provider: vultr`,
+`region: ewr`, `network: 10.40.0.0/20`, `cluster.target: vultr-vms`,
+`cluster.k3s_version: v1.32.13+k3s1`, single server plan `vc2-2c-4gb`, zero
+agents by default, cloud-init bootstrap with remote kubeconfig path
+`/root/humility-k3s.yaml`, and Vultr Object Storage state key
+`channels/dev/terraform.tfstate`.
+Remote values that would cause real mutation, such as SSH key IDs and allowed
+SSH CIDRs, are accepted only as plan inputs where OpenTofu can validate the
+root. They are not runtime stubs; remote apply is explicitly anti-scope.
+### 2.5 `platform-cluster-k3d` module
+New module:
+```text
+infra/modules/platform-cluster-k3d/
 ```
+This module is the local target surface. It does not call the Vultr provider.
+It may use the `null` provider and `local-exec` only if the implementation
+keeps the command path deterministic and validates inputs before execution.
+The preferred local bring-up path is the script in Section 2.10, with the
+module exposing generated outputs consumed by the channel root. The module
+owns:
+- k3d cluster name.
+- k3s image/version value derived from D1.
+- server count `1`.
+- agent count `1`.
+- optional local registry name.
+- optional API port.
+- optional port and volume mappings.
+- channel-scoped kubeconfig path.
+- outputs for cluster name, kubeconfig path, server count, and agent count.
+The module must not fall back to kind, Docker Compose Kubernetes, minikube, or
+the operator's global kubeconfig. It must not silently reduce the topology to a
+single node if the agent cannot start. A failed two-node local topology is a
+failure to fix, not a downgrade.
 
+Variable contract for `infra/modules/platform-cluster-k3d/variables.tf`:
+
+| Variable | Type | Default | Description |
+|---|---:|---|---|
+| `channel_id` | `string` | no default; required | Channel identifier used for labels and generated paths. No default; required. |
+| `cluster_name` | `string` | no default; required | k3d cluster name resolved from `k3d.cluster_name`. No default; required. |
+| `k3s_version` | `string` | no default; required | Pinned k3s version used for the local k3d node image. No default; required. |
+| `server_count` | `number` | `1` | Number of k3d server nodes; INIT-101 expects one. Default: `1`. |
+| `agent_count` | `number` | `1` | Number of k3d agent nodes; INIT-101 expects one. Default: `1`. |
+| `kubeconfig_path` | `string` | no default; required | Channel-scoped generated kubeconfig path. No default; required. |
+| `registry_name` | `string` | `null` | Optional local k3d registry name. Default: `null`. |
+| `api_port` | `string` | `null` | Optional host API-port binding passed to k3d. Default: `null`. |
+| `port_mappings` | `list(string)` | `[]` | Optional k3d port mappings. Default: `[]`. |
+| `volume_mappings` | `list(string)` | `[]` | Optional k3d volume mappings. Default: `[]`. |
+### 2.6 `platform-cluster-vms` module
+New module:
+```text
+infra/modules/platform-cluster-vms/
+```
+This replaces the VKE module:
+```text
+infra/modules/platform-cluster/
+```
+The new module provisions remote plan-surface resources only:
+- One `vultr_instance` server by default.
+- Optional future agent instances from `agents.count`, default `0`.
+- VPC attachment through the existing `platform-network` output.
+- Firewall group/rules sufficient for the single-server plan surface.
+- SSH key IDs as required inputs for apply-capable remote channels.
+- `user_data` rendered from cloud-init.
+- Outputs for server label, server IP, remote kubeconfig path, and cluster
+  version.
+The module must not use `vultr_kubernetes`. It must not preserve VKE variables
+such as `cluster_kubernetes_version`, `node_plan`, `node_quantity`,
+`ha_controlplanes`, or `enable_firewall` as compatibility aliases.
+
+Variable contract for `infra/modules/platform-cluster-vms/variables.tf`:
+
+| Variable | Type | Default | Description |
+|---|---:|---|---|
+| `channel_id` | `string` | no default; required | Channel identifier used for names, tags, and labels. No default; required. |
+| `region` | `string` | no default; required | Vultr region resolved from the channel. No default; required. |
+| `vpc_id` | `string` | no default; required | Existing Vultr VPC identifier from `platform-network`. No default; required. |
+| `k3s_version` | `string` | no default; required | Pinned k3s version exported to the installer. No default; required. |
+| `server_count` | `number` | `1` | Number of remote server VMs for INIT-101. Default: `1`. |
+| `server_plan` | `string` | `"vc2-2c-4gb"` | Vultr plan for server VMs. Default: `"vc2-2c-4gb"`. |
+| `agent_count` | `number` | `0` | Number of remote agent VMs for INIT-101. Default: `0`. |
+| `agent_plan` | `string` | `"vc2-2c-4gb"` | Vultr plan for future agent VMs. Default: `"vc2-2c-4gb"`. |
+| `ssh_key_ids` | `list(string)` | no default; required | Vultr SSH key IDs for apply-capable remote channels. No default; required. |
+| `allowed_ssh_cidrs` | `list(string)` | no default; required | CIDRs allowed to reach SSH on remote VMs. No default; required. |
+| `remote_kubeconfig_path` | `string` | `"/root/humility-k3s.yaml"` | Path where cloud-init copies the server kubeconfig. Default: `"/root/humility-k3s.yaml"`. |
+| `firewall_name` | `string` | `null` | Optional explicit firewall group name. Default: `null`. |
+### 2.7 Cloud-init template
+Cloud-init lives at:
+```text
+infra/modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl
+```
+The template writes a k3s config and installs the pinned version:
+```yaml
+#cloud-config
+write_files:
+  - path: /etc/rancher/k3s/config.yaml
+    owner: root:root
+    permissions: "0600"
+    content: |
+      write-kubeconfig-mode: "0600"
+      node-name: ${node_name}
+runcmd:
+  - export INSTALL_K3S_VERSION="${k3s_version}"
+  - curl -sfL https://get.k3s.io | sh -
+  - cp /etc/rancher/k3s/k3s.yaml ${remote_kubeconfig_path}
+  - chmod 0600 ${remote_kubeconfig_path}
+```
+The actual implementation may add strict shell flags, file existence checks,
+and token handling. It may not switch to k3sup, the Vultr Marketplace k3s app,
+or an unpinned installer.
+
+Cloud-init idempotency is part of the plan contract even though remote apply is
+anti-scope in INIT-101:
+- k3s installation runs at most once per VM, guarded by
+  `/var/lib/k3s-installed` or by checking for an existing k3s systemd unit.
+- Config and kubeconfig writes are in `runcmd` steps with prerequisite checks;
+  they do not overwrite an existing valid config or valid kubeconfig copy.
+- Given the same resolved channel inputs, the rendered `user_data` payload is
+  byte-identical between harness runs.
+### 2.8 Channel template
+The template remains:
+```text
+infra/templates/platform-channel/
+```
+`main.tf` is rewritten to dispatch by `cluster.target`:
+- `k3d-local` calls `infra/modules/platform-cluster-k3d`.
+- `vultr-vms` calls `infra/modules/platform-network` and
+  `infra/modules/platform-cluster-vms`.
+Because OpenTofu module counts/for_each have static-shape implications, the
+implementation can use explicit conditional module `count` blocks or split
+target-specific locals, but it must keep one channel template directory and one
+generated root shape. It must not revive hard environment roots or create a
+parallel "local-only" template that bypasses the channel contract.
+Generated tfvars must contain only the k3s-shaped payload:
+- `channel_id`
+- `exposure`
+- `cluster_distribution`
+- `cluster_target`
+- `cluster_k3s_version`
+- `cluster_kubeconfig_path`
+- `k3d_*` fields for local targets
+- `vultr_*` fields for remote targets
+- `state_*` fields
+No generated tfvars may contain `kubernetes_version`, `node_pools`,
+`ha_controlplanes`, `enable_firewall` as VKE managed-cluster fields, or
+`vultr_kubernetes`-oriented names.
+### 2.9 Kubeconfig retrieval
+Local kubeconfig:
+```text
+infra/channels/local/.generated/kubeconfig.yaml
+```
+Local retrieval command:
+```bash
+k3d kubeconfig get humility-local > infra/channels/local/.generated/kubeconfig.yaml
+```
+The harness uses:
+```bash
+KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes
+```
+Remote kubeconfig, for post-INIT-101 remote deployment:
+```text
+/root/humility-k3s.yaml
+```
+Remote retrieval is an operator SSH copy after remote apply exists. INIT-101
+does not implement or exercise that copy path because no remote cluster is
+created.
+Generated kubeconfigs and any generated local channel artifacts are ignored by
+git:
+```text
+infra/channels/*/.generated/
+```
+### 2.10 Provider and version pins
+OpenTofu:
+- Required version: `>= 1.8.0`.
+- Verified INIT-101 CLI version: `1.11.5`.
+The `terraform { required_version = ">= 1.8.0" }` floor may remain in module
+and root blocks for runtime compatibility, but the proposal, harness, and
+operator docs verify OpenTofu `1.11.5` for INIT-101.
+Providers:
+- `vultr/vultr` or the project-standard Vultr provider source already used by
+  the repo, constrained to `~> 2.30` per D7 and platform-stack memory.
+- `hashicorp/local`, `hashicorp/null`, and `hashicorp/random` only if needed
+  for generated local artifacts or remote token plan inputs.
+Runtime tools:
+- k3s: `v1.32.13+k3s1`.
+- k3d: `v5.8.3`.
+- kubectl: existing local tool is acceptable if it can talk to the created
+  cluster.
+- Docker: required by k3d.
+Tool installer:
+```text
+infra/scripts/install-cluster-tools.sh
+```
+The installer pins k3d to `v5.8.3`, the current stable GitHub release at this
+revision, and owns any future cluster-tier tool pins. It is idempotent and
+supports `--check`, which exits nonzero if any required tool is missing or at
+the wrong version. It may install k3d through the documented `TAG=v5.8.3`
+installer path, but it must not install floating `latest`.
+### 2.11 Local bring-up scripts
+Primary script:
+```text
+infra/scripts/bring-up-local-channel.sh
+```
+Responsibilities:
+- Resolve `infra/channels/local.yaml`.
+- Generate backend and tfvars for `infra/roots/channels/local/`.
+- Check Docker, kubectl, OpenTofu, and k3d.
+- Ensure k3d is `v5.8.3` or install/check that exact tag.
+- Create `humility-local` with one server and one agent.
+- Use the pinned k3s image/version corresponding to `v1.32.13+k3s1`.
+- Write `infra/channels/local/.generated/kubeconfig.yaml`.
+- Run `kubectl get nodes` through that kubeconfig.
+- Print the kubeconfig path and cluster name.
+Idempotency contract:
+- If `humility-local` already exists and matches the channel contract, succeed
+  without re-creating it.
+- If `humility-local` already exists and does not match the channel contract,
+  fail with a clear message unless an explicit `--recreate` flag is supplied.
+- A no-op second bring-up must leave generated backend, tfvars, and kubeconfig
+  material byte-identical.
+Companion script:
+```text
+infra/scripts/delete-local-channel.sh
+```
+Responsibilities:
+- Delete `humility-local`.
+- Remove the channel `.generated/` kubeconfig.
+- Leave checked-in channel declarations and roots intact.
+Idempotency contract:
+- If `humility-local` does not exist, succeed without error.
+- If generated local channel material is already absent, succeed without error.
+- A no-op second tear-down must not modify checked-in files.
+### 2.12 Harness extensions
+Existing harness shape is preserved:
+```text
+infra/tests/validate_platform_bootstrap.sh
+```
+INIT-101 extends it to check:
+- No active VKE artifacts remain.
+- Channel schemas reject VKE-shaped fields.
+- Channel resolver/generator output is drift-free.
+- `tofu fmt -check` passes for `infra/`.
+- `tofu init -backend=false` and `tofu validate` pass for
+  `infra/bootstrap/state-backend`.
+- `tofu init -backend=false` and `tofu validate` pass for
+  `infra/roots/channels/local`.
+- `tofu init -backend=false` and `tofu validate` pass for
+  `infra/roots/channels/dev`.
+- Provider lockfiles are drift-free: `.terraform.lock.hcl` is committed for
+  every root that runs `tofu init`, regenerated with `tofu init -backend=false`,
+  and byte-identical to the committed file.
+- Modules do not carry `.terraform.lock.hcl` files because they are not
+  independently initialized.
+- `tofu plan` for the dev channel root is supported when required Vultr
+  environment variables are present; otherwise the harness records a skipped
+  remote plan with an explicit credential-missing message.
+- Real local k3d cluster creation succeeds.
+- Double bring-up succeeds as an idempotent no-op when the cluster already
+  matches the channel contract.
+- `KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes`
+  returns at least one node and, under the default topology, one server and one
+  agent node.
+- Double tear-down succeeds when the cluster and generated kubeconfig are
+  already absent.
+- Cloud-init `user_data` render is byte-identical between runs with the same
+  resolved channel inputs.
+Skipping remote plan for missing credentials is allowed because remote apply is
+anti-scope. Skipping local cluster creation is not allowed because local is the
+INIT-101 done state.
 ---
-
-## §3 — Contracts
-
-### `services/api/app/contracts/compliance.py` (new)
-
-```python
-from __future__ import annotations
-
-from datetime import date, datetime
-from decimal import Decimal
-from typing import Any, Literal
-from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict, Field
-
-
-CadenceKind = Literal["weekly", "monthly", "quarterly"]
-ConsequenceKind = Literal["review", "under_review"]
-ExtractionStatus = Literal[
-    "pending", "running", "completed", "failed", "corrected"
-]
-EvaluationResult = Literal[
-    "compliant", "violation", "insufficient_evidence"
-]
-ConsequenceApplied = Literal[
-    "none", "review_queued", "under_review_applied"
-]
-ReviewStatus = Literal["pending", "approved", "overridden", "not_required"]
-
-
-class _ComplianceModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class EvidenceRequirement(_ComplianceModel):
-    type: str = Field(min_length=1)
-    required: bool = True
-
-
-class ComplianceRuleCreate(_ComplianceModel):
-    chapter_id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
-    cadence_kind: CadenceKind
-    cadence_params: dict[str, Any] = Field(default_factory=dict)
-    evaluation_window_days: int = Field(ge=1, le=365)
-    evidence_requirements: list[EvidenceRequirement]
-    consequence_kind: ConsequenceKind
-    consequence_params: dict[str, Any] = Field(default_factory=dict)
-
-
-class ComplianceRuleUpdate(_ComplianceModel):
-    name: str | None = Field(default=None, min_length=1)
-    cadence_kind: CadenceKind | None = None
-    cadence_params: dict[str, Any] | None = None
-    evaluation_window_days: int | None = Field(default=None, ge=1, le=365)
-    evidence_requirements: list[EvidenceRequirement] | None = None
-    consequence_kind: ConsequenceKind | None = None
-    consequence_params: dict[str, Any] | None = None
-    active: bool | None = None
-
-
-class ComplianceRuleRead(_ComplianceModel):
-    id: UUID
-    chapter_id: str
-    name: str
-    cadence_kind: CadenceKind
-    cadence_params: dict[str, Any]
-    evaluation_window_days: int
-    evidence_requirements: list[EvidenceRequirement]
-    consequence_kind: ConsequenceKind
-    consequence_params: dict[str, Any]
-    active: bool
-    archived_at: datetime | None
-    created_at: datetime
-    version: int = Field(ge=1)
-
-
-class EvidenceSubmissionCreate(_ComplianceModel):
-    rule_id: UUID
-    member_id: str = Field(min_length=1)
-    chapter_id: str = Field(min_length=1)
-    attachment_ref: str = Field(min_length=1)
-
-
-class EvidenceSubmissionRead(_ComplianceModel):
-    id: UUID
-    rule_id: UUID
-    member_id: str
-    chapter_id: str
-    attachment_ref: str
-    raw_text: str | None
-    extracted_fields: dict[str, Any] | None
-    extracted_fields_corrected: dict[str, Any] | None
-    extraction_status: ExtractionStatus
-    extraction_confidence: Decimal | None
-    extraction_error: str | None
-    submitted_by_member_id: str
-    submitted_at: datetime
-    corrected_by_member_id: str | None
-    corrected_at: datetime | None
-    correction_reason: str | None
-    version: int = Field(ge=1)
-
-
-class ComplianceEvaluationRead(_ComplianceModel):
-    id: UUID
-    rule_id: UUID
-    rule_version: int = Field(ge=1)
-    chapter_id: str
-    member_id: str
-    period_start: date
-    period_end: date
-    result: EvaluationResult
-    consequence_applied: ConsequenceApplied
-    review_status: ReviewStatus
-    reviewer_id: str | None
-    review_reason: str | None
-    reviewed_at: datetime | None
-    evaluated_at: datetime
-    evidence_ids: list[UUID]
-    version: int = Field(ge=1)
-
-
-class ComplianceEvaluationReviewRequest(_ComplianceModel):
-    action: Literal["approve", "override"]
-    override_result: EvaluationResult | None = None
-    reviewer_reason: str = Field(min_length=1)
-
-
-# Constants-only audit dispatch (D13)
-
-COMPLIANCE_RULE_CREATE_ACTION_TYPE = "compliance_rule.create"
-COMPLIANCE_RULE_CREATE_CHANGE_TYPE = "compliance_rule.created"
-COMPLIANCE_RULE_UPDATE_ACTION_TYPE = "compliance_rule.update"
-COMPLIANCE_RULE_UPDATE_CHANGE_TYPE = "compliance_rule.updated"
-COMPLIANCE_RULE_ARCHIVE_ACTION_TYPE = "compliance_rule.archive"
-COMPLIANCE_RULE_ARCHIVE_CHANGE_TYPE = "compliance_rule.archived"
-
-EVIDENCE_SUBMIT_ACTION_TYPE = "evidence_submission.submit"
-EVIDENCE_SUBMIT_CHANGE_TYPE = "evidence_submission.submitted"
-EVIDENCE_EXTRACT_ACTION_TYPE = "evidence_submission.extract"
-EVIDENCE_EXTRACT_CHANGE_TYPE = "evidence_submission.extracted"
-EVIDENCE_EXTRACTION_FAILED_CHANGE_TYPE = "evidence_submission.extraction_failed"
-EVIDENCE_CORRECT_ACTION_TYPE = "evidence_submission.correct"
-EVIDENCE_CORRECT_CHANGE_TYPE = "evidence_submission.corrected"
-
-COMPLIANCE_EVALUATION_CREATE_ACTION_TYPE = "compliance_evaluation.create"
-COMPLIANCE_EVALUATION_CREATE_CHANGE_TYPE = "compliance_evaluation.created"
-COMPLIANCE_EVALUATION_REVIEW_ACTION_TYPE = "compliance_evaluation.review"
-COMPLIANCE_EVALUATION_REVIEW_CHANGE_TYPE = "compliance_evaluation.reviewed"
-COMPLIANCE_EVALUATION_OVERRIDE_ACTION_TYPE = "compliance_evaluation.override"
-COMPLIANCE_EVALUATION_OVERRIDE_CHANGE_TYPE = "compliance_evaluation.overridden"
-# Note (Revision 1, R3): no standalone `compliance_evaluation.consequence_applied`
-# change_type — `consequence_applied` is an attribute of the evaluation,
-# written inside the CREATE action's `mutate_projection` and captured in
-# the CREATE state change's `payload_json`. The roster transition lives
-# on its own audit chain (`roster_entry.transition`), threaded via
-# correlation_id.
-
-# Narrow payload allowlists per action
-COMPLIANCE_RULE_CREATE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "chapter_id", "name", "cadence_kind", "cadence_params",
-    "evaluation_window_days", "evidence_requirements",
-    "consequence_kind", "consequence_params",
-})
-COMPLIANCE_RULE_UPDATE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "name", "cadence_kind", "cadence_params", "evaluation_window_days",
-    "evidence_requirements", "consequence_kind", "consequence_params",
-    "active",
-})
-EVIDENCE_SUBMIT_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "rule_id", "member_id", "chapter_id", "attachment_ref",
-    "submitted_by_member_id",
-})
-EVIDENCE_EXTRACT_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "extraction_status", "extraction_confidence",
-    "extraction_error", "raw_text_present",
-})
-EVIDENCE_CORRECT_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "corrected_fields", "correction_reason", "corrected_by_member_id",
-})
-COMPLIANCE_EVALUATION_CREATE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "rule_id", "rule_version", "chapter_id", "member_id",
-    "period_start", "period_end", "result", "consequence_applied",
-    "evidence_ids",
-})
-COMPLIANCE_EVALUATION_REVIEW_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "action", "override_result", "reviewer_reason",
-})
-# Revision 2 (R8 / audit L2): dedicated override allowlist so the override
-# action dispatches with its own named allowlist rather than reusing the
-# review one implicitly. Fields cover the evaluation target, the override
-# result, and the reviewer justification.
-COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST: frozenset[str] = frozenset({
-    "evaluation_id", "override_result", "reviewer_reason",
-})
-
-
-# Errors
-class ComplianceRuleNotFoundError(Exception):
-    def __init__(self, rule_id: UUID) -> None:
-        self.rule_id = rule_id
-        super().__init__(f"compliance rule {rule_id} was not found")
-
-
-class DuplicateActiveComplianceRuleError(Exception):
-    def __init__(self, chapter_id: str, name: str) -> None:
-        self.chapter_id = chapter_id
-        self.name = name
-        super().__init__(
-            f"compliance rule {name!r} already active in chapter {chapter_id}"
-        )
-
-
-class EvidenceSubmissionNotFoundError(Exception):
-    def __init__(self, evidence_id: UUID) -> None:
-        self.evidence_id = evidence_id
-        super().__init__(f"evidence submission {evidence_id} was not found")
-
-
-class ComplianceEvaluationNotFoundError(Exception):
-    def __init__(self, evaluation_id: UUID) -> None:
-        self.evaluation_id = evaluation_id
-        super().__init__(
-            f"compliance evaluation {evaluation_id} was not found"
-        )
-
-
-class InvalidEvaluationReviewActionError(Exception):
-    """`override` requested without `override_result` (422)."""
-
-
-class EvidenceChapterMismatchError(Exception):
-    """Raised when submit_evidence's request.chapter_id does not match the
-    rule's chapter_id (422). Authorization is always derived from the
-    rule; this error exists so the caller discovers an inconsistent
-    request rather than silently accepting the rule's chapter."""
-
-    def __init__(
-        self, *, rule_id: UUID, rule_chapter_id: str, request_chapter_id: str
-    ) -> None:
-        self.rule_id = rule_id
-        self.rule_chapter_id = rule_chapter_id
-        self.request_chapter_id = request_chapter_id
-        super().__init__(
-            f"request.chapter_id {request_chapter_id!r} does not match "
-            f"rule {rule_id} chapter_id {rule_chapter_id!r}"
-        )
-
-
-class OcrProviderNotConfiguredError(Exception):
-    """Raised by the stub provider; mapped to 503 in the endpoint layer."""
+## 3. Slice decomposition
+INIT-101 uses INIT-specific slice numbering: `SLICE-101.01` through
+`SLICE-101.06`. This keeps the corrected Phase 5 work visibly separate from
+the archived INIT-008 `SLICE-030` series and the Phase 5 reset's INIT-100
+work.
+### SLICE-101.01 - Discard VKE substrate and introduce k3s channel contract
+**Scope:** Remove or rewrite the wrong-shaped INIT-008 substrate in this
+branch and introduce the k3s-shaped channel schema plus `local` and `dev`
+channel declarations. This slice implements D8 and D12 first so later slices
+cannot accidentally build on VKE names or VKE-generated payloads.
+**Files touched:**
+- `infra/schemas/platform-channel.schema.json`
+- `infra/schemas/platform-channel-resolved.schema.json`
+- `infra/channels/local.yaml`
+- `infra/channels/dev.yaml`
+- `infra/channels/fixtures/*.yaml`
+- `infra/scripts/resolve_platform_channel.py`
+- `infra/scripts/validate_platform_channels.py`
+- `infra/modules/platform-cluster/` deleted
+- `infra/environments/` deleted
+- `infra/README.md`
+- `.gitignore`
+**Local-verification acceptance commands:**
+```bash
+python infra/scripts/validate_platform_channels.py
+python infra/scripts/resolve_platform_channel.py infra/channels/local.yaml > /tmp/local-channel.json
+python infra/scripts/resolve_platform_channel.py infra/channels/dev.yaml > /tmp/dev-channel.json
+rg -n "vultr_kubernetes|kubernetes_version|node_pools|ha_controlplanes|enable_firewall" infra && exit 1 || true
 ```
-
-### `services/api/app/contracts/compliance_corrections.py` (new)
-
-```python
-from __future__ import annotations
-
-from datetime import datetime
-from typing import Any
-from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class _CorrectionModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class OfficerCorrectionRequest(_CorrectionModel):
-    corrected_fields: dict[str, Any]
-    correction_reason: str = Field(min_length=1)
-
-
-class OfficerCorrectionRead(_CorrectionModel):
-    evidence_id: UUID
-    corrected_fields: dict[str, Any]
-    corrected_by_member_id: str
-    corrected_at: datetime
-    correction_reason: str
-    version: int = Field(ge=1)
-
-
-class CorrectionNotPermittedStatusError(Exception):
-    """Raised when correction is attempted in `pending` or `running` (409)."""
-
-    def __init__(self, evidence_id: UUID, status: str) -> None:
-        self.evidence_id = evidence_id
-        self.status = status
-        super().__init__(
-            f"correction not permitted while evidence {evidence_id} "
-            f"is in status {status!r}"
-        )
+**Acceptance criteria:** no active schema accepts VKE
+`cluster.kubernetes_version`, `node_pools`, `ha_controlplanes`, or VKE-only
+fields; `local` resolves to `distribution: k3s`, `target: k3d-local`, and
+`k3s_version: v1.32.13+k3s1`; `dev` resolves to `distribution: k3s`,
+`target: vultr-vms`, and the single-server remote defaults.
+**Dependencies:** INIT-100.
+**Magnitude:** M.
+**Anti-scope:** no OpenTofu module implementation, no k3d cluster creation, no
+remote VM resources, no VKE compatibility adapter, no archived copy of
+INIT-008 inside this branch.
+### SLICE-101.02 - k3d local cluster module, scripts, and reachability harness
+**Scope:** Add the local k3d creation surface using D1-D4 and D10. This slice
+owns pinned k3d version checking, local cluster create/delete wrappers,
+channel-scoped kubeconfig generation, and the first reachability check against
+the local API server.
+**Files touched:**
+- `infra/modules/platform-cluster-k3d/main.tf`
+- `infra/modules/platform-cluster-k3d/variables.tf`
+- `infra/modules/platform-cluster-k3d/outputs.tf`
+- `infra/modules/platform-cluster-k3d/versions.tf`
+- `infra/scripts/install-cluster-tools.sh`
+- `infra/scripts/bring-up-local-channel.sh`
+- `infra/scripts/delete-local-channel.sh`
+- `infra/tests/validate_platform_bootstrap.sh`
+- `infra/README.md`
+- `.gitignore`
+**Local-verification acceptance commands:**
+```bash
+bash infra/scripts/install-cluster-tools.sh --check
+bash infra/scripts/bring-up-local-channel.sh
+bash infra/scripts/bring-up-local-channel.sh
+k3d version
+k3d cluster list humility-local
+test -f infra/channels/local/.generated/kubeconfig.yaml
+KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes
+bash infra/scripts/delete-local-channel.sh
+bash infra/scripts/delete-local-channel.sh
 ```
-
-### `services/api/app/contracts/compliance_extraction.py` (new)
-
-```python
-from __future__ import annotations
-
-from datetime import datetime
-from decimal import Decimal
-from typing import Any
-from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict
-
-
-class _ExtractionModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class EvidenceExtractionRead(_ExtractionModel):
-    evidence_id: UUID
-    extraction_status: str
-    raw_text: str | None
-    extracted_fields: dict[str, Any] | None
-    extraction_confidence: Decimal | None
-    extraction_error: str | None
-    extraction_completed_at: datetime
-    version: int
+**Acceptance criteria:** k3d is exactly `v5.8.3`; cluster name is
+`humility-local`; the cluster uses one server and one agent; kubeconfig is
+written under `infra/channels/local/.generated/`; double bring-up and double
+tear-down are idempotent; no command relies on the operator's global current
+kubectl context.
+**Dependencies:** SLICE-101.01.
+**Magnitude:** L.
+**Anti-scope:** no Flux bootstrap, no app workloads, no hidden single-node
+downgrade, no kind/minikube fallback, no remote apply.
+### SLICE-101.03 - Vultr VM module and cloud-init k3s bootstrap plan surface
+**Scope:** Replace the VKE module with a Vultr VM/cloud-init remote
+control-cluster plan surface. This slice owns the `vultr_instance` resources,
+single-server defaults, VPC/firewall inputs, cloud-init template, pinned k3s
+installer environment, and known remote kubeconfig path.
+**Files touched:**
+- `infra/modules/platform-cluster-vms/main.tf`
+- `infra/modules/platform-cluster-vms/variables.tf`
+- `infra/modules/platform-cluster-vms/outputs.tf`
+- `infra/modules/platform-cluster-vms/versions.tf`
+- `infra/modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl`
+- `infra/modules/platform-network/main.tf`
+- `infra/modules/platform-network/versions.tf`
+- `infra/templates/platform-channel/*.tf`
+- `infra/roots/channels/dev/*`
+- `infra/tests/validate_platform_bootstrap.sh`
+**Local-verification acceptance commands:**
+```bash
+tofu -chdir=infra/modules/platform-cluster-vms fmt -check
+tofu -chdir=infra/roots/channels/dev init -backend=false
+git diff --exit-code -- infra/roots/channels/dev/.terraform.lock.hcl
+tofu -chdir=infra/roots/channels/dev validate
+rg -n "vultr_kubernetes" infra && exit 1 || true
 ```
-
+When credentials and required variables are present:
+```bash
+tofu -chdir=infra/roots/channels/dev plan -out=/tmp/init-101-dev.tfplan
+rm -f /tmp/init-101-dev.tfplan
+```
+**Acceptance criteria:** `vultr_instance` replaces `vultr_kubernetes`; server
+default plan is `vc2-2c-4gb`; remote server count default is one; cloud-init
+sets `INSTALL_K3S_VERSION=v1.32.13+k3s1`; `tofu validate` passes; `tofu plan`
+is possible with credentials; no slice command applies remote resources.
+**Dependencies:** SLICE-101.01.
+**Magnitude:** L.
+**Anti-scope:** no remote `tofu apply`, no embedded-etcd HA, no Vultr load
+balancer, no k3sup, no Vultr Marketplace k3s image, no DNS or TLS resources.
+### SLICE-101.04 - Channel template and generated root rewrite
+**Scope:** Rebuild the platform-channel template, generated roots, backend
+generation, tfvars generation, and drift checks around the k3s-shaped channel
+schema. This is where the salvaged INIT-008 resolver/generator structure is
+adapted to the new target-specific payload.
+**Files touched:**
+- `infra/templates/platform-channel/main.tf`
+- `infra/templates/platform-channel/variables.tf`
+- `infra/templates/platform-channel/outputs.tf`
+- `infra/templates/platform-channel/versions.tf`
+- `infra/roots/channels/local/main.tf`
+- `infra/roots/channels/local/backend.tfbackend`
+- `infra/roots/channels/local/channel.auto.tfvars.json`
+- `infra/roots/channels/local/.terraform.lock.hcl`
+- `infra/roots/channels/dev/main.tf`
+- `infra/roots/channels/dev/backend.tfbackend`
+- `infra/roots/channels/dev/channel.auto.tfvars.json`
+- `infra/roots/channels/dev/.terraform.lock.hcl`
+- `infra/scripts/generate_channel_backend.py`
+- `infra/scripts/generate_channel_tfvars.py`
+- `infra/scripts/spawn_platform_channel.py`
+- `infra/tests/validate_platform_bootstrap.sh`
+**Local-verification acceptance commands:**
+```bash
+python infra/scripts/generate_channel_backend.py infra/channels/local.yaml --out infra/roots/channels/local/backend.tfbackend
+python infra/scripts/generate_channel_tfvars.py infra/channels/local.yaml --out infra/roots/channels/local/channel.auto.tfvars.json
+python infra/scripts/generate_channel_backend.py infra/channels/dev.yaml --out infra/roots/channels/dev/backend.tfbackend
+python infra/scripts/generate_channel_tfvars.py infra/channels/dev.yaml --out infra/roots/channels/dev/channel.auto.tfvars.json
+git diff --exit-code -- infra/roots/channels/local infra/roots/channels/dev
+tofu -chdir=infra/roots/channels/local init -backend=false
+git diff --exit-code -- infra/roots/channels/local/.terraform.lock.hcl
+tofu -chdir=infra/roots/channels/local validate
+tofu -chdir=infra/roots/channels/dev init -backend=false
+git diff --exit-code -- infra/roots/channels/dev/.terraform.lock.hcl
+tofu -chdir=infra/roots/channels/dev validate
+```
+**Acceptance criteria:** generated tfvars contain only k3s/k3d or k3s/Vultr
+fields; the INIT-008 Object Storage state-backend root remains unchanged
+except for formatting if required; root provider lockfiles are committed and
+drift-free after `tofu init -backend=false`; inheritance fixtures exercise the
+new field shape; hard `infra/environments/{dev,staging,production}` roots are
+not revived.
+**Dependencies:** SLICE-101.01, SLICE-101.03.
+**Magnitude:** L.
+**Anti-scope:** no new channel onboarding beyond `local` and `dev`, no
+multi-channel root, no compatibility generation for old tfvars, no semantic
+state-backend redesign.
+### SLICE-101.05 - Local k3d bootstrap end-to-end verification
+**Scope:** Turn the local bring-up surface into the INIT-101 done-state proof.
+This slice creates a real local k3d cluster, verifies `kubectl get nodes`
+against the channel kubeconfig, checks the expected node shape, and makes stale
+generated state handling explicit.
+**Files touched:**
+- `infra/scripts/bring-up-local-channel.sh`
+- `infra/scripts/delete-local-channel.sh`
+- `infra/tests/validate_platform_bootstrap.sh`
+- `infra/tests/README.md` if added
+- `infra/README.md`
+- `.gitignore`
+**Local-verification acceptance commands:**
+```bash
+bash infra/scripts/delete-local-channel.sh || true
+bash infra/scripts/bring-up-local-channel.sh
+bash infra/scripts/bring-up-local-channel.sh
+KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes -o wide
+KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes --no-headers | wc -l
+bash infra/tests/validate_platform_bootstrap.sh
+```
+Cleanup after verification:
+```bash
+bash infra/scripts/delete-local-channel.sh
+bash infra/scripts/delete-local-channel.sh
+```
+**Acceptance criteria:** the cluster is real; `kubectl get nodes` succeeds
+against `infra/channels/local/.generated/kubeconfig.yaml`; at least one node
+exists and the default two-node server/agent shape is verified where k3d
+reports roles; stale generated state is not silently reused; double bring-up
+and double tear-down prove no-op idempotency; harness failure messages
+distinguish missing credentials for remote plan from forbidden local cluster
+failures.
+**Dependencies:** SLICE-101.02, SLICE-101.04.
+**Magnitude:** M.
+**Anti-scope:** no remote VM creation, no Flux install, no workload smoke test,
+no skipping cluster creation because Docker/k3d is unavailable.
+### SLICE-101.06 - Documentation and INIT-102 handoff
+**Scope:** Document the corrected substrate, operator local bring-up, remote
+plan-only boundary, stale material displacement, and INIT-102 handoff. This
+slice makes the decisions visible to future proposal, hookpoint, and
+implementation agents.
+**Files touched:**
+- `infra/README.md`
+- `docs/` deployment substrate document if the repo already has the right
+  location
+- `.pipeline/implementation.md` if the implementation stage records slice
+  status there
+- `DECISIONS.md` only if a mechanical cross-reference to D8 is required; no
+  new decision is expected
+**Local-verification acceptance commands:**
+```bash
+rg -n "D8|k3d|k3s|humility-local|INIT-102|INIT-118|VKE" infra README.md docs .pipeline 2>/dev/null || true
+rg -n "vultr_kubernetes|kind|local-only verification|kubernetes_version|node_pools" infra docs .pipeline && exit 1 || true
+bash infra/tests/validate_platform_bootstrap.sh
+```
+**Acceptance criteria:** docs name D8 as controlling authority; docs state VKE
+artifacts are retired and preserved only on reference branches; docs identify
+the local kubeconfig path consumed by INIT-102; docs state remote HA is
+deferred to INIT-118; docs do not imply remote apply, Flux, Crossplane,
+Infisical, DNS, TLS, or workloads are part of INIT-101.
+**Dependencies:** SLICE-101.05.
+**Magnitude:** S.
+**Anti-scope:** no tutorial-only substitute for executable scripts, no remote
+operations runbook that claims INIT-101 has deployed remote k3s, no new
+architecture decision beyond documenting D8 and D1-D12.
 ---
-
-## §4 — Repository layer
-
-### `services/api/app/repositories/compliance.py` (new)
-
-All functions are thin SQL wrappers returning typed rows/dicts. No
-business logic. All mutations go through `mutate_entity`; repository
-helpers only run DML inside the projection callback.
-
-```python
-def create_rule(
-    connection: Connection[Any], *, row: dict[str, Any]
-) -> dict[str, Any]: ...
-
-def update_rule(
-    connection: Connection[Any], *, rule_id: UUID, updates: dict[str, Any]
-) -> dict[str, Any]: ...
-
-def _fetch_rule_for_update(
-    connection: Connection[Any], rule_id: UUID
-) -> dict[str, Any] | None: ...
-
-def get_rule(
-    connection: Connection[Any], rule_id: UUID
-) -> dict[str, Any] | None: ...
-
-def list_rules_by_chapter(
-    connection: Connection[Any], chapter_id: str, *, active_only: bool
-) -> list[dict[str, Any]]: ...
-
-def list_active_rules(
-    connection: Connection[Any]
-) -> list[dict[str, Any]]: ...
-
-def create_evidence(
-    connection: Connection[Any], *, row: dict[str, Any]
-) -> dict[str, Any]: ...
-
-def get_evidence(
-    connection: Connection[Any], evidence_id: UUID
-) -> dict[str, Any] | None: ...
-
-def _fetch_evidence_for_update(
-    connection: Connection[Any], evidence_id: UUID
-) -> dict[str, Any] | None: ...
-
-def update_evidence_after_extraction(
-    connection: Connection[Any], *, evidence_id: UUID,
-    extraction_status: str, raw_text: str | None,
-    extracted_fields: dict[str, Any] | None,
-    extraction_confidence: Decimal | None,
-    extraction_error: str | None,
-) -> dict[str, Any]: ...
-
-def update_evidence_correction(
-    connection: Connection[Any], *, evidence_id: UUID,
-    corrected_fields: dict[str, Any],
-    corrected_by_member_id: str,
-    correction_reason: str,
-) -> dict[str, Any]:
-    """UPDATE sets overlay + status='corrected'; never touches
-    `raw_text`, `attachment_ref`, or `extracted_fields` (D3/AC3)."""
-
-def list_evidence_for_rule_period(
-    connection: Connection[Any], *, rule_id: UUID,
-    period_start: date, period_end: date,
-    member_id: str | None = None,
-) -> list[dict[str, Any]]: ...
-
-def insert_evaluation_if_absent(
-    connection: Connection[Any], *, row: dict[str, Any]
-) -> dict[str, Any] | None:
-    """`INSERT ... ON CONFLICT (member_id, rule_id, period_start,
-    period_end) DO NOTHING RETURNING *`. Returns the inserted row or
-    None if a prior tick already created it (AC4 idempotency; mirrors
-    `repositories/ticket_sla.py:135–136`).
-
-    **Revision 1 (R2):** invoked only from inside
-    `_evaluate_member_rule`'s `mutate_projection` callback — never as a
-    naked DML step outside a `mutate_entity` call. The connection passed
-    in is the one `mutate_entity` opened for the per-member transaction;
-    if the audit projection raises, the ON CONFLICT insert rolls back
-    atomically so the next tick can retry cleanly."""
-
-def get_evaluation(
-    connection: Connection[Any], evaluation_id: UUID
-) -> dict[str, Any] | None: ...
-
-def _fetch_evaluation_for_update(
-    connection: Connection[Any], evaluation_id: UUID
-) -> dict[str, Any] | None: ...
-
-def update_evaluation_review(
-    connection: Connection[Any], *, evaluation_id: UUID,
-    review_status: str, reviewer_id: str,
-    review_reason: str, result: str | None,
-    consequence_applied: str | None,
-) -> dict[str, Any]: ...
-```
-
-**Revision 1 (R3):** `mark_consequence_applied` is intentionally absent.
-Consequence is recorded as an attribute of the evaluation in the CREATE
-action's `mutate_projection` — no second repository helper, no second
-mutation, no orphan change_type.
-
-### Roster member enumeration + per-member entry read
-
-`run_scheduled_compliance_evaluations` enumerates chapter members via
-the existing roster repository (research §5, §6); a single new helper
-`list_active_members_by_chapter(connection, chapter_id)` is added to
-`services/api/app/repositories/roster.py` returning
-`roster_entries` rows where `status = 'active'`. No new table is
-introduced (D1/D15); there is no `chapter_members` relation.
-
-**Revision 1 (R6)** — `_evaluate_member_rule` additionally calls the
-shipped roster read helper `get_roster_entry(connection, *,
-chapter_id, member_id)` (already in
-`services/api/app/repositories/roster.py`; add the helper if not
-present, returning `roster_entries` row + its `aggregate_heads`
-version). The returned `id` and `version` drive the
-`transition_roster_entry(..., entry_id=..., expected_version=...)`
-call so OCC is explicit — no stale-version assumption. Also exposes
-a service-layer alias `roster_service.get_roster_entry` if
-compliance needs a service-contract view (used by the worker only,
-SELECT-only, no authority check required — matches the repository
-access pattern used by other workers).
-
+## 4. Tradeoffs accepted
+1. **Single remote server for INIT-101.** D5 accepts a single remote k3s server
+   plan surface instead of embedded-etcd HA. This keeps INIT-101 focused on the
+   substrate contract and local done state. HA is explicitly deferred to
+   INIT-118: Remote Control Cluster HA.
+2. **Local must be real, remote stays plan-ready.** D8 requires every Phase 5
+   initiative to deploy a real local component. INIT-101 therefore creates
+   k3d locally, but does not run a real Vultr apply. The proposal accepts the
+   asymmetry because local is the first deployment target and remote channel
+   onboarding is post-INIT-117 work.
+3. **Schema version remains `1` while the field shape is replaced.** The VKE
+   shape never becomes the accepted main-path contract after D8, so preserving
+   `schema_version: 1` with a clean k3s replacement is less misleading than
+   supporting v1 and v2 side by side. No old reader remains.
+4. **Keep Vultr provider constraint `~> 2.30`.** D7 avoids provider churn even
+   though newer releases exist. INIT-101 changes substrate shape, not provider
+   version policy.
+5. **Use cloud-init plus the official k3s installer, not k3sup.** D9 chooses
+   the bootstrap path already named by D8. k3sup remains out of scope even
+   though it can fetch kubeconfig and join nodes.
+6. **Generated kubeconfigs are files, not global context mutation.** D10
+   accepts channel-scoped kubeconfig files because k3d can mutate global
+   kubeconfig by default. This makes the harness deterministic and keeps later
+   INITs from depending on the operator's current context.
+7. **Delete instead of archive in-tree.** D12 and the no-backwards-compatibility
+   convention reject an `archived/` directory. The old artifacts remain
+   inspectable on the reference branch.
+8. **One channel template dispatches targets.** Keeping
+   `infra/templates/platform-channel/` means local and remote use the same
+   channel-generation contract. The target-specific modules differ, but the
+   environment model does not fork.
+9. **No remote bootstrap token finalization.** INIT-101 exposes the remote
+   token as a plan input/reference shape but does not create a runtime secret
+   flow. Infisical and remote apply are not in this initiative.
+10. **No local exception components.** k3d is accepted because it runs k3s in
+    Docker. kind and VKE simulation are rejected because they violate the
+    same-distribution requirement.
 ---
-
-## §5 — Service layer
-
-All service functions take `actor: ActorIdentity` and perform an
-authority check before any mutation (D11). Mutations flow through
-`mutate_entity` (`services/api/app/services/mutations.py:58`) with the
-constants from §9; payload allowlists are narrow per action. Originating
-actor is derived from `actor.actor_id` / `actor.actor_kind` and never
-from the request body.
-
-**Revision 2 — Roster service signature extensions (backward-compatible):**
-`services/api/app/services/roster.py::transition_roster_entry` and
-`get_roster_entry` accept an optional `connection=` kwarg to support
-caller-managed transactions. Omitting it preserves today's behaviour
-(open a fresh tx); supplying it runs the roster work on the caller's
-connection so the roster write commits or rolls back with the caller's
-outer `mutate_entity`. Mirrors SLICE-020 R1's extension of
-`grant_authority` / `revoke_authority`.
-
-### Roster service signature extension (Revision 2 — R7)
-
-`_evaluate_member_rule` (§5) threads its per-member `mutate_entity`
-connection into `transition_roster_entry(..., connection=conn)` so the
-evaluation insert and the roster transition commit atomically. The
-shipped `transition_roster_entry` in
-`services/api/app/services/roster.py:186-192` does **not** currently
-accept a `connection=` kwarg; its internal `mutate_entity` call opens
-its own `db.transaction()`. Without the extension, the
-`transition_roster_entry(..., connection=conn)` call in §5 raises
-`TypeError` at import time, and the atomicity guarantee R2 was built
-to deliver collapses (evaluation + roster transition commit in
-separate transactions; a crash between them leaves a
-`consequence_applied='under_review_applied'` evaluation with no
-matching `roster_entries.status='under_review'`).
-
-Change — `services/api/app/services/roster.py`:
-
-1. Extend `transition_roster_entry(db, entry_id, request, actor, *,
-   expected_version, connection: Connection[Any] | None = None)` — add
-   an optional `connection` kwarg. When provided, pass it through to
-   the internal `mutate_entity(..., connection=connection)` call so the
-   roster write runs on the caller's transaction. When `None`, open a
-   fresh tx as today.
-2. Extend `get_roster_entry(db, *, chapter_id, member_id,
-   connection: Connection[Any] | None = None)` with the same shape —
-   reading on the same connection the caller will write on ensures a
-   consistent snapshot of `(id, version)` when the caller needs
-   read-then-write inside one tx. Lookup-only callers (today's usage)
-   keep the default `None` path and open their own read connection.
-3. The signature is append-only and defaults to `None`, so every
-   existing caller continues to work unchanged (no backwards-compat
-   shim; the kwarg is genuinely optional per AGENTS.md).
-4. Pattern precedent: SLICE-020 R1 extended `grant_authority` /
-   `revoke_authority` with the same optional-`connection=` shape so
-   the permission-intent worker could share a tx with its audit
-   projection. R7 applies the same shape to roster for the same
-   reason.
-
-`services/api/app/services/mutations.py:70` already accepts
-`connection=` on `mutate_entity`, so the threading is mechanical —
-the extension is purely adding the kwarg to the roster service layer
-and routing it into the existing `mutate_entity` call.
-
-Test (in `services/api/tests/test_roster.py`, the roster service's
-own test home, not a SLICE-022 file — so the signature change is
-testable where it lives):
-
-- `test_transition_roster_entry_accepts_shared_connection` — opens
-  a caller-managed `db.transaction()`, invokes
-  `transition_roster_entry(..., connection=conn)`, and asserts (a)
-  the roster row + its audit projection are visible inside the same
-  tx before commit, and (b) a rollback on the caller's connection
-  rolls back the roster transition atomically (both commit or both
-  roll back — no partial state). This verifies the shared-connection
-  tx behavior rather than the signature alone.
-
-
-### `services/api/app/services/compliance.py` (new)
-
-```python
-def create_rule(
-    db: PostgresDatabase, request: ComplianceRuleCreate, *,
-    actor: ActorIdentity,
-) -> ComplianceRuleRead:
-    _require_scoped_authority(
-        "compliance_rule.write",
-        scope_kind="chapter", scope_id=request.chapter_id,
-        actor=actor, db=db,
-    )
-    rule_id = uuid4()
-
-    def mutate_projection(conn: Connection[Any]) -> StateChangeDraft:
-        try:
-            row = create_rule_row(
-                conn,
-                row={
-                    "id": rule_id,
-                    "chapter_id": request.chapter_id,
-                    "name": request.name,
-                    "cadence_kind": request.cadence_kind,
-                    "cadence_params": request.cadence_params,
-                    "evaluation_window_days": request.evaluation_window_days,
-                    "evidence_requirements":
-                        [r.model_dump() for r in request.evidence_requirements],
-                    "consequence_kind": request.consequence_kind,
-                    "consequence_params": request.consequence_params,
-                },
-            )
-        except errors.UniqueViolation as err:
-            raise DuplicateActiveComplianceRuleError(
-                request.chapter_id, request.name
-            ) from err
-        return StateChangeDraft(
-            change_type=COMPLIANCE_RULE_CREATE_CHANGE_TYPE,
-            payload_json={"rule_id": str(rule_id), ...},
-            diff_json={},
-        )
-
-    result = mutate_entity(
-        db=db,
-        aggregate_type="compliance_rule",
-        aggregate_id=str(rule_id),
-        request=_make_request(
-            expected_version=0, actor=actor,
-            request_surface="api:/api/v1/compliance/rules",
-        ),
-        action_type=COMPLIANCE_RULE_CREATE_ACTION_TYPE,
-        action_payload=request.model_dump(mode="json"),
-        payload_allowlist=set(COMPLIANCE_RULE_CREATE_PAYLOAD_ALLOWLIST),
-        mutate_projection=mutate_projection,
-        scope_kind="chapter", scope_id=request.chapter_id,
-    )
-    return _rule_read_from_result(result)
-
-
-def update_rule(
-    db: PostgresDatabase, rule_id: UUID,
-    request: ComplianceRuleUpdate, expected_version: int,
-    *, actor: ActorIdentity,
-) -> ComplianceRuleRead: ...
-    # authority `compliance_rule.write` (chapter scope via loaded row);
-    # mutate_entity with aggregate_type="compliance_rule",
-    # COMPLIANCE_RULE_UPDATE_*; If-Match → expected_version drives OCC.
-
-
-def submit_evidence(
-    db: PostgresDatabase, request: EvidenceSubmissionCreate,
-    *, actor: ActorIdentity,
-) -> EvidenceSubmissionRead:
-    # Revision 1 (R1): authorize against the rule's chapter, not the
-    # request's chapter. The rule is the source of truth for scope; the
-    # request's chapter_id is cross-checked and a mismatch returns 422.
-    # Pattern applies to any endpoint that takes both `rule_id` and
-    # `chapter_id`.
-    with db.connection() as conn:
-        rule = get_rule(conn, request.rule_id)
-    if rule is None:
-        raise ComplianceRuleNotFoundError(request.rule_id)
-    if request.chapter_id != rule["chapter_id"]:
-        raise EvidenceChapterMismatchError(
-            rule_id=request.rule_id,
-            rule_chapter_id=rule["chapter_id"],
-            request_chapter_id=request.chapter_id,
-        )
-
-    _require_scoped_authority(
-        "compliance_evidence.submit",
-        scope_kind="chapter", scope_id=rule["chapter_id"],
-        actor=actor, db=db,
-    )
-    # FK-validate rule_id; inserts with extraction_status='pending',
-    # chapter_id=rule["chapter_id"] (derived, spoof-proof),
-    # submitted_by_member_id=actor.actor_id (spoof-proof).
-```
-
-### `services/api/app/services/compliance_corrections.py` (new)
-
-```python
-def correct_evidence(
-    db: PostgresDatabase, evidence_id: UUID,
-    request: OfficerCorrectionRequest, expected_version: int,
-    *, actor: ActorIdentity,
-) -> OfficerCorrectionRead:
-    with db.connection() as conn:
-        current = get_evidence(conn, evidence_id)
-    if current is None:
-        raise EvidenceSubmissionNotFoundError(evidence_id)
-
-    _require_scoped_authority(
-        "compliance_evidence.correct",
-        scope_kind="chapter", scope_id=current["chapter_id"],
-        actor=actor, db=db,
-    )
-
-    if current["extraction_status"] in ("pending", "running"):
-        raise CorrectionNotPermittedStatusError(
-            evidence_id, current["extraction_status"]
-        )
-
-    def mutate_projection(conn: Connection[Any]) -> StateChangeDraft:
-        row = _fetch_evidence_for_update(conn, evidence_id)
-        if row is None:
-            raise EvidenceSubmissionNotFoundError(evidence_id)
-        if row["extraction_status"] in ("pending", "running"):
-            raise CorrectionNotPermittedStatusError(
-                evidence_id, row["extraction_status"]
-            )
-        update_evidence_correction(
-            conn,
-            evidence_id=evidence_id,
-            corrected_fields=request.corrected_fields,
-            corrected_by_member_id=actor.actor_id,
-            correction_reason=request.correction_reason,
-        )
-        return StateChangeDraft(
-            change_type=EVIDENCE_CORRECT_CHANGE_TYPE,
-            payload_json={
-                "evidence_id": str(evidence_id),
-                "corrected_fields": request.corrected_fields,
-                "corrected_by_member_id": actor.actor_id,
-                "correction_reason": request.correction_reason,
-            },
-            # Revision 1 (R5): `extracted_fields_corrected` diff captures
-            # the prior overlay (None on the first correction) and the new
-            # overlay, so a second-correction row is self-describing
-            # without walking backward across rows. `extracted_fields` is
-            # the immutable OCR baseline — included for completeness so an
-            # auditor inspecting a single state-change row sees
-            # (baseline, prior overlay, new overlay) in one place.
-            diff_json={
-                "extraction_status": {
-                    "old": row["extraction_status"], "new": "corrected",
-                },
-                "extracted_fields": row["extracted_fields"],
-                "extracted_fields_corrected": {
-                    "old": row["extracted_fields_corrected"],
-                    "new": request.corrected_fields,
-                },
-            },
-        )
-
-    result = mutate_entity(
-        db=db,
-        aggregate_type="evidence_submission",
-        aggregate_id=str(evidence_id),
-        request=_make_request(
-            expected_version=expected_version, actor=actor,
-            request_surface=(
-                f"api:/api/v1/compliance/evidence/{evidence_id}/correct"
-            ),
-            reason_text=request.correction_reason,
-        ),
-        action_type=EVIDENCE_CORRECT_ACTION_TYPE,
-        action_payload={
-            "corrected_fields": request.corrected_fields,
-            "correction_reason": request.correction_reason,
-            "corrected_by_member_id": actor.actor_id,
-        },
-        payload_allowlist=set(EVIDENCE_CORRECT_PAYLOAD_ALLOWLIST),
-        mutate_projection=mutate_projection,
-        scope_kind="chapter", scope_id=current["chapter_id"],
-    )
-    return _correction_read_from_result(result)
-```
-
-Raw text + attachment ref are never touched by this path (AC3 / D6).
-
-### `services/api/app/services/compliance_extraction.py` (new)
-
-Thin wrapper orchestrating OCR provider + persistence. The service
-opens a single `db.transaction()` and runs provider invocation inside
-a coroutine bridge:
-
-```python
-def trigger_extraction(
-    db: PostgresDatabase, evidence_id: UUID,
-    *, actor: ActorIdentity,
-    ocr_provider: OcrProvider,
-) -> EvidenceExtractionRead:
-    with db.connection() as conn:
-        current = get_evidence(conn, evidence_id)
-    if current is None:
-        raise EvidenceSubmissionNotFoundError(evidence_id)
-
-    _require_scoped_authority(
-        "compliance_evidence.extract",
-        scope_kind="chapter", scope_id=current["chapter_id"],
-        actor=actor, db=db,
-    )
-
-    # Run provider OUTSIDE the transaction so a slow OCR call doesn't
-    # hold row locks. Persisting the result is OCC-safe via
-    # mutate_entity (extraction is idempotent — repeated calls
-    # overwrite with the latest provider result).
-    try:
-        extraction = asyncio.run(
-            ocr_provider.extract(
-                attachment_ref=current["attachment_ref"],
-                rule_hint=None,
-            )
-        )
-    except OcrProviderNotConfiguredError:
-        raise  # bubbles to endpoint → 503
-    except Exception as err:
-        return _persist_extraction_failure(db, evidence_id, err, actor)
-
-    return _persist_extraction_success(db, evidence_id, extraction, actor)
-```
-
-`_persist_extraction_success` / `_persist_extraction_failure` call
-`mutate_entity` with `EVIDENCE_EXTRACT_ACTION_TYPE` and the success /
-failed change type per D13. Extraction is idempotent: a second
-successful extraction overwrites `raw_text` + `extracted_fields` and
-leaves the `corrected` overlay untouched (status transitions
-`completed → completed`).
-
-### `services/api/app/services/compliance_review.py` (new)
-
-```python
-def get_evaluation(
-    db: PostgresDatabase, evaluation_id: UUID,
-    *, actor: ActorIdentity,
-) -> ComplianceEvaluationRead:
-    with db.connection() as conn:
-        row = get_evaluation_row(conn, evaluation_id)
-    if row is None:
-        raise ComplianceEvaluationNotFoundError(evaluation_id)
-    _require_scoped_authority(
-        "compliance_evaluation.read",
-        scope_kind="chapter", scope_id=row["chapter_id"],
-        actor=actor, db=db,
-    )
-    return _evaluation_read_from_row(row)
-
-
-def review_evaluation(
-    db: PostgresDatabase, evaluation_id: UUID,
-    request: ComplianceEvaluationReviewRequest,
-    expected_version: int, *, actor: ActorIdentity,
-) -> ComplianceEvaluationRead:
-    if request.action == "override" and request.override_result is None:
-        raise InvalidEvaluationReviewActionError(
-            "override requires override_result"
-        )
-    # authority: compliance_evaluation.review (chapter scope from row)
-    # mutate_entity with aggregate_type="compliance_evaluation";
-    # OCC from expected_version.
-    # Revision 2 (R8 / audit L2): pair the action_type with its dedicated
-    # payload allowlist — review → COMPLIANCE_EVALUATION_REVIEW_*
-    # + COMPLIANCE_EVALUATION_REVIEW_PAYLOAD_ALLOWLIST; override →
-    # COMPLIANCE_EVALUATION_OVERRIDE_* + COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST.
-    # Both dispatches route through the same mutate_entity call with the
-    # allowlist chosen per request.action; no f-strings, constants-only.
-```
-
-### `run_scheduled_compliance_evaluations` (WU-041B core logic)
-
-Lives in `services/api/app/services/compliance.py` to keep worker +
-API in one service module (ticket Code Boundary). Algorithm
-(Revision 1 rewrites R2 + R4 + R6):
-
-```python
-def run_scheduled_compliance_evaluations(
-    db: PostgresDatabase, *,
-    now: datetime,
-    batch_size: int = COMPLIANCE_EVIDENCE_BATCH_SIZE,
-    actor: ActorIdentity,
-    originating_actor: ActorIdentity | None = None,
-) -> list[ComplianceEvaluationRead]:
-    """Enumerate active rules + members, insert per-member evaluations
-    idempotently, dispatch consequences through the roster service.
-
-    Revision 1 (R4):
-    - `actor` is the authority-bearing identity used for inner
-      `mutate_entity` calls; the scheduled worker passes the
-      `compliance-evaluator` service actor (which holds the internal
-      `compliance_evaluation.write` + `roster.transition` grants).
-    - `originating_actor` is the identity recorded as
-      `originating_actor_kind` / `originating_actor_id` on the roster
-      transition request, preserving operator attribution when the
-      manual `/evaluations/run` endpoint triggers this path. Defaults
-      to `actor` (so the scheduled worker naturally records the
-      service actor as originating).
-    """
-    created: list[ComplianceEvaluationRead] = []
-    effective_originating = originating_actor or actor
-
-    with db.connection() as conn:
-        rules = list_active_rules(conn)
-
-    for rule in rules:
-        try:
-            period_start, period_end = _compute_period(
-                cadence_kind=rule["cadence_kind"],
-                cadence_params=rule["cadence_params"],
-                evaluation_window_days=rule["evaluation_window_days"],
-                now=now,
-            )
-            with db.connection() as conn:
-                members = list_active_members_by_chapter(
-                    conn, rule["chapter_id"]
-                )
-        except Exception:
-            logger.exception(
-                "compliance evaluation rule setup failed rule=%s",
-                rule["id"],
-            )
-            continue
-
-        # Revision 1 (R2 / F2): per-member isolation. A failure on one
-        # member's evaluation tx does NOT abort the remaining members
-        # of this rule. Mirrors SLICE-020 R1 `_expire_single_intent`
-        # batch pattern.
-        for member in members:
-            try:
-                inserted = _evaluate_member_rule(
-                    db,
-                    rule=rule,
-                    member=member,
-                    period_start=period_start,
-                    period_end=period_end,
-                    actor=actor,
-                    originating_actor=effective_originating,
-                )
-                if inserted is not None:
-                    created.append(inserted)
-            except StaleMutationError:
-                logger.debug(
-                    "compliance evaluation OCC skip rule=%s member=%s",
-                    rule["id"], member["member_id"],
-                )
-                continue
-            except Exception:
-                logger.exception(
-                    "compliance evaluation failed rule=%s member=%s",
-                    rule["id"], member["member_id"],
-                )
-                continue
-    return created
-```
-
-`_evaluate_member_rule` (private helper) — **Revision 1 (R2, R3,
-R6)** rewrites the body to a single per-member transaction that
-atomically covers the idempotency insert, the audit projection, and
-the consequence dispatch. Mirrors SLICE-020 R1
-`_expire_single_intent` point-for-point.
-
-```python
-def _evaluate_member_rule(
-    db: PostgresDatabase, *,
-    rule: dict[str, Any],
-    member: dict[str, Any],
-    period_start: date,
-    period_end: date,
-    actor: ActorIdentity,
-    originating_actor: ActorIdentity,
-) -> ComplianceEvaluationRead | None:
-    evaluation_id = uuid4()
-
-    # (R6) Snapshot the roster entry's id + version BEFORE opening the
-    # mutate_entity transaction, so the transition call has a concrete
-    # `expected_version` to drive OCC. `list_active_members_by_chapter`
-    # already returned the roster row; pull from there (roster row id +
-    # its aggregate head version) via `get_roster_entry` to avoid a
-    # stale version assumption.
-    with db.connection() as conn:
-        roster_entry = get_roster_entry(
-            conn,
-            chapter_id=rule["chapter_id"],
-            member_id=member["member_id"],
-        )
-    if roster_entry is None:
-        logger.debug(
-            "compliance evaluation skipped; roster entry gone rule=%s "
-            "member=%s", rule["id"], member["member_id"],
-        )
-        return None
-
-    # (R6) Snapshot evidence outside the tx (read-only) to keep the
-    # write-path transaction short.
-    with db.connection() as conn:
-        evidence_rows = list_evidence_for_rule_period(
-            conn,
-            rule_id=rule["id"],
-            period_start=period_start,
-            period_end=period_end,
-            member_id=member["member_id"],
-        )
-    rule_version = _current_rule_version(db, rule_id=rule["id"])
-
-    result, evidence_ids = _compute_rule_result(
-        rule=rule, evidence_rows=evidence_rows
-    )
-    consequence_applied, review_status = _compute_consequence_shape(
-        rule=rule, result=result
-    )
-
-    def mutate_projection(conn: Connection[Any]) -> StateChangeDraft:
-        # (R2 / M1) The idempotency insert runs INSIDE mutate_projection,
-        # so if any downstream step raises, the insert rolls back with
-        # the audit row — no bare evaluation row persists.
-        inserted = insert_evaluation_if_absent(
-            conn,
-            row={
-                "id": evaluation_id,
-                "rule_id": rule["id"],
-                "rule_version": rule_version,
-                "chapter_id": rule["chapter_id"],
-                "member_id": member["member_id"],
-                "period_start": period_start,
-                "period_end": period_end,
-                "result": result,
-                "consequence_applied": consequence_applied,
-                "review_status": review_status,
-                "evidence_ids": [str(x) for x in evidence_ids],
-            },
-        )
-        if inserted is None:
-            # Another tick already evaluated this (member, rule, period).
-            # Raise the well-known sentinel so mutate_entity aborts the
-            # projection cleanly and the caller treats this member as a
-            # no-op (no audit row written).
-            raise _AlreadyEvaluatedSentinel()
-
-        # (R3 / R6) Dispatch consequence inside the same connection so
-        # the roster transition either commits alongside the evaluation
-        # insert or both roll back together. `transition_roster_entry`
-        # accepts `connection=` via mutate_entity so we thread ours in.
-        # StaleMutationError / InvalidRosterStatusTransitionError
-        # propagate out of mutate_projection → mutate_entity's
-        # rollback covers the evaluation insert too. On the next tick
-        # the ON CONFLICT skip will NOT fire (the insert rolled back),
-        # so the whole member/period is retried cleanly — no retry
-        # bookkeeping, no `deferred_occ_conflict` marker state.
-        if consequence_applied == "under_review_applied":
-            roster_service.transition_roster_entry(
-                db,
-                entry_id=roster_entry["id"],
-                request=RosterEntryTransitionRequest(
-                    to_status="under_review",
-                    reason=f"compliance_violation:{rule['name']}",
-                    originating_actor_kind=originating_actor.actor_kind,
-                    originating_actor_id=originating_actor.actor_id,
-                ),
-                expected_version=roster_entry["version"],
-                actor=actor,
-                connection=conn,  # mutations.py:70 accepts this kwarg
-            )
-
-        return StateChangeDraft(
-            change_type=COMPLIANCE_EVALUATION_CREATE_CHANGE_TYPE,
-            payload_json={
-                "rule_id": str(rule["id"]),
-                "rule_version": rule_version,
-                "chapter_id": rule["chapter_id"],
-                "member_id": member["member_id"],
-                "period_start": period_start.isoformat(),
-                "period_end": period_end.isoformat(),
-                "result": result,
-                "consequence_applied": consequence_applied,
-                "evidence_ids": [str(x) for x in evidence_ids],
-            },
-            diff_json={},
-        )
-
-    try:
-        mutation_result = mutate_entity(
-            db=db,
-            aggregate_type="compliance_evaluation",
-            aggregate_id=str(evaluation_id),
-            request=_make_request(
-                expected_version=0,
-                actor=actor,
-                request_surface="worker:compliance_evaluation",
-            ),
-            action_type=COMPLIANCE_EVALUATION_CREATE_ACTION_TYPE,
-            action_payload={
-                "rule_id": str(rule["id"]),
-                "rule_version": rule_version,
-                "chapter_id": rule["chapter_id"],
-                "member_id": member["member_id"],
-                "period_start": period_start.isoformat(),
-                "period_end": period_end.isoformat(),
-                "result": result,
-                "consequence_applied": consequence_applied,
-                "evidence_ids": [str(x) for x in evidence_ids],
-            },
-            payload_allowlist=set(
-                COMPLIANCE_EVALUATION_CREATE_PAYLOAD_ALLOWLIST
-            ),
-            mutate_projection=mutate_projection,
-            scope_kind="chapter", scope_id=rule["chapter_id"],
-        )
-    except _AlreadyEvaluatedSentinel:
-        return None
-
-    return _evaluation_read_from_result(mutation_result)
-
-
-def _compute_consequence_shape(
-    *, rule: dict[str, Any], result: str
-) -> tuple[str, str]:
-    """Map (consequence_kind, result) → (consequence_applied,
-    review_status). D1/D10:
-    - `consequence_kind='review'` → `(review_queued, pending)`
-    - `consequence_kind='under_review'` + `result='violation'` +
-      `consequence_params.auto_apply` (fail-safe default: must be
-      explicitly True; absence → False) → `(under_review_applied,
-      not_required)`
-    - otherwise → `(none, not_required)` or `(none, pending)` per
-      `consequence_params.require_review`."""
-```
-
-The private sentinel `_AlreadyEvaluatedSentinel` is a module-local
-exception that carries no payload; it signals ON CONFLICT hit so the
-caller does not treat the skip as an error.
-
-**Revision 1 (R2) summary.** A mid-step failure rolls back the
-entire (evaluation insert + audit projection + roster transition) as
-one unit. On next tick the ON CONFLICT insert succeeds cleanly —
-there is no bare evaluation row to heal, no orphan consequence state,
-no retry bookkeeping. Per-member isolation is at the worker loop
-level.
-
-Period computation (D9):
-
-```python
-def _compute_period(
-    *, cadence_kind, cadence_params, evaluation_window_days, now
-) -> tuple[date, date]:
-    anchor = now - timedelta(days=evaluation_window_days)
-    offset = int(cadence_params.get("week_offset", 0))  # or month/quarter
-    if cadence_kind == "weekly":
-        # ISO week: Monday 00:00 UTC → Sunday 23:59:59 UTC
-        ...
-    elif cadence_kind == "monthly":
-        # calendar month in UTC
-        ...
-    elif cadence_kind == "quarterly":
-        # calendar quarter in UTC
-        ...
-```
-
+## 5. Hookpoints preview
+Full hookpoint research happens after the risk gate. The expected blast radius
+is visible enough for risk assessment:
+### Delete
+- `infra/modules/platform-cluster/` - VKE module based on
+  `vultr_kubernetes`.
+- `infra/environments/dev/` - hard environment root.
+- `infra/environments/staging/` - hard environment root.
+- `infra/environments/production/` - hard environment root.
+- VKE-shaped generated tfvars in any active root.
+- Any docs describing INIT-008's VKE substrate as the accepted Phase 5 path.
+### Rewrite
+- `infra/schemas/platform-channel.schema.json` - replace VKE cluster fields
+  with k3s/k3d/Vultr-VM fields.
+- `infra/schemas/platform-channel-resolved.schema.json` - resolved shape for
+  generated roots.
+- `infra/channels/dev.yaml` - remote VKE dev channel becomes remote Vultr VM
+  k3s plan channel.
+- `infra/templates/platform-channel/main.tf` - replace VKE module call with
+  target-specific k3d or Vultr-VM module calls.
+- `infra/templates/platform-channel/variables.tf` - replace VKE variables.
+- `infra/templates/platform-channel/outputs.tf` - output channel-scoped
+  cluster/kubeconfig facts.
+- `infra/scripts/generate_channel_tfvars.py` - emit k3s-shaped variables.
+- `infra/tests/validate_platform_bootstrap.sh` - add real local cluster proof
+  and VKE grep invariants.
+- `infra/README.md` - document D8-substrate contract and handoff.
+### Salvage with narrow changes
+- `infra/bootstrap/state-backend/` - reuse unchanged per D11 except formatting
+  or lock-file refresh required by toolchain.
+- `infra/modules/platform-network/` - keep Vultr VPC concept; adjust variables
+  only if the VM module requires stricter inputs.
+- `infra/scripts/resolve_platform_channel.py` - keep inheritance, fixture
+  lookup, deep merge, circular-parent guard, and structured errors.
+- `infra/scripts/spawn_platform_channel.py` - keep ephemeral child concept;
+  update field names.
+- `infra/scripts/generate_channel_backend.py` - keep state backend generation;
+  update local-vs-S3 backend handling if needed.
+- Harness structure for toolchain, formatting, validation, drift, security,
+  and resolver checks.
+### New files
+- `infra/channels/local.yaml`
+- `infra/roots/channels/local/*`
+- `infra/modules/platform-cluster-k3d/*`
+- `infra/modules/platform-cluster-vms/*`
+- `infra/modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl`
+- `infra/scripts/install-cluster-tools.sh`
+- `infra/scripts/bring-up-local-channel.sh`
+- `infra/scripts/delete-local-channel.sh`
 ---
-
-## §6 — OCR infrastructure
-
-### `services/api/app/infrastructure/ocr.py` (new)
-
-```python
-from __future__ import annotations
-
-from decimal import Decimal
-from typing import Any, Protocol
-
-from pydantic import BaseModel, ConfigDict
-
-
-class OcrExtractionResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    raw_text: str
-    extracted_fields: dict[str, Any]
-    confidence: Decimal
-
-
-class OcrProvider(Protocol):
-    async def extract(
-        self, attachment_ref: str, rule_hint: str | None = None
-    ) -> OcrExtractionResult: ...
-
-
-class StubOcrProvider:
-    async def extract(
-        self, attachment_ref: str, rule_hint: str | None = None
-    ) -> OcrExtractionResult:
-        from app.contracts.compliance import OcrProviderNotConfiguredError
-        raise OcrProviderNotConfiguredError(
-            "OCR provider not configured"
-        )
-
-
-def get_ocr_provider(settings) -> OcrProvider:
-    # Operators wire a concrete provider via settings in a later slice;
-    # SLICE-022 ships the stub only (D4, D15).
-    return StubOcrProvider()
+## 6. Acceptance criteria for INIT-101
+- [ ] A real local k3d cluster named `humility-local` is created.
+- [ ] The local cluster uses pinned k3d `v5.8.3`.
+- [ ] The local cluster uses pinned k3s `v1.32.13+k3s1`.
+- [ ] `infra/scripts/install-cluster-tools.sh --check` verifies pinned cluster
+  tools, including k3d `v5.8.3`.
+- [ ] OpenTofu CLI verification uses version `1.11.5` while root/module
+  `required_version` floors may remain `>= 1.8.0`.
+- [ ] The local default topology is one k3d server and one k3d agent.
+- [ ] Local bring-up is idempotent when an existing cluster matches the channel
+  contract, and local tear-down is idempotent when the cluster is absent.
+- [ ] A channel-scoped kubeconfig is written at
+  `infra/channels/local/.generated/kubeconfig.yaml`.
+- [ ] `KUBECONFIG=infra/channels/local/.generated/kubeconfig.yaml kubectl get nodes`
+  returns at least one node.
+- [ ] The harness verifies the local `kubectl get nodes` command.
+- [ ] `tofu validate` is clean for `infra/bootstrap/state-backend`.
+- [ ] `tofu validate` is clean for `infra/roots/channels/local`.
+- [ ] `tofu validate` is clean for `infra/roots/channels/dev`.
+- [ ] `tofu plan` against `infra/roots/channels/dev` produces a clean plan
+  when Vultr credentials and required remote inputs are present.
+- [ ] Missing Vultr credentials skip only the remote plan assertion, never the
+  local k3d proof.
+- [ ] Old VKE-shaped artifacts are deleted: no active
+  `infra/modules/platform-cluster/` VKE module remains.
+- [ ] No active channel file contains VKE-shaped fields such as
+  `cluster.kubernetes_version`, `node_pools`, `ha_controlplanes`, or VKE
+  managed-cluster `enable_firewall`.
+- [ ] `infra/templates/platform-channel/main.tf` calls the k3d module for
+  `k3d-local` and the VM module for `vultr-vms`.
+- [ ] Cloud-init uses `INSTALL_K3S_VERSION=v1.32.13+k3s1`.
+- [ ] Cloud-init renders byte-identical `user_data` for byte-identical channel
+  inputs and guards k3s installation to at most once per VM.
+- [ ] The remote module uses `vultr_instance`, not `vultr_kubernetes`.
+- [ ] Generated tfvars are drift-free and k3s-shaped.
+- [ ] `.terraform.lock.hcl` is committed and drift-free for every root, and no
+  module carries a provider lockfile.
+- [ ] Generated kubeconfigs and `.generated/` artifacts are ignored by git.
+- [ ] Documentation identifies INIT-102 as the next consumer of the local
+  control-cluster kubeconfig and channel contract.
+Canonical validation command:
+```bash
+bash infra/tests/validate_platform_bootstrap.sh
 ```
-
-The endpoint layer maps `OcrProviderNotConfiguredError → 503` via
-`_shared.py` (see §8). No third-party SDKs are added as dependencies.
-
+The harness is allowed to call narrower commands internally, but this command
+is the single operator-facing verification entry point for INIT-101.
 ---
-
-## §7 — Scheduled worker (WU-041B)
-
-### `services/api/app/tasks/compliance.py` (new)
-
-Mirrors `services/api/app/tasks/permission_expiry.py` structurally:
-module-level `_DB`, `configure_compliance(*, db)`, service-actor
-helper, root audit context, tick function.
-
-```python
-from __future__ import annotations
-
-import logging
-from contextlib import nullcontext
-from datetime import UTC, datetime
-from uuid import uuid4
-
-from app.contracts.actor import ActorIdentity
-from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
-from app.contracts.mutations import StaleMutationError
-from app.core.context import get_current_audit_context, use_audit_context
-from app.repositories.db import PostgresDatabase
-from app.services.compliance import (
-    COMPLIANCE_EVIDENCE_BATCH_SIZE,
-    run_scheduled_compliance_evaluations,
-)
-
-logger = logging.getLogger(__name__)
-
-COMPLIANCE_EVALUATOR_ACTOR_ID = "compliance-evaluator"
-_DB: PostgresDatabase | None = None
-
-
-def configure_compliance(*, db: PostgresDatabase) -> None:
-    global _DB
-    _DB = db
-
-
-def get_compliance_db() -> PostgresDatabase:
-    global _DB
-    if _DB is None:
-        _DB = PostgresDatabase()
-    return _DB
-
-
-def _evaluator_service_actor() -> ActorIdentity:
-    return ActorIdentity(
-        actor_kind="service", actor_id=COMPLIANCE_EVALUATOR_ACTOR_ID
-    )
-
-
-def _root_audit_context() -> AuditContextRead:
-    correlation_id = uuid4()
-    return AuditContextRead(
-        correlation_id=correlation_id,
-        causation_id=None,
-        headers=CorrelationHeadersRead(
-            x_correlation_id=correlation_id,
-            x_causation_id=None,
-        ),
-    )
-
-
-def compliance_evaluation_worker_tick(
-    *,
-    now: datetime | None = None,
-    batch_size: int | None = None,
-) -> list | None:
-    existing_ctx = get_current_audit_context()
-    ambient = (
-        use_audit_context(_root_audit_context())
-        if existing_ctx is None
-        else nullcontext()
-    )
-    with ambient:
-        try:
-            return run_scheduled_compliance_evaluations(
-                get_compliance_db(),
-                actor=_evaluator_service_actor(),
-                originating_actor=None,  # defaults to actor (service)
-                now=now or datetime.now(tz=UTC),
-                batch_size=batch_size or COMPLIANCE_EVIDENCE_BATCH_SIZE,
-            )
-        except StaleMutationError:
-            logger.debug(
-                "compliance evaluation: OCC conflict, retry next tick"
-            )
-            return None
-        except Exception:
-            logger.exception(
-                "compliance evaluation worker tick failed"
-            )
-            return None
-```
-
-### Scheduler wiring
-
-`services/api/app/services/scheduler.py`:
-
-- Add module-level constant
-  `COMPLIANCE_EVALUATION_INTERVAL_SECONDS = 3600` (near line 34).
-- Add `self._last_compliance_evaluation_tick_at: datetime | None = None`
-  to `SchedulerLoop.__init__` (near line 150).
-- Add `await self._run_compliance_evaluation_if_due(now)` to `_tick`
-  (after existing worker dispatches).
-- Add the `_run_compliance_evaluation_if_due` method mirroring
-  `_run_permission_expiry_if_due` (lines 256–273).
-- Append `"COMPLIANCE_EVALUATION_INTERVAL_SECONDS"` to `__all__`.
-
-`services/api/app/tasks/__init__.py`:
-
-- Import `configure_compliance` from `app.tasks.compliance`.
-- Call `configure_compliance(db=db)` inside `configure_task_runtime`.
-
-No `scheduled_jobs` row is registered — compliance uses the in-loop
-interval pattern (same as permission expiry, ticket SLA, archive, and
-read-model workers).
-
+## 7. Anti-scope
+INIT-101 explicitly does not do the following:
+- No Flux install. INIT-102 owns GitOps and Flux reconciliation.
+- No Crossplane install. INIT-106 owns application-cluster provisioning.
+- No app workloads. INIT-113 owns workload deployment.
+- No HA topology beyond a single remote server in this initiative.
+- No remote embedded-etcd cluster.
+- No Vultr load balancer or fixed remote registration endpoint.
+- No real Vultr `tofu apply`.
+- No remote k3s actually deployed.
+- No remote kubeconfig fetched.
+- No DNS automation.
+- No cert-manager.
+- No Infisical.
+- No public ingress.
+- No SOPS runtime secret expansion.
+- No Buildkite worker.
+- No app-cluster claim or composition.
+- No VKE module.
+- No VKE root.
+- No VKE channel schema.
+- No kind-only harness.
+- No dry-run-only completion.
+- No archived copy of INIT-008 inside this branch.
+Named successors:
+- INIT-102: Flux/GitOps substrate on the local k3d control cluster.
+- INIT-103: Infisical runtime secret store.
+- INIT-106: Crossplane app-cluster provisioning.
+- INIT-113: application workloads.
+- INIT-118: Remote Control Cluster HA, including multi-server topology and any
+  fixed registration endpoint.
+- Post-INIT-117 remote deployment work: first real remote k3s apply and remote
+  kubeconfig retrieval.
+These are not deferred stubs. They are explicit scope boundaries for scheduled
+successor initiatives.
 ---
-
-## §8 — Endpoints
-
-### Package layout
-
-Under ticket Code Boundary the endpoints live in a new subpackage
-`services/api/app/api/v1/endpoints/compliance/`, mirroring
-`endpoints/permissions/`:
-
-```
-services/api/app/api/v1/endpoints/compliance/
-├── __init__.py            # APIRouter aggregator
-├── _shared.py             # get_db, parse_if_match_strong, exception mapper
-├── rules.py               # POST, PATCH, GET /rules
-├── evidence.py            # POST, GET /evidence
-├── evidence_correct.py    # POST /evidence/{id}/correct
-├── evidence_extract.py    # POST /evidence/{id}/extract
-├── evaluations.py         # GET, POST /evaluations/{id}[/review]
-└── evaluations_run.py     # POST /evaluations/run (manual trigger)
-```
-
-`services/api/app/api/v1/router.py` gains one line:
-
-```python
-from .endpoints import compliance
-router.include_router(compliance.router, prefix="/compliance")
-```
-
-(The path prefix `/compliance` is applied at the aggregator; each
-sub-router keeps relative paths like `/rules`.)
-
-### `_shared.py`
-
-Reused helpers adapted from
-`services/api/app/api/v1/endpoints/permissions/_shared.py`:
-
-- `get_db(request) -> PostgresDatabase`
-- `parse_if_match_strong(request) -> int` (verbatim semantics;
-  RFC 7232 strong ETag)
-- `set_etag(response, etag)`
-- `raise_known_compliance_error(error)` maps:
-  - `ComplianceRuleNotFoundError`, `EvidenceSubmissionNotFoundError`,
-    `ComplianceEvaluationNotFoundError`, `MissingAggregateError` → 404
-  - `StaleMutationError` → 412 (with
-    `expected_version` / `current_version` detail per permissions
-    pattern)
-  - `CorrectionNotPermittedStatusError` → 409
-  - `DuplicateActiveComplianceRuleError` → 409
-  - `InvalidEvaluationReviewActionError` → 422
-  - `EvidenceChapterMismatchError` → 422 (Revision 1 / R1;
-    `{"code": "evidence_chapter_mismatch"}` with
-    `rule_id`, `rule_chapter_id`, `request_chapter_id` detail)
-  - `OcrProviderNotConfiguredError` → 503 (`{"code":
-    "ocr_provider_not_configured"}`)
-  - `PermissionError` → 403
-  - Pydantic `ValidationError` (blank `correction_reason` etc.) → 422
-
-### Endpoint bodies
-
-Each module follows the `endpoints/permissions/*` pattern: parse path /
-body via Pydantic, resolve `actor = Depends(get_current_actor)`, call
-the service (which runs the authority check internally per D11), map
-known exceptions via `_shared.raise_known_compliance_error`. ETag is
-set on any response that carries a versioned aggregate.
-
-Status-code mapping:
-
-| Path                                                       | 200 | 201 | 403 | 404 | 409                                | 412            | 422                          | 503                         |
-|------------------------------------------------------------|-----|-----|-----|-----|------------------------------------|----------------|------------------------------|-----------------------------|
-| `POST /compliance/rules`                                   | -   | Y   | authority | chapter n/a | duplicate_active_rule              | -              | validation                   | -                           |
-| `PATCH /compliance/rules/{id}`                             | Y   | -   | authority | rule n/a    | -                                  | stale If-Match | validation                   | -                           |
-| `GET /compliance/rules`                                    | Y   | -   | authority | -           | -                                  | -              | -                            | -                           |
-| `POST /compliance/evidence`                                | -   | Y   | authority | rule n/a    | -                                  | -              | blank attachment_ref; chapter_id/rule mismatch (R1) | -              |
-| `GET /compliance/evidence/{id}`                            | Y   | -   | authority | evidence n/a| -                                  | -              | -                            | -                           |
-| `POST /compliance/evidence/{id}/correct`                   | Y   | -   | authority | evidence n/a| status not correctable             | stale If-Match | blank reason                 | -                           |
-| `POST /compliance/evidence/{id}/extract`                   | Y   | -   | authority | evidence n/a| -                                  | -              | -                            | ocr_provider_not_configured |
-| `GET /compliance/evaluations/{id}`                         | Y   | -   | authority | evaluation n/a | -                               | -              | -                            | -                           |
-| `POST /compliance/evaluations/{id}/review`                 | Y   | -   | authority | evaluation n/a | -                               | stale If-Match | override without result      | -                           |
-| `POST /compliance/evaluations/run`                         | Y   | -   | authority | -           | -                                  | -              | -                            | -                           |
-
+## 8. Stale material disposal
+INIT-008's VKE-shaped artifacts are deleted from this branch. The reference
+copy lives on `feat/init-008-platform-bootstrap` and in the
+`worktrees/init-008-platform-bootstrap/` checkout. No in-tree archive is
+created.
+Disposed material:
+- `infra/modules/platform-cluster/` if it provisions `vultr_kubernetes`.
+- VKE channel schema fields:
+  `cluster.kubernetes_version`, `node_pools`, `ha_controlplanes`, and
+  `enable_firewall` as managed-cluster fields.
+- VKE-oriented platform-channel template inputs.
+- VKE-shaped generated tfvars.
+- Hard `infra/environments/{dev,staging,production}` roots.
+- Dev-channel framing as a remote VKE control cluster.
+- Render-only or local-verification-only harness completion criteria.
+- Documentation that names INIT-008 as the accepted control-cluster substrate.
+Salvaged material:
+- Channel-template directory idea.
+- Channel inheritance/resolution concept.
+- Generated backend/tfvars drift-check concept.
+- Vultr Object Storage state-backend bootstrap module.
+- Vultr VPC/network concept.
+- Resolver structured errors and fixture testing pattern.
+- Harness structure for toolchain checks, validation, generated-artifact drift,
+  security assertions, and channel resolver behavior.
+The disposal rule is strict: no backwards-compatible VKE reader, no VKE field
+aliases, no forwarding module, no "legacy channel" examples, and no note that
+old channels still work. The corrected main path is k3s/k3d/Vultr-VM only.
 ---
-
-## §9 — Constants (module-level, no f-strings)
-
-All `action_type` / `change_type` / payload allowlist values live in
-`services/api/app/contracts/compliance.py` (contracts-level, as
-elsewhere in the codebase); imported by services and tests. No
-f-string / dynamic vocabulary per D13 + AGENTS.md.
-
-Additional module-level constants:
-
-| Module                                    | Constant                                    | Value                     |
-|-------------------------------------------|---------------------------------------------|---------------------------|
-| `services/api/app/services/scheduler.py`  | `COMPLIANCE_EVALUATION_INTERVAL_SECONDS`    | `3600`                    |
-| `services/api/app/services/compliance.py` | `COMPLIANCE_EVIDENCE_BATCH_SIZE`            | `50`                      |
-| `services/api/app/tasks/compliance.py`    | `COMPLIANCE_EVALUATOR_ACTOR_ID`             | `"compliance-evaluator"`  |
-| (implicit — D11, opaque strings)          | `compliance_rule.read`                      | authority permission      |
-| (implicit — D11, opaque strings)          | `compliance_rule.write`                     | authority permission      |
-| (implicit — D11, opaque strings)          | `compliance_evidence.submit`                | authority permission      |
-| (implicit — D11, opaque strings)          | `compliance_evidence.correct`               | authority permission      |
-| (implicit — D11, opaque strings)          | `compliance_evidence.extract`               | authority permission      |
-| (implicit — D11, opaque strings)          | `compliance_evaluation.read`                | authority permission      |
-| (implicit — D11, opaque strings)          | `compliance_evaluation.review`              | authority permission      |
-| (implicit — D11, opaque strings)          | `compliance_evaluation.write`               | internal substrate perm   |
-| (implicit — D11, opaque strings)          | `roster.transition`                         | reused shipped permission |
-
----
-
-## §10 — Tests (per-WU, per-AC docstrings)
-
-Tests follow D14 and AGENTS.md Test/Code separation: the test agent
-sees contracts only; each test docstring names the AC or guardrail it
-enforces. Tests hit a real DB fixture (`governance_db` style —
-`services/api/tests/test_roster.py:34–40`). Approximately 40 tests
-across six files.
-
-### `services/api/tests/test_compliance_rules.py` (WU-039)
-
-- `test_create_persists_cadence_requirements_and_consequence` — AC1.
-- `test_create_emits_compliance_rule_create_action_with_constants` — D13.
-- `test_create_requires_compliance_rule_write_authority` — D11: 403.
-- `test_create_rejects_duplicate_active_name_in_chapter` — D2: 409.
-- `test_create_rejects_invalid_cadence_kind` — D2: 422 CHECK
-  proxy / Pydantic literal.
-- `test_create_rejects_invalid_consequence_kind` — D1: 422.
-- `test_update_advances_version_with_if_match` — AC1 OCC.
-- `test_update_rejects_stale_if_match` — AC1: 412.
-- `test_archive_allows_name_reuse` — D2: partial unique index.
-- `test_list_rules_returns_chapter_scoped_results` — AC1.
-
-### `services/api/tests/test_compliance_evidence.py` (WU-040A)
-
-- `test_submit_creates_row_in_pending_state` — AC2.
-- `test_submit_emits_evidence_submission_submit_action_with_constants` — D13.
-- `test_submit_requires_compliance_evidence_submit_authority` — D11.
-- `test_submit_enforces_rule_fk_integrity` — D3: 404 (rule missing) /
-  FK violation surfaced.
-- `test_submit_rejects_blank_attachment_ref` — D3: 422.
-- `test_submitted_by_is_derived_from_actor_not_request_body` — D3 /
-  spoof-proof: even if body carries a different `submitted_by`, row
-  stores `actor.actor_id` (extra field is rejected by `extra="forbid"`).
-- `test_submit_rejects_chapter_id_mismatch_with_rule` — Revision 1
-  (R1): request carries `chapter_id` that differs from the rule's
-  chapter; service raises `EvidenceChapterMismatchError` → HTTP 422.
-- `test_submit_authorizes_against_rules_chapter_not_request_chapter`
-  — Revision 1 (R1): actor holds `compliance_evidence.submit` only
-  on the rule's chapter; request carries an unrelated `chapter_id`
-  the actor also has authority on; service uses rule's chapter for
-  the authority check (422 precedes authority, so mismatch is
-  rejected before authority is consulted; an aligned matching request
-  proceeds).
-- `test_submit_persists_chapter_id_from_rule_not_request` —
-  Revision 1 (R1): the evidence row's `chapter_id` column always
-  equals the rule's chapter, regardless of what the body supplied
-  (in the matching case).
-- `test_get_returns_pending_state_and_version_etag` — AC2.
-
-### `services/api/tests/test_compliance_ocr_correct.py` (WU-040B-correct)
-
-- `test_correction_writes_overlay_with_actor_as_corrector` — AC3.
-- `test_correction_preserves_raw_text_and_attachment_ref` — AC3.
-- `test_correction_preserves_original_extracted_fields` — AC3 / D3.
-- `test_correction_transitions_status_to_corrected` — AC3.
-- `test_correction_rejects_stale_if_match` — AC3 OCC: 412.
-- `test_correction_rejects_pending_status` — D6: 409.
-- `test_correction_rejects_running_status` — D6: 409.
-- `test_correction_rejects_blank_reason` — D6: 422.
-- `test_correction_requires_compliance_evidence_correct_authority` — D11.
-- `test_correction_emits_evidence_submission_correct_action_with_constants` — D13.
-- `test_second_correction_overwrites_overlay_and_preserves_baseline` — D6.
-- `test_correction_diff_json_records_prior_overlay_on_second_correction`
-  — Revision 1 (R5) / audit M4: second correction's
-  `activity_state_changes.diff_json` records
-  `extracted_fields_corrected: {old: <overlay_1>, new: <overlay_2>}`
-  and the immutable `extracted_fields` baseline. First correction's
-  diff records `extracted_fields_corrected: {old: null, new: <overlay_1>}`.
-
-### `services/api/tests/test_compliance_ocr_extract.py` (WU-040B-extract)
-
-- `test_extract_invokes_provider_and_transitions_to_completed` — D4/D5.
-- `test_extract_persists_raw_text_fields_and_confidence` — D3.
-- `test_extract_failure_transitions_to_failed_with_error_populated` — D3.
-- `test_extract_with_stub_provider_returns_503` — D4/D5.
-- `test_extract_is_idempotent_on_repeat_invocation` — D5.
-- `test_extract_requires_compliance_evidence_extract_authority` — D11.
-- `test_extract_emits_evidence_submission_extract_action_with_constants` — D13.
-
-### `services/api/tests/test_compliance_review_api.py` (WU-041A)
-
-- `test_get_evaluation_returns_populated_read_model` — AC1/AC4.
-- `test_review_approve_updates_review_status_and_reviewer` — AC1.
-- `test_review_override_changes_result_and_advances_consequence` — AC1.
-- `test_review_override_without_result_returns_422` — D7.
-- `test_review_rejects_stale_if_match` — AC1 OCC: 412.
-- `test_review_rejects_blank_reason` — 422.
-- `test_review_requires_compliance_evaluation_review_authority` — D11.
-- `test_review_emits_compliance_evaluation_review_action_with_constants` — D13.
-
-### `services/api/tests/test_compliance_evaluation_worker.py` (WU-041B)
-
-- `test_worker_inserts_evaluation_once_per_member_rule_period` — AC4.
-- `test_worker_is_idempotent_across_multiple_ticks` — AC4 / D8.
-- `test_worker_routes_under_review_consequence_through_roster_service` — AC4 / D10.
-- `test_worker_records_review_queued_for_review_consequence_kind` — D1/D10.
-- `test_worker_records_consequence_applied_under_review_on_success` — D10.
-- `test_worker_tolerates_per_rule_failure_and_continues_batch` — D8.
-- `test_worker_tolerates_occ_conflict_and_retries_next_tick` — D8.
-- `test_period_computation_weekly_monthly_quarterly` — D9.
-- `test_worker_records_insufficient_evidence_with_no_consequence` — D7/D14.
-- `test_worker_installs_root_audit_context` — D8.
-- `test_worker_respects_consequence_kind_under_review_only_on_violation` — D10.
-- `test_worker_does_not_bypass_roster_service_with_raw_sql` — D10.
-- `test_worker_member_failure_does_not_skip_remaining_members_of_rule`
-  — Revision 1 (R2 / F2): a mid-rule member raising a non-OCC
-  exception is caught at the per-member arm; remaining members of
-  that rule are processed within the same tick.
-- `test_worker_rolls_back_evaluation_insert_when_audit_projection_fails`
-  — Revision 1 (R2 / M1): injected fault inside the audit projection
-  raises; neither the `compliance_evaluations` row nor any
-  `activity_actions` row persists; the next tick retries cleanly
-  (no ON CONFLICT shadow row, no bare evaluation row).
-- `test_worker_rolls_back_evaluation_insert_when_roster_transition_occ_fails`
-  — Revision 1 (R6): roster transition raises
-  `StaleMutationError` inside the projection; whole per-member tx
-  rolls back; next tick retries and commits when version matches.
-- `test_manual_run_preserves_operator_attribution_on_roster_transition`
-  — Revision 1 (R4 / audit M3): HTTP operator triggers
-  `POST /evaluations/run`; resulting `roster_entry.transition`
-  action row records
-  `originating_actor_kind=<operator.kind>`,
-  `originating_actor_id=<operator.id>` (not
-  `compliance-evaluator`). Scheduled worker tick in the same test
-  fixture records the service actor as originating.
-- `test_manual_run_requires_compliance_evaluation_review_authority`
-  — Revision 1 (R4): operator without `compliance_evaluation.review`
-  receives 403; the inner service-actor's `.write` grant is not
-  consulted for authority purposes when the endpoint check fails.
-
-HTTP-layer coverage: each endpoint has at least one HTTP-level test
-exercising 403 (authority), 422 (validation), and the happy path.
-Service-layer tests carry the per-AC behavioural assertions.
-
----
-
-## §11 — Out of scope (explicit — D15)
-
-The following are deferred; any PR adding one is out-of-bounds for this
-slice and must split into a follow-up slice:
-
-1. Real OCR engine implementation (Google Vision, Gemini, Tesseract,
-   etc.) — pluggable Protocol + stub only (D4).
-2. Async extraction queue — synchronous only (D5).
-3. File upload endpoint / blob storage — `attachment_ref` is opaque.
-4. Per-rule-type evidence validators or dispatch tables.
-5. Multi-member / batch consequences — one consequence per evaluation
-   row.
-6. Evidence deletion / GDPR flows.
-7. Discord-triggered evidence submission — HTTP intake only.
-8. Trust-signal integration — compliance violations do not generate
-   trust signals this slice.
-9. Immutable corrections history table — history lives in
-   `activity_state_changes` via the audit projection.
-10. `probation` as a new roster state — the only roster consequence is
-    existing `under_review` (D1).
-11. Per-chapter timezone overrides on cadence windows — UTC only (D9).
-12. Confidence-based auto-approval of extractions.
-13. Cross-scope (global) compliance rules — chapter-scoped only.
-
----
-
-## §12 — PR decomposition
-
-Three candidate seams emerge from the synthesis:
-
-- **PR A — Rule lifecycle.** WU-039 (migration + contracts + repo +
-  service + endpoints + tests) and WU-041A review API (migration +
-  review service + endpoints + tests). Clean read/write-gated
-  substrate without any evidence flow.
-- **PR B — Evidence flow.** WU-040A (migration + evidence contracts +
-  service + endpoints + tests), WU-040B-correct (contracts + service
-  + endpoints + tests), WU-040B-extract (contracts + infrastructure
-  OCR + service + endpoints + tests). All three share the
-  `evidence_submissions` row lifecycle.
-- **PR C — Scheduled worker.** WU-041B only (worker module,
-  scheduler wiring, period helper, roster-service consequence
-  dispatch, tests). Depends on PR A + PR B being merged.
-
-Alternative single-PR bundling (PR A+B+C): acceptable at multi-concern
-review time if the reviewer prefers one coherent drop — the three
-migrations can be chained in a single PR (still linear per D12). The
-proposal recommends the three-PR split for review surface area; final
-decomposition is subject to the multi-concern review gate and should
-not exceed three PRs.
-
----
-
-## Guardrails (binding across all WUs)
-
-- D1–D15 are binding. Any apparent need to violate a decision escalates
-  to synthesis revision rather than silent expansion.
-- All mutations flow through `mutate_entity` with narrow payload
-  allowlists; no direct INSERT/UPDATE on mutable aggregates
-  (§5 / `services/api/app/services/mutations.py:58`).
-- All `action_type` / `change_type` values are module-level constants
-  (§9). No f-strings or inline concatenation when emitting audit
-  events (D13).
-- Authority checks run at the service layer via
-  `_require_scoped_authority`; endpoints do not declare per-route
-  FastAPI authority dependencies (matches SLICE-020 / permissions
-  pattern).
-- Originating actor is spoof-proof: derived from
-  `Depends(get_current_actor)` / the ambient audit context, never
-  from the request body.
-- Roster consequences route only through
-  `services/api/app/services/roster.py::transition_roster_entry` (D10).
-  No raw `UPDATE roster_entries` in compliance code.
-- Multi-aggregate service operations share one connection via
-  `mutate_entity(connection=...)` — the kwarg exists at
-  `services/api/app/services/mutations.py:70`.
-- Worker installs root audit context (§7 — mirrors
-  `services/api/app/tasks/permission_expiry.py:43–74`).
-- Migration chain is linear off `wu_038` (D12); downgrades are
-  no-ops.
-- Roster state vocabulary is `under_review`, not `probation` (D1).
-- Test/Code Agent separation (D14): test agent sees contracts only;
-  code agent sees contracts + tests.
-
----
-
-## Migration chain
-
-- Current head: `wu_038_permission_intent_expiry`.
-- SLICE-022 advances the head through three migrations in order:
-  `wu_039_compliance_rules` → `wu_040a_compliance_evidence` →
-  `wu_041a_compliance_evaluations`. New head after slice:
-  `wu_041a_compliance_evaluations`.
-- Filename convention (shipped): `wu-039_compliance_rules.py` (dash
-  between number and title); internal `revision` identifier uses
-  underscore: `"wu_039_compliance_rules"`.
-
----
-
-## Revision log
-
-### Revision 2 — audit re-run MEDIUM + LOW findings closed
-
-Binding risk inputs (re-run): `plans/risk/slice-022-audit.md` (MEDIUM:
-M5; LOW: L1 unchanged, L2 new), `plans/risk/slice-022-shortcut.md`
-(LOW — no action).
-
-- **R7 (audit M5 MEDIUM — roster-service `connection=` kwarg).**
-  R6's atomicity guarantee (evaluation insert + roster transition
-  share one `mutate_entity` transaction) depended on
-  `transition_roster_entry(..., connection=conn)` threading the
-  caller's connection. The shipped
-  `services/api/app/services/roster.py::transition_roster_entry`
-  does not accept a `connection=` kwarg today, so without an
-  explicit signature extension the §5 call would raise `TypeError`
-  at import and the evaluation + roster transition would commit in
-  separate transactions — re-opening the exact atomicity failure R2
-  was built to close. Revision 2 adds an explicit subsection to §5
-  ("Roster service signature extension") documenting the
-  backward-compatible extension of `transition_roster_entry` and
-  `get_roster_entry` with an optional `connection=None` kwarg,
-  mirroring SLICE-020 R1's same-shape extension of
-  `grant_authority` / `revoke_authority`. Test:
-  `test_transition_roster_entry_accepts_shared_connection` in
-  `services/api/tests/test_roster.py` (roster's own test home — so
-  the signature change is pinned where it lives, not smeared into
-  SLICE-022 tests). File/line refs: §5 header + §5 "Roster service
-  signature extension" subsection; §10 notes the cross-file test.
-
-- **R8 (audit L2 LOW — override payload allowlist).** Added
-  `COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST = frozenset({
-  "evaluation_id", "override_result", "reviewer_reason"})` alongside
-  the review allowlist in §3. §5 `review_evaluation` selects the
-  allowlist per `request.action`: review dispatches pair
-  `COMPLIANCE_EVALUATION_REVIEW_ACTION_TYPE` with
-  `COMPLIANCE_EVALUATION_REVIEW_PAYLOAD_ALLOWLIST`; override
-  dispatches pair `COMPLIANCE_EVALUATION_OVERRIDE_ACTION_TYPE` with
-  `COMPLIANCE_EVALUATION_OVERRIDE_PAYLOAD_ALLOWLIST`. Closes D13's
-  "named allowlist per action" requirement at the naming layer
-  (previously review and override implicitly shared one allowlist,
-  which read correctly but scanned poorly). File/line refs: §3
-  (new constant); §5 `review_evaluation` (selection comment).
-
-- **Audit L1 (LOW) — unchanged.** Still documented-silent (no audit
-  row on 503 path); accepted per Revision 1's deferral.
-
-- **Shortcut LOW items — no action.** Shortcut re-run is LOW with no
-  new findings; Revision 1's LOW deferrals stand.
-
-### Revision 1 — audit/shortcut MEDIUM findings closed
-
-Binding risk inputs: `plans/risk/slice-022-audit.md` (MEDIUM: M1, M2,
-M3, M4; LOW: L1), `plans/risk/slice-022-shortcut.md` (MEDIUM: F1, F2,
-F3; six LOW), `plans/risk/slice-022-scope.md` (LOW — no action).
-
-- **R1 (shortcut F1 MEDIUM — chapter_id spoof).** `submit_evidence`
-  loads the rule first via `get_rule(request.rule_id)` and authorizes
-  against `rule["chapter_id"]`, not `request.chapter_id`. Mismatch
-  raises `EvidenceChapterMismatchError` → HTTP 422. The evidence row
-  persists `chapter_id = rule["chapter_id"]` — derived, spoof-proof.
-  Same rule-first pattern documented for any future endpoint that
-  accepts both `rule_id` and `chapter_id`. Tests:
-  `test_submit_rejects_chapter_id_mismatch_with_rule`,
-  `test_submit_authorizes_against_rules_chapter_not_request_chapter`,
-  `test_submit_persists_chapter_id_from_rule_not_request`.
-  File/line refs in this proposal: §3 `EvidenceChapterMismatchError`;
-  §5 `submit_evidence`; §8 `_shared.py` + status table; §10
-  `test_compliance_evidence.py`.
-
-- **R2 (audit M1 MEDIUM + shortcut F2 MEDIUM — atomic evaluation +
-  per-member isolation).** `_evaluate_member_rule` is now a single
-  per-member transaction — `insert_evaluation_if_absent`, the audit
-  projection, and the roster transition commit or roll back together
-  (mirrors SLICE-020 R1 `_expire_single_intent`). On ON CONFLICT, a
-  private `_AlreadyEvaluatedSentinel` raised from
-  `mutate_projection` aborts the projection cleanly (no audit row,
-  no duplicate). `run_scheduled_compliance_evaluations` wraps the
-  member loop in a per-member `try / except StaleMutationError /
-  except Exception` so one bad member does not abort the rule's
-  remaining members. Tests:
-  `test_worker_rolls_back_evaluation_insert_when_audit_projection_fails`,
-  `test_worker_member_failure_does_not_skip_remaining_members_of_rule`.
-  File/line refs: §4 `insert_evaluation_if_absent` docstring; §5
-  `_evaluate_member_rule` rewrite.
-
-- **R3 (audit M2 MEDIUM — consequence audit shape).** Picked option
-  (a) per risk guidance: consequence is an attribute of the
-  evaluation and is written inside the CREATE action's
-  `mutate_projection`. The orphan
-  `COMPLIANCE_EVALUATION_CONSEQUENCE_CHANGE_TYPE` constant is
-  removed; the `mark_consequence_applied` repository helper is
-  removed from §4. The roster transition is its own audit chain
-  (`roster_entry.transition`) threaded via the shared
-  `correlation_id`. File/line refs: §3 (constant removal);
-  §4 (helper removal); §5 `_evaluate_member_rule.mutate_projection`.
-
-- **R4 (audit M3 MEDIUM — operator attribution on manual /run).**
-  `run_scheduled_compliance_evaluations` grows an explicit
-  `originating_actor: ActorIdentity | None` parameter (defaulting
-  to `actor`). The scheduled worker passes `None`, so the service
-  actor is originating as before. The manual
-  `POST /evaluations/run` endpoint authorizes the operator with
-  `compliance_evaluation.review` (D11: `.write` is internal-only),
-  then invokes the service with
-  `actor=_evaluator_service_actor(), originating_actor=<operator>`.
-  The resulting `roster_entry.transition` records operator kind +
-  id; the `compliance_evaluation.create` row records the service
-  actor (consistent with the scheduled path); correlation_id ties
-  them together. This is a legitimate authority-escalation pattern
-  (operator cannot self-write `.write` but can trigger the service
-  actor for a backfill) and is documented in §1 AC4 and the
-  Guardrails. Tests:
-  `test_manual_run_preserves_operator_attribution_on_roster_transition`,
-  `test_manual_run_requires_compliance_evaluation_review_authority`.
-  File/line refs: §1 AC4 endpoints bullet; §5
-  `run_scheduled_compliance_evaluations`; §7 worker tick (defaults
-  `originating_actor=None`).
-
-- **R5 (audit M4 MEDIUM — second-correction diff_json).**
-  `correct_evidence.mutate_projection` now emits
-  `diff_json = {extraction_status: {old, new},
-  extracted_fields: <baseline>,
-  extracted_fields_corrected: {old: <prior overlay>, new: <new
-  overlay>}}`. First correction's `old` is `None`; subsequent
-  corrections carry the prior overlay. A single state-change row is
-  self-describing: baseline + prior overlay + new overlay. Test:
-  `test_correction_diff_json_records_prior_overlay_on_second_correction`.
-  File/line refs: §5 `correct_evidence.mutate_projection` diff_json.
-
-- **R6 (shortcut F3 MEDIUM — roster call signature).** The worker
-  now explicitly (a) fetches `roster_entry` via
-  `get_roster_entry(connection, chapter_id=..., member_id=...)`
-  before opening the mutate_entity transaction, and (b) passes
-  `entry_id=roster_entry["id"]` and
-  `expected_version=roster_entry["version"]` into
-  `roster.transition_roster_entry`, which runs on the shared
-  connection (`mutations.py:70` accepts `connection=`). On
-  `StaleMutationError` the entire per-member transaction rolls back
-  (R2), so the next tick retries naturally — no
-  `deferred_occ_conflict` marker state, no `pending_consequence`
-  intermediate, no second mutation. Observation 3 from the shortcut
-  report (non-atomic consequence) is closed by the same tx boundary.
-  `InvalidRosterStatusTransitionError` (member already
-  `under_review`/`removed`) is mapped upstream by
-  `_compute_consequence_shape` choosing `consequence_applied="none"`
-  when the preconditions do not hold; there is no silent catch
-  inside the write path. Test:
-  `test_worker_rolls_back_evaluation_insert_when_roster_transition_occ_fails`.
-  File/line refs: §4 "Roster member enumeration" expansion;
-  §5 `_evaluate_member_rule` rewrite.
-
-- **Audit L1 (LOW) — unchanged.** The 503 path remains
-  documented-silent (no audit row). Raising this to a MEDIUM-action
-  revision was not required; the proposal already documents the
-  503 short-circuit in §5 and the tests pin the behavior. Deferred
-  to a follow-up slice if operational visibility becomes a concern.
-
-- **Scope findings — none.** `plans/risk/slice-022-scope.md` rated
-  LOW with observations only; no action.
-
-- **Shortcut LOW items (Obs 1–6) — not addressed in this revision.**
-  Obs 1 (failed → corrected COALESCE rule), Obs 2 (rule_version
-  snapshot mechanism), Obs 4 (unused `compliance_rule.read` on
-  service actor), Obs 5 (`asyncio.run` endpoint declaration),
-  Obs 6 (negative-test naming). These are hygiene items;
-  implementation phase can absorb them inline without a revision
-  cycle.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+## 9. Revision history
+- Round 1 A-1 closed by the `platform-cluster-k3d` variable contract in
+  Section 2.5, lines 248-261.
+- Round 1 A-2 closed by the `platform-cluster-vms` variable contract in
+  Section 2.6, lines 284-299.
+- Round 1 A-3 closed by cloud-init idempotency invariants and harness proof in
+  Sections 2.7 and 2.12, lines 325-332 and 478-479.
+- Round 1 A-4 closed by bring-up/tear-down idempotency contracts and double-run
+  harness assertions in Sections 2.11, 2.12, and 3, lines 427-445, 470-477,
+  and 657-675.
+- Round 1 A-5 closed by the OpenTofu `1.11.5` verified CLI pin in Section 2.10,
+  lines 385-391.
+- Round 1 A-6 closed by provider lockfile policy and root drift checks in
+  Sections 2.12, 3, and 6, lines 462-466, 610-636, and 834-835.
+- Round 1 A-7 closed by the named `install-cluster-tools.sh` installer
+  commitment in Sections 2.10, 3, 5, and 6, lines 403-411, 531-554, 795-796,
+  and 803-804.
