@@ -2,7 +2,7 @@ server:
   replicas: 1
   uvicornWorkers: 1
   broadcastPgsql: false
-  policyRepoUrl: https://github.com/permitio/opal-example-policy-repo
+  policyRepoUrl: null
   extraEnv:
     OPAL_POLICY_REPO_POLICY_EXTENSIONS: '[".cedar"]'
   securityContext:

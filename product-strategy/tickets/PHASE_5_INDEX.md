@@ -30,16 +30,16 @@ remotely. SOPS+age is bootstrap-only. Infisical is the runtime secret store.
 | INIT-102 | GitOps substrate | Flux, Kustomize channel overlays, SOPS+age bootstrap-only, real reconciliation in local k3d | 101 | yes | L | done |
 | INIT-103 | Infisical runtime secret store | Infisical, Infisical Operator, InfisicalSecret CRDs, RBAC, runtime secret ownership | 102 | yes | L | done |
 | INIT-104 | S3-compatible storage layer | MinIO local, Vultr Object Storage remote contract, same S3 SDK path, credentials through Infisical | 103 | yes | M | done |
-| INIT-105 | TLS and DNS automation | cert-manager, local step-ca issuer, local DNS/CoreDNS, remote ExternalDNS/Cloudflare and ACME contract | 102, 103 | yes | L | pending |
-| INIT-106 | Application cluster provisioning | Crossplane app-cluster claims for k3s targets, local-channel behavior, remote Vultr VM+k3s compositions | 101, 102, 103 | yes | XL | pending |
-| INIT-107 | Cluster security baseline | NetworkPolicies, PSS, RBAC, service-account boundaries, secret access, policy tests | 102, 106 | yes | L | pending |
-| INIT-108 | Container delivery and registry | Dockerfiles, local image load, channel-aware tags, registry decision with GHCR recommended | 101, 102 | yes | L | pending |
-| INIT-109 | CI/CD via Buildkite | Buildkite pipeline, local agent, remote agent contract, Flux handoff | 102, 108 | yes | L | pending |
-| INIT-110 | Ingress with Kong | Kong controller, local hostnames/TLS, route conventions, remote equivalent | 105, 107 | yes | M | pending |
-| INIT-111 | Data plane | CloudNativePG, Atlas SQL-first migrations, pg_stat_statements, DB credentials via Infisical | 103, 104, 107 | yes | L | pending |
-| INIT-112 | Backup and DR | CNPG backups to S3-compatible storage, RPO/RTO, restore drill, deletion safety | 104, 111 | yes | L | pending |
-| INIT-113 | Application workloads | Deploy api and discord workloads; local bot uses beta guild, remote uses Humility | 103, 108, 110, 111 | yes | XL | pending |
-| INIT-114 | Auth stack | Authentik, OPAL/Cedar, Pomerium, identity claims, route and policy integration | 103, 110, 113 | yes | XL | complete |
+| INIT-105 | TLS and DNS automation | cert-manager, local step-ca issuer, local DNS/CoreDNS, remote ExternalDNS/Cloudflare and ACME contract | 102, 103 | yes | L | done |
+| INIT-106 | Application cluster provisioning | Crossplane app-cluster claims for k3s targets, local-channel behavior, remote Vultr VM+k3s compositions | 101, 102, 103 | yes | XL | done |
+| INIT-107 | Cluster security baseline | NetworkPolicies, PSS, RBAC, service-account boundaries, secret access, policy tests | 102, 106 | yes | L | done |
+| INIT-108 | Container delivery and registry | Dockerfiles, local image load, channel-aware tags, registry decision with GHCR recommended | 101, 102 | yes | L | done |
+| INIT-109 | CI/CD via Buildkite | Buildkite pipeline, local agent, remote agent contract, Flux handoff | 102, 108 | yes | L | done |
+| INIT-110 | Ingress with Kong | Kong controller, local hostnames/TLS, route conventions, remote equivalent | 105, 107 | yes | M | done |
+| INIT-111 | Data plane | CloudNativePG, Atlas SQL-first migrations, pg_stat_statements, DB credentials via Infisical | 103, 104, 107 | yes | L | done |
+| INIT-112 | Backup and DR | CNPG backups to S3-compatible storage, RPO/RTO, restore drill, deletion safety | 104, 111 | yes | L | done |
+| INIT-113 | Application workloads | Deploy api and discord workloads; local bot uses beta guild, remote uses Humility | 103, 108, 110, 111 | yes | XL | done |
+| INIT-114 | Auth stack | Authentik, OPAL/Cedar, Pomerium, identity claims, route and policy integration | 103, 110, 113 | yes | XL | done |
 | INIT-115 | Access policy and service identity | Pomerium policy-as-code, break-glass, Smallstep scope, service identity, service-mesh decision | 107, 114 | yes | M/L | pending |
 | INIT-116 | Tenant and channel isolation | Operationalize tenant/channel isolation across cluster, namespace, DB, object storage, Discord identity | 106, 111, 113, 114 | yes | L | pending |
 | INIT-117 | Observability | Prometheus/Grafana/Alertmanager, OpenTelemetry Collector, Loki, dashboards, alerts, hardening | 107, 113, 114 | yes | L | pending |

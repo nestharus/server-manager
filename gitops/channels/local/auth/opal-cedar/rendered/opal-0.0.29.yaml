@@ -186,7 +186,7 @@ spec:
               protocol: TCP
           env:
             - name: OPAL_POLICY_REPO_URL
-              value: "https://github.com/permitio/opal-example-policy-repo"
+              value: 
             - name: OPAL_POLICY_REPO_POLLING_INTERVAL
               value: "30"
             - name: UVICORN_NUM_WORKERS

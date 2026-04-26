@@ -8,7 +8,6 @@ resources:
   - postgres-cluster.yaml
   - rendered/authentik-2026.2.2.yaml
   - ingress.yaml
-  - local-dns-alias.yaml
 patches:
   - target:
       kind: Deployment

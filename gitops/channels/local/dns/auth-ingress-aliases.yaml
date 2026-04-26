@@ -1,6 +1,18 @@
 apiVersion: v1
 kind: Service
 metadata:
+  name: auth
+  namespace: local
+  labels:
+    app.kubernetes.io/name: authentik-ingress-alias
+    platform.humility.gg/init: "114"
+spec:
+  type: ExternalName
+  externalName: kong-kong-proxy.kong-system.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: authenticate
   namespace: local
   labels:
@@ -21,4 +33,3 @@ metadata:
 spec:
   type: ExternalName
   externalName: kong-kong-proxy.kong-system.svc.cluster.local
-

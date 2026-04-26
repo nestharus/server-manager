@@ -119,7 +119,11 @@ need_command() {
 }
 
 kubectl_cmd() {
-  kubectl "${KUBECONFIG_ARG[@]}" "$@"
+  if [[ "${#KUBECONFIG_ARG[@]}" -gt 0 ]]; then
+    kubectl "${KUBECONFIG_ARG[@]}" "$@"
+  else
+    kubectl "$@"
+  fi
 }
 
 secret_value() {

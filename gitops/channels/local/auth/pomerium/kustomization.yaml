@@ -5,7 +5,6 @@ resources:
   - secrets-infisicalsecret.yaml
   - rendered/pomerium-34.0.1.yaml
   - ingress.yaml
-  - local-dns-alias.yaml
 patches:
   - path: local-all-in-one-patch.yaml
   - target:

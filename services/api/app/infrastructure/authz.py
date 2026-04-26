@@ -1,29 +1,31 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from urllib.error import URLError
+import logging
+import socket
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 from app.contracts.authz import CedarAuthorizationDecision
+
+logger = logging.getLogger(__name__)
 
 
 class CedarAuthorizationUnavailableError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
-class CedarAuthorizationRequest:
+class CedarAuthorizationRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     principal: str
     action: str
     resource: str
 
     def to_payload(self) -> dict[str, str]:
-        return {
-            "principal": self.principal,
-            "action": self.action,
-            "resource": self.resource,
-        }
+        return self.model_dump()
 
 
 class CedarAuthorizationClient:
@@ -42,12 +44,31 @@ class CedarAuthorizationClient:
         try:
             with urlopen(http_request, timeout=self._timeout_seconds) as response:
                 body = response.read().decode("utf-8")
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            logger.warning("Cedar HTTP error %s: %s", exc.code, body)
+            raise CedarAuthorizationUnavailableError(
+                f"Cedar returned HTTP {exc.code}: {body}"
+            ) from exc
         except URLError as exc:
+            logger.warning("Cedar network error: %s", exc)
             raise CedarAuthorizationUnavailableError(str(exc)) from exc
+        except (socket.timeout, TimeoutError) as exc:
+            logger.warning(
+                "Cedar request timed out after %s seconds",
+                self._timeout_seconds,
+            )
+            raise CedarAuthorizationUnavailableError(
+                f"Cedar request timed out after {self._timeout_seconds} seconds"
+            ) from exc
 
         try:
             data = json.loads(body)
         except json.JSONDecodeError as exc:
             raise CedarAuthorizationUnavailableError("invalid Cedar response") from exc
-        return CedarAuthorizationDecision.model_validate(data)
-
+        try:
+            return CedarAuthorizationDecision.model_validate(data)
+        except ValidationError as exc:
+            raise CedarAuthorizationUnavailableError(
+                "invalid Cedar response schema"
+            ) from exc

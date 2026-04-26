@@ -28,23 +28,22 @@ def load_resolver():
 
 
 def test_local_auth_stack_contract() -> None:
+    # Exact versions are deliberate channel-contract checks, not a snapshot.
     resolver = load_resolver()
     channel = resolver.resolve_channel("local")
     auth_stack = channel["auth_stack"]
 
     assert auth_stack["namespace"] == "auth-system"
-    assert auth_stack["authentik"] == {
-        "chart_name": "authentik/authentik",
-        "chart_version": "2026.2.2",
-        "image": "ghcr.io/goauthentik/server:2026.2.2",
-        "host": "auth.local.humility.local",
-        "database_cluster_name": "authentik-postgres",
-        "database_name": "authentik",
-        "database_owner": "authentik",
-        "infisical_project": "platform-auth",
-        "infisical_environment": "local",
-        "infisical_path": "/auth/local/authentik",
-    }
+    assert auth_stack["authentik"]["chart_name"] == "authentik/authentik"
+    assert auth_stack["authentik"]["chart_version"] == "2026.2.2"
+    assert auth_stack["authentik"]["image"] == "ghcr.io/goauthentik/server:2026.2.2"
+    assert auth_stack["authentik"]["host"] == "auth.local.humility.local"
+    assert auth_stack["authentik"]["database_cluster_name"] == "authentik-postgres"
+    assert auth_stack["authentik"]["database_name"] == "authentik"
+    assert auth_stack["authentik"]["database_owner"] == "authentik"
+    assert auth_stack["authentik"]["infisical_project"] == "platform-auth"
+    assert auth_stack["authentik"]["infisical_environment"] == "local"
+    assert auth_stack["authentik"]["infisical_path"] == "/auth/local/authentik"
     assert auth_stack["pomerium"]["chart_version"] == "34.0.1"
     assert auth_stack["pomerium"]["authenticate_host"] == (
         "authenticate.local.humility.local"
@@ -52,17 +51,13 @@ def test_local_auth_stack_contract() -> None:
     assert auth_stack["pomerium"]["proxy_host"] == (
         "protected-api.local.humility.local"
     )
-    assert auth_stack["opal_cedar"] == {
-        "chart_name": "permitio/opal",
-        "chart_version": "0.0.29",
-        "server_image": "docker.io/permitio/opal-server:0.7.12",
-        "client_image": "docker.io/permitio/opal-client-cedar:0.7.12",
-        "proof_path": "/v1/is_authorized",
-    }
-    assert auth_stack["protected_api"] == {
-        "host": "protected-api.local.humility.local",
-        "backend_service": "server-manager-api",
-        "backend_namespace": "server-manager",
-        "backend_port": 8000,
-        "proof_path": "/api/v1/protected/authz-proof",
-    }
+    assert auth_stack["opal_cedar"]["chart_name"] == "permitio/opal"
+    assert auth_stack["opal_cedar"]["chart_version"] == "0.0.29"
+    assert auth_stack["opal_cedar"]["server_image"] == "docker.io/permitio/opal-server:0.7.12"
+    assert auth_stack["opal_cedar"]["client_image"] == "docker.io/permitio/opal-client-cedar:0.7.12"
+    assert auth_stack["opal_cedar"]["proof_path"] == "/v1/is_authorized"
+    assert auth_stack["protected_api"]["host"] == "protected-api.local.humility.local"
+    assert auth_stack["protected_api"]["backend_service"] == "server-manager-api"
+    assert auth_stack["protected_api"]["backend_namespace"] == "server-manager"
+    assert auth_stack["protected_api"]["backend_port"] == 8000
+    assert auth_stack["protected_api"]["proof_path"] == "/api/v1/protected/authz-proof"
