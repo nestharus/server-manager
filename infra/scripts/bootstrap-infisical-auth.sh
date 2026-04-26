@@ -7,6 +7,7 @@ INFRA_DIR="${REPO_ROOT}/infra"
 CHANNEL_REQUEST="local"
 KUBECONFIG_ARG=()
 LOCAL_PORT="18084"
+ROTATE_POMERIUM_SECRETS="false"
 
 SERVER_NAMESPACE="infisical-system"
 SERVER_DEPLOYMENT="infisical-infisical-standalone-infisical"
@@ -36,7 +37,7 @@ PORT_FORWARD_PID=""
 
 usage() {
   cat <<'EOF'
-Usage: bootstrap-infisical-auth.sh [--channel local] [--kubeconfig PATH] [--local-port PORT]
+Usage: bootstrap-infisical-auth.sh [--channel local] [--kubeconfig PATH] [--local-port PORT] [--rotate-pomerium-secrets]
 
 Bootstraps INIT-114 local auth secrets:
   - creates or finds Infisical project platform-auth and environment local
@@ -46,6 +47,10 @@ Bootstraps INIT-114 local auth secrets:
 
 Credentials are written only to Infisical. Re-running is idempotent and leaves
 existing auth secrets unchanged.
+
+Use --rotate-pomerium-secrets only to recover local generated Pomerium crypto
+secrets after a failed bootstrap or format bug. It does not modify Authentik
+credentials or OIDC client identifiers.
 EOF
 }
 
@@ -92,6 +97,11 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "--local-port requires a value"
       LOCAL_PORT="$2"
       shift 2
+      continue
+      ;;
+    --rotate-pomerium-secrets)
+      ROTATE_POMERIUM_SECRETS="true"
+      shift
       continue
       ;;
     -h|--help)
@@ -383,8 +393,26 @@ set_secret_if_absent() {
     --silent >/dev/null
 }
 
+set_secret() {
+  local secret_path="$1"
+  local name="$2"
+  local value="$3"
+
+  infisical secrets set "${name}=${value}" \
+    --domain "http://127.0.0.1:${LOCAL_PORT}/api" \
+    --token "$ADMIN_TOKEN" \
+    --projectId "$PROJECT_ID" \
+    --env "$ENVIRONMENT_SLUG" \
+    --path "$secret_path" \
+    --silent >/dev/null
+}
+
 generate_secret() {
   openssl rand -base64 "${1:-48}" | tr '+/' '-_' | tr -d '=\n'
+}
+
+generate_standard_base64_secret() {
+  openssl rand -base64 "${1:-32}" | tr -d '\n'
 }
 
 need_command kubectl
@@ -429,8 +457,14 @@ set_secret_if_absent "$AUTHENTIK_PATH" "SAMPLE_USER_PASSWORD" "$(generate_secret
 
 set_secret_if_absent "$POMERIUM_PATH" "OIDC_CLIENT_ID" "humility-local-pomerium"
 set_secret_if_absent "$POMERIUM_PATH" "OIDC_CLIENT_SECRET" "$(generate_secret)"
-set_secret_if_absent "$POMERIUM_PATH" "SHARED_SECRET" "$(generate_secret 32)"
-set_secret_if_absent "$POMERIUM_PATH" "COOKIE_SECRET" "$(openssl rand -base64 32 | tr -d '\n')"
-set_secret_if_absent "$POMERIUM_PATH" "SIGNING_KEY" "$(generate_secret 96)"
+if [[ "$ROTATE_POMERIUM_SECRETS" == "true" ]]; then
+  set_secret "$POMERIUM_PATH" "SHARED_SECRET" "$(generate_standard_base64_secret 32)"
+  set_secret "$POMERIUM_PATH" "COOKIE_SECRET" "$(generate_standard_base64_secret 32)"
+  set_secret "$POMERIUM_PATH" "SIGNING_KEY" "$(generate_secret 96)"
+else
+  set_secret_if_absent "$POMERIUM_PATH" "SHARED_SECRET" "$(generate_standard_base64_secret 32)"
+  set_secret_if_absent "$POMERIUM_PATH" "COOKIE_SECRET" "$(generate_standard_base64_secret 32)"
+  set_secret_if_absent "$POMERIUM_PATH" "SIGNING_KEY" "$(generate_secret 96)"
+fi
 
 log "Infisical project ${PROJECT_SLUG} auth paths are bootstrapped for channel ${CHANNEL_REQUEST}"

@@ -114,7 +114,7 @@ spec:
             - name: OPAL_POLICY_STORE_AUTH_TYPE
               value: "none"
             - name: OPAL_POLICY_STORE_TYPE
-              value: "cedar"
+              value: "CEDAR"
             - name: OPAL_POLICY_STORE_URL
               value: "http://localhost:8180"
           readinessProbe:
