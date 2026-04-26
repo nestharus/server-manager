@@ -1,0 +1,33 @@
+fullnameOverride: step-ca
+image:
+  repository: cr.smallstep.com/smallstep/step-ca
+  initContainerRepository: busybox:1.37.0
+  pullPolicy: IfNotPresent
+  tag: "0.30.2"
+bootstrap:
+  image:
+    repository: cr.smallstep.com/smallstep/step-ca-bootstrap
+    tag: "0.30.2"
+    pullPolicy: IfNotPresent
+ca:
+  name: Humility Local CA
+  dns: step-ca.step-ca-system.svc.cluster.local,step-ca.step-ca-system,step-ca,127.0.0.1
+  url: https://step-ca.step-ca-system.svc.cluster.local
+  provisioner:
+    name: admin
+  db:
+    enabled: true
+    persistent: true
+    storageClass: local-path
+    size: 1Gi
+  bootstrap:
+    postInitHook: |
+      step ca provisioner add acme --type ACME --force --ca-config "$(step path)/config/ca.json"
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+serviceaccount:
+  create: true
