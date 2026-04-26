@@ -7,9 +7,12 @@ image:
 
 podSecurityContext:
   runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
 
 containerSecurityContext:
   runAsUser: 1000
+  runAsNonRoot: true
   allowPrivilegeEscalation: false
   capabilities:
     drop:

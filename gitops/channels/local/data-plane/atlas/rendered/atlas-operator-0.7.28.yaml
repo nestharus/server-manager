@@ -18222,6 +18222,7 @@ spec:
           capabilities:
             drop:
             - ALL
+          runAsNonRoot: true
           runAsUser: 1000
         env:
         - name: PREWARM_DEVDB
@@ -18230,5 +18231,7 @@ spec:
           value: "false"
       securityContext:
         runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: atlas-operator
       terminationGracePeriodSeconds: 10
