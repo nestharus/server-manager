@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None, repr=False)
     z_ai_api_key: str | None = Field(default=None, repr=False)
     minimax_api_key: str | None = Field(default=None, repr=False)
+    cedar_authorization_url: str = (
+        "http://opal-client.auth-system.svc.cluster.local:8180"
+    )
 
     def to_read(self) -> ApiSettingsRead:
         return ApiSettingsRead(

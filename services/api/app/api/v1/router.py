@@ -21,6 +21,7 @@ from app.api.v1.endpoints import (
     operations,
     permissions,
     policies,
+    protected,
     ready,
     roster,
     system,
@@ -41,6 +42,7 @@ router.include_router(notifications.router, tags=["notification-rules"])
 router.include_router(operations.router, tags=["operations"])
 router.include_router(permissions.router)
 router.include_router(policies.router, tags=["policies"])
+router.include_router(protected.router, tags=["protected"])
 router.include_router(ready.router, tags=["ready"])
 router.include_router(roster.router, tags=["roster"])
 router.include_router(system.router, tags=["system"])

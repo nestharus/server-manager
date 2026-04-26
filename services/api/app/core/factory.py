@@ -19,6 +19,7 @@ from app.api.v1.router import router as v1_router
 from app.core.actor import ActorMiddleware
 from app.core.context import CorrelationMiddleware
 from app.core.settings import Settings, load_settings
+from app.infrastructure.authz import CedarAuthorizationClient
 from app.infrastructure.ocr import OcrProvider, StubOcrProvider
 from app.repositories.db import PostgresDatabase
 from app.services.scheduler import build_scheduler_loop
@@ -75,6 +76,9 @@ def create_api_app(
 
     app.state.settings = resolved_settings
     app.state.db = resolved_db
+    app.state.cedar_authorizer = CedarAuthorizationClient(
+        resolved_settings.cedar_authorization_url
+    )
     app.state.ocr_provider = resolved_ocr_provider
     app.state.scheduler_loop = scheduler_loop
 
