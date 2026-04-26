@@ -65,3 +65,22 @@ dns:
   coredns_configmap_namespace: kube-system
   coredns_configmap_name: coredns
   sample_lookup_name: minio.minio-system.humility.local
+app_cluster:
+  provider: crossplane
+  claim_namespace: platform-app-clusters
+  sample_claim_name: local-sample
+  crossplane_namespace: crossplane-system
+  provider_kubernetes_package: xpkg.upbound.io/crossplane-contrib/provider-kubernetes:v0.18.0
+  provider_vultr_package: xpkg.upbound.io/crossplane-contrib/provider-vultr:v0.2.0
+  local:
+    target: k3d-local
+    cluster_name: humility-local-app
+    servers: 1
+    agents: 0
+    docker_socket_hostpath: /var/run/docker.sock
+  vultr:
+    credentials_secret_name: vultr-creds
+    credentials_secret_namespace: crossplane-system
+    credentials_secret_key: credentials
+    infisical_project: platform-vultr
+    infisical_path: /api
