@@ -301,7 +301,8 @@ PY
     "gitops/sources/local/gitrepository.yaml" \
     "gitops/sources/local/kustomization.yaml" \
     "gitops/sources/local/kustomization.kustomize.yaml" \
-    "gitops/channels/local/generated/gitops-snapshot-marker.yaml"; do
+    "gitops/channels/local/generated/gitops-snapshot-marker.yaml" \
+    "gitops/bootstrap/infisical-server-bootstrap.enc.yaml"; do
     if [[ -f "${out_dir}/${file}" ]]; then
       pass "rendered: ${file}"
     else
@@ -478,7 +479,7 @@ target = spec.get("managedSecretReference", {})
 
 expected = {
     ("spec", "hostAPI"): "http://infisical.infisical-system.svc.cluster.local:8080",
-    ("scope", "projectId"): "platform-local",
+    ("scope", "projectSlug"): "platform-local",
     ("scope", "envSlug"): "local",
     ("scope", "secretsPath"): "/sample",
     ("creds", "secretName"): "infisical-operator-auth",
@@ -557,6 +558,7 @@ assert_infisical_server_raw_manifests() {
   assert_repo_file_exists "gitops/channels/local/infisical/kustomization.yaml"
   assert_repo_file_exists "gitops/channels/local/infisical/server/kustomization.yaml"
   assert_repo_file_exists "gitops/channels/local/infisical/server/namespace.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/server/service-alias.yaml"
   assert_repo_file_exists "gitops/channels/local/infisical/server/render-values.yaml"
   assert_repo_file_exists "gitops/channels/local/infisical/server/rendered/infisical-standalone-1.8.0.yaml"
   assert_file_exists "scripts/render-infisical-manifests.sh"
@@ -1111,6 +1113,162 @@ assert_delete_missing_local_cluster() {
   fi
 }
 
+cluster_rollout_ready() {
+  local kubeconfig_path="$1"
+  local namespace="$2"
+  local resource="$3"
+  local description="$4"
+
+  if kubectl --kubeconfig "$kubeconfig_path" -n "$namespace" rollout status "$resource" --timeout=300s >/dev/null \
+    && kubectl --kubeconfig "$kubeconfig_path" -n "$namespace" get "$resource" >/dev/null; then
+    pass "$description"
+  else
+    fail "$description"
+    return 1
+  fi
+}
+
+cluster_pvc_bound() {
+  local kubeconfig_path="$1"
+  local namespace="$2"
+  local pvc="$3"
+  local description="$4"
+  local phase
+
+  phase="$(kubectl --kubeconfig "$kubeconfig_path" -n "$namespace" get pvc "$pvc" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  if [[ "$phase" == "Bound" ]]; then
+    pass "$description"
+  else
+    fail "$description"
+    return 1
+  fi
+}
+
+cluster_secret_key_present() {
+  local kubeconfig_path="$1"
+  local namespace="$2"
+  local secret="$3"
+  local key="$4"
+  local description="$5"
+  local value
+
+  value="$(kubectl --kubeconfig "$kubeconfig_path" -n "$namespace" get secret "$secret" -o "jsonpath={.data.${key}}" 2>/dev/null || true)"
+  if [[ -n "$value" ]]; then
+    pass "$description"
+  else
+    fail "$description"
+    return 1
+  fi
+}
+
+cluster_wait_infisicalsecret_ready() {
+  local kubeconfig_path="$1"
+  local description="$2"
+  local attempt
+  local py_bin
+
+  py_bin="$(python_bin)" || {
+    fail "$description"
+    return 1
+  }
+
+  for attempt in $(seq 1 60); do
+    if kubectl --kubeconfig "$kubeconfig_path" -n infisical-sample get infisicalsecret infisical-local-sample -o json 2>/dev/null \
+      | "$py_bin" -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+generation = payload.get("metadata", {}).get("generation")
+for condition in payload.get("status", {}).get("conditions", []):
+    if condition.get("type") not in {"secrets.infisical.com/ReadyToSyncSecrets", "Ready"}:
+        continue
+    if str(condition.get("status")) != "True":
+        continue
+    observed = condition.get("observedGeneration")
+    if observed is not None and generation is not None and int(observed) != int(generation):
+        continue
+    raise SystemExit(0)
+
+raise SystemExit(1)
+'; then
+      pass "$description"
+      return 0
+    fi
+    sleep 3
+  done
+
+  kubectl --kubeconfig "$kubeconfig_path" -n infisical-sample get infisicalsecret infisical-local-sample -o yaml || true
+  fail "$description"
+  return 1
+}
+
+cluster_target_secret_synced() {
+  local kubeconfig_path="$1"
+  local encoded
+  local decoded
+
+  encoded="$(kubectl --kubeconfig "$kubeconfig_path" -n infisical-sample get secret infisical-local-sample -o jsonpath='{.data.INFISICAL_SAMPLE_KEY}' 2>/dev/null || true)"
+  decoded="$(printf '%s' "$encoded" | base64 --decode 2>/dev/null || true)"
+  if [[ "$decoded" == "infisical-local-ready" ]]; then
+    pass "target Secret/infisical-local-sample contains expected INFISICAL_SAMPLE_KEY"
+  else
+    fail "target Secret/infisical-local-sample contains expected INFISICAL_SAMPLE_KEY"
+    return 1
+  fi
+}
+
+assert_infisical_runtime_cluster_state() {
+  local kubeconfig_path="$1"
+  local phase="${2:-after bring-up}"
+
+  echo "Infisical runtime resources ${phase}:"
+  kubectl --kubeconfig "$kubeconfig_path" get infisicalsecret,secret -A | grep infisical-local-sample || true
+
+  cluster_rollout_ready "$kubeconfig_path" infisical-system deployment/infisical-infisical-standalone-infisical "Infisical server Deployment Available (${phase})"
+  cluster_rollout_ready "$kubeconfig_path" infisical-system statefulset/postgresql "Infisical Postgres Pod Ready (${phase})"
+  cluster_rollout_ready "$kubeconfig_path" infisical-system statefulset/redis-master "Infisical Redis Pod Ready (${phase})"
+  cluster_pvc_bound "$kubeconfig_path" infisical-system data-postgresql-0 "Postgres PVC data-postgresql-0 Bound (${phase})"
+  cluster_pvc_bound "$kubeconfig_path" infisical-system redis-data-redis-master-0 "Redis PVC redis-data-redis-master-0 Bound (${phase})"
+  cluster_rollout_ready "$kubeconfig_path" infisical-system deployment/infisical-opera-controller-manager "Infisical Operator Deployment Available (${phase})"
+  cluster_secret_key_present "$kubeconfig_path" infisical-system infisical-server-bootstrap INFISICAL_AUTO_BOOTSTRAP_EMAIL "SOPS-bootstrapped Secret/infisical-server-bootstrap exists (${phase})"
+  cluster_secret_key_present "$kubeconfig_path" infisical-system infisical-operator-auth clientId "Operator UA Secret clientId exists (${phase})"
+  cluster_secret_key_present "$kubeconfig_path" infisical-system infisical-operator-auth clientSecret "Operator UA Secret clientSecret exists (${phase})"
+  cluster_wait_infisicalsecret_ready "$kubeconfig_path" "Sample InfisicalSecret condition secrets.infisical.com/ReadyToSyncSecrets=True (${phase})"
+  cluster_target_secret_synced "$kubeconfig_path"
+}
+
+assert_postgres_restart_durable() {
+  local kubeconfig_path="$1"
+  local postgres_pod
+
+  postgres_pod="$(kubectl --kubeconfig "$kubeconfig_path" -n infisical-system get pod \
+    -l app.kubernetes.io/name=postgresql,app.kubernetes.io/component=primary \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+
+  if [[ -z "$postgres_pod" ]]; then
+    fail "Postgres restart durability: existing Pod found"
+    return
+  fi
+
+  if kubectl --kubeconfig "$kubeconfig_path" -n infisical-system delete pod "$postgres_pod" --wait=false >/dev/null \
+    && kubectl --kubeconfig "$kubeconfig_path" -n infisical-system rollout status statefulset/postgresql --timeout=300s >/dev/null \
+    && kubectl --kubeconfig "$kubeconfig_path" -n infisical-system wait deployment/infisical-infisical-standalone-infisical --for=condition=Available --timeout=300s >/dev/null; then
+    pass "Postgres Pod recreates after deletion"
+  else
+    fail "Postgres Pod recreates after deletion"
+    return
+  fi
+
+  cluster_pvc_bound "$kubeconfig_path" infisical-system data-postgresql-0 "Postgres PVC remains Bound after Pod restart"
+  cluster_wait_infisicalsecret_ready "$kubeconfig_path" "InfisicalSecret continues to reconcile after Postgres restart"
+  cluster_target_secret_synced "$kubeconfig_path"
+}
+
 assert_local_cluster_can_create() {
   local kubeconfig_path="${HOME}/.kube/humility-local.yaml"
   local node_count
@@ -1194,6 +1352,9 @@ assert_local_cluster_can_create() {
   echo "Flux resources after bring-up:"
   kubectl --kubeconfig "$kubeconfig_path" get gitrepository,kustomization -A || true
 
+  assert_infisical_runtime_cluster_state "$kubeconfig_path" "after bring-up"
+  assert_postgres_restart_durable "$kubeconfig_path"
+
   expected_sha="$(awk '/^[[:space:]]*source_sha:/ { print $2; exit }' "$marker_file" 2>/dev/null || true)"
   actual_sha="$(kubectl --kubeconfig "$kubeconfig_path" -n humility-gitops-sentinel get configmap gitops-snapshot-marker -o jsonpath='{.data.source_sha}' 2>/dev/null || true)"
   if [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]]; then
@@ -1255,6 +1416,8 @@ assert_local_cluster_can_create() {
     echo "$second_bring_up_output"
     fail "second bring-up reapplies Flux without error"
   fi
+
+  assert_infisical_runtime_cluster_state "$kubeconfig_path" "after second bring-up"
 
   set +e
   delete_output="$(bash "${INFRA_DIR}/scripts/delete-local-channel.sh" --channel local 2>&1)"

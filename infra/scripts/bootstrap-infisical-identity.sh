@@ -10,7 +10,8 @@ ROTATE=0
 LOCAL_PORT="18080"
 
 SERVER_NAMESPACE="infisical-system"
-SERVER_DEPLOYMENT="infisical"
+SERVER_DEPLOYMENT="infisical-infisical-standalone-infisical"
+SERVER_SERVICE="infisical"
 POSTGRES_STATEFULSET="postgresql"
 REDIS_STATEFULSET="redis-master"
 BOOTSTRAP_SECRET_NAME="infisical-server-bootstrap"
@@ -18,6 +19,7 @@ BOOTSTRAP_SECRET_NAME="infisical-server-bootstrap"
 ORG_NAME="platform"
 PROJECT_SLUG="platform-local"
 PROJECT_NAME="platform-local"
+ORG_ID=""
 ENVIRONMENT_SLUG="local"
 ENVIRONMENT_NAME="local"
 SECRETS_PATH="/sample"
@@ -151,7 +153,7 @@ start_port_forward() {
   local log_file="${REPO_ROOT}/.tmp/infisical-port-forward.log"
   mkdir -p "${REPO_ROOT}/.tmp"
   : >"$log_file"
-  kubectl_cmd -n "$SERVER_NAMESPACE" port-forward "service/infisical" "127.0.0.1:${LOCAL_PORT}:8080" >"$log_file" 2>&1 &
+  kubectl_cmd -n "$SERVER_NAMESPACE" port-forward --address 127.0.0.1 "service/${SERVER_SERVICE}" "${LOCAL_PORT}:8080" >"$log_file" 2>&1 &
   PORT_FORWARD_PID="$!"
 
   for _ in $(seq 1 60); do
@@ -173,6 +175,7 @@ bootstrap_or_login() {
   local admin_password="$3"
   local bootstrap_output
   local token
+  local org_id
 
   set +e
   bootstrap_output="$(
@@ -189,8 +192,14 @@ bootstrap_or_login() {
 
   token="$(jq -er '.identity.credentials.token // empty' <<<"$bootstrap_output" 2>/dev/null || true)"
   if [[ -n "$token" ]]; then
-    printf '%s' "$token"
+    org_id="$(jq -er '.organization.id // empty' <<<"$bootstrap_output" 2>/dev/null || true)"
+    [[ -n "$org_id" ]] || die "Infisical bootstrap response did not include organization.id"
+    printf '%s\t%s' "$token" "$org_id"
     return
+  fi
+
+  if [[ -z "${ORG_ID:-}" ]]; then
+    die "Infisical is already bootstrapped but organization id is unknown"
   fi
 
   set +e
@@ -199,13 +208,14 @@ bootstrap_or_login() {
       --method user \
       --email "$admin_email" \
       --password "$admin_password" \
+      --organization-id "$ORG_ID" \
       --domain "${api_url}/api" \
       --plain \
       --silent 2>/dev/null
   )"
   set -e
   [[ -n "$token" ]] || die "unable to obtain Infisical admin token from bootstrap or direct login"
-  printf '%s' "$token"
+  printf '%s\t%s' "$token" "$ORG_ID"
 }
 
 api_request() {
@@ -248,13 +258,17 @@ find_or_create_project() {
   local project
   local body
   local status
+  local project_id
+  local org_id
 
   set +e
   project="$(api_request GET "/api/v1/projects/slug/${PROJECT_SLUG}")"
   status=$?
   set -e
   if [[ "$status" -eq 0 ]]; then
-    printf '%s' "$project" | json_field '.project.id // .id'
+    project_id="$(jq -er '.project.id // .id' <<<"$project")"
+    org_id="$(jq -er '.project.orgId // .orgId' <<<"$project")"
+    printf '%s\t%s' "$project_id" "$org_id"
     return
   fi
   [[ "$status" -eq 4 ]] || return "$status"
@@ -264,23 +278,27 @@ find_or_create_project() {
     --arg slug "$PROJECT_SLUG" \
     '{projectName: $name, projectDescription: "Humility local runtime secret project", slug: $slug, template: "default", type: "secret-manager", shouldCreateDefaultEnvs: false, hasDeleteProtection: true}')"
   project="$(api_request POST "/api/v1/projects" "$body")"
-  printf '%s' "$project" | json_field '.project.id // .id'
+  project_id="$(jq -er '.project.id // .id' <<<"$project")"
+  org_id="$(jq -er '.project.orgId // .orgId' <<<"$project")"
+  printf '%s\t%s' "$project_id" "$org_id"
 }
 
 ensure_environment() {
-  local environments
+  local project
   local exists
   local body
 
-  environments="$(api_request GET "/api/v1/projects/${PROJECT_ID}/environments")"
-  exists="$(jq -er --arg slug "$ENVIRONMENT_SLUG" '.environments[]? | select(.slug == $slug) | .id' <<<"$environments" 2>/dev/null || true)"
+  project="$(api_request GET "/api/v1/projects/slug/${PROJECT_SLUG}")"
+  exists="$(jq -er --arg slug "$ENVIRONMENT_SLUG" '(.project.environments // .environments // [])[]? | select(.slug == $slug) | .id' <<<"$project" 2>/dev/null || true)"
   [[ -n "$exists" ]] && return
 
   body="$(jq -n --arg name "$ENVIRONMENT_NAME" --arg slug "$ENVIRONMENT_SLUG" '{name: $name, slug: $slug, position: 1}')"
-  api_request POST "/api/v1/projects/${PROJECT_ID}/environments" "$body" >/dev/null
+  api_request POST "/api/v1/workspace/${PROJECT_ID}/environments" "$body" >/dev/null
 }
 
 ensure_sample_secret() {
+  ensure_secret_folder
+
   infisical secrets set "${SAMPLE_SECRET_NAME}=${SAMPLE_SECRET_VALUE}" \
     --domain "http://127.0.0.1:${LOCAL_PORT}/api" \
     --token "$ADMIN_TOKEN" \
@@ -290,20 +308,66 @@ ensure_sample_secret() {
     --silent >/dev/null
 }
 
+ensure_secret_folder() {
+  local parent_path
+  local folder_name
+  local folders
+  local exists
+  local body
+
+  [[ "$SECRETS_PATH" != "/" ]] || return
+  parent_path="$(dirname "$SECRETS_PATH")"
+  folder_name="$(basename "$SECRETS_PATH")"
+  [[ "$parent_path" == "." ]] && parent_path="/"
+
+  folders="$(api_request GET "/api/v2/folders?projectId=${PROJECT_ID}&environment=${ENVIRONMENT_SLUG}&path=${parent_path}&recursive=false")"
+  exists="$(jq -er --arg name "$folder_name" '.folders[]? | select(.name == $name) | .id' <<<"$folders" 2>/dev/null || true)"
+  [[ -n "$exists" ]] && return
+
+  body="$(jq -n \
+    --arg project_id "$PROJECT_ID" \
+    --arg environment "$ENVIRONMENT_SLUG" \
+    --arg name "$folder_name" \
+    --arg path "$parent_path" \
+    '{projectId: $project_id, environment: $environment, name: $name, path: $path}')"
+  api_request POST "/api/v2/folders" "$body" >/dev/null
+}
+
 find_or_create_identity() {
   local identities
   local identity_id
   local body
 
-  identities="$(api_request GET "/api/v1/projects/${PROJECT_ID}/identities?limit=1000&search=${IDENTITY_NAME}")"
+  body="$(jq -n --arg name "$IDENTITY_NAME" '{limit: 100, search: {name: {"$eq": $name}}}')"
+  identities="$(api_request POST "/api/v1/identities/search" "$body")" || die "failed to search Infisical identities"
   identity_id="$(jq -er --arg name "$IDENTITY_NAME" '.identities[]? | select(.name == $name) | .id' <<<"$identities" 2>/dev/null || true)"
   if [[ -n "$identity_id" ]]; then
     printf '%s' "$identity_id"
     return
   fi
 
-  body="$(jq -n --arg name "$IDENTITY_NAME" '{name: $name, hasDeleteProtection: true}')"
-  api_request POST "/api/v1/projects/${PROJECT_ID}/identities" "$body" | json_field '.identity.id'
+  [[ -n "$ORG_ID" ]] || die "organization id is required to create identity ${IDENTITY_NAME}"
+  body="$(jq -n --arg name "$IDENTITY_NAME" --arg org_id "$ORG_ID" '{name: $name, organizationId: $org_id, role: "member", hasDeleteProtection: true}')"
+  api_request POST "/api/v1/identities" "$body" | json_field '.identity.id // .id'
+}
+
+ensure_identity_project_membership() {
+  local identity_id="$1"
+  local membership
+  local status
+  local body
+
+  set +e
+  membership="$(api_request GET "/api/v2/workspace/${PROJECT_ID}/identity-memberships/${identity_id}")"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    return
+  fi
+  [[ "$status" -eq 4 ]] || return "$status"
+
+  body="$(jq -n '{roles: [{role: "admin"}]}')"
+  api_request POST "/api/v2/workspace/${PROJECT_ID}/identity-memberships/${identity_id}" "$body" >/dev/null
 }
 
 ensure_universal_auth() {
@@ -346,6 +410,17 @@ existing_ua_secret_value() {
   kubectl_cmd -n "$UA_SECRET_NAMESPACE" get secret "$UA_SECRET_NAME" -o "jsonpath={.data.${key}}" 2>/dev/null | base64 --decode || true
 }
 
+target_secret_value() {
+  kubectl_cmd -n "infisical-sample" get secret "infisical-local-sample" -o "jsonpath={.data.${SAMPLE_SECRET_NAME}}" 2>/dev/null | base64 --decode || true
+}
+
+runtime_already_bootstrapped() {
+  [[ "$ROTATE" -eq 0 ]] || return 1
+  [[ -n "$(existing_ua_secret_value clientId)" ]] || return 1
+  [[ -n "$(existing_ua_secret_value clientSecret)" ]] || return 1
+  [[ "$(target_secret_value)" == "$SAMPLE_SECRET_VALUE" ]] || return 1
+}
+
 create_client_secret() {
   local identity_id="$1"
   local body
@@ -377,16 +452,28 @@ need_command base64
 
 resolve_channel_infisical
 wait_for_server
+if runtime_already_bootstrapped; then
+  log "Infisical runtime identity and sample Secret already bootstrapped"
+  exit 0
+fi
 start_port_forward
 
 ADMIN_EMAIL="$(secret_value INFISICAL_AUTO_BOOTSTRAP_EMAIL)"
 ADMIN_PASSWORD="$(secret_value INFISICAL_AUTO_BOOTSTRAP_PASSWORD)"
-ADMIN_TOKEN="$(bootstrap_or_login "http://127.0.0.1:${LOCAL_PORT}" "$ADMIN_EMAIL" "$ADMIN_PASSWORD")"
+BOOTSTRAP_RESULT="$(bootstrap_or_login "http://127.0.0.1:${LOCAL_PORT}" "$ADMIN_EMAIL" "$ADMIN_PASSWORD")"
+ADMIN_TOKEN="${BOOTSTRAP_RESULT%%$'\t'*}"
+ORG_ID="${BOOTSTRAP_RESULT#*$'\t'}"
 
-PROJECT_ID="$(find_or_create_project)"
+PROJECT_RESULT="$(find_or_create_project)"
+PROJECT_ID="${PROJECT_RESULT%%$'\t'*}"
+PROJECT_ORG_ID="${PROJECT_RESULT#*$'\t'}"
+if [[ -n "$PROJECT_ORG_ID" ]]; then
+  ORG_ID="$PROJECT_ORG_ID"
+fi
 ensure_environment
 ensure_sample_secret
 IDENTITY_ID="$(find_or_create_identity)"
+ensure_identity_project_membership "$IDENTITY_ID"
 CLIENT_ID="$(ensure_universal_auth "$IDENTITY_ID")"
 
 CLIENT_SECRET=""
