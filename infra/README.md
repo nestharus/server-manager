@@ -4,29 +4,34 @@ Authoritative operator documentation for the Humility deployment substrate.
 
 ## Overview
 
-`infra/` contains the INIT-101 control-cluster substrate: Vultr-locked
-OpenTofu, self-managed k3s, channel templates, and local-first deployment
-scripts. The local channel runs k3s through k3d. Remote channels describe k3s
-on Vultr Cloud Compute VMs bootstrapped by cloud-init.
+`infra/` contains the Phase 5 control-cluster substrate: Vultr-locked
+OpenTofu, self-managed k3s, channel templates, local-first deployment scripts,
+and the INIT-102 GitOps substrate. The local channel runs k3s through k3d.
+Remote channels describe k3s on Vultr Cloud Compute VMs bootstrapped by
+cloud-init.
 
 Local is a real deployment target, not a dry run. The completion proof creates
-`humility-local` and reaches it with `kubectl` through
-`~/.kube/humility-local.yaml`. Remote Vultr work is plan-only in INIT-101.
+`humility-local`, installs Flux source and kustomize controllers, seeds an
+in-cluster Git source from the local GitOps snapshot, and reaches it with
+`kubectl` through `~/.kube/humility-local.yaml`. Remote Vultr work is
+plan-only until a later deployment initiative.
 
 ## Local Prerequisites
 
 Required tools: OpenTofu `1.11.5`, kubectl `>= 1.31`, Docker `>= 24`,
-Python `>= 3.10` with `jsonschema` and `PyYAML`, and k3d `v5.8.3`.
+Python `>= 3.10` with `jsonschema` and `PyYAML`, k3d `v5.8.3`, Flux
+`v2.8.6`, SOPS `v3.12.2`, and age/age-keygen `v1.3.1`.
 
-Verify or install the pinned k3d binary:
+Verify or install the pinned local cluster and GitOps toolchain:
 
 ```bash
 bash infra/scripts/install-cluster-tools.sh --check
 bash infra/scripts/install-cluster-tools.sh --install
 ```
 
-`--install` writes k3d to `~/.local/bin`. It does not install OpenTofu,
-kubectl, Docker, Python, `jsonschema`, or `PyYAML`.
+`--install` writes k3d, flux, sops, age, and age-keygen to `~/.local/bin`.
+It does not install OpenTofu, kubectl, Docker, Python, `jsonschema`, or
+`PyYAML`.
 
 ## Layout
 
@@ -95,7 +100,7 @@ tofu version
 Create, verify, repair, recreate, and tear down the local channel:
 
 ```bash
-bash infra/scripts/bring-up-local-channel.sh --channel local
+bash infra/scripts/bring-up-local-channel.sh local
 KUBECONFIG=~/.kube/humility-local.yaml kubectl get nodes
 KUBECONFIG=~/.kube/humility-local.yaml kubectl get pods -A
 bash infra/scripts/bring-up-local-channel.sh --channel local --repair
@@ -107,6 +112,82 @@ The script resolves `local.yaml`, creates `humility-local` if needed, writes
 `~/.kube/humility-local.yaml`, and verifies one server plus one agent. A second
 run is a no-op when the live cluster matches the channel contract. The delete
 script is idempotent when the cluster and kubeconfig are absent.
+
+## GitOps Substrate
+
+INIT-102 adds the canonical local GitOps reconciliation path. The local channel
+installs pinned Flux `v2.8.6` source and kustomize controllers from
+`gitops/flux/gotk-components.yaml`, serves a rendered repository snapshot from
+an in-cluster Git daemon, and reconciles `GitRepository/humility-local` plus
+`Kustomization/humility-local` in `flux-system`.
+
+Operator one-time bootstrap:
+
+1. Generate or reuse the operator-local age private key:
+
+   ```bash
+   bash infra/scripts/bootstrap-sops-age-key.sh --channel local
+   ```
+
+   The default key path is `~/.config/sops/age/local.txt`, with mode `0600`.
+
+2. Replace the age recipient in `.sops.yaml` with the printed public key, then
+   re-encrypt `gitops/bootstrap/sops-sentinel.enc.yaml` with that recipient:
+
+   ```bash
+   tmp_sentinel="$(mktemp)"
+   cat > "${tmp_sentinel}" <<'YAML'
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: sops-sentinel
+     namespace: flux-system
+     labels:
+       channel: local
+       sentinel: sops-local-ready
+   type: Opaque
+   stringData:
+     ready: "true"
+   YAML
+   sops --encrypt \
+     --filename-override gitops/bootstrap/sops-sentinel.enc.yaml \
+     "${tmp_sentinel}" > gitops/bootstrap/sops-sentinel.enc.yaml
+   rm -f "${tmp_sentinel}"
+   ```
+
+3. Bring up the local channel and Flux reconciliation:
+
+   ```bash
+   bash infra/scripts/bring-up-local-channel.sh local
+   ```
+
+Verify reconciliation:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml kubectl get gitrepository,kustomization -A
+```
+
+All listed Flux resources should report `Ready=True`.
+
+Tear down the local channel:
+
+```bash
+bash infra/scripts/delete-local-channel.sh --channel local
+```
+
+Troubleshooting Flux reconciliation starts with:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n flux-system logs deploy/source-controller
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n flux-system logs deploy/kustomize-controller
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n flux-system describe gitrepository humility-local
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n flux-system describe kustomization humility-local
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n git-system logs deploy/git-daemon
+```
+
+SOPS+age is bootstrap-only. The encrypted sentinel proves Flux can decrypt
+bootstrap-tier manifests. Runtime application secrets, Discord tokens,
+database passwords, and Infisical runtime data belong to Infisical in INIT-103.
 
 ## Remote Channel Plan-Only
 
@@ -146,32 +227,34 @@ The spawn script refuses outputs outside `.tmp/` and parents with
 
 ## Local Verification
 
-Canonical INIT-101 verification:
+Canonical INIT-102 verification without creating a cluster:
 
 ```bash
 bash infra/tests/validate_platform_bootstrap.sh
 ```
 
 Default mode validates files, schemas, resolver behavior, generator drift,
-OpenTofu validation, cloud-init strictness, VKE retirement, and no-cluster
-script idempotency.
+GitOps rendering, Flux lockfile shape, SOPS bootstrap boundary, OpenTofu
+validation, cloud-init strictness, VKE retirement, and no-cluster script
+idempotency.
 
-Real local cluster proof:
+Canonical INIT-102 real local cluster proof:
 
 ```bash
 bash infra/tests/validate_platform_bootstrap.sh --cluster
 ```
 
-Cluster mode requires Docker, k3d, and kubectl. It verifies
-`kubectl get nodes` against `~/.kube/humility-local.yaml`, confirms all nodes
-are `Ready`, checks bring-up idempotency, deletes the cluster, and checks
-delete idempotency.
+Cluster mode requires Docker, k3d, kubectl, flux, sops, age, and age-keygen.
+It verifies `kubectl get nodes` against `~/.kube/humility-local.yaml`,
+confirms all nodes are `Ready`, waits for Flux `GitRepository` and
+`Kustomization` readiness, verifies the snapshot marker reached the cluster,
+checks git-daemon Pod restart recovery, reruns bring-up, deletes the cluster,
+and checks delete idempotency.
 
 ## Anti-Scope
 
 This directory does not install or operate:
 
-- GitOps reconciliation or Flux installation: INIT-102.
 - Runtime secret management or Infisical installation: INIT-103.
 - Crossplane app-cluster provisioning: INIT-106.
 - DNS automation, TLS, cert-manager, ingress, and edge policy: later INITs.
