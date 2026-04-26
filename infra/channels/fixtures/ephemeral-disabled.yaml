@@ -40,3 +40,12 @@ infisical:
   universal_auth_secret_namespace: infisical-system
   operator_namespace: infisical-system
   resync_interval: 60s
+object_storage:
+  provider: minio
+  endpoint: http://minio.minio-system.svc.cluster.local:9000
+  region: us-east-1
+  bucket: humility-local-sample
+  credentials_secret_name: minio-root
+  credentials_secret_namespace: minio-system
+  infisical_project: platform-storage
+  infisical_path: /object-storage/local/

@@ -50,6 +50,9 @@
     },
     "infisical": {
       "$ref": "#/$defs/infisical"
+    },
+    "object_storage": {
+      "$ref": "#/$defs/objectStorage"
     }
   },
   "allOf": [
@@ -81,7 +84,47 @@
         "required": ["cluster"]
       },
       "then": {
-        "required": ["gitops", "infisical"]
+        "required": ["gitops", "infisical", "object_storage"],
+        "properties": {
+          "object_storage": {
+            "required": [
+              "provider",
+              "endpoint",
+              "region",
+              "bucket",
+              "credentials_secret_name",
+              "credentials_secret_namespace",
+              "infisical_project",
+              "infisical_path"
+            ],
+            "properties": {
+              "provider": {
+                "const": "minio"
+              },
+              "endpoint": {
+                "const": "http://minio.minio-system.svc.cluster.local:9000"
+              },
+              "region": {
+                "const": "us-east-1"
+              },
+              "bucket": {
+                "const": "humility-local-sample"
+              },
+              "credentials_secret_name": {
+                "const": "minio-root"
+              },
+              "credentials_secret_namespace": {
+                "const": "minio-system"
+              },
+              "infisical_project": {
+                "const": "platform-storage"
+              },
+              "infisical_path": {
+                "const": "/object-storage/local/"
+              }
+            }
+          }
+        }
       }
     },
     {
@@ -98,7 +141,38 @@
         },
         "required": ["cluster"]
       },
-      "then": {}
+      "then": {
+        "properties": {
+          "object_storage": {
+            "required": [
+              "provider",
+              "region",
+              "bucket",
+              "credentials_secret_name",
+              "credentials_secret_namespace",
+              "infisical_project",
+              "infisical_path"
+            ],
+            "properties": {
+              "provider": {
+                "const": "vultr-object-storage"
+              },
+              "endpoint": {
+                "pattern": "^https://[a-z]{3}1\\.vultrobjects\\.com$"
+              },
+              "region": {
+                "$ref": "#/$defs/region"
+              },
+              "infisical_project": {
+                "const": "platform-storage"
+              },
+              "infisical_path": {
+                "pattern": "^/object-storage/[a-z0-9][a-z0-9-]*/$"
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -402,6 +476,46 @@
         "resync_interval": {
           "type": "string",
           "pattern": "^[1-9][0-9]*(s|m|h)$"
+        }
+      }
+    },
+    "objectStorage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["minio", "vultr-object-storage"]
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
+        },
+        "region": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "credentials_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "credentials_secret_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "infisical_project": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/object-storage/[a-z0-9][a-z0-9-]*/$"
         }
       }
     }
