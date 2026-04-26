@@ -323,6 +323,181 @@ PY
   fi
 }
 
+assert_infisical_channel_schema_and_sample() {
+  local tmp_dir="${REPO_ROOT}/.tmp/validate-platform-bootstrap/infisical-channel"
+  local local_resolved="${tmp_dir}/local.resolved.json"
+  local dev_resolved="${tmp_dir}/dev.resolved.json"
+  local registry="${tmp_dir}/channels"
+  local sample_dir="${REPO_ROOT}/gitops/channels/local/infisical/sample"
+  local sample_cr="${sample_dir}/infisicalsecret.yaml"
+  local operator_crd="${REPO_ROOT}/gitops/channels/local/infisical/operator/rendered/secrets-operator-0.10.32.yaml"
+  local py_bin
+
+  if ! py_bin="$(python_bin)"; then
+    fail "python interpreter available for Infisical channel validation"
+    return
+  fi
+
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel local --out "$local_resolved" \
+    && "$py_bin" - "$local_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "server_url": "http://infisical.infisical-system.svc.cluster.local:8080",
+    "project_id": "platform-local",
+    "environment": "local",
+    "secrets_path": "/sample",
+    "auth_method": "universal-auth",
+    "universal_auth_secret_name": "infisical-operator-auth",
+    "universal_auth_secret_namespace": "infisical-system",
+    "operator_namespace": "infisical-system",
+    "resync_interval": "60s",
+}
+if data.get("infisical") != expected:
+    raise SystemExit(f"unexpected infisical block: {data.get('infisical')!r}")
+PY
+  then
+    pass "local channel resolves with operator-supplied infisical block"
+  else
+    fail "local channel resolves with operator-supplied infisical block"
+  fi
+
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel dev --out "$dev_resolved" \
+    && "$py_bin" - "$dev_resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if "infisical" in data:
+    raise SystemExit("dev must omit infisical in INIT-103")
+PY
+  then
+    pass "dev channel validates without infisical block"
+  else
+    fail "dev channel validates without infisical block"
+  fi
+
+  if "$py_bin" - "${INFRA_DIR}/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import resolve_platform_channel as resolver
+
+resolved = resolver.resolve_channel("local-child")
+if resolved.get("infisical", {}).get("project_id") != "platform-local":
+    raise SystemExit(f"local-child did not inherit infisical: {resolved.get('infisical')!r}")
+PY
+  then
+    pass "local child channel inherits infisical block"
+  else
+    fail "local child channel inherits infisical block"
+  fi
+
+  cp -R "${INFRA_DIR}/channels" "$registry"
+  if "$py_bin" - "${registry}/local.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data.pop("infisical", None)
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+  then
+    if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+      fail "local k3d channel without infisical fails schema validation"
+    else
+      pass "local k3d channel without infisical fails schema validation"
+    fi
+  else
+    fail "local k3d channel without infisical fails schema validation"
+  fi
+
+  assert_repo_file_exists "gitops/channels/local/infisical/sample/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/sample/namespace.yaml"
+  assert_repo_file_exists "gitops/channels/local/infisical/sample/infisicalsecret.yaml"
+
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$sample_dir" >/dev/null; then
+    pass "kubectl kustomize Infisical sample"
+  else
+    fail "kubectl kustomize Infisical sample"
+  fi
+
+  if "$py_bin" - "$sample_cr" "$operator_crd" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+from jsonschema import Draft7Validator
+
+sample = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+crd_path = Path(sys.argv[2])
+schema = None
+
+for document in yaml.safe_load_all(crd_path.read_text(encoding="utf-8")):
+    if not isinstance(document, dict):
+        continue
+    if document.get("kind") != "CustomResourceDefinition":
+        continue
+    if document.get("metadata", {}).get("name") != "infisicalsecrets.secrets.infisical.com":
+        continue
+    for version in document.get("spec", {}).get("versions", []):
+        if version.get("name") == "v1alpha1":
+            schema = version.get("schema", {}).get("openAPIV3Schema")
+            break
+
+if not isinstance(schema, dict):
+    raise SystemExit("InfisicalSecret v1alpha1 CRD schema not found")
+
+errors = sorted(Draft7Validator(schema).iter_errors(sample), key=lambda item: list(item.path))
+if errors:
+    raise SystemExit(errors[0].message)
+
+if sample.get("apiVersion") != "secrets.infisical.com/v1alpha1":
+    raise SystemExit("apiVersion mismatch")
+if sample.get("kind") != "InfisicalSecret":
+    raise SystemExit("kind mismatch")
+if sample.get("metadata", {}).get("name") != "infisical-local-sample":
+    raise SystemExit("metadata.name mismatch")
+if sample.get("metadata", {}).get("namespace") != "infisical-sample":
+    raise SystemExit("metadata.namespace mismatch")
+
+spec = sample.get("spec", {})
+auth = spec.get("authentication", {}).get("universalAuth", {})
+scope = auth.get("secretsScope", {})
+creds = auth.get("credentialsRef", {})
+target = spec.get("managedSecretReference", {})
+
+expected = {
+    ("spec", "hostAPI"): "http://infisical.infisical-system.svc.cluster.local:8080",
+    ("scope", "projectId"): "platform-local",
+    ("scope", "envSlug"): "local",
+    ("scope", "secretsPath"): "/sample",
+    ("creds", "secretName"): "infisical-operator-auth",
+    ("creds", "secretNamespace"): "infisical-system",
+    ("target", "secretName"): "infisical-local-sample",
+    ("target", "secretNamespace"): "infisical-sample",
+}
+actual_maps = {"spec": spec, "scope": scope, "creds": creds, "target": target}
+for (section, key), value in expected.items():
+    if actual_maps[section].get(key) != value:
+        raise SystemExit(f"{section}.{key} mismatch: {actual_maps[section].get(key)!r}")
+PY
+  then
+    pass "sample InfisicalSecret conforms to pinned CRD schema"
+  else
+    fail "sample InfisicalSecret conforms to pinned CRD schema"
+  fi
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -1225,6 +1400,11 @@ echo ""
 echo "=== Slice 103.04 Infisical identity bootstrap validation ==="
 
 assert_infisical_identity_bootstrap_script
+
+echo ""
+echo "=== Slice 103.05 Infisical channel schema and sample validation ==="
+
+assert_infisical_channel_schema_and_sample
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create

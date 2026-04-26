@@ -44,6 +44,9 @@
     },
     "gitops": {
       "$ref": "#/$defs/gitops"
+    },
+    "infisical": {
+      "$ref": "#/$defs/infisical"
     }
   },
   "allOf": [
@@ -62,8 +65,24 @@
         "required": ["cluster"]
       },
       "then": {
-        "required": ["gitops"]
+        "required": ["gitops", "infisical"]
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "cluster": {
+            "properties": {
+              "target": {
+                "const": "vultr-vms"
+              }
+            },
+            "required": ["target"]
+          }
+        },
+        "required": ["cluster"]
+      },
+      "then": {}
     }
   ],
   "$defs": {
@@ -314,6 +333,59 @@
         },
         "wait": {
           "type": "boolean"
+        }
+      }
+    },
+    "infisical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server_url",
+        "project_id",
+        "environment",
+        "secrets_path",
+        "auth_method",
+        "universal_auth_secret_name",
+        "universal_auth_secret_namespace",
+        "operator_namespace",
+        "resync_interval"
+      ],
+      "properties": {
+        "server_url": {
+          "type": "string",
+          "pattern": "^https?://[^\\s/$.?#].[^\\s]*$"
+        },
+        "project_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "secrets_path": {
+          "type": "string",
+          "pattern": "^/([A-Za-z0-9._-]+(/|$))*$"
+        },
+        "auth_method": {
+          "type": "string",
+          "enum": ["universal-auth"]
+        },
+        "universal_auth_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "universal_auth_secret_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "operator_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "resync_interval": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(s|m|h)$"
         }
       }
     }
