@@ -9,3 +9,4 @@ resources:
   - infisical/operator
   - infisical/sample
   - object-storage
+  - tls
