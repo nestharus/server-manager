@@ -138,7 +138,7 @@ install_k3d() {
 
   mkdir -p "$INSTALL_DIR"
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
+  trap '[[ -z "${tmpdir:-}" ]] || rm -rf "$tmpdir"' RETURN
   tmpbin="${tmpdir}/k3d"
 
   echo "Downloading k3d ${K3D_VERSION} from ${url}"

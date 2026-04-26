@@ -1,5 +1,6 @@
 locals {
   kubeconfig_path = pathexpand(var.kubeconfig_path)
+  k3d_image_tag   = replace(var.k3s_version, "+", "-")
 }
 
 resource "null_resource" "k3d_cluster" {
@@ -23,10 +24,10 @@ resource "null_resource" "k3d_cluster" {
         echo "k3d cluster '$CLUSTER_NAME' already exists; skipping create"
       else
         k3d cluster create "$CLUSTER_NAME" \
-          --image "rancher/k3s:$K3S_VERSION" \
+          --image "rancher/k3s:$K3D_IMAGE_TAG" \
           --servers "$SERVERS" \
           --agents "$AGENTS" \
-          --registry-create "$REGISTRY_NAME:0.0.0.0:5000" \
+          --registry-create "$REGISTRY_NAME" \
           --kubeconfig-update-default=false \
           --wait
       fi
@@ -37,7 +38,7 @@ resource "null_resource" "k3d_cluster" {
 
     environment = {
       CLUSTER_NAME    = var.cluster_name
-      K3S_VERSION     = var.k3s_version
+      K3D_IMAGE_TAG   = local.k3d_image_tag
       SERVERS         = tostring(var.servers)
       AGENTS          = tostring(var.agents)
       REGISTRY_NAME   = var.registry_name
