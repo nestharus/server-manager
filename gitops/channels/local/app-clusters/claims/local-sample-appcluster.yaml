@@ -1,0 +1,17 @@
+apiVersion: platform.humility.gg/v1alpha1
+kind: AppCluster
+metadata:
+  name: local-sample
+  namespace: platform-app-clusters
+spec:
+  compositionSelector:
+    matchLabels:
+      platform.humility.gg/app-cluster-target: k3d-local
+  parameters:
+    channel: local
+    target: k3d-local
+    k3sVersion: v1.32.13+k3s1
+    local:
+      clusterName: humility-local-app
+      servers: 1
+      agents: 0
