@@ -1058,6 +1058,73 @@ PY
   fi
 }
 
+assert_dns_coredns_manifests() {
+  local dns_dir="${REPO_ROOT}/gitops/channels/local/dns"
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/dns-rendered.yaml"
+  local py_bin
+
+  assert_repo_file_exists "gitops/channels/local/dns/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/dns/coredns-configmap.yaml"
+
+  mkdir -p "$(dirname "$rendered")"
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$dns_dir" >"$rendered"; then
+    pass "kubectl kustomize local DNS subtree"
+  else
+    fail "kubectl kustomize local DNS subtree"
+    return
+  fi
+
+  if grep -R -Eq '^[[:space:]]*kind:[[:space:]]*(HelmRelease|OCIRepository|HelmRepository|Deployment|Service)[[:space:]]*$' "$dns_dir"; then
+    fail "local DNS subtree only owns CoreDNS ConfigMap"
+  else
+    pass "local DNS subtree only owns CoreDNS ConfigMap"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "CoreDNS local-domain manifest contract"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+if len(docs) != 1:
+    raise SystemExit(f"expected one DNS document, got {len(docs)}")
+config = docs[0]
+if config.get("kind") != "ConfigMap":
+    raise SystemExit("DNS document must be a ConfigMap")
+metadata = config.get("metadata", {})
+if metadata.get("name") != "coredns" or metadata.get("namespace") != "kube-system":
+    raise SystemExit(f"CoreDNS ConfigMap identity mismatch: {metadata!r}")
+corefile = config.get("data", {}).get("Corefile", "")
+required_fragments = [
+    "rewrite stop",
+    r"name regex (.*)\.humility\.local {1}.svc.cluster.local",
+    r"answer name (.*)\.svc\.cluster\.local {1}.humility.local",
+    "kubernetes cluster.local in-addr.arpa ip6.arpa",
+    "forward . /etc/resolv.conf",
+    "reload",
+]
+for fragment in required_fragments:
+    if fragment not in corefile:
+        raise SystemExit(f"Corefile missing fragment: {fragment}")
+if config.get("data", {}).get("NodeHosts", None) is None:
+    raise SystemExit("CoreDNS NodeHosts key must be present for k3s compatibility")
+PY
+  then
+    pass "CoreDNS local-domain manifest contract"
+  else
+    fail "CoreDNS local-domain manifest contract"
+  fi
+
+  if grep -q '  - dns$' "${REPO_ROOT}/gitops/channels/local/kustomization.yaml"; then
+    pass "local channel kustomization includes DNS subtree"
+  else
+    fail "local channel kustomization includes DNS subtree"
+  fi
+}
+
 assert_object_storage_infisical_bootstrap() {
   local script="${INFRA_DIR}/scripts/bootstrap-infisical-storage.sh"
   local storage_dir="${REPO_ROOT}/gitops/channels/local/object-storage/infisical"
@@ -2731,6 +2798,11 @@ echo ""
 echo "=== Slice 105.03 step-ca and local issuer validation ==="
 
 assert_tls_step_ca_manifests
+
+echo ""
+echo "=== Slice 105.04 CoreDNS local domain validation ==="
+
+assert_dns_coredns_manifests
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="
