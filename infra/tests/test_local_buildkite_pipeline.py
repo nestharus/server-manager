@@ -27,11 +27,14 @@ def test_load_pipeline_accepts_command_and_wait_steps() -> None:
     top_env, steps = runner.load_pipeline(REPO_ROOT / ".buildkite" / "pipeline.yml")
 
     assert top_env["CHANNEL_ID"] == "local"
-    assert [type(step).__name__ for step in steps] == [
-        "CommandStep",
-        "CommandStep",
-        "WaitStep",
-        "CommandStep",
+    assert [type(step).__name__ for step in steps].count("WaitStep") == 1
+    assert [step.key for step in steps if isinstance(step, runner.CommandStep)] == [
+        "init-109-smoke",
+        "unit-tests",
+        "init-111-data-plane-static",
+        "init-113-application-workloads-static",
+        "registry-build-push",
+        "init-113-build-images",
     ]
 
 
