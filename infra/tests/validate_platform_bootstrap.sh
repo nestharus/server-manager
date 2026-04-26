@@ -689,6 +689,121 @@ PY
   done
 }
 
+assert_object_storage_infisical_bootstrap() {
+  local script="${INFRA_DIR}/scripts/bootstrap-infisical-storage.sh"
+  local storage_dir="${REPO_ROOT}/gitops/channels/local/object-storage/infisical"
+  local storage_cr="${storage_dir}/minio-root-infisicalsecret.yaml"
+  local operator_crd="${REPO_ROOT}/gitops/channels/local/infisical/operator/rendered/secrets-operator-0.10.32.yaml"
+  local help_output
+  local py_bin
+
+  assert_file_exists "scripts/bootstrap-infisical-storage.sh"
+  assert_executable "scripts/bootstrap-infisical-storage.sh"
+
+  if help_output="$(bash "$script" --help 2>&1)" \
+    && grep -q 'Usage: bootstrap-infisical-storage.sh' <<<"$help_output" \
+    && grep -q 'Re-running is idempotent' <<<"$help_output" \
+    && grep -q 'storage-specific Universal Auth Secret' <<<"$help_output"; then
+    pass "bootstrap-infisical-storage --help"
+  else
+    fail "bootstrap-infisical-storage --help"
+  fi
+
+  if grep -q '^UA_SECRET_NAME="infisical-operator-auth"$' "$script" \
+    && grep -q '^UA_SECRET_NAMESPACE="infisical-system"$' "$script" \
+    && ! grep -q 'infisical-storage-operator-auth' "$script" \
+    && ! grep -q -- '--from-literal=clientId=' "$script" \
+    && ! grep -q -- '--from-literal=clientSecret=' "$script"; then
+    pass "storage bootstrap reuses INIT-103 Operator UA Secret"
+  else
+    fail "storage bootstrap reuses INIT-103 Operator UA Secret"
+  fi
+
+  assert_repo_file_exists "gitops/channels/local/object-storage/infisical/kustomization.yaml"
+  assert_repo_file_exists "gitops/channels/local/object-storage/infisical/minio-root-infisicalsecret.yaml"
+
+  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$storage_dir" >/dev/null; then
+    pass "kubectl kustomize object-storage InfisicalSecret"
+  else
+    fail "kubectl kustomize object-storage InfisicalSecret"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "object-storage InfisicalSecret conforms to pinned CRD schema"
+  elif "$py_bin" - "$storage_cr" "$operator_crd" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+from jsonschema import Draft7Validator
+
+storage = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+crd_path = Path(sys.argv[2])
+schema = None
+
+for document in yaml.safe_load_all(crd_path.read_text(encoding="utf-8")):
+    if not isinstance(document, dict):
+        continue
+    if document.get("kind") != "CustomResourceDefinition":
+        continue
+    if document.get("metadata", {}).get("name") != "infisicalsecrets.secrets.infisical.com":
+        continue
+    for version in document.get("spec", {}).get("versions", []):
+        if version.get("name") == "v1alpha1":
+            schema = version.get("schema", {}).get("openAPIV3Schema")
+            break
+
+if not isinstance(schema, dict):
+    raise SystemExit("InfisicalSecret v1alpha1 CRD schema not found")
+
+errors = sorted(Draft7Validator(schema).iter_errors(storage), key=lambda item: list(item.path))
+if errors:
+    raise SystemExit(errors[0].message)
+
+if storage.get("apiVersion") != "secrets.infisical.com/v1alpha1":
+    raise SystemExit("apiVersion mismatch")
+if storage.get("kind") != "InfisicalSecret":
+    raise SystemExit("kind mismatch")
+if storage.get("metadata", {}).get("name") != "minio-root":
+    raise SystemExit("metadata.name mismatch")
+if storage.get("metadata", {}).get("namespace") != "minio-system":
+    raise SystemExit("metadata.namespace mismatch")
+
+spec = storage.get("spec", {})
+auth = spec.get("authentication", {}).get("universalAuth", {})
+scope = auth.get("secretsScope", {})
+creds = auth.get("credentialsRef", {})
+target = spec.get("managedSecretReference", {})
+template = target.get("template", {})
+
+expected = {
+    ("spec", "hostAPI"): "http://infisical.infisical-system.svc.cluster.local:8080",
+    ("scope", "projectSlug"): "platform-storage",
+    ("scope", "envSlug"): "local",
+    ("scope", "secretsPath"): "/object-storage/local/",
+    ("creds", "secretName"): "infisical-operator-auth",
+    ("creds", "secretNamespace"): "infisical-system",
+    ("target", "secretName"): "minio-root",
+    ("target", "secretNamespace"): "minio-system",
+    ("target", "creationPolicy"): "Owner",
+}
+actual_maps = {"spec": spec, "scope": scope, "creds": creds, "target": target}
+for (section, key), value in expected.items():
+    if actual_maps[section].get(key) != value:
+        raise SystemExit(f"{section}.{key} mismatch: {actual_maps[section].get(key)!r}")
+
+if scope.get("recursive") is not False:
+    raise SystemExit("recursive must be false")
+if template.get("includeAllSecrets") is not True:
+    raise SystemExit("includeAllSecrets must be true")
+PY
+  then
+    pass "object-storage InfisicalSecret conforms to pinned CRD schema"
+  else
+    fail "object-storage InfisicalSecret conforms to pinned CRD schema"
+  fi
+}
+
 assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
@@ -1899,6 +2014,11 @@ echo ""
 echo "=== Slice 104.01 object-storage channel schema validation ==="
 
 assert_object_storage_channel_schema
+
+echo ""
+echo "=== Slice 104.03 Infisical storage bootstrap validation ==="
+
+assert_object_storage_infisical_bootstrap
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create
