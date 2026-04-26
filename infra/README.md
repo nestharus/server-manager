@@ -504,6 +504,41 @@ checks Postgres and git-daemon Pod restart recovery, reruns bring-up, repeats
 the object-storage and TLS/DNS proofs, deletes the cluster, and checks delete
 idempotency.
 
+## Container Delivery
+
+INIT-108 adds the channel image registry contract. The local channel pushes to
+`localhost:5000` and Pods pull the same repository path through
+`k3d-humility-local:5000`. Image names follow:
+
+```text
+<registry>/<channel>/<app>:<tag>
+```
+
+Local smoke build and push:
+
+```bash
+bash infra/scripts/build-channel-image.sh \
+  --channel local \
+  --app registry-smoke \
+  --tag init-108 \
+  --context containers/samples/registry-smoke \
+  --file containers/samples/registry-smoke/Containerfile
+```
+
+Real local registry proof:
+
+```bash
+bash infra/tests/validate_container_delivery_local.sh \
+  --channel local \
+  --kubeconfig ~/.kube/humility-local.yaml
+```
+
+The local bring-up script creates Distribution proxy caches for Docker Hub,
+Quay, and GHCR, then passes a K3s `registries.yaml` mirror config into k3d.
+Remote `dev` records the Vultr Container Registry contract only:
+`ewr.vultrcr.com/humility`, with `Secret/vultr-cr-credentials` in
+`app-runtime` sourced from Infisical path `/registry/dev`.
+
 ## Anti-Scope
 
 This directory does not install or operate:
