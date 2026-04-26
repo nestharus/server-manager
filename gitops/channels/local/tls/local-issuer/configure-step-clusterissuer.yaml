@@ -65,10 +65,13 @@ spec:
         app.kubernetes.io/component: tls-bootstrap
     spec:
       serviceAccountName: configure-step-clusterissuer
+      automountServiceAccountToken: true
       restartPolicy: OnFailure
       securityContext:
         runAsNonRoot: true
         fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: kubectl
           image: bitnami/kubectl@sha256:98736aabcecb8d3cbcdcd7b132d14b1d67ed99bac2f06d471f06235933103df3
@@ -84,6 +87,13 @@ spec:
                 - ALL
             seccompProfile:
               type: RuntimeDefault
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+            requests:
+              cpu: 20m
+              memory: 64Mi
           command:
             - /bin/sh
             - -ec
@@ -101,7 +111,7 @@ spec:
               test -n "$ca_bundle"
               test -n "$kid"
 
-              cat <<EOF | kubectl apply -f -
+              cat > /tmp/step-clusterissuer.yaml <<EOF
               apiVersion: certmanager.step.sm/v1beta1
               kind: StepClusterIssuer
               metadata:
@@ -117,6 +127,7 @@ spec:
                     namespace: step-ca-system
                     key: password
               EOF
+              kubectl apply -f /tmp/step-clusterissuer.yaml
           volumeMounts:
             - name: tmp
               mountPath: /tmp

@@ -311,6 +311,22 @@ PY
     fi
   done
 
+  if "$py_bin" - "${out_dir}/gitops/sources/local/kustomization.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if data.get("spec", {}).get("force") is not True:
+    raise SystemExit("Flux Kustomization must set spec.force=true for immutable Job replacement")
+PY
+  then
+    pass "rendered Flux Kustomization enables immutable Job replacement"
+  else
+    fail "rendered Flux Kustomization enables immutable Job replacement"
+  fi
+
   before="$(find "$out_dir" -type f -print0 | sort -z | xargs -0 sha256sum)"
   set +e
   "$py_bin" "${INFRA_DIR}/scripts/render-gitops-source.py" --channel local --out "$out_dir" >/dev/null
@@ -702,6 +718,30 @@ assert_tls_dns_channel_schema() {
     return
   fi
 
+  if "$py_bin" - "${INFRA_DIR}/schemas/platform-channel.schema.json" "${INFRA_DIR}/schemas/platform-channel-resolved.schema.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+def walk(value, path):
+    if isinstance(value, dict):
+        if value.get("required") == []:
+            raise SystemExit(f"empty required array at {path}.required")
+        for key, child in value.items():
+            walk(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            walk(child, f"{path}[{index}]")
+
+for arg in sys.argv[1:]:
+    walk(json.loads(Path(arg).read_text(encoding="utf-8")), Path(arg).name)
+PY
+  then
+    pass "TLS/DNS schemas do not contain empty required arrays"
+  else
+    fail "TLS/DNS schemas do not contain empty required arrays"
+  fi
+
   rm -rf "$tmp_dir"
   mkdir -p "$tmp_dir"
 
@@ -1058,6 +1098,16 @@ required_fragments = [
 for fragment in required_fragments:
     if fragment not in script:
         raise SystemExit(f"configure job missing fragment: {fragment}")
+script_lines = script.splitlines()
+try:
+    start = script_lines.index("cat > /tmp/step-clusterissuer.yaml <<EOF") + 1
+    end = script_lines.index("EOF", start)
+except ValueError as exc:
+    raise SystemExit("configure job heredoc delimiters missing or indented incorrectly") from exc
+issuer_yaml = "\n".join(script_lines[start:end]).replace("${ca_bundle}", "Q0E=").replace("${kid}", "kid")
+parsed = yaml.safe_load(issuer_yaml)
+if parsed.get("kind") != "StepClusterIssuer":
+    raise SystemExit(f"configure job heredoc does not render StepClusterIssuer YAML: {parsed!r}")
 
 if any(doc.get("kind") == "Pod" and str(doc.get("metadata", {}).get("name", "")).endswith("test-connection") for doc in docs):
     raise SystemExit("step-ca chart test Pod must not be applied")
@@ -1232,6 +1282,9 @@ if issuer is None:
 acme = issuer.get("spec", {}).get("acme", {})
 if acme.get("server") != "https://acme-staging-v02.api.letsencrypt.org/directory":
     raise SystemExit(f"ACME server must be staging: {acme!r}")
+email = acme.get("email", "")
+if email != "acme-bootstrap@humility.gg" or email.endswith(".example"):
+    raise SystemExit(f"ACME email must use the Humility bootstrap placeholder, not an example domain: {email!r}")
 solver = acme.get("solvers", [{}])[0].get("dns01", {}).get("cloudflare", {}).get("apiTokenSecretRef", {})
 if solver != {"name": "cloudflare-api-token", "key": "CF_API_TOKEN"}:
     raise SystemExit(f"ACME Cloudflare token ref mismatch: {solver!r}")
@@ -1240,6 +1293,101 @@ PY
     pass "remote TLS/DNS rendered contract"
   else
     fail "remote TLS/DNS rendered contract"
+  fi
+}
+
+assert_tls_dns_pod_hardening() {
+  local rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/tls-dns-pod-hardening.yaml"
+  local py_bin
+
+  mkdir -p "$(dirname "$rendered")"
+  if command -v kubectl >/dev/null 2>&1 \
+    && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/tls/cert-manager" >"${rendered}.cert-manager" \
+    && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/tls/step-ca" >"${rendered}.step-ca" \
+    && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/tls/step-issuer" >"${rendered}.step-issuer" \
+    && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/tls/local-issuer" >"${rendered}.local-issuer" \
+    && kubectl kustomize "${REPO_ROOT}/gitops/contracts/remote/tls-dns/external-dns" >"${rendered}.external-dns"; then
+    {
+      cat "${rendered}.cert-manager"
+      printf '%s\n' '---'
+      cat "${rendered}.step-ca"
+      printf '%s\n' '---'
+      cat "${rendered}.step-issuer"
+      printf '%s\n' '---'
+      cat "${rendered}.local-issuer"
+      printf '%s\n' '---'
+      cat "${rendered}.external-dns"
+    } >"$rendered"
+  else
+    fail "TLS/DNS Pod specs render for hardening audit"
+    return
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "TLS/DNS Pod specs satisfy hardening contract"
+  elif "$py_bin" - "$rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+need_token = {
+    ("Deployment", "cert-manager-cainjector"),
+    ("Deployment", "cert-manager"),
+    ("Deployment", "cert-manager-webhook"),
+    ("Job", "cert-manager-startupapicheck"),
+    ("Job", "step-ca"),
+    ("Deployment", "step-issuer"),
+    ("Job", "configure-step-clusterissuer"),
+    ("Deployment", "external-dns"),
+}
+no_token = {("StatefulSet", "step-ca")}
+
+for doc in docs:
+    kind = doc.get("kind")
+    name = doc.get("metadata", {}).get("name")
+    if kind in {"Deployment", "StatefulSet", "DaemonSet"}:
+        template = doc.get("spec", {}).get("template", {})
+    elif kind == "Job":
+        template = doc.get("spec", {}).get("template", {})
+    else:
+        continue
+    spec = template.get("spec", {})
+    if (kind, name) in need_token and spec.get("automountServiceAccountToken") is not True:
+        raise SystemExit(f"{kind}/{name} must explicitly mount its service account token")
+    if (kind, name) in no_token and spec.get("automountServiceAccountToken") is not False:
+        raise SystemExit(f"{kind}/{name} must explicitly disable service account token automount")
+    for list_name in ("initContainers", "containers"):
+        for container in spec.get(list_name, []) or []:
+            container_name = container.get("name")
+            security = container.get("securityContext") or {}
+            resources = container.get("resources") or {}
+            requests = resources.get("requests") or {}
+            limits = resources.get("limits") or {}
+            for key, expected in {
+                "readOnlyRootFilesystem": True,
+                "runAsNonRoot": True,
+                "allowPrivilegeEscalation": False,
+            }.items():
+                if security.get(key) is not expected:
+                    raise SystemExit(f"{kind}/{name} {container_name} has {key}={security.get(key)!r}")
+            if not isinstance(security.get("runAsUser"), int) or security.get("runAsUser") == 0:
+                raise SystemExit(f"{kind}/{name} {container_name} must run as a non-zero UID")
+            if (security.get("capabilities") or {}).get("drop") != ["ALL"]:
+                raise SystemExit(f"{kind}/{name} {container_name} must drop all capabilities")
+            if (security.get("seccompProfile") or {}).get("type") != "RuntimeDefault":
+                raise SystemExit(f"{kind}/{name} {container_name} must use RuntimeDefault seccomp")
+            for field in ("cpu", "memory"):
+                if field not in requests:
+                    raise SystemExit(f"{kind}/{name} {container_name} missing {field} request")
+                if field not in limits:
+                    raise SystemExit(f"{kind}/{name} {container_name} missing {field} limit")
+PY
+  then
+    pass "TLS/DNS Pod specs satisfy hardening contract"
+  else
+    fail "TLS/DNS Pod specs satisfy hardening contract"
   fi
 }
 
@@ -1796,6 +1944,7 @@ assert_gitops_flux_components() {
   local file="${REPO_ROOT}/gitops/flux/gotk-components.yaml"
   local deployment_count
   local unexpected_deployment_count
+  local py_bin
 
   if [[ -f "$file" ]]; then
     pass "exists: gitops/flux/gotk-components.yaml"
@@ -1836,6 +1985,36 @@ assert_gitops_flux_components() {
     pass "Flux lockfile excludes helm/notification/image controller Deployments"
   else
     fail "Flux lockfile excludes helm/notification/image controller Deployments"
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "Flux lockfile RBAC subjects match installed ServiceAccounts"
+  elif "$py_bin" - "$file" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = [doc for doc in yaml.safe_load_all(Path(sys.argv[1]).read_text(encoding="utf-8")) if isinstance(doc, dict)]
+service_accounts = {
+    (doc.get("metadata", {}).get("namespace", "default"), doc.get("metadata", {}).get("name"))
+    for doc in docs
+    if doc.get("kind") == "ServiceAccount"
+}
+for doc in docs:
+    if doc.get("kind") not in {"RoleBinding", "ClusterRoleBinding"}:
+        continue
+    for subject in doc.get("subjects", []) or []:
+        if subject.get("kind") != "ServiceAccount":
+            continue
+        subject_key = (subject.get("namespace", doc.get("metadata", {}).get("namespace", "default")), subject.get("name"))
+        if subject_key not in service_accounts:
+            raise SystemExit(f"{doc.get('kind')}/{doc.get('metadata', {}).get('name')} references absent ServiceAccount {subject_key}")
+PY
+  then
+    pass "Flux lockfile RBAC subjects match installed ServiceAccounts"
+  else
+    fail "Flux lockfile RBAC subjects match installed ServiceAccounts"
   fi
 }
 
@@ -3031,6 +3210,11 @@ echo ""
 echo "=== Slice 105.05 remote ExternalDNS and ACME contract validation ==="
 
 assert_remote_tls_dns_contracts
+
+echo ""
+echo "=== Slice 105.05a TLS/DNS Pod hardening validation ==="
+
+assert_tls_dns_pod_hardening
 
 echo ""
 echo "=== Slice 105.06 sample Certificate and DNS proof validation ==="

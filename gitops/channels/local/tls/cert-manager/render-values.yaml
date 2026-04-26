@@ -2,26 +2,84 @@ crds:
   enabled: true
 prometheus:
   enabled: false
+automountServiceAccountToken: true
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsGroup: 1001
+  runAsNonRoot: true
+  runAsUser: 1001
+  seccompProfile:
+    type: RuntimeDefault
 startupapicheck:
   enabled: true
+  automountServiceAccountToken: true
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsGroup: 1001
+    runAsNonRoot: true
+    runAsUser: 1001
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 50m
+      memory: 128Mi
 resources:
   requests:
     cpu: 10m
     memory: 64Mi
   limits:
+    cpu: 100m
     memory: 256Mi
 cainjector:
+  automountServiceAccountToken: true
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsGroup: 1001
+    runAsNonRoot: true
+    runAsUser: 1001
+    seccompProfile:
+      type: RuntimeDefault
   resources:
     requests:
       cpu: 10m
       memory: 64Mi
     limits:
+      cpu: 100m
       memory: 256Mi
 webhook:
   timeoutSeconds: 4
+  automountServiceAccountToken: true
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsGroup: 1001
+    runAsNonRoot: true
+    runAsUser: 1001
+    seccompProfile:
+      type: RuntimeDefault
   resources:
     requests:
       cpu: 10m
       memory: 64Mi
     limits:
+      cpu: 100m
       memory: 256Mi

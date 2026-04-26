@@ -38,7 +38,7 @@ tls:
   provider: acme
   remote_cluster_issuer_name: letsencrypt-staging
   acme_server: https://acme-staging-v02.api.letsencrypt.org/directory
-  acme_email: platform-admin@humility.example
+  acme_email: acme-bootstrap@humility.gg
   cloudflare_api_token_secret_name: cloudflare-api-token
   cloudflare_api_token_secret_namespace: external-dns-system
 dns:
