@@ -9,6 +9,7 @@ resources:
   - infisical/operator
   - infisical/sample
   - object-storage
+  - image-registry
   - tls
   - dns
   - app-clusters
