@@ -353,7 +353,7 @@
       "properties": {
         "server_url": {
           "type": "string",
-          "pattern": "^https?://[^\\s/$.?#].[^\\s]*$"
+          "pattern": "^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
         },
         "project_id": {
           "type": "string",

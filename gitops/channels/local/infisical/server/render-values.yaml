@@ -38,6 +38,10 @@ postgresql:
       name: infisical-server-bootstrap
       key: DB_CONNECTION_URI
   primary:
+    # INIT-107 owns the cluster NetworkPolicy baseline. The chart defaults
+    # are intentionally disabled here because they allow broad ingress.
+    networkPolicy:
+      enabled: false
     persistence:
       size: 8Gi
 redis:
@@ -50,6 +54,10 @@ redis:
   auth:
     existingSecret: infisical-server-bootstrap
     existingSecretPasswordKey: REDIS_PASSWORD
+  # INIT-107 owns the cluster NetworkPolicy baseline. The chart default
+  # includes allow-all egress, so keep it disabled until that baseline lands.
+  networkPolicy:
+    enabled: false
   master:
     persistence:
       size: 8Gi

@@ -95,7 +95,7 @@ render_server() {
   local output_path="$1"
   local raw_path="${output_path}.raw"
 
-  helm repo add "$HELM_REPO_NAME" "$HELM_REPO_URL" >/dev/null
+  helm repo add "$HELM_REPO_NAME" "$HELM_REPO_URL" --force-update >/dev/null
   helm repo update "$HELM_REPO_NAME" >/dev/null
   helm template "$SERVER_RELEASE" "${HELM_REPO_NAME}/${SERVER_CHART}" \
     --version "$SERVER_CHART_VERSION" \
@@ -254,7 +254,7 @@ render_operator() {
   local raw_path="${output_path}.raw"
   local upstream_dir="${output_path}.upstream"
 
-  helm repo add "$HELM_REPO_NAME" "$HELM_REPO_URL" >/dev/null
+  helm repo add "$HELM_REPO_NAME" "$HELM_REPO_URL" --force-update >/dev/null
   helm repo update "$HELM_REPO_NAME" >/dev/null
   helm template "$OPERATOR_RELEASE" "${HELM_REPO_NAME}/${OPERATOR_CHART}" \
     --version "$OPERATOR_CHART_VERSION" \
