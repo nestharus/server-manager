@@ -20,7 +20,8 @@ plan-only until a later deployment initiative.
 
 Required tools: OpenTofu `1.11.5`, kubectl `>= 1.31`, Docker `>= 24`,
 Python `>= 3.10` with `jsonschema` and `PyYAML`, k3d `v5.8.3`, Flux
-`v2.8.6`, SOPS `v3.12.2`, and age/age-keygen `v1.3.1`.
+`v2.8.6`, Helm `v3.20.2`, SOPS `v3.12.2`, age/age-keygen `v1.3.1`, and
+Infisical CLI `v0.43.78`.
 
 Verify or install the pinned local cluster and GitOps toolchain:
 
@@ -29,9 +30,10 @@ bash infra/scripts/install-cluster-tools.sh --check
 bash infra/scripts/install-cluster-tools.sh --install
 ```
 
-`--install` writes k3d, flux, sops, age, and age-keygen to `~/.local/bin`.
-It does not install OpenTofu, kubectl, Docker, Python, `jsonschema`, or
-`PyYAML`.
+`--install` writes k3d, flux, helm, sops, age, age-keygen, and infisical to
+`~/.local/bin`. Helm is local render tooling only; it is not installed into
+the cluster. The script does not install OpenTofu, kubectl, Docker, Python,
+`jsonschema`, or `PyYAML`.
 
 ## Layout
 
@@ -244,12 +246,12 @@ Canonical INIT-102 real local cluster proof:
 bash infra/tests/validate_platform_bootstrap.sh --cluster
 ```
 
-Cluster mode requires Docker, k3d, kubectl, flux, sops, age, and age-keygen.
-It verifies `kubectl get nodes` against `~/.kube/humility-local.yaml`,
-confirms all nodes are `Ready`, waits for Flux `GitRepository` and
-`Kustomization` readiness, verifies the snapshot marker reached the cluster,
-checks git-daemon Pod restart recovery, reruns bring-up, deletes the cluster,
-and checks delete idempotency.
+Cluster mode requires Docker, k3d, kubectl, flux, helm, sops, age, age-keygen,
+and infisical. It verifies `kubectl get nodes` against
+`~/.kube/humility-local.yaml`, confirms all nodes are `Ready`, waits for Flux
+`GitRepository` and `Kustomization` readiness, verifies the snapshot marker
+reached the cluster, checks git-daemon Pod restart recovery, reruns bring-up,
+deletes the cluster, and checks delete idempotency.
 
 ## Anti-Scope
 

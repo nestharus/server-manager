@@ -638,11 +638,35 @@ assert_tool_version() {
   fi
 }
 
+assert_command_version() {
+  local description="$1"
+  local expected="$2"
+  local pattern="$3"
+  shift 3
+  local raw_output
+  local output
+  local status
+
+  set +e
+  raw_output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  output="$(sed -n '1p' <<<"$raw_output")"
+
+  if [[ "$status" -eq 0 ]] && grep -Eq "$pattern" <<<"$output"; then
+    pass "${description} returns ${expected} (${output//$'\n'/; })"
+  else
+    fail "${description} returns ${expected} (${output//$'\n'/; })"
+  fi
+}
+
 assert_gitops_tool_versions() {
   assert_tool_version "flux" "v2.8.6" '^flux version 2\.8\.6$'
+  assert_command_version "helm version --short" "v3.20.2" '^v3\.20\.2(\+.*)?$' helm version --short
   assert_tool_version "sops" "v3.12.2" '^sops 3\.12\.2([[:space:]].*)?$'
   assert_tool_version "age" "v1.3.1" '^v1\.3\.1$'
   assert_tool_version "age-keygen" "v1.3.1" '^v1\.3\.1$'
+  assert_tool_version "infisical" "infisical version 0.43.78" '^infisical version 0\.43\.78$'
 }
 
 assert_bring_up_script_help_works() {
