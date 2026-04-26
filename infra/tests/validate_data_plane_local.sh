@@ -22,6 +22,7 @@ APP_SECRET=""
 URL_SECRET=""
 ATLAS_MIGRATION=""
 VERIFY_TABLE=""
+BACKUP_SECRET=""
 
 usage() {
   cat <<'EOF'
@@ -30,7 +31,7 @@ Usage: validate_data_plane_local.sh [--channel local] [--kubeconfig PATH] [--sta
 Validates INIT-111 data plane:
   - channel data_plane schema resolution
   - raw CNPG and Atlas manifests
-  - sample PG Cluster, Infisical credential, backup target, and Atlas migration manifests
+  - sample PG Cluster, Infisical credential, backup target, ScheduledBackup, and Atlas migration manifests
   - optional runtime proof: CNPG Cluster Ready, AtlasMigration Ready, psql connect, schema verify
 
 Options:
@@ -217,8 +218,9 @@ assert_channel_contract() {
   assert_json_equals '.data_plane.atlas.chart_version' '0.7.28' 'Atlas chart version'
   assert_json_equals '.data_plane.credentials.infisical_project' 'platform-databases' 'database Infisical project'
   assert_json_equals '.data_plane.credentials.infisical_path' '/postgres/local/sample-app' 'database Infisical path'
-  assert_json_equals '.data_plane.backup.bucket' 'humility-local-sample' 'backup bucket'
-  assert_json_equals '.data_plane.backup.endpoint' 'http://minio.minio-system.svc.cluster.local:9000' 'backup endpoint'
+  assert_json_equals '.backup.bucket' 'humility-local-backups' 'backup bucket'
+  assert_json_equals '.backup.endpoint' 'http://minio.minio-system.svc.cluster.local:9000' 'backup endpoint'
+  assert_json_equals '.backup.retention_policy' '7d' 'backup retention policy'
   pass "resolved channel data_plane contract"
 
   CNPG_NAMESPACE="$(json_field '.data_plane.cnpg.operator_namespace')"
@@ -230,6 +232,7 @@ assert_channel_contract() {
   URL_SECRET="$(json_field '.data_plane.credentials.url_secret_name')"
   ATLAS_MIGRATION="$(json_field '.data_plane.migrations.atlas_migration_name')"
   VERIFY_TABLE="$(json_field '.data_plane.migrations.verify_table')"
+  BACKUP_SECRET="$(json_field '.backup.credentials_secret_name')"
 }
 
 assert_static_manifests() {
@@ -240,6 +243,7 @@ assert_static_manifests() {
   assert_file "gitops/channels/local/data-plane/atlas/render-values.yaml"
   assert_file "gitops/channels/local/data-plane/atlas/rendered/atlas-operator-0.7.28.yaml"
   assert_file "gitops/channels/local/data-plane/sample-app/cluster.yaml"
+  assert_file "gitops/channels/local/data-plane/sample-app/scheduled-backup.yaml"
   assert_file "gitops/channels/local/data-plane/sample-app/atlas-migration.yaml"
   assert_file "database/migrations/sample-app/20260426000100_init.sql"
   assert_file "database/migrations/sample-app/atlas.sum"
@@ -253,15 +257,16 @@ assert_static_manifests() {
   pass "local root kustomization includes data-plane"
 
   grep -q '^kind: Cluster$' "$data_plane_render" || die "missing CNPG Cluster kind in rendered manifests"
+  grep -q '^kind: ScheduledBackup$' "$data_plane_render" || die "missing CNPG ScheduledBackup kind in rendered manifests"
   grep -q '^kind: AtlasMigration$' "$data_plane_render" || die "missing AtlasMigration kind in rendered manifests"
   grep -q 'name: sample-app-atlas-migrations' "$data_plane_render" || die "missing migration ConfigMap sample-app-atlas-migrations in rendered manifests"
-  pass "sample Cluster and Atlas migration objects rendered"
+  pass "sample Cluster, ScheduledBackup, and Atlas migration objects rendered"
 
-  if rg -n '^kind: (Secret|Backup|ScheduledBackup)$' --glob '!**/rendered/**' "${REPO_ROOT}/gitops/channels/local/data-plane" >/tmp/init111-forbidden-kind.txt; then
+  if rg -n '^kind: (Secret|Backup)$' --glob '!**/rendered/**' "${REPO_ROOT}/gitops/channels/local/data-plane" >/tmp/init111-forbidden-kind.txt; then
     cat /tmp/init111-forbidden-kind.txt >&2
-    die "no committed data-plane Secret, Backup, or ScheduledBackup resources"
+    die "no committed data-plane Secret or one-shot Backup resources"
   fi
-  pass "no committed data-plane Secret, Backup, or ScheduledBackup resources"
+  pass "no committed data-plane Secret or one-shot Backup resources"
 
   if rg -n 'postgres://sample_app:[^$({]' "${REPO_ROOT}/gitops" "${REPO_ROOT}/database" >/tmp/init111-secret-literal.txt; then
     cat /tmp/init111-secret-literal.txt >&2
@@ -293,8 +298,8 @@ assert_runtime() {
   pass "InfisicalSecret/${APP_SECRET} ReadyToSyncSecrets=True"
   wait_infisicalsecret_ready "$URL_SECRET"
   pass "InfisicalSecret/${URL_SECRET} ReadyToSyncSecrets=True"
-  wait_infisicalsecret_ready "minio-root"
-  pass "InfisicalSecret/minio-root ReadyToSyncSecrets=True"
+  wait_infisicalsecret_ready "$BACKUP_SECRET"
+  pass "InfisicalSecret/${BACKUP_SECRET} ReadyToSyncSecrets=True"
 
   [[ -n "$(secret_key "$SAMPLE_NAMESPACE" "$APP_SECRET" username)" ]] || die "app username Secret key is empty"
   [[ -n "$(secret_key "$SAMPLE_NAMESPACE" "$APP_SECRET" password)" ]] || die "app password Secret key is empty"

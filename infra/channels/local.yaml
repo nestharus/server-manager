@@ -119,7 +119,7 @@ data_plane:
     operator_namespace: cnpg-system
     operator_version: 1.29.0
     operator_manifest: gitops/channels/local/data-plane/cnpg/rendered/cnpg-1.29.0.yaml
-    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-standard-trixie
+    postgres_image: ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
   atlas:
     operator_namespace: atlas-operator
     chart_name: oci://ghcr.io/ariga/charts/atlas-operator
@@ -146,14 +146,19 @@ data_plane:
     repo_dir: database/migrations/sample-app
     revisions_schema: atlas_schema_revisions
     verify_table: sample_app.widgets
-  backup:
-    provider: minio
-    endpoint: http://minio.minio-system.svc.cluster.local:9000
-    bucket: humility-local-sample
-    region: us-east-1
-    destination_path: s3://humility-local-sample/cnpg/local/sample-app-postgres
-    credentials_secret_name: minio-root
-    credentials_secret_namespace: minio-system
+backup:
+  provider: minio
+  endpoint: http://minio.minio-system.svc.cluster.local:9000
+  bucket: humility-local-backups
+  region: us-east-1
+  destination_path: s3://humility-local-backups/cnpg/local/sample-app-postgres
+  retention_policy: 7d
+  schedule: "0 0 0 * * *"
+  credentials_secret_name: backup-object-storage
+  credentials_secret_namespace: sample-app-db
+  infisical_project: platform-storage
+  infisical_environment: local
+  infisical_path: /object-storage/local/
 tls:
   provider: step-ca
   local_cluster_issuer_name: humility-local-step-ca

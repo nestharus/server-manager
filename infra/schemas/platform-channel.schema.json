@@ -76,6 +76,9 @@
     "data_plane": {
       "$ref": "#/$defs/dataPlane"
     },
+    "backup": {
+      "$ref": "#/$defs/backup"
+    },
     "tls": {
       "$ref": "#/$defs/tls"
     },
@@ -1442,8 +1445,7 @@
         "atlas",
         "sample",
         "credentials",
-        "migrations",
-        "backup"
+        "migrations"
       ],
       "properties": {
         "provider": {
@@ -1463,9 +1465,6 @@
         },
         "migrations": {
           "$ref": "#/$defs/dataPlaneMigrations"
-        },
-        "backup": {
-          "$ref": "#/$defs/dataPlaneBackup"
         }
       }
     },
@@ -1637,7 +1636,7 @@
         }
       }
     },
-    "dataPlaneBackup": {
+    "backup": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1646,13 +1645,22 @@
         "bucket",
         "region",
         "destination_path",
+        "retention_policy",
+        "schedule",
         "credentials_secret_name",
-        "credentials_secret_namespace"
+        "credentials_secret_namespace",
+        "infisical_project",
+        "infisical_environment",
+        "infisical_path"
       ],
       "properties": {
         "provider": {
-          "description": "S3-compatible object storage provider using the MinIO API contract.",
-          "const": "minio"
+          "description": "Object storage provider for platform backup targets.",
+          "type": "string",
+          "enum": [
+            "minio",
+            "vultr-object-storage"
+          ]
         },
         "endpoint": {
           "type": "string",
@@ -1672,6 +1680,15 @@
           "type": "string",
           "pattern": "^s3://[a-z0-9][a-z0-9.-]*[a-z0-9]/[A-Za-z0-9._/-]+$"
         },
+        "retention_policy": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*d$"
+        },
+        "schedule": {
+          "description": "CloudNativePG ScheduledBackup cron expression including seconds.",
+          "type": "string",
+          "pattern": "^[^\\n]+$"
+        },
         "credentials_secret_name": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
@@ -1679,6 +1696,18 @@
         "credentials_secret_namespace": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "infisical_project": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "infisical_environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/object-storage/[a-z0-9][a-z0-9-]*/$"
         }
       }
     },

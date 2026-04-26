@@ -223,6 +223,8 @@ log "PASS: Secret/minio-root synced with non-empty keys"
 
 kubectl_cmd -n minio-system wait job/create-sample-bucket --for=condition=Complete --timeout=300s >/dev/null
 log "PASS: Job/create-sample-bucket Complete"
+kubectl_cmd -n minio-system wait job/create-backup-bucket --for=condition=Complete --timeout=300s >/dev/null
+log "PASS: Job/create-backup-bucket Complete"
 
 start_port_forward
 ROUNDTRIP_TMP_DIR="$(mktemp -d)"
@@ -232,6 +234,8 @@ mc_alias local-minio "$access_key" "$secret_key_value"
 
 mc ls local-minio/humility-local-sample >/dev/null
 log "PASS: Bucket humility-local-sample exists"
+mc ls local-minio/humility-local-backups >/dev/null
+log "PASS: Bucket humility-local-backups exists"
 
 S3_ENDPOINT="http://127.0.0.1:${PORT}" \
 S3_ACCESS_KEY_ID="$access_key" \
