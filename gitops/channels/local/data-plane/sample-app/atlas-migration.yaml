@@ -1,0 +1,18 @@
+apiVersion: db.atlasgo.io/v1alpha1
+kind: AtlasMigration
+metadata:
+  name: sample-app
+  namespace: sample-app-db
+  labels:
+    app.kubernetes.io/name: sample-app
+    platform.humility.gg/init: "111"
+spec:
+  urlFrom:
+    secretKeyRef:
+      key: url
+      name: sample-app-postgres-url
+  dir:
+    configMapRef:
+      name: sample-app-atlas-migrations
+  revisionsSchema: atlas_schema_revisions
+  backoffLimit: 5

@@ -11,6 +11,7 @@ resources:
   - object-storage
   - image-registry
   - cicd
+  - data-plane
   - tls
   - dns
   - ingress
