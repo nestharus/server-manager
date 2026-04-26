@@ -1,0 +1,7 @@
+# Bootstrap-only SOPS rule for INIT-102.
+# Replace this placeholder recipient with the operator's real age public key,
+# then re-encrypt gitops/bootstrap/sops-sentinel.enc.yaml during bootstrap.
+creation_rules:
+  - path_regex: ^gitops/.*\.enc\.yaml$
+    encrypted_regex: ^(data|stringData)$
+    age: age1y7etps8gyw9eryh3ws5tev9n68t4vffq6fcujs2d5mxr4j3gef8sx5tysy
