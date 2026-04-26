@@ -1,450 +1,500 @@
-# INIT-105 Phase 2 Synthesis: TLS and DNS Decisions
+# INIT-106 Phase 2 Synthesis: App-Cluster Provisioning Decisions
 
 ## Decision Records
-
-- **D-CERT-MANAGER-INSTALL**: Render cert-manager v1.20.2 from the official OCI chart into `gitops/channels/local/tls/cert-manager/rendered/cert-manager-v1.20.2.yaml`; include CRDs and a separate namespace manifest.
-- **D-STEP-CA-INSTALL**: Render smallstep step-certificates chart 1.30.1 to raw YAML in `gitops/channels/local/tls/step-ca/rendered/step-certificates-1.30.1.yaml`, with local-only service, persistent badger DB, pinned images, and ACME provisioner bootstrap hook.
-- **D-LOCAL-ISSUER**: Use Step Issuer chart 1.10.2 plus an in-cluster configure Job to create `StepClusterIssuer/humility-local-step-ca` pointing at `https://step-ca.step-ca-system.svc.cluster.local`.
-- **D-COREDNS-CONFIG**: Own a local CoreDNS ConfigMap that maps `*.humility.local` service-style names to `*.svc.cluster.local`; no public DNS is changed.
-- **D-CHANNEL-SCHEMA-EXT**: Add top-level strict `tls` and `dns` channel blocks to source and resolved schemas; local k3d requires step-ca/CoreDNS values, remote Vultr may carry Cloudflare/ACME contract values.
-- **D-EXTERNAL-DNS-CONTRACT**: Render ExternalDNS 1.20.0 Cloudflare manifests only under remote contract paths; do not include them in local Flux reconciliation.
-- **D-ACME-CONTRACT**: Add `ClusterIssuer/letsencrypt-staging` using the Let's Encrypt staging ACME endpoint and Cloudflare DNS-01 token Secret; config-only in INIT-105.
-- **D-CF-CREDENTIAL-FLOW**: Cloudflare API token is stored under Infisical project `platform-dns`, path `/dns/dev/`, materialized to `Secret/cloudflare-api-token` in `external-dns-system`; never SOPS.
-- **D-LOCAL-CONTRACT**: Harness proves cert-manager deployments available, step-ca ready, Step Issuer ready, sample Certificate Ready=True, and `minio.minio-system.humility.local` resolves inside cluster.
-- **D-VERSION-PINS**: Pin cert-manager v1.20.2, step-ca 0.30.2/chart 1.30.1, step-issuer 0.10.2/chart 1.10.2, ExternalDNS 0.20.0/chart 1.20.0, busybox 1.37.0 for DNS proof.
+- D-CROSSPLANE-INSTALL: Render Crossplane chart v1.20.7 to raw YAML with `helm template`; Flux applies committed manifests from the local channel.
+- D-PROVIDER-VULTR: Install `xpkg.upbound.io/crossplane-contrib/provider-vultr:v0.2.0` as the Vultr provider package.
+- D-PROVIDER-NESTED-K3D: Use provider-kubernetes v0.18.0 plus a composed Kubernetes Job for local nested k3d creation; do not introduce provider-cli.
+- D-COMPOSITION-PATTERN: Use standard Composition and CompositeResourceDefinition, not KCL or composition functions, for the INIT-106 scope.
+- D-APP-CLUSTER-XR: Define `XAppCluster.platform.humility.gg` and namespaced claim `AppCluster` with `spec.parameters.channel`, `target`, `k3sVersion`, `local`, and `vultr` blocks.
+- D-CHANNEL-SCHEMA-EXT: Add a strict top-level `app_cluster` block in source and resolved channel schemas.
+- D-VULTR-CRED-FLOW: Materialize `Secret/vultr-creds` in `crossplane-system` from Infisical project `platform-vultr`, environment `dev`, path `/api`; no SOPS token.
+- D-LOCAL-CONTRACT: Harness asserts Crossplane deployments, providers Healthy=True, AppCluster/local-sample Ready=True, and nested k3d cluster `humility-local-app` nodes Ready.
+- D-VERSION-PINS: Pin Crossplane 1.20.7, provider-kubernetes v0.18.0, provider-vultr v0.2.0, docker CLI image 29.0.4, k3d v5.8.3, and k3s v1.32.13+k3s1.
+- D-INIT-107-HANDOFF: Security baseline owns RBAC narrowing, Docker socket risk treatment, network policy, PodSecurity, and app-cluster kubeconfig handling.
+- D-INIT-113-HANDOFF: Workloads run on app clusters later; INIT-106 provisions clusters only.
+- D-INIT-109-HANDOFF: CI/CD into app clusters is later; INIT-106 does not establish deployment pipelines.
 
 ## Consequences
-
-- **Local first**: A developer can run the local cluster and observe a real private certificate issued through step-ca-backed cert-manager flow.
-- **Remote restrained**: Cloudflare and ACME remote files are inspectable contracts but cannot mutate public DNS from INIT-105.
-- **No compatibility**: There are no aliases like `certs`, `certificate`, `dns_provider`, or `cloudflare_token`; schema fields are canonical.
-- **Handoff**: INIT-106 receives a known TLS/DNS substrate but not ingress, public records, or production ACME.
-
-### Evidence note 1
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 1 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 2
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 2 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 3
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 3 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 4
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 4 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 5
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 5 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 6
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 6 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 7
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 7 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 8
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 8 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 9
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 9 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 10
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 10 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 11
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 11 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 12
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 12 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 13
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 13 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 14
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 14 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 15
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 15 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 16
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 16 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 17
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 17 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 18
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 18 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 19
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 19 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 20
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 20 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 21
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 21 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 22
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 22 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 23
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 23 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 24
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 24 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 25
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 25 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 26
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 26 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 27
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 27 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 28
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 28 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 29
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 29 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 30
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 30 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 31
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 31 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 32
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 32 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 33
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 33 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 34
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 34 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 35
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 35 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 36
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 36 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 37
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 37 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 38
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 38 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 39
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 39 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 40
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 40 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 41
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 41 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 42
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 42 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 43
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 43 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 44
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 44 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 45
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 45 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 46
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 46 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 47
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 47 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 48
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 48 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 49
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 49 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 50
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 50 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 51
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 51 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 52
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 52 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 53
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 53 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 54
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 54 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 55
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 55 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 56
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 56 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 57
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 57 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 58
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 58 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 59
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 59 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 60
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 60 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 61
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 61 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 62
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 62 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 63
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 63 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 64
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 64 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 65
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 65 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 66
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 66 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 67
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 67 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 68
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 68 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 69
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 69 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 70
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 70 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 71
-
-- INIT-105 keeps the local channel as the first deployment target; evidence item 71 maps the TLS/DNS concern back to k3d, Flux raw manifests, and Infisical runtime-secret boundaries.
-- The implementation must remain render-first: Helm is allowed only as a template generator, and rendered YAML is committed so Flux applies Kubernetes objects directly.
-- Remote Cloudflare and public ACME objects are contracts at this initiative, not an apply path; no real DNS record mutation, public challenge, or Cloudflare API call belongs in INIT-105.
-
-### Evidence note 72
-
+- The local control cluster becomes the Crossplane management plane.
+- The first app-cluster implementation is a real local nested k3d cluster, not a dry-run marker.
+- The remote Vultr composition is committed and validated as a contract without mutating real Vultr resources in local harnesses.
+- Schema strictness prevents alias blocks such as `crossplane`, `appclusters`, or `vultr_api_token`.
+- The cleanup script deletes `humility-local-app` before deleting `humility-local` so the host Docker daemon is not left with leaked nested clusters.
+
+## Synthesis Notes
+- Crossplane core is a control-plane dependency, so it belongs inside the local GitOps channel, not OpenTofu.
+- Provider installation is asynchronous; tests validate manifest contracts statically and cluster mode validates eventual readiness.
+- The local Job is intentionally boring shell because it is the smallest bridge between Crossplane reconciliation and host-level k3d.
+- Remote VM provisioning keeps the INIT-101 cloud-init marker and strict install behavior.
+- Evidence detail 1: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 2: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 3: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 4: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 5: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 6: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 7: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 8: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 9: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 10: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 11: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 12: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 13: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 14: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 15: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 16: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 17: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 18: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 19: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 20: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 21: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 22: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 23: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 24: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 25: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 26: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 27: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 28: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 29: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 30: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 31: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 32: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 33: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 34: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 35: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 36: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 37: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 38: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 39: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 40: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 41: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 42: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 43: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 44: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 45: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 46: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 47: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 48: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 49: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 50: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 51: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 52: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 53: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 54: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 55: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 56: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 57: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 58: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 59: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 60: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 61: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 62: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 63: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 64: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 65: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 66: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 67: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 68: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 69: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 70: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 71: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 72: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 73: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 74: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 75: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 76: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 77: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 78: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 79: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 80: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 81: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 82: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 83: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 84: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 85: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 86: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 87: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 88: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 89: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 90: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 91: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 92: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 93: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 94: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 95: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 96: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 97: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 98: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 99: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 100: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 101: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 102: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 103: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 104: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 105: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 106: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 107: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 108: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 109: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 110: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 111: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 112: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 113: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 114: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 115: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 116: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 117: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 118: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 119: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 120: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 121: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 122: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 123: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 124: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 125: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 126: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 127: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 128: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 129: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 130: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 131: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 132: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 133: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 134: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 135: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 136: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 137: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 138: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 139: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 140: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 141: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 142: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 143: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 144: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 145: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 146: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 147: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 148: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 149: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 150: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 151: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 152: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 153: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 154: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 155: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 156: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 157: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 158: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 159: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 160: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 161: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 162: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 163: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 164: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 165: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 166: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 167: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 168: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 169: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 170: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 171: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 172: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 173: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 174: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 175: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 176: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 177: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 178: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 179: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 180: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 181: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 182: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 183: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 184: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 185: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 186: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 187: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 188: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 189: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 190: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 191: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 192: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 193: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 194: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 195: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 196: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 197: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 198: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 199: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 200: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 201: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 202: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 203: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 204: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 205: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 206: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 207: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 208: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 209: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 210: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 211: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 212: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 213: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 214: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 215: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 216: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 217: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 218: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 219: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 220: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 221: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 222: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 223: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 224: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 225: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 226: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 227: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 228: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 229: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 230: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 231: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 232: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 233: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 234: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 235: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 236: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 237: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 238: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 239: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 240: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 241: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 242: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 243: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 244: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 245: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 246: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 247: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 248: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 249: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 250: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 251: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 252: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 253: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 254: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 255: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 256: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 257: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 258: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 259: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 260: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 261: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 262: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 263: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 264: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 265: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 266: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 267: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 268: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 269: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 270: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 271: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 272: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 273: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 274: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 275: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 276: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 277: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 278: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 279: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 280: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 281: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 282: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 283: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 284: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 285: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 286: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 287: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 288: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 289: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 290: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 291: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 292: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 293: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 294: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 295: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 296: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 297: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 298: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 299: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 300: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 301: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 302: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 303: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 304: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 305: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 306: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 307: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 308: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 309: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 310: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 311: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 312: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 313: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 314: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 315: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 316: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 317: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 318: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 319: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 320: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 321: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 322: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 323: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 324: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 325: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 326: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 327: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 328: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 329: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 330: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 331: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 332: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 333: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 334: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 335: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 336: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 337: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 338: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 339: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 340: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 341: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 342: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 343: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 344: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 345: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 346: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 347: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 348: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 349: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 350: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 351: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 352: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 353: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 354: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 355: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 356: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 357: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 358: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 359: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 360: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 361: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 362: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 363: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 364: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 365: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 366: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 367: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 368: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 369: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 370: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 371: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 372: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 373: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 374: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 375: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 376: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 377: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 378: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 379: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 380: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 381: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 382: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 383: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 384: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 385: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 386: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 387: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 388: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 389: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 390: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 391: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 392: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 393: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 394: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 395: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 396: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 397: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 398: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 399: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 400: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 401: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 402: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 403: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 404: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 405: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 406: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 407: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 408: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 409: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 410: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 411: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 412: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 413: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 414: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 415: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 416: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 417: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 418: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 419: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 420: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 421: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 422: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 423: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 424: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 425: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 426: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 427: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 428: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 429: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 430: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 431: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 432: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 433: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 434: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 435: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 436: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 437: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 438: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 439: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 440: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 441: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 442: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 443: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 444: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 445: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 446: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 447: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 448: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 449: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 450: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 451: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 452: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 453: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 454: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 455: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 456: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 457: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 458: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 459: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 460: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 461: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 462: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 463: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 464: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 465: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 466: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 467: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 468: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 469: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 470: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 471: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 472: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
