@@ -73,6 +73,9 @@
     "ingress": {
       "$ref": "#/$defs/ingress"
     },
+    "auth_stack": {
+      "$ref": "#/$defs/authStack"
+    },
     "data_plane": {
       "$ref": "#/$defs/dataPlane"
     },
@@ -1433,6 +1436,203 @@
         "proof_path": {
           "type": "string",
           "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$"
+        }
+      }
+    },
+    "authStack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "authentik",
+        "pomerium",
+        "opal_cedar",
+        "protected_api"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "authentik": {
+          "$ref": "#/$defs/authStackAuthentik"
+        },
+        "pomerium": {
+          "$ref": "#/$defs/authStackPomerium"
+        },
+        "opal_cedar": {
+          "$ref": "#/$defs/authStackOpalCedar"
+        },
+        "protected_api": {
+          "$ref": "#/$defs/authStackProtectedApi"
+        }
+      }
+    },
+    "authStackAuthentik": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chart_name",
+        "chart_version",
+        "image",
+        "host",
+        "database_cluster_name",
+        "database_name",
+        "database_owner",
+        "infisical_project",
+        "infisical_environment",
+        "infisical_path"
+      ],
+      "properties": {
+        "chart_name": {
+          "const": "authentik/authentik"
+        },
+        "chart_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        },
+        "host": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "database_cluster_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "database_name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "database_owner": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "infisical_project": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "infisical_environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/auth/[a-z0-9][a-z0-9-]*/authentik$"
+        }
+      }
+    },
+    "authStackPomerium": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chart_name",
+        "chart_version",
+        "image",
+        "authenticate_host",
+        "proxy_host",
+        "infisical_project",
+        "infisical_environment",
+        "infisical_path"
+      ],
+      "properties": {
+        "chart_name": {
+          "const": "pomerium/pomerium"
+        },
+        "chart_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        },
+        "authenticate_host": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "proxy_host": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "infisical_project": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "infisical_environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/auth/[a-z0-9][a-z0-9-]*/pomerium$"
+        }
+      }
+    },
+    "authStackOpalCedar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chart_name",
+        "chart_version",
+        "server_image",
+        "client_image",
+        "proof_path"
+      ],
+      "properties": {
+        "chart_name": {
+          "const": "permitio/opal"
+        },
+        "chart_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "server_image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        },
+        "client_image": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./:_-]+$"
+        },
+        "proof_path": {
+          "const": "/v1/is_authorized"
+        }
+      }
+    },
+    "authStackProtectedApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "backend_service",
+        "backend_namespace",
+        "backend_port",
+        "proof_path"
+      ],
+      "properties": {
+        "host": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "backend_service": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "backend_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "backend_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "proof_path": {
+          "const": "/api/v1/protected/authz-proof"
         }
       }
     },

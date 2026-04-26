@@ -113,6 +113,40 @@ ingress:
     remote_host: minio.local.humility.gg
     tls_secret_name: minio-local-ingress-tls
     proof_path: /minio/health/ready
+auth_stack:
+  namespace: auth-system
+  authentik:
+    chart_name: authentik/authentik
+    chart_version: 2026.2.2
+    image: ghcr.io/goauthentik/server:2026.2.2
+    host: auth.local.humility.local
+    database_cluster_name: authentik-postgres
+    database_name: authentik
+    database_owner: authentik
+    infisical_project: platform-auth
+    infisical_environment: local
+    infisical_path: /auth/local/authentik
+  pomerium:
+    chart_name: pomerium/pomerium
+    chart_version: 34.0.1
+    image: pomerium/pomerium:v0.22.1
+    authenticate_host: authenticate.local.humility.local
+    proxy_host: protected-api.local.humility.local
+    infisical_project: platform-auth
+    infisical_environment: local
+    infisical_path: /auth/local/pomerium
+  opal_cedar:
+    chart_name: permitio/opal
+    chart_version: 0.0.29
+    server_image: docker.io/permitio/opal-server:0.7.12
+    client_image: docker.io/permitio/opal-client-cedar:0.7.12
+    proof_path: /v1/is_authorized
+  protected_api:
+    host: protected-api.local.humility.local
+    backend_service: server-manager-api
+    backend_namespace: server-manager
+    backend_port: 8000
+    proof_path: /api/v1/protected/authz-proof
 data_plane:
   provider: cloudnative-pg
   cnpg:
