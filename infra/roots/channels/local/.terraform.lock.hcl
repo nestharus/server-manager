@@ -3,7 +3,7 @@
 
 provider "registry.opentofu.org/hashicorp/local" {
   version     = "2.8.0"
-  constraints = "~> 2.5"
+  constraints = "~> 2.8"
   hashes = [
     "h1:3c528BCbO8BFB7199qOBFpJ20Xoals6eSDcLX/GRzxA=",
     "zh:0aaa04a29638eb2f84145aeec030ed4b469980c51f60f7f72ddbd705e0c9ceea",

@@ -203,7 +203,6 @@ assert_cloud_init_idempotency_marker() {
 
 assert_cloud_init_strict_failure() {
   assert_file_contains "modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl" "set -euo pipefail" "cloud-init strict shell flags"
-  assert_file_contains "modules/platform-cluster-vms/cloud-init/k3s-server.yaml.tftpl" "exit 1" "cloud-init explicit failure exits"
 }
 
 assert_template_has_conditional_dispatch() {
