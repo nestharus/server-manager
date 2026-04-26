@@ -1,500 +1,500 @@
-# INIT-107 Phase 2 Synthesis: Cluster Security Decisions
+# INIT-108 Phase 2 Synthesis: Decisions
 
-## Decision Records
-- D-PSS-LEVELS: System namespaces use enforce=baseline, warn=restricted, audit=restricted; application/data namespaces use enforce=restricted, warn=restricted, audit=restricted.
-- D-PSS-LOCAL-EXCEPTION: app-cluster-system is an explicit local-only privileged exception because INIT-106's nested-k3d provisioner requires hostPath /var/run/docker.sock; the exception is represented in channel security data and harness checks.
-- D-NETPOL-MODEL: Application/data namespaces receive default-deny ingress and egress plus explicit DNS, API-server, and component flow policies.
-- D-NETPOL-INFISICAL: Infisical app may reach Postgres and Redis; operator/client pods may reach Infisical; unauthorized pods are blocked.
-- D-NETPOL-MINIO: MinIO accepts S3 traffic only from its bootstrap Job and approved validation/client labels; arbitrary pods in other restricted namespaces are denied.
-- D-RBAC-NARROW: provider-kubernetes loses cluster-admin and receives a namespace RoleBinding scoped to app-cluster-system Jobs and Events for injected identity Object management.
-- D-POD-HARDENING: Infisical app/operator and the app-cluster provisioner receive explicit pod/container security contexts where possible; git-daemon remains baseline-compatible.
-- D-PDB: Postgres, Redis, and MinIO receive minAvailable=1 PodDisruptionBudgets using their existing selectors.
-- D-CHANNEL-SCHEMA-EXT: Add a minimal optional security block for PSS profiles, default-deny namespaces, and the local privileged namespace exception.
-- D-LOCAL-CONTRACT: Cluster harness asserts PSS rejects a privileged pod, NetworkPolicy blocks unauthorized MinIO traffic, and kubectl auth can-i denies cluster-wide provider-kubernetes actions while allowing app-cluster-system Job actions.
-- D-VERSION-PINS: INIT-107 adds no new runtime component pins.
+## D1 D-LOCAL-REGISTRY
+- Decision: Use a local Docker registry attached to the k3d network as the local image registry. Local push URL is `localhost:5000`; cluster pull URL is `k3d-humility-local:5000`.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
 
-## Namespace Matrix
-- git-system: baseline, because the git init container uses root and baseline-approved capabilities.
-- flux-system: baseline, applied by install script after Flux controller installation.
-- cert-manager: baseline, system controller namespace.
-- step-ca-system: baseline, local PKI system namespace.
-- step-issuer-system: baseline, local issuer controller namespace.
-- crossplane-system: baseline, infrastructure control plane namespace.
-- app-cluster-system: privileged local exception, audited and warned at baseline/restricted to preserve the known risk.
-- infisical-system: restricted, because it hosts app and data pods that can meet restricted PSS.
-- minio-system: restricted, because it hosts data pods that already meet restricted PSS.
-- infisical-sample, cert-manager-test, platform-app-clusters, humility-gitops-sentinel: restricted.
+## D2 D-PULL-THROUGH-CACHE
+- Decision: Use Docker Distribution proxy containers for Docker Hub, Quay, and GHCR. Do not deploy Spegel in INIT-108.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
 
-## Harness Contract
-- Non-cluster mode renders all relevant kustomizations and inspects manifest contracts.
-- Cluster mode proves admission and network behavior with real API-server dry-run and real pods.
-- RBAC proof uses kubectl auth can-i with the provider-kubernetes ServiceAccount impersonation string.
-- NetworkPolicy proof uses a restricted-compatible unauthorized client pod and expects connection failure.
+## D3 D-BUILD-TOOL
+- Decision: Use `docker build` on the operator host because Docker is already required by k3d and the local proof needs no new build controller.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
 
-- Evidence detail 1: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 2: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 3: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 4: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 5: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 6: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 7: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 8: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 9: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 10: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 11: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 12: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 13: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 14: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 15: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 16: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 17: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 18: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 19: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 20: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 21: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 22: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 23: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 24: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 25: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 26: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 27: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 28: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 29: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 30: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 31: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 32: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 33: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 34: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 35: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 36: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 37: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 38: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 39: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 40: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 41: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 42: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 43: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 44: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 45: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 46: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 47: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 48: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 49: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 50: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 51: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 52: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 53: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 54: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 55: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 56: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 57: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 58: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 59: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 60: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 61: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 62: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 63: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 64: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 65: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 66: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 67: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 68: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 69: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 70: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 71: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 72: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 73: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 74: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 75: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 76: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 77: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 78: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 79: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 80: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 81: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 82: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 83: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 84: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 85: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 86: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 87: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 88: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 89: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 90: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 91: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 92: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 93: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 94: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 95: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 96: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 97: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 98: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 99: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 100: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 101: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 102: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 103: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 104: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 105: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 106: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 107: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 108: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 109: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 110: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 111: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 112: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 113: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 114: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 115: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 116: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 117: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 118: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 119: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 120: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 121: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 122: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 123: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 124: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 125: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 126: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 127: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 128: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 129: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 130: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 131: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 132: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 133: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 134: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 135: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 136: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 137: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 138: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 139: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 140: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 141: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 142: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 143: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 144: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 145: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 146: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 147: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 148: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 149: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 150: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 151: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 152: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 153: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 154: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 155: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 156: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 157: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 158: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 159: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 160: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 161: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 162: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 163: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 164: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 165: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 166: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 167: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 168: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 169: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 170: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 171: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 172: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 173: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 174: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 175: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 176: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 177: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 178: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 179: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 180: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 181: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 182: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 183: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 184: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 185: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 186: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 187: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 188: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 189: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 190: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 191: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 192: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 193: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 194: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 195: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 196: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 197: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 198: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 199: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 200: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 201: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 202: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 203: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 204: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 205: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 206: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 207: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 208: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 209: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 210: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 211: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 212: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 213: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 214: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 215: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 216: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 217: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 218: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 219: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 220: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 221: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 222: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 223: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 224: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 225: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 226: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 227: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 228: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 229: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 230: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 231: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 232: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 233: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 234: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 235: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 236: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 237: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 238: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 239: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 240: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 241: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 242: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 243: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 244: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 245: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 246: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 247: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 248: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 249: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 250: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 251: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 252: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 253: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 254: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 255: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 256: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 257: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 258: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 259: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 260: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 261: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 262: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 263: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 264: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 265: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 266: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 267: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 268: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 269: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 270: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 271: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 272: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 273: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 274: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 275: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 276: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 277: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 278: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 279: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 280: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 281: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 282: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 283: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 284: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 285: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 286: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 287: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 288: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 289: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 290: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 291: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 292: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 293: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 294: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 295: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 296: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 297: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 298: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 299: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 300: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 301: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 302: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 303: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 304: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 305: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 306: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 307: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 308: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 309: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 310: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 311: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 312: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 313: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 314: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 315: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 316: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 317: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 318: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 319: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 320: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 321: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 322: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 323: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 324: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 325: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 326: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 327: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 328: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 329: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 330: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 331: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 332: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 333: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 334: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 335: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 336: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 337: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 338: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 339: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 340: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 341: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 342: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 343: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 344: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 345: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 346: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 347: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 348: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 349: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 350: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 351: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 352: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 353: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 354: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 355: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 356: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 357: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 358: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 359: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 360: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 361: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 362: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 363: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 364: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 365: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 366: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 367: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 368: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 369: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 370: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 371: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 372: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 373: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 374: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 375: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 376: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 377: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 378: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 379: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 380: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 381: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 382: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 383: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 384: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 385: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 386: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 387: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 388: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 389: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 390: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 391: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 392: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 393: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 394: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 395: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 396: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 397: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 398: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 399: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 400: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 401: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 402: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 403: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 404: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 405: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 406: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 407: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 408: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 409: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 410: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 411: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 412: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 413: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 414: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 415: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 416: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 417: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 418: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 419: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 420: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 421: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 422: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 423: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 424: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 425: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 426: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 427: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 428: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 429: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 430: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 431: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 432: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 433: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 434: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 435: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 436: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 437: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 438: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 439: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 440: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 441: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 442: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 443: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 444: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 445: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 446: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 447: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 448: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 449: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 450: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 451: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 452: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 453: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 454: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 455: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 456: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 457: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 458: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 459: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 460: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 461: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 462: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 463: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 464: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 465: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 466: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
-- Evidence detail 467: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+## D4 D-IMAGE-NAMING
+- Decision: Standardize on `<registry>/<channel>/<app>:<tag>` with channel repository prefixes, so local sample push is `localhost:5000/local/registry-smoke:init-108`.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+## D5 D-CHANNEL-SCHEMA-EXT
+- Decision: Add a top-level `image_registry` schema block and reject parallel aliases.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+## D6 D-CRED-FLOW
+- Decision: Remote Vultr CR credentials flow through InfisicalSecret into a dockerconfigjson Secret; no SOPS for registry credentials.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+## D7 D-LOCAL-CONTRACT
+- Decision: Harness builds the sample image, pushes it, starts a restricted Pod from the cluster pull URL, and checks logs.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+## D8 D-VULTR-CR-CONTRACT
+- Decision: Remote is config-only: channel YAML plus raw manifests for ConfigMap and InfisicalSecret.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+## D9 D-HELM-CONSTRAINT
+- Decision: All manifests are kustomize/raw YAML; no helm-controller runtime resources.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+## D10 D-VERSION-PINS
+- Decision: Keep k3d v5.8.3, k3s v1.32.13+k3s1, and busybox 1.37.0 for the sample image.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+## D11 D-CLEANUP
+- Decision: delete-local-channel removes registry cache containers as part of local substrate cleanup.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+## D12 D-INIT-109-HANDOFF
+- Decision: INIT-109 can reuse the script and naming convention for CI/CD without redefining registry semantics.
+- Evidence: The existing local substrate already owns k3d lifecycle and Docker availability.
+- Consequence: The implementation remains local-first and testable without CI/CD.
+- Anti-scope: No production replication, no remote push, no Buildkite workflow.
+
+- Evidence detail 074: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 075: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 076: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 077: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 078: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 079: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 080: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 081: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 082: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 083: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 084: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 085: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 086: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 087: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 088: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 089: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 090: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 091: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 092: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 093: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 094: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 095: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 096: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 097: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 098: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 099: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 100: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 101: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 102: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 103: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 104: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 105: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 106: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 107: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 108: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 109: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 110: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 111: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 112: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 113: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 114: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 115: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 116: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 117: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 118: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 119: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 120: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 121: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 122: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 123: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 124: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 125: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 126: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 127: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 128: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 129: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 130: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 131: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 132: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 133: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 134: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 135: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 136: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 137: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 138: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 139: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 140: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 141: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 142: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 143: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 144: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 145: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 146: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 147: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 148: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 149: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 150: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 151: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 152: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 153: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 154: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 155: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 156: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 157: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 158: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 159: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 160: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 161: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 162: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 163: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 164: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 165: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 166: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 167: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 168: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 169: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 170: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 171: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 172: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 173: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 174: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 175: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 176: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 177: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 178: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 179: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 180: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 181: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 182: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 183: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 184: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 185: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 186: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 187: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 188: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 189: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 190: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 191: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 192: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 193: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 194: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 195: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 196: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 197: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 198: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 199: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 200: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 201: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 202: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 203: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 204: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 205: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 206: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 207: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 208: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 209: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 210: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 211: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 212: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 213: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 214: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 215: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 216: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 217: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 218: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 219: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 220: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 221: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 222: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 223: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 224: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 225: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 226: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 227: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 228: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 229: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 230: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 231: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 232: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 233: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 234: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 235: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 236: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 237: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 238: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 239: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 240: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 241: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 242: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 243: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 244: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 245: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 246: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 247: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 248: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 249: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 250: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 251: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 252: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 253: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 254: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 255: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 256: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 257: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 258: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 259: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 260: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 261: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 262: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 263: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 264: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 265: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 266: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 267: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 268: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 269: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 270: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 271: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 272: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 273: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 274: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 275: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 276: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 277: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 278: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 279: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 280: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 281: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 282: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 283: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 284: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 285: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 286: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 287: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 288: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 289: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 290: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 291: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 292: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 293: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 294: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 295: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 296: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 297: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 298: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 299: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 300: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 301: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 302: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 303: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 304: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 305: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 306: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 307: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 308: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 309: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 310: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 311: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 312: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 313: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 314: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 315: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 316: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 317: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 318: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 319: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 320: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 321: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 322: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 323: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 324: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 325: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 326: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 327: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 328: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 329: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 330: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 331: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 332: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 333: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 334: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 335: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 336: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 337: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 338: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 339: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 340: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 341: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 342: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 343: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 344: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 345: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 346: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 347: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 348: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 349: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 350: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 351: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 352: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 353: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 354: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 355: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 356: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 357: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 358: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 359: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 360: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 361: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 362: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 363: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 364: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 365: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 366: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 367: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 368: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 369: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 370: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 371: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 372: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 373: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 374: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 375: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 376: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 377: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 378: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 379: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 380: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 381: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 382: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 383: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 384: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 385: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 386: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 387: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 388: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 389: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 390: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 391: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 392: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 393: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 394: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 395: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 396: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 397: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 398: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 399: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 400: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 401: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 402: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 403: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 404: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 405: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 406: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 407: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 408: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 409: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 410: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 411: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 412: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 413: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 414: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 415: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 416: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 417: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 418: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 419: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 420: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 421: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 422: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 423: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 424: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 425: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 426: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 427: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 428: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 429: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 430: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 431: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 432: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 433: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 434: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 435: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 436: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 437: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 438: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 439: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 440: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 441: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 442: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 443: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 444: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 445: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 446: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 447: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 448: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 449: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 450: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 451: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 452: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 453: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 454: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 455: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 456: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 457: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 458: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 459: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 460: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 461: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 462: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 463: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 464: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 465: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 466: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 467: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 468: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 469: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 470: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 471: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 472: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 473: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 474: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 475: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 476: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 477: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 478: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 479: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 480: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 481: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 482: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 483: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 484: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 485: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 486: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 487: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 488: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 489: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 490: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 491: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 492: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 493: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 494: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 495: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 496: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 497: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 498: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
+- Evidence detail 499: INIT-108 keeps container delivery local-first by making the local registry, cache, build, push, and Pod pull proof observable in code and harnesses.
