@@ -1,0 +1,37 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgresql
+  namespace: infisical-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: infisical
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/component: primary
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-master
+  namespace: infisical-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: infisical
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/component: master
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minio
+  namespace: minio-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+      app.kubernetes.io/component: object-storage

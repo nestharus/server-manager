@@ -3542,6 +3542,121 @@ PY
   fi
 }
 
+assert_cluster_security_pod_hardening_and_pdbs() {
+  local server_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/infisical-server-security.yaml"
+  local operator_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/infisical-operator-security.yaml"
+  local app_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/appcluster-security.yaml"
+  local security_rendered="${REPO_ROOT}/.tmp/validate-platform-bootstrap/pdb-security.yaml"
+  local py_bin
+
+  if command -v kubectl >/dev/null 2>&1 \
+    && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/infisical/server" >"$server_rendered" \
+    && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/infisical/operator" >"$operator_rendered" \
+    && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/app-clusters/compositions" >"$app_rendered" \
+    && kubectl kustomize "${REPO_ROOT}/gitops/channels/local/security" >"$security_rendered"; then
+    pass "kubectl kustomize cluster security pod hardening and PDB inputs"
+  else
+    fail "kubectl kustomize cluster security pod hardening and PDB inputs"
+    return
+  fi
+
+  if ! py_bin="$(python_bin)"; then
+    fail "remaining INIT-107 pod specs and PDBs satisfy security contract"
+  elif "$py_bin" - "$server_rendered" "$operator_rendered" "$app_rendered" "$security_rendered" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+docs = []
+for path in sys.argv[1:]:
+    docs.extend(doc for doc in yaml.safe_load_all(Path(path).read_text(encoding="utf-8")) if isinstance(doc, dict))
+by_kind_name = {(doc.get("kind"), doc.get("metadata", {}).get("name")): doc for doc in docs}
+by_kind_ns_name = {
+    (doc.get("kind"), doc.get("metadata", {}).get("namespace"), doc.get("metadata", {}).get("name")): doc
+    for doc in docs
+}
+
+def workload_template(kind, name):
+    doc = by_kind_name[(kind, name)]
+    return doc.get("spec", {}).get("template", {})
+
+def require_restricted_container(kind, name, container_name, read_only_root):
+    template = workload_template(kind, name)
+    spec = template.get("spec", {})
+    pod_security = spec.get("securityContext", {})
+    if pod_security.get("runAsNonRoot") is not True:
+        raise SystemExit(f"{kind}/{name} missing pod runAsNonRoot")
+    if (pod_security.get("seccompProfile") or {}).get("type") != "RuntimeDefault":
+        raise SystemExit(f"{kind}/{name} missing pod RuntimeDefault seccomp")
+    for container in spec.get("containers", []):
+        if container.get("name") != container_name:
+            continue
+        security = container.get("securityContext", {})
+        if security.get("allowPrivilegeEscalation") is not False:
+            raise SystemExit(f"{kind}/{name} {container_name} allows privilege escalation")
+        if (security.get("capabilities") or {}).get("drop") != ["ALL"]:
+            raise SystemExit(f"{kind}/{name} {container_name} must drop ALL")
+        if security.get("runAsNonRoot") is not True or security.get("runAsUser") == 0:
+            raise SystemExit(f"{kind}/{name} {container_name} must run as non-root")
+        if security.get("readOnlyRootFilesystem") is not read_only_root:
+            raise SystemExit(f"{kind}/{name} {container_name} readOnlyRootFilesystem mismatch")
+        if (security.get("seccompProfile") or {}).get("type") != "RuntimeDefault":
+            raise SystemExit(f"{kind}/{name} {container_name} missing RuntimeDefault seccomp")
+        resources = container.get("resources", {})
+        if "cpu" not in resources.get("requests", {}) or "memory" not in resources.get("requests", {}):
+            raise SystemExit(f"{kind}/{name} {container_name} missing resource requests")
+        if "cpu" not in resources.get("limits", {}) or "memory" not in resources.get("limits", {}):
+            raise SystemExit(f"{kind}/{name} {container_name} missing resource limits")
+        return
+    raise SystemExit(f"{kind}/{name} missing container {container_name}")
+
+require_restricted_container("Deployment", "infisical-infisical-standalone-infisical", "infisical-standalone-infisical", False)
+if workload_template("Deployment", "infisical-infisical-standalone-infisical").get("spec", {}).get("automountServiceAccountToken") is not False:
+    raise SystemExit("Infisical app must disable service account token automount")
+
+require_restricted_container("Deployment", "infisical-opera-controller-manager", "manager", True)
+
+composition = by_kind_name[("Composition", "appcluster-k3d-local")]
+job = composition["spec"]["resources"][0]["base"]["spec"]["forProvider"]["manifest"]
+job_spec = job["spec"]["template"]["spec"]
+if job_spec.get("automountServiceAccountToken") is not False:
+    raise SystemExit("app-cluster provisioner must disable service account token automount")
+container = job_spec["containers"][0]
+security = container.get("securityContext", {})
+if security.get("allowPrivilegeEscalation") is not False:
+    raise SystemExit("app-cluster provisioner must disable privilege escalation")
+if (security.get("capabilities") or {}).get("drop") != ["ALL"]:
+    raise SystemExit("app-cluster provisioner must drop ALL capabilities")
+if (security.get("seccompProfile") or {}).get("type") != "RuntimeDefault":
+    raise SystemExit("app-cluster provisioner must use RuntimeDefault seccomp")
+if "hostPath" not in yaml.safe_dump(job):
+    raise SystemExit("app-cluster provisioner exception must remain explicit and inspectable")
+if "cpu" not in container.get("resources", {}).get("requests", {}) or "memory" not in container.get("resources", {}).get("limits", {}):
+    raise SystemExit("app-cluster provisioner resources missing")
+
+for namespace, name, labels in [
+    ("infisical-system", "postgresql", {"app.kubernetes.io/name": "postgresql", "app.kubernetes.io/component": "primary"}),
+    ("infisical-system", "redis-master", {"app.kubernetes.io/name": "redis", "app.kubernetes.io/component": "master"}),
+    ("minio-system", "minio", {"app.kubernetes.io/name": "minio", "app.kubernetes.io/component": "object-storage"}),
+]:
+    pdb = by_kind_ns_name.get(("PodDisruptionBudget", namespace, name))
+    if pdb is None:
+        raise SystemExit(f"PDB/{namespace}/{name} missing")
+    if pdb.get("spec", {}).get("minAvailable") != 1:
+        raise SystemExit(f"PDB/{namespace}/{name} must set minAvailable=1")
+    selector = pdb.get("spec", {}).get("selector", {}).get("matchLabels", {})
+    for key, value in labels.items():
+        if selector.get(key) != value:
+            raise SystemExit(f"PDB/{namespace}/{name} selector mismatch: {selector!r}")
+PY
+  then
+    pass "remaining INIT-107 pod specs and PDBs satisfy security contract"
+  else
+    fail "remaining INIT-107 pod specs and PDBs satisfy security contract"
+  fi
+}
+
 assert_app_cluster_manifests() {
   local app_dir="${REPO_ROOT}/gitops/channels/local/app-clusters"
   local remote_dir="${REPO_ROOT}/gitops/contracts/remote/app-clusters"
@@ -3883,6 +3998,7 @@ echo "=== Slice 107.02 cluster security channel and PSS validation ==="
 assert_cluster_security_channel_schema
 assert_cluster_security_namespace_labels
 assert_cluster_security_network_policies
+assert_cluster_security_pod_hardening_and_pdbs
 
 echo ""
 echo "=== Slice 104.03 Infisical storage bootstrap validation ==="

@@ -230,11 +230,46 @@ def replace_secret_backed_env(value):
         container["env"] = filtered
 
 
+def harden_server_workload(value):
+    if not isinstance(value, dict):
+        return
+    if value.get("kind") != "Deployment":
+        return
+    metadata = value.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("name") != "infisical-infisical-standalone-infisical":
+        return
+    spec = value.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
+    spec["automountServiceAccountToken"] = False
+    spec["securityContext"] = {
+        "fsGroup": 1000,
+        "runAsGroup": 1000,
+        "runAsNonRoot": True,
+        "runAsUser": 1000,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+    for container in spec.get("containers", []) or []:
+        if container.get("name") != "infisical-standalone-infisical":
+            continue
+        container["securityContext"] = {
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"]},
+            "readOnlyRootFilesystem": False,
+            "runAsGroup": 1000,
+            "runAsNonRoot": True,
+            "runAsUser": 1000,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        }
+        resources = container.setdefault("resources", {})
+        resources["limits"] = {"cpu": "750m", "memory": "1000Mi"}
+        resources["requests"] = {"cpu": "350m", "memory": "512Mi"}
+
+
 documents = [doc for doc in yaml.safe_load_all(raw_path.read_text(encoding="utf-8")) if doc]
 for document in documents:
     strip_metadata(document)
     add_namespace(document)
     replace_secret_backed_env(document)
+    harden_server_workload(document)
 
 with output_path.open("w", encoding="utf-8") as handle:
     yaml.safe_dump_all(
@@ -359,10 +394,38 @@ def add_namespace(value):
             metadata.setdefault("namespace", OPERATOR_NAMESPACE)
 
 
+def harden_operator_workload(value):
+    if not isinstance(value, dict):
+        return
+    if value.get("kind") != "Deployment":
+        return
+    metadata = value.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("name") != "infisical-opera-controller-manager":
+        return
+    spec = value.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
+    pod_security = spec.setdefault("securityContext", {})
+    pod_security["runAsGroup"] = 1000
+    pod_security["runAsNonRoot"] = True
+    pod_security["runAsUser"] = 1000
+    pod_security["seccompProfile"] = {"type": "RuntimeDefault"}
+    for container in spec.get("containers", []) or []:
+        if container.get("name") != "manager":
+            continue
+        security = container.setdefault("securityContext", {})
+        security["allowPrivilegeEscalation"] = False
+        security["capabilities"] = {"drop": ["ALL"]}
+        security["readOnlyRootFilesystem"] = True
+        security["runAsGroup"] = 1000
+        security["runAsNonRoot"] = True
+        security["runAsUser"] = 1000
+        security["seccompProfile"] = {"type": "RuntimeDefault"}
+
+
 documents = [doc for doc in yaml.safe_load_all(raw_path.read_text(encoding="utf-8")) if doc]
 for document in documents:
     strip_metadata(document)
     add_namespace(document)
+    harden_operator_workload(document)
 
 found_crds = {name for document in documents if (name := crd_name(document))}
 for name in expected_crds:
@@ -381,6 +444,7 @@ for name in expected_crds:
         raise SystemExit(f"expected one upstream CRD document for {name}, found {len(matching_docs)}")
     strip_metadata(matching_docs[0])
     add_namespace(matching_docs[0])
+    harden_operator_workload(matching_docs[0])
     documents.append(matching_docs[0])
     found_crds.add(name)
 
