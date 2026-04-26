@@ -13,5 +13,6 @@ resources:
   - cicd
   - tls
   - dns
+  - ingress
   - app-clusters
   - security
