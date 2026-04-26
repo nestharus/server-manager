@@ -1,0 +1,37 @@
+fullnameOverride: pomerium
+config:
+  rootDomain: local.humility.local
+  existingSecret: pomerium-config
+  existingSharedSecret: pomerium-shared-secret
+  existingSigningKeySecret: pomerium-signing-key
+  generateTLS: false
+  generateSigningKey: false
+  insecure: true
+authenticate:
+  idp:
+    provider: oidc
+    clientID: from-infisical
+    clientSecret: from-infisical
+    url: https://auth.local.humility.local/application/o/pomerium/
+    scopes: openid email profile
+databroker:
+  storage:
+    type: memory
+ingress:
+  enabled: false
+ingressController:
+  enabled: false
+service:
+  externalPort: 80
+proxy:
+  service:
+    type: ClusterIP
+  redirectServer: false
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+

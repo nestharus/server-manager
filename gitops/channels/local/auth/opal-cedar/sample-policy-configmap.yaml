@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cedar-sample-policy
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: opal-cedar
+    platform.humility.gg/init: "114"
+data:
+  policies.json: |
+    [
+      {
+        "id": "server-manager-api-read",
+        "content": "permit(principal == User::\"sample@local.humility.local\", action == Action::\"api:read\", resource == Resource::\"server-manager-api\");"
+      }
+    ]
+

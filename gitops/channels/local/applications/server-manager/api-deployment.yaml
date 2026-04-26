@@ -74,6 +74,8 @@ spec:
                 secretKeyRef:
                   name: server-manager-object-storage
                   key: S3_SECRET_ACCESS_KEY
+            - name: CEDAR_AUTHORIZATION_URL
+              value: http://opal-client.auth-system.svc.cluster.local:8180
           readinessProbe:
             httpGet:
               path: /api/v1/ready
@@ -103,4 +105,3 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
-

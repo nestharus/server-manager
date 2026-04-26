@@ -15,6 +15,7 @@ resources:
   - tls
   - dns
   - ingress
+  - auth
   - app-clusters
   - applications
   - security

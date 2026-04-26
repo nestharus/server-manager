@@ -1,0 +1,253 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: auth-system
+    platform.humility.gg/init: "114"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: auth-system
+    platform.humility.gg/init: "114"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kong-to-auth-entrypoints
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: auth-system
+    platform.humility.gg/init: "114"
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - authentik
+          - pomerium-proxy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kong-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kong
+              app.kubernetes.io/instance: kong
+              app.kubernetes.io/component: app
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-pomerium-internal
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: pomerium
+    platform.humility.gg/init: "114"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: pomerium
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: pomerium
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: pomerium
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: authentik
+      ports:
+        - protocol: TCP
+          port: 9000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: server-manager
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server-manager-api
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-authentik-egress
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: authentik
+    platform.humility.gg/init: "114"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: authentik
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: authentik-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-authentik-postgres-ingress
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: authentik-postgres
+    platform.humility.gg/init: "114"
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: authentik-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: authentik
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: authentik-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-opal-cedar
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: opal-cedar
+    platform.humility.gg/init: "114"
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - opal-client
+          - opal-server
+          - opal-cedar
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: server-manager
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server-manager-api
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - opal-client
+                  - opal-server
+                  - opal-cedar
+      ports:
+        - protocol: TCP
+          port: 7000
+        - protocol: TCP
+          port: 7002
+        - protocol: TCP
+          port: 8180
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - opal-client
+                  - opal-server
+      ports:
+        - protocol: TCP
+          port: 7000
+        - protocol: TCP
+          port: 7002
+        - protocol: TCP
+          port: 8180
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

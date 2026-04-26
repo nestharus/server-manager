@@ -1,0 +1,236 @@
+---
+# Source: opal/templates/service-client.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: opal-client
+  labels:
+    app.kubernetes.io/managed-by: "Helm"
+    app.kubernetes.io/version: "0.7.12"
+    helm.sh/chart: "opal-0.0.29"
+    app.kubernetes.io/name: "opal-client"
+    app.kubernetes.io/instance: "opal"
+    opal.ac/role: client
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 7000
+      targetPort: http
+      protocol: TCP
+    - name: opa
+      port: 8180
+      targetPort: opa
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: "opal-client"
+    app.kubernetes.io/instance: "opal"
+    opal.ac/role: client
+---
+# Source: opal/templates/service-server.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: "opal-server"
+  labels:
+    app.kubernetes.io/managed-by: "Helm"
+    app.kubernetes.io/version: "0.7.12"
+    helm.sh/chart: "opal-0.0.29"
+    app.kubernetes.io/name: "opal-server"
+    app.kubernetes.io/instance: "opal"
+    opal.ac/role: server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 7002
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: "opal-server"
+    app.kubernetes.io/instance: "opal"
+    opal.ac/role: server
+---
+# Source: opal/templates/deployment-client.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "opal-client"
+  labels:
+    app.kubernetes.io/managed-by: "Helm"
+    app.kubernetes.io/version: "0.7.12"
+    helm.sh/chart: "opal-0.0.29"
+    app.kubernetes.io/name: "opal-client"
+    app.kubernetes.io/instance: "opal"
+    opal.ac/role: client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "opal-client"
+      app.kubernetes.io/instance: "opal"
+      opal.ac/role: client
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: "Helm"
+        app.kubernetes.io/version: "0.7.12"
+        helm.sh/chart: "opal-0.0.29"
+        app.kubernetes.io/name: "opal-client"
+        app.kubernetes.io/instance: "opal"
+        opal.ac/role: client
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opal-client
+          image: "docker.io/permitio/opal-client-cedar:0.7.12"
+          imagePullPolicy: "IfNotPresent"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            runAsNonRoot: true
+          ports:
+            - name: http
+              containerPort: 7000
+              protocol: TCP
+            - name: opa
+              containerPort: 8180
+              protocol: TCP
+          env:
+            - name: UVICORN_NUM_WORKERS
+              value: "1"
+            - name: OPAL_SERVER_URL
+              value: "http://opal-server:7002"
+            - name: OPAL_DATA_UPDATER_ENABLED
+              value: "False"
+            - name: OPAL_POLICY_STORE_AUTH_TYPE
+              value: "none"
+            - name: OPAL_POLICY_STORE_TYPE
+              value: "cedar"
+            - name: OPAL_POLICY_STORE_URL
+              value: "http://localhost:8180"
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            failureThreshold: 5
+            initialDelaySeconds: 5
+            timeoutSeconds: 10
+            periodSeconds: 15
+
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            failureThreshold: 5
+            timeoutSeconds: 10
+            periodSeconds: 30
+---
+# Source: opal/templates/deployment-server.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "opal-server"
+  labels:
+    app.kubernetes.io/managed-by: "Helm"
+    app.kubernetes.io/version: "0.7.12"
+    helm.sh/chart: "opal-0.0.29"
+    app.kubernetes.io/name: "opal-server"
+    app.kubernetes.io/instance: "opal"
+    opal.ac/role: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "opal-server"
+      app.kubernetes.io/instance: "opal"
+      opal.ac/role: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: "Helm"
+        app.kubernetes.io/version: "0.7.12"
+        helm.sh/chart: "opal-0.0.29"
+        app.kubernetes.io/name: "opal-server"
+        app.kubernetes.io/instance: "opal"
+        opal.ac/role: server
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opal-server
+          image: "docker.io/permitio/opal-server:0.7.12"
+          imagePullPolicy: "IfNotPresent"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            runAsNonRoot: true
+          ports:
+            - name: http
+              containerPort: 7002
+              protocol: TCP
+          env:
+            - name: OPAL_POLICY_REPO_URL
+              value: "https://github.com/permitio/opal-example-policy-repo"
+            - name: OPAL_POLICY_REPO_POLLING_INTERVAL
+              value: "30"
+            - name: UVICORN_NUM_WORKERS
+              value: "1"
+            - name: OPAL_POLICY_REPO_POLICY_EXTENSIONS
+              value: "[\".cedar\"]"
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            failureThreshold: 5
+            initialDelaySeconds: 5
+            timeoutSeconds: 10
+            periodSeconds: 15
+
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: http
+            failureThreshold: 5
+            timeoutSeconds: 10
+            periodSeconds: 30
+---
+# Source: opal/templates/tests/e2e.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: opal-e2e
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  containers:
+  - name: e2e
+    image: "apteno/alpine-jq:2021-04-25"
+    command:
+    - '/bin/sh'
+    - '-c'
+    - |
+      set -x
+      set -e
+
+      sleep 15
+
+      [ "$(curl -s http://opal-client:8180/v1/data | jq '.result.users | keys | length')" -eq 3 ]
+      [ "$(curl -s http://opal-client:8180/v1/data | jq '.result.role_permissions | keys | length')" -eq 3 ]

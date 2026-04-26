@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: auth-system
+resources:
+  - rendered/opal-0.0.29.yaml
+  - sample-policy-configmap.yaml
+  - bootstrap-job.yaml
+

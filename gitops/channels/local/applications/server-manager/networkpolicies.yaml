@@ -65,6 +65,12 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: server-manager-discord
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auth-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pomerium-proxy
       ports:
         - protocol: TCP
           port: 8000
@@ -102,6 +108,16 @@ spec:
       ports:
         - protocol: TCP
           port: 9000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auth-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opal-client
+      ports:
+        - protocol: TCP
+          port: 8180
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
