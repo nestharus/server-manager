@@ -3245,13 +3245,22 @@ assert_app_cluster_manifests() {
     "gitops/channels/local/app-clusters/xrd/appcluster-xrd.yaml" \
     "gitops/channels/local/app-clusters/compositions/appcluster-k3d-local.yaml" \
     "gitops/channels/local/app-clusters/compositions/appcluster-vultr-vms.yaml" \
+    "gitops/channels/local/app-clusters/flux/providers-kustomization.yaml" \
+    "gitops/channels/local/app-clusters/flux/provider-configs-kustomization.yaml" \
+    "gitops/channels/local/app-clusters/flux/api-kustomization.yaml" \
+    "gitops/channels/local/app-clusters/flux/claims-kustomization.yaml" \
     "gitops/channels/local/app-clusters/claims/local-sample-appcluster.yaml" \
     "gitops/contracts/remote/app-clusters/kustomization.yaml" \
     "infra/tests/validate_app_clusters_local.sh"; do
     assert_repo_file_exists "$file"
   done
 
-  if command -v kubectl >/dev/null 2>&1 && kubectl kustomize "$app_dir" >"$rendered"; then
+  if command -v kubectl >/dev/null 2>&1 \
+    && kubectl kustomize "$app_dir" >"$rendered" \
+    && kubectl kustomize "$app_dir/providers" >>"$rendered" \
+    && kubectl kustomize "$app_dir/provider-configs" >>"$rendered" \
+    && kubectl kustomize "$app_dir/api" >>"$rendered" \
+    && kubectl kustomize "$app_dir/claims" >>"$rendered"; then
     pass "kubectl kustomize local app-clusters manifests"
   else
     fail "kubectl kustomize local app-clusters manifests"
