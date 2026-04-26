@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the INIT-102 bootstrap-only SOPS boundary."""
+"""Enforce the bootstrap-only SOPS boundary."""
 
 from __future__ import annotations
 
@@ -12,7 +12,24 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ALLOWED_FILE = Path("gitops/bootstrap/sops-sentinel.enc.yaml")
+SOPS_SENTINEL_FILE = Path("gitops/bootstrap/sops-sentinel.enc.yaml")
+INFISICAL_BOOTSTRAP_FILE = Path("gitops/bootstrap/infisical-server-bootstrap.enc.yaml")
+ALLOWED_ENCRYPTED_FILES = {
+    SOPS_SENTINEL_FILE,
+    INFISICAL_BOOTSTRAP_FILE,
+}
+INFISICAL_BOOTSTRAP_STRINGDATA_KEYS = {
+    "ENCRYPTION_KEY",
+    "AUTH_SECRET",
+    "SITE_URL",
+    "DB_CONNECTION_URI",
+    "REDIS_URL",
+    "INFISICAL_AUTO_BOOTSTRAP_EMAIL",
+    "INFISICAL_AUTO_BOOTSTRAP_PASSWORD",
+}
+INFISICAL_BOOTSTRAP_ALLOWED_KEY_PATHS = {
+    f"stringData.{key}" for key in INFISICAL_BOOTSTRAP_STRINGDATA_KEYS
+}
 RUNTIME_SECRET_PATTERNS = (
     re.compile(r"^infisical", re.IGNORECASE),
     re.compile(r"discord.*token", re.IGNORECASE),
@@ -64,20 +81,22 @@ def main() -> int:
     failures: list[str] = []
     encrypted_files = _encrypted_files()
 
-    if encrypted_files != [ALLOWED_FILE]:
+    if set(encrypted_files) != ALLOWED_ENCRYPTED_FILES:
         failures.append(
             "encrypted file set must be exactly "
-            f"{ALLOWED_FILE}; found {', '.join(str(path) for path in encrypted_files) or '<none>'}"
+            f"{', '.join(str(path) for path in sorted(ALLOWED_ENCRYPTED_FILES))}; "
+            f"found {', '.join(str(path) for path in encrypted_files) or '<none>'}"
         )
 
     for relative_path in encrypted_files:
         if relative_path.parts[:2] != ("gitops", "bootstrap"):
             failures.append(f"encrypted file outside gitops/bootstrap: {relative_path}")
 
-        for part in relative_path.parts:
-            match = _runtime_secret_match(part)
-            if match:
-                failures.append(f"runtime-secret-shaped path component in {relative_path}: {part} ({match})")
+        if relative_path not in ALLOWED_ENCRYPTED_FILES:
+            for part in relative_path.parts:
+                match = _runtime_secret_match(part)
+                if match:
+                    failures.append(f"runtime-secret-shaped path component in {relative_path}: {part} ({match})")
 
         absolute_path = REPO_ROOT / relative_path
         try:
@@ -86,7 +105,39 @@ def main() -> int:
             failures.append(f"{relative_path}: {exc}")
             continue
 
+        if relative_path == INFISICAL_BOOTSTRAP_FILE:
+            if not isinstance(document, dict):
+                failures.append(f"{relative_path}: expected YAML mapping")
+                continue
+            if document.get("apiVersion") != "v1":
+                failures.append(f"{relative_path}: apiVersion must be v1")
+            if document.get("kind") != "Secret":
+                failures.append(f"{relative_path}: kind must be Secret")
+            metadata = document.get("metadata")
+            if not isinstance(metadata, dict):
+                failures.append(f"{relative_path}: metadata must be a mapping")
+            else:
+                if metadata.get("name") != "infisical-server-bootstrap":
+                    failures.append(f"{relative_path}: metadata.name must be infisical-server-bootstrap")
+                if metadata.get("namespace") != "infisical-system":
+                    failures.append(f"{relative_path}: metadata.namespace must be infisical-system")
+            if document.get("type") != "Opaque":
+                failures.append(f"{relative_path}: type must be Opaque")
+            string_data = document.get("stringData")
+            if not isinstance(string_data, dict):
+                failures.append(f"{relative_path}: stringData must be a mapping")
+            else:
+                found_keys = set(str(key) for key in string_data)
+                if found_keys != INFISICAL_BOOTSTRAP_STRINGDATA_KEYS:
+                    failures.append(
+                        f"{relative_path}: stringData keys must be exactly "
+                        f"{', '.join(sorted(INFISICAL_BOOTSTRAP_STRINGDATA_KEYS))}; "
+                        f"found {', '.join(sorted(found_keys)) or '<none>'}"
+                    )
+
         for key_path, match in _walk_keys(document):
+            if relative_path == INFISICAL_BOOTSTRAP_FILE and key_path in INFISICAL_BOOTSTRAP_ALLOWED_KEY_PATHS:
+                continue
             failures.append(f"runtime-secret-shaped key in {relative_path}: {key_path} ({match})")
 
     if failures:
@@ -94,7 +145,10 @@ def main() -> int:
             print(f"FAIL: {failure}", file=sys.stderr)
         return 1
 
-    print(f"PASS: SOPS encrypted file boundary is bootstrap-only ({ALLOWED_FILE})")
+    print(
+        "PASS: SOPS encrypted file boundary is bootstrap-only "
+        f"({', '.join(str(path) for path in sorted(ALLOWED_ENCRYPTED_FILES))})"
+    )
     return 0
 
 

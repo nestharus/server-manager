@@ -124,6 +124,7 @@ assert_file_contains() {
 assert_sops_bootstrap_boundary() {
   local sops_config="${REPO_ROOT}/.sops.yaml"
   local sentinel="${REPO_ROOT}/gitops/bootstrap/sops-sentinel.enc.yaml"
+  local infisical_bootstrap="${REPO_ROOT}/gitops/bootstrap/infisical-server-bootstrap.enc.yaml"
   local linter="${INFRA_DIR}/scripts/lint-sops-boundary.py"
   local py_bin
 
@@ -163,14 +164,60 @@ PY
     fail "sops sentinel is encrypted"
   fi
 
-  if [[ -n "${py_bin:-}" && -f "$linter" ]] && "$py_bin" "$linter" >/dev/null; then
-    pass "SOPS boundary lint"
+  assert_repo_file_exists "gitops/bootstrap/infisical-server-bootstrap.enc.yaml"
+  if [[ -f "$infisical_bootstrap" ]] \
+    && grep -q '^sops:' "$infisical_bootstrap" \
+    && grep -q '^[[:space:]]*mac:' "$infisical_bootstrap" \
+    && grep -q 'name: infisical-server-bootstrap' "$infisical_bootstrap" \
+    && grep -q 'namespace: infisical-system' "$infisical_bootstrap"; then
+    pass "Infisical server bootstrap Secret is encrypted"
   else
-    fail "SOPS boundary lint"
+    fail "Infisical server bootstrap Secret is encrypted"
+  fi
+
+  if [[ -n "${py_bin:-}" && -f "$linter" ]] && "$py_bin" "$linter" >/dev/null; then
+    pass "SOPS boundary lint accepts bootstrap allowlist"
+  else
+    fail "SOPS boundary lint accepts bootstrap allowlist"
   fi
 
   assert_file_exists "scripts/bootstrap-sops-age-key.sh"
   assert_executable "scripts/bootstrap-sops-age-key.sh"
+}
+
+assert_infisical_identity_bootstrap_script() {
+  local script="${INFRA_DIR}/scripts/bootstrap-infisical-identity.sh"
+  local operator_crd="${REPO_ROOT}/gitops/channels/local/infisical/operator/rendered/secrets-operator-0.10.32.yaml"
+  local help_output
+
+  assert_file_exists "scripts/bootstrap-infisical-identity.sh"
+  assert_executable "scripts/bootstrap-infisical-identity.sh"
+
+  if help_output="$(bash "$script" --help 2>&1)" \
+    && grep -q 'Usage: bootstrap-infisical-identity.sh' <<<"$help_output" \
+    && grep -q 'Re-running is idempotent' <<<"$help_output"; then
+    pass "bootstrap-infisical-identity --help"
+  else
+    fail "bootstrap-infisical-identity --help"
+  fi
+
+  if grep -q '^UA_SECRET_NAME="infisical-operator-auth"$' "$script" \
+    && grep -q '^UA_SECRET_NAMESPACE="infisical-system"$' "$script" \
+    && grep -q -- '--from-literal=clientId=' "$script" \
+    && grep -q -- '--from-literal=clientSecret=' "$script"; then
+    pass "Operator UA Secret is kubectl-applied with clientId/clientSecret"
+  else
+    fail "Operator UA Secret is kubectl-applied with clientId/clientSecret"
+  fi
+
+  if grep -q 'universalAuth:' "$operator_crd" \
+    && grep -q 'credentialsRef:' "$operator_crd" \
+    && grep -q 'secretName:' "$operator_crd" \
+    && grep -q 'secretNamespace:' "$operator_crd"; then
+    pass "Infisical Operator CRD reads Universal Auth credentialsRef Secret"
+  else
+    fail "Infisical Operator CRD reads Universal Auth credentialsRef Secret"
+  fi
 }
 
 assert_gitops_channel_schema_rendering() {
@@ -1173,6 +1220,11 @@ echo ""
 echo "=== Slice 102.03 SOPS+age bootstrap sentinel validation ==="
 
 assert_sops_bootstrap_boundary
+
+echo ""
+echo "=== Slice 103.04 Infisical identity bootstrap validation ==="
+
+assert_infisical_identity_bootstrap_script
 
 if [[ "$RUN_CLUSTER" -eq 1 ]]; then
   assert_local_cluster_can_create

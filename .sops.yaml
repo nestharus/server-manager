@@ -1,6 +1,8 @@
-# Bootstrap-only SOPS rule for INIT-102.
+# Bootstrap-only SOPS rule.
 # Replace this placeholder recipient with the operator's real age public key,
 # then re-encrypt gitops/bootstrap/sops-sentinel.enc.yaml during bootstrap.
+# The path regex intentionally covers bootstrap encrypted YAML only; the exact
+# encrypted file and key allowlist is enforced by infra/scripts/lint-sops-boundary.py.
 creation_rules:
   - path_regex: ^gitops/bootstrap/.*\.enc\.yaml$
     encrypted_regex: ^(data|stringData)$
