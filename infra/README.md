@@ -58,11 +58,53 @@ Use the channel-scoped kubeconfig explicitly:
 KUBECONFIG=~/.kube/humility-local.yaml kubectl get nodes
 ```
 
+If the script reports stale local state, choose the repair path explicitly:
+
+```bash
+bash infra/scripts/bring-up-local-channel.sh --repair
+```
+
+Use `--force` only when the local k3d cluster itself should be deleted and
+recreated:
+
+```bash
+bash infra/scripts/bring-up-local-channel.sh --force
+```
+
 Delete the local channel cluster when finished:
 
 ```bash
 bash infra/scripts/delete-local-channel.sh
 ```
+
+The delete script is safe to run again after the cluster and kubeconfig are
+already gone.
+
+## Done-State Proof
+
+Run the full local proof when Docker, k3d, and kubectl are available:
+
+```bash
+bash infra/tests/validate_platform_bootstrap.sh --cluster
+```
+
+The harness performs this sequence:
+
+```bash
+bash infra/scripts/bring-up-local-channel.sh
+KUBECONFIG=~/.kube/humility-local.yaml kubectl get nodes
+bash infra/scripts/bring-up-local-channel.sh
+bash infra/scripts/delete-local-channel.sh
+bash infra/scripts/delete-local-channel.sh
+```
+
+The expected proof is:
+
+- `kubectl get nodes` returns at least one node through
+  `~/.kube/humility-local.yaml`.
+- All reported nodes are `Ready`.
+- The second bring-up exits 0 with an `already up` no-op message.
+- Both delete runs exit 0, and the second reports the cluster is already gone.
 
 ## Notes
 
