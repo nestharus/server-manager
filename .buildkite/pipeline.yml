@@ -7,6 +7,7 @@ env:
   IMAGE_TAG: init-109-local
   IMAGE_CONTEXT: containers/samples/registry-smoke
   IMAGE_FILE: containers/samples/registry-smoke/Containerfile
+  INIT113_IMAGE_TAG: init-113-local
 
 steps:
   - key: init-109-smoke
@@ -21,6 +22,10 @@ steps:
     label: "INIT-111 data plane static validation"
     command: "infra/tests/validate_data_plane_local.sh --static-only"
 
+  - key: init-113-application-workloads-static
+    label: "INIT-113 application workloads static validation"
+    command: "infra/tests/validate_application_workloads_local.sh --static-only"
+
   - wait
 
   - key: registry-build-push
@@ -32,3 +37,10 @@ steps:
       --tag "${IMAGE_TAG}"
       --context "${IMAGE_CONTEXT}"
       --file "${IMAGE_FILE}"
+
+  - key: init-113-build-images
+    label: "Build and push server-manager app images"
+    command: >
+      infra/scripts/build-server-manager-images.sh
+      --channel "${CHANNEL_ID}"
+      --tag "${INIT113_IMAGE_TAG}"
