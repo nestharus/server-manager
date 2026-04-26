@@ -34,6 +34,27 @@ object_storage:
   credentials_secret_namespace: app-runtime
   infisical_project: platform-storage
   infisical_path: /object-storage/dev/
+image_registry:
+  provider: vultr-container-registry
+  registry_url: ewr.vultrcr.com/humility
+  push_url: ewr.vultrcr.com/humility
+  pull_url: ewr.vultrcr.com/humility
+  repository_prefix: dev
+  credentials:
+    required: true
+    secret_name: vultr-cr-credentials
+    secret_namespace: app-runtime
+    dockerconfigjson_key: .dockerconfigjson
+    infisical_project: platform-registry
+    infisical_path: /registry/dev
+  pull_through_cache:
+    enabled: false
+    implementation: none
+    mirrors: []
+  sample:
+    app: registry-smoke
+    tag: init-108
+    namespace: registry-smoke
 tls:
   provider: acme
   remote_cluster_issuer_name: letsencrypt-staging

@@ -49,6 +49,34 @@ object_storage:
   credentials_secret_namespace: minio-system
   infisical_project: platform-storage
   infisical_path: /object-storage/local/
+image_registry:
+  provider: local-docker-registry
+  registry_url: k3d-humility-local:5000
+  push_url: localhost:5000
+  pull_url: k3d-humility-local:5000
+  repository_prefix: local
+  credentials:
+    required: false
+  pull_through_cache:
+    enabled: true
+    implementation: distribution-proxy
+    mirrors:
+      - registry: docker.io
+        cache_name: humility-local-cache-docker
+        host_port: 5001
+        remote_url: https://registry-1.docker.io
+      - registry: quay.io
+        cache_name: humility-local-cache-quay
+        host_port: 5002
+        remote_url: https://quay.io
+      - registry: ghcr.io
+        cache_name: humility-local-cache-ghcr
+        host_port: 5003
+        remote_url: https://ghcr.io
+  sample:
+    app: registry-smoke
+    tag: init-108
+    namespace: registry-smoke
 tls:
   provider: step-ca
   local_cluster_issuer_name: humility-local-step-ca
