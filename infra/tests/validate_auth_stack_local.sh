@@ -231,6 +231,7 @@ assert_runtime() {
   kubectl_cmd -n "$AUTH_NAMESPACE" delete pod init-114-cedar --ignore-not-found >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" run init-114-cedar \
     --restart=Never \
+    --labels=app.kubernetes.io/name=opal-cedar,platform.humility.gg/init=114 \
     --image=curlimages/curl:8.16.0 \
     --command -- /bin/sh -ec "curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"sample@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized && echo && curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"other@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized" >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" wait pod/init-114-cedar --for=jsonpath='{.status.phase}'=Succeeded --timeout=180s >/dev/null
