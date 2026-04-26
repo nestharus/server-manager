@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: channel-image-registry
+  namespace: image-registry-system
+  labels:
+    app.kubernetes.io/name: channel-image-registry
+    platform.humility.gg/init: "108"
+data:
+  provider: local-docker-registry
+  registryUrl: k3d-humility-local:5000
+  pushUrl: localhost:5000
+  pullUrl: k3d-humility-local:5000
+  repositoryPrefix: local
+  imageNamePattern: k3d-humility-local:5000/local/${app}:${tag}
+  pullThroughCacheImplementation: distribution-proxy
+  mirror.docker.io: k3d-humility-local-cache-docker:5000
+  mirror.quay.io: k3d-humility-local-cache-quay:5000
+  mirror.ghcr.io: k3d-humility-local-cache-ghcr:5000
