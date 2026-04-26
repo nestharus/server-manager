@@ -55,6 +55,11 @@ variable "agent_plan" {
 variable "ssh_key_ids" {
   type        = list(string)
   description = "Operator-supplied Vultr SSH key IDs for apply-capable remote channels; no default; required"
+
+  validation {
+    condition     = length(var.ssh_key_ids) > 0
+    error_message = "ssh_key_ids must contain at least one SSH key ID."
+  }
 }
 
 variable "allowed_ssh_cidrs" {
