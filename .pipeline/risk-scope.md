@@ -1,7 +1,7 @@
-# INIT-107 Phase 4 Scope Risk Gate
+# INIT-108 Risk Gate: Scope
 
-Verdict: LOW
+Result: LOW
 
-The proposal stays inside cluster security baseline work and explicitly excludes authn/authz, credential rotation, and tenant policy.
-
-Required follow-up: INIT-108 should decide whether to replace the local Docker-socket app-cluster provisioner with a non-hostPath mechanism before tenant boundaries are introduced.
+- The proposal excludes INIT-109 CI/CD and production replication.
+- Remote Vultr registry remains config-only.
+- All implementation surfaces map to the binding scope.

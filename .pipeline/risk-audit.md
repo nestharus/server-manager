@@ -1,7 +1,7 @@
-# INIT-107 Phase 4 Audit Risk Gate
+# INIT-108 Risk Gate: Audit
 
-Verdict: LOW
+Result: LOW
 
-The proposal directly covers every binding scope item and includes cluster-mode proof for admission, network isolation, and RBAC.
-
-Required follow-up: INIT-108 should decide whether to replace the local Docker-socket app-cluster provisioner with a non-hostPath mechanism before tenant boundaries are introduced.
+- The proposal uses existing k3d, Docker, kustomize, channel schema, and Infisical patterns.
+- Local visible Discord actions: none.
+- Main residual risk is local Docker/k3d environment availability, covered by harness prerequisites.
