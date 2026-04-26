@@ -154,9 +154,87 @@ def strip_metadata(value):
             strip_metadata(child)
 
 
+NAMESPACED_KINDS = {
+    "ConfigMap",
+    "Deployment",
+    "NetworkPolicy",
+    "PersistentVolumeClaim",
+    "Pod",
+    "Role",
+    "RoleBinding",
+    "Secret",
+    "Service",
+    "ServiceAccount",
+    "StatefulSet",
+}
+SERVER_NAMESPACE = "infisical-system"
+BOOTSTRAP_SECRET = "infisical-server-bootstrap"
+
+
+def add_namespace(value):
+    if not isinstance(value, dict):
+        return
+    if value.get("kind") in NAMESPACED_KINDS:
+        metadata = value.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata.setdefault("namespace", SERVER_NAMESPACE)
+
+
+def replace_secret_backed_env(value):
+    if not isinstance(value, dict):
+        return
+    spec = value.get("spec")
+    template = spec.get("template") if isinstance(spec, dict) else None
+    pod_spec = template.get("spec") if isinstance(template, dict) else None
+    containers = pod_spec.get("containers") if isinstance(pod_spec, dict) else None
+    if not isinstance(containers, list):
+        return
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        env = container.get("env")
+        if not isinstance(env, list):
+            continue
+        filtered = []
+        seen_secret_backed = set()
+        for item in env:
+            if not isinstance(item, dict):
+                filtered.append(item)
+                continue
+            name = item.get("name")
+            if name == "DB_CONNECTION_URI":
+                item = {
+                    "name": name,
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": BOOTSTRAP_SECRET,
+                            "key": "DB_CONNECTION_URI",
+                        },
+                    },
+                }
+            elif name == "REDIS_URL":
+                item = {
+                    "name": name,
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": BOOTSTRAP_SECRET,
+                            "key": "REDIS_URL",
+                        },
+                    },
+                }
+            if name in {"DB_CONNECTION_URI", "REDIS_URL"}:
+                if name in seen_secret_backed:
+                    continue
+                seen_secret_backed.add(name)
+            filtered.append(item)
+        container["env"] = filtered
+
+
 documents = [doc for doc in yaml.safe_load_all(raw_path.read_text(encoding="utf-8")) if doc]
 for document in documents:
     strip_metadata(document)
+    add_namespace(document)
+    replace_secret_backed_env(document)
 
 with output_path.open("w", encoding="utf-8") as handle:
     yaml.safe_dump_all(
@@ -253,9 +331,35 @@ def crd_name(document):
     return name if isinstance(name, str) else None
 
 
+NAMESPACED_KINDS = {
+    "ConfigMap",
+    "Deployment",
+    "NetworkPolicy",
+    "PersistentVolumeClaim",
+    "Pod",
+    "Role",
+    "RoleBinding",
+    "Secret",
+    "Service",
+    "ServiceAccount",
+    "StatefulSet",
+}
+OPERATOR_NAMESPACE = "infisical-system"
+
+
+def add_namespace(value):
+    if not isinstance(value, dict):
+        return
+    if value.get("kind") in NAMESPACED_KINDS:
+        metadata = value.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata.setdefault("namespace", OPERATOR_NAMESPACE)
+
+
 documents = [doc for doc in yaml.safe_load_all(raw_path.read_text(encoding="utf-8")) if doc]
 for document in documents:
     strip_metadata(document)
+    add_namespace(document)
 
 found_crds = {name for document in documents if (name := crd_name(document))}
 for name in expected_crds:
@@ -273,6 +377,7 @@ for name in expected_crds:
     if len(matching_docs) != 1:
         raise SystemExit(f"expected one upstream CRD document for {name}, found {len(matching_docs)}")
     strip_metadata(matching_docs[0])
+    add_namespace(matching_docs[0])
     documents.append(matching_docs[0])
     found_crds.add(name)
 

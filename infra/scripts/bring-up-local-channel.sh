@@ -5,21 +5,21 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
 TOOL_INSTALLER="${REPO_ROOT}/infra/scripts/install-cluster-tools.sh"
 FLUX_INSTALLER="${REPO_ROOT}/infra/scripts/install-flux-for-channel.sh"
-CHANNEL_ID="local"
+CHANNEL_REQUEST="local"
+CHANNEL_ID=""
 FORCE=0
 REPAIR=0
 CLUSTER_ONLY=0
-POSITIONAL_CHANNEL=0
 
 usage() {
   cat <<'EOF'
-Usage: bring-up-local-channel.sh [local | --channel local] [--force | --repair] [--cluster-only]
+Usage: bring-up-local-channel.sh [--channel local] [--force | --repair] [--cluster-only]
 
 Creates the local k3d platform cluster for a resolved local channel and runs
 the Flux post-install unless --cluster-only is passed.
 
 Options:
-  --channel <id>   Channel id to resolve (default: local)
+  --channel <id>   Channel id to resolve (default: local); resolved JSON id is canonical
   --force          Delete stale local state and recreate the cluster
   --repair         Repair stale generated kubeconfig state without recreating a matching cluster
   --cluster-only   Skip Flux post-install
@@ -55,7 +55,7 @@ parse_args() {
     case "$1" in
       --channel)
         [[ $# -ge 2 ]] || die "--channel requires a value"
-        CHANNEL_ID="$2"
+        CHANNEL_REQUEST="$2"
         shift
         ;;
       --force)
@@ -72,11 +72,7 @@ parse_args() {
         exit 0
         ;;
       *)
-        if [[ "$1" == -* || "$POSITIONAL_CHANNEL" -eq 1 ]]; then
-          die "unknown argument: $1"
-        fi
-        CHANNEL_ID="$1"
-        POSITIONAL_CHANNEL=1
+        die "unknown argument: $1"
         ;;
     esac
     shift
@@ -99,6 +95,8 @@ field = sys.argv[2]
 
 if field == "target":
     print(data["cluster"]["target"])
+elif field == "id":
+    print(data["id"])
 elif field == "cluster_name":
     print(data["cluster"]["k3d"].get("cluster_name") or f"humility-{data['id']}")
 elif field == "k3s_version":
@@ -241,7 +239,7 @@ main() {
   docker info >/dev/null 2>&1 || die "docker daemon is unavailable"
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required to resolve channels"
 
-  RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_ID")"
+  RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST")"
 
   local target
   local cluster_name
@@ -251,6 +249,7 @@ main() {
   local registry_name
   local kubeconfig_path
 
+  CHANNEL_ID="$(resolve_field id)"
   target="$(resolve_field target)"
   [[ "$target" == "k3d-local" ]] || die "channel '${CHANNEL_ID}' target is '${target}', expected k3d-local"
 

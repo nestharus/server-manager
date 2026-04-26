@@ -3,7 +3,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
-CHANNEL_ID="local"
+CHANNEL_REQUEST="local"
+CHANNEL_ID=""
 
 usage() {
   cat <<'EOF'
@@ -12,7 +13,7 @@ Usage: delete-local-channel.sh [--channel local]
 Deletes the local k3d platform cluster for a resolved local channel.
 
 Options:
-  --channel <id>  Channel id to resolve (default: local)
+  --channel <id>  Channel id to resolve (default: local); resolved JSON id is canonical
   -h, --help      Show this help
 EOF
 }
@@ -41,7 +42,7 @@ parse_args() {
     case "$1" in
       --channel)
         [[ $# -ge 2 ]] || die "--channel requires a value"
-        CHANNEL_ID="$2"
+        CHANNEL_REQUEST="$2"
         shift
         ;;
       -h|--help)
@@ -68,6 +69,8 @@ field = sys.argv[2]
 
 if field == "target":
     print(data["cluster"]["target"])
+elif field == "id":
+    print(data["id"])
 elif field == "cluster_name":
     print(data["cluster"]["k3d"].get("cluster_name") or f"humility-{data['id']}")
 elif field == "kubeconfig_path":
@@ -110,12 +113,13 @@ main() {
   command -v k3d >/dev/null 2>&1 || die "k3d is required; run infra/scripts/install-cluster-tools.sh --install"
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required to resolve channels"
 
-  RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_ID")"
+  RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST")"
 
   local target
   local cluster_name
   local kubeconfig_path
 
+  CHANNEL_ID="$(resolve_field id)"
   target="$(resolve_field target)"
   [[ "$target" == "k3d-local" ]] || die "channel '${CHANNEL_ID}' target is '${target}', expected k3d-local"
 

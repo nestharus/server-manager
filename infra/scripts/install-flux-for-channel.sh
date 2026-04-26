@@ -6,10 +6,11 @@ RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
 RENDERER="${REPO_ROOT}/infra/scripts/render-gitops-source.py"
 AGE_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-sops-age-key.sh"
 INFISICAL_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-identity.sh"
-CHANNEL_ID="local"
+CHANNEL_REQUEST="local"
+CHANNEL_ID=""
 WAIT_TIMEOUT="180s"
 INFISICAL_WAIT_TIMEOUT="300s"
-INFISICAL_NAMESPACE="infisical-system"
+INFISICAL_NAMESPACE=""
 INFISICAL_SERVER_DEPLOYMENT="infisical-infisical-standalone-infisical"
 INFISICAL_POSTGRES_STATEFULSET="postgresql"
 INFISICAL_REDIS_STATEFULSET="redis-master"
@@ -21,14 +22,14 @@ INFISICAL_SAMPLE_VALUE="infisical-local-ready"
 
 usage() {
   cat <<'EOF'
-Usage: install-flux-for-channel.sh [--channel local]
+Usage: install-flux-for-channel.sh --channel local
 
 Installs Flux into the local k3d channel, seeds the in-cluster Git daemon,
 delivers the SOPS age key Secret, applies Flux source CRs, and waits for
 reconciliation.
 
 Options:
-  --channel <id>  Channel id to resolve (default: local)
+  --channel <id>  Channel id to resolve (default: local); resolved JSON id is canonical
   -h, --help      Show this help
 EOF
 }
@@ -57,7 +58,7 @@ parse_args() {
     case "$1" in
       --channel)
         [[ $# -ge 2 ]] || die "--channel requires a value"
-        CHANNEL_ID="$2"
+        CHANNEL_REQUEST="$2"
         shift
         ;;
       -h|--help)
@@ -85,6 +86,8 @@ gitops = data.get("gitops", {})
 
 if field == "target":
     print(data["cluster"]["target"])
+elif field == "id":
+    print(data["id"])
 elif field == "kubeconfig_path":
     print(data["cluster"].get("kubeconfig_path") or f"~/.kube/humility-{data['id']}.yaml")
 elif field == "source_name":
@@ -332,7 +335,7 @@ wait_for_target_secret() {
   for attempt in $(seq 1 60); do
     encoded="$(kubectl_cmd -n "$INFISICAL_SAMPLE_NAMESPACE" get secret "$INFISICAL_SAMPLE_NAME" -o "jsonpath={.data.${INFISICAL_SAMPLE_KEY}}" 2>/dev/null || true)"
     if [[ -n "$encoded" ]]; then
-      decoded="$(printf '%s' "$encoded" | base64 --decode 2>/dev/null || true)"
+      decoded="$(printf '%s' "$encoded" | base64 -d 2>/dev/null || true)"
       if [[ "$decoded" == "$INFISICAL_SAMPLE_VALUE" ]]; then
         return 0
       fi
@@ -373,7 +376,8 @@ main() {
   command -v base64 >/dev/null 2>&1 || die "base64 is required"
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required"
 
-  RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_ID")"
+  RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST")"
+  CHANNEL_ID="$(json_field id)"
   target="$(json_field target)"
   [[ "$target" == "k3d-local" ]] || die "channel '${CHANNEL_ID}' target is '${target}', expected k3d-local"
 

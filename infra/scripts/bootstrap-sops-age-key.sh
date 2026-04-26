@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CHANNEL_ID="local"
-KEY_FILE="${HOME}/.config/sops/age/local.txt"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
+CHANNEL_REQUEST="local"
+CHANNEL_ID=""
+KEY_FILE=""
+KEY_FILE_EXPLICIT=0
 KUBECONFIG_ARG=()
 SECRET_NAMESPACE="flux-system"
 SECRET_NAME="sops-age"
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 usage() {
   cat <<'EOF'
@@ -16,7 +19,7 @@ Creates or reuses the operator-local age private key and applies it to the
 cluster as Secret/sops-age in namespace flux-system.
 
 Options:
-  --channel <id>     Channel id for the default key path (default: local)
+  --channel <id>     Channel id for the default key path (default: local); resolved JSON id is canonical
   --key-file <path>  Override age private key path
   --kubeconfig <p>   Pass a kubeconfig path to kubectl
   --namespace <n>    Secret namespace (default: flux-system)
@@ -35,13 +38,13 @@ parse_args() {
     case "$1" in
       --channel)
         [[ $# -ge 2 ]] || die "--channel requires a value"
-        CHANNEL_ID="$2"
-        KEY_FILE="${HOME}/.config/sops/age/${CHANNEL_ID}.txt"
+        CHANNEL_REQUEST="$2"
         shift
         ;;
       --key-file)
         [[ $# -ge 2 ]] || die "--key-file requires a value"
         KEY_FILE="$2"
+        KEY_FILE_EXPLICIT=1
         shift
         ;;
       --kubeconfig)
@@ -71,6 +74,16 @@ parse_args() {
   done
 }
 
+python_bin() {
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+  elif command -v python >/dev/null 2>&1; then
+    command -v python
+  else
+    return 1
+  fi
+}
+
 public_key() {
   awk '/^# public key: / { print $4; found = 1; exit } END { exit found ? 0 : 1 }' "$KEY_FILE"
 }
@@ -79,11 +92,16 @@ parse_args "$@"
 
 command -v age-keygen >/dev/null 2>&1 || die "age-keygen is required"
 command -v kubectl >/dev/null 2>&1 || die "kubectl is required"
+PYTHON_BIN="$(python_bin)" || die "python or python3 is required to resolve channels"
+CHANNEL_ID="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST" | "$PYTHON_BIN" -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
+if [[ "$KEY_FILE_EXPLICIT" -eq 0 ]]; then
+  KEY_FILE="${HOME}/.config/sops/age/${CHANNEL_ID}.txt"
+fi
 
 mkdir -p "$(dirname "$KEY_FILE")"
 if [[ ! -f "$KEY_FILE" ]]; then
   tmp_dir="$(mktemp -d)"
-  tmp_key="${tmp_dir}/local.txt"
+  tmp_key="${tmp_dir}/${CHANNEL_ID}.txt"
   age-keygen -o "$tmp_key" >/dev/null
   chmod 600 "$tmp_key"
   mv "$tmp_key" "$KEY_FILE"
@@ -128,8 +146,8 @@ metadata:
   name: sops-sentinel
   namespace: flux-system
   labels:
-    channel: local
-    sentinel: sops-local-ready
+    channel: ${CHANNEL_ID}
+    sentinel: sops-${CHANNEL_ID}-ready
 type: Opaque
 stringData:
   ready: "true"

@@ -27,9 +27,16 @@ postgresql:
     tag: 16.2.0-debian-11-r16
   auth:
     username: infisical
-    password: root
-    postgresPassword: root
     database: infisicalDB
+    existingSecret: infisical-server-bootstrap
+    secretKeys:
+      adminPasswordKey: POSTGRES_POSTGRES_PASSWORD
+      userPasswordKey: POSTGRES_PASSWORD
+  useExistingPostgresSecret:
+    enabled: true
+    existingConnectionStringSecret:
+      name: infisical-server-bootstrap
+      key: DB_CONNECTION_URI
   primary:
     persistence:
       size: 8Gi
@@ -40,6 +47,9 @@ redis:
     registry: mirror.gcr.io
     repository: bitnamilegacy/redis
     tag: 7.2.4-debian-11-r18
+  auth:
+    existingSecret: infisical-server-bootstrap
+    existingSecretPasswordKey: REDIS_PASSWORD
   master:
     persistence:
       size: 8Gi
