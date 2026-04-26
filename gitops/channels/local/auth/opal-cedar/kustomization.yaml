@@ -5,4 +5,5 @@ resources:
   - rendered/opal-0.0.29.yaml
   - sample-policy-configmap.yaml
   - bootstrap-job.yaml
-
+patches:
+  - path: client-probes-patch.yaml
