@@ -11,6 +11,7 @@ FORCE=0
 REPAIR=0
 CLUSTER_ONLY=0
 K3D_REGISTRY_PORT="${K3D_REGISTRY_PORT:-5000}"
+REGISTRY_CONFIG_PATH=""
 
 usage() {
   cat <<'EOF'
@@ -39,6 +40,14 @@ die() {
 log() {
   echo "$*"
 }
+
+cleanup_registry_config() {
+  if [[ -n "$REGISTRY_CONFIG_PATH" ]]; then
+    rm -f "$REGISTRY_CONFIG_PATH"
+  fi
+}
+
+trap cleanup_registry_config EXIT
 
 stale_state() {
   die "stale state detected: $*; rerun with --repair to fix generated kubeconfig state or --force to recreate the local cluster"
@@ -113,6 +122,14 @@ elif field == "registry_name":
     print(data["cluster"]["k3d"]["registry_name"])
 elif field == "kubeconfig_path":
     print(data["cluster"].get("kubeconfig_path") or f"~/.kube/humility-{data['id']}.yaml")
+elif field == "registry_mirrors":
+    for mirror in data.get("image_registry", {}).get("pull_through_cache", {}).get("mirrors", []):
+        print("\t".join([
+            mirror["registry"],
+            mirror["cache_name"],
+            str(mirror["host_port"]),
+            mirror["remote_url"],
+        ]))
 else:
     raise SystemExit(f"unknown field: {field}")
 PY
@@ -196,6 +213,164 @@ delete_existing_state() {
   fi
 }
 
+cache_container_name() {
+  local cache_name="$1"
+  printf 'k3d-%s' "$cache_name"
+}
+
+local_registry_container_name() {
+  printf 'k3d-%s' "$registry_name"
+}
+
+ensure_local_registry() {
+  local container_name
+  local volume_name
+
+  [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]] || return 0
+
+  container_name="$(local_registry_container_name)"
+  volume_name="${container_name}-data"
+
+  if docker inspect "$container_name" >/dev/null 2>&1; then
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$container_name")" != "true" ]]; then
+      log "Starting local image registry '${container_name}'"
+      docker start "$container_name" >/dev/null
+    else
+      log "Local image registry '${container_name}' already exists"
+    fi
+    return 0
+  fi
+
+  log "Creating local image registry '${container_name}' on localhost:${K3D_REGISTRY_PORT}"
+  docker volume create "$volume_name" >/dev/null
+  docker run -d \
+    --name "$container_name" \
+    --restart unless-stopped \
+    --publish "${K3D_REGISTRY_PORT}:5000" \
+    --volume "${volume_name}:/var/lib/registry" \
+    registry:2 >/dev/null
+}
+
+ensure_registry_cache() {
+  local cache_name="$1"
+  local host_port="$2"
+  local remote_url="$3"
+  local container_name
+  local volume_name
+
+  container_name="$(cache_container_name "$cache_name")"
+  volume_name="k3d-${cache_name}-data"
+
+  if docker inspect "$container_name" >/dev/null 2>&1; then
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$container_name")" != "true" ]]; then
+      log "Starting registry cache '${container_name}'"
+      docker start "$container_name" >/dev/null
+    else
+      log "Registry cache '${container_name}' already exists"
+    fi
+    return 0
+  fi
+
+  if k3d registry get "$container_name" >/dev/null 2>&1 || k3d registry get "$cache_name" >/dev/null 2>&1; then
+    log "Registry cache '${container_name}' already exists"
+    return 0
+  fi
+
+  log "Creating registry cache '${container_name}' for ${remote_url}"
+  docker volume create "$volume_name" >/dev/null
+  docker run -d \
+    --name "$container_name" \
+    --restart unless-stopped \
+    --volume "${volume_name}:/var/lib/registry" \
+    --env "REGISTRY_PROXY_REMOTEURL=${remote_url}" \
+    --env "REGISTRY_STORAGE_DELETE_ENABLED=true" \
+    registry:2 >/dev/null
+}
+
+ensure_registry_caches() {
+  local registry
+  local cache_name
+  local host_port
+  local remote_url
+  local mirrors
+
+  mirrors="$(resolve_field registry_mirrors)"
+  [[ -n "$mirrors" ]] || return 0
+
+  while IFS=$'\t' read -r registry cache_name host_port remote_url; do
+    [[ -n "$registry" ]] || continue
+    ensure_registry_cache "$cache_name" "$host_port" "$remote_url"
+  done <<<"$mirrors"
+}
+
+write_registry_config() {
+  local mirrors
+  local registry
+  local cache_name
+  local host_port
+  local remote_url
+
+  mirrors="$(resolve_field registry_mirrors)"
+  [[ -n "$mirrors" ]] || return 0
+
+  REGISTRY_CONFIG_PATH="$(mktemp)"
+  {
+    echo "mirrors:"
+    if [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]]; then
+      printf '  "%s:5000":\n' "$(local_registry_container_name)"
+      printf '    endpoint:\n'
+      printf '      - http://%s:5000\n' "$(local_registry_container_name)"
+    fi
+    while IFS=$'\t' read -r registry cache_name host_port remote_url; do
+      [[ -n "$registry" ]] || continue
+      printf '  "%s":\n' "$registry"
+      printf '    endpoint:\n'
+      printf '      - http://%s:5000\n' "$(cache_container_name "$cache_name")"
+    done <<<"$mirrors"
+  } >"$REGISTRY_CONFIG_PATH"
+}
+
+connect_registry_caches_to_cluster_network() {
+  local registry
+  local cache_name
+  local host_port
+  local remote_url
+  local mirrors
+  local network_name="k3d-${cluster_name}"
+  local container_name
+
+  mirrors="$(resolve_field registry_mirrors)"
+  [[ -n "$mirrors" ]] || return 0
+
+  while IFS=$'\t' read -r registry cache_name host_port remote_url; do
+    [[ -n "$registry" ]] || continue
+    container_name="$(cache_container_name "$cache_name")"
+    docker network inspect "$network_name" >/dev/null
+    if docker inspect -f "{{json .NetworkSettings.Networks}}" "$container_name" | grep -q "\"${network_name}\""; then
+      log "Registry cache '${container_name}' already attached to ${network_name}"
+    else
+      log "Attaching registry cache '${container_name}' to ${network_name}"
+      docker network connect "$network_name" "$container_name"
+    fi
+  done <<<"$mirrors"
+}
+
+connect_local_registry_to_cluster_network() {
+  local network_name="k3d-${cluster_name}"
+  local container_name
+
+  [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]] || return 0
+
+  container_name="$(local_registry_container_name)"
+  docker network inspect "$network_name" >/dev/null
+  if docker inspect -f "{{json .NetworkSettings.Networks}}" "$container_name" | grep -q "\"${network_name}\""; then
+    log "Local image registry '${container_name}' already attached to ${network_name}"
+  else
+    log "Attaching local image registry '${container_name}' to ${network_name}"
+    docker network connect "$network_name" "$container_name"
+  fi
+}
+
 create_cluster() {
   local k3d_image_tag="${k3s_version/+/-}"
   local args=(
@@ -207,12 +382,23 @@ create_cluster() {
     --volume "/var/run/docker.sock:/var/run/docker.sock@all"
     --wait
   )
+  local registry
+  local cache_name
+  local host_port
+  local remote_url
 
-  if [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]]; then
-    args+=(--registry-create "${registry_name}:0.0.0.0:${K3D_REGISTRY_PORT}")
+  ensure_local_registry
+  ensure_registry_caches
+  write_registry_config
+  if [[ -n "$REGISTRY_CONFIG_PATH" ]]; then
+    args+=(--registry-config "$REGISTRY_CONFIG_PATH")
   fi
 
   k3d "${args[@]}"
+  connect_local_registry_to_cluster_network
+  connect_registry_caches_to_cluster_network
+  rm -f "$REGISTRY_CONFIG_PATH"
+  REGISTRY_CONFIG_PATH=""
   write_kubeconfig
   verify_kubectl_reachability
 
