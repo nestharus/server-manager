@@ -1,94 +1,125 @@
-# INIT-101 Implementation
+# INIT-103 Implementation
 
 ## Status
 
-INIT-101 is complete across all six implementation slices:
+INIT-103 is complete across the runtime-secret slices:
 
-- `SLICE-101.01`: discarded VKE-shaped substrate and introduced the k3s channel
-  contract.
-- `SLICE-101.02`: added the k3d local cluster module, scripts, and local
-  reachability harness.
-- `SLICE-101.03`: added the Vultr VM module and cloud-init k3s plan surface.
-- `SLICE-101.04`: rewrote the channel template, generated roots, and spawn
-  workflow.
-- `SLICE-101.05`: verified the local k3d bootstrap end to end.
-- `SLICE-101.06`: consolidated `infra/README.md`, added the
-  `docs/deployment-substrate.md` handoff, and recorded INIT-102 takeover
-  context.
+- `SLICE-103.02`: added committed raw Infisical server manifests rendered from
+  `infisical-standalone` chart `1.8.0`.
+- `SLICE-103.03`: added committed raw Infisical Kubernetes Operator manifests
+  rendered from `secrets-operator` chart `0.10.32`, including all Operator
+  CRDs.
+- `SLICE-103.04`: added bootstrap-only server secret handling and the
+  idempotent host-side Universal Auth identity bootstrap.
+- `SLICE-103.05`: extended the channel schemas and local channel contract with
+  strict Infisical configuration, then added the sample `InfisicalSecret`
+  reconciliation proof.
+- `SLICE-103.06`: extended the bootstrap harness with local-cluster runtime
+  assertions for server readiness, PVC binding, Operator readiness,
+  Universal Auth, sample sync, idempotency, and Postgres Pod restart recovery.
+- `SLICE-103.07`: consolidated operator documentation and recorded the
+  INIT-104 object-storage handoff.
 
-## Verification Entry Point
+## Done State
 
-Canonical INIT-101 verification:
+The local channel owns a real runtime-secret path:
+
+- Flux reconciles `gitops/channels/local/infisical/server`,
+  `gitops/channels/local/infisical/operator`, and
+  `gitops/channels/local/infisical/sample`.
+- Infisical runs in `infisical-system` with in-cluster PostgreSQL and Redis.
+- The Operator runs in `infisical-system` and authenticates through
+  `Secret/infisical-operator-auth`.
+- The bootstrap-only server config lives in
+  `gitops/bootstrap/infisical-server-bootstrap.enc.yaml`.
+- `InfisicalSecret/infisical-local-sample` in `infisical-sample` syncs
+  `Secret/infisical-local-sample` with
+  `INFISICAL_SAMPLE_KEY=infisical-local-ready`.
+
+SOPS+age remains bootstrap-only. Runtime secrets are not committed to SOPS
+files; they belong in Infisical and are consumed through `InfisicalSecret`.
+
+## Verification
+
+Canonical no-cluster harness:
 
 ```bash
 bash infra/tests/validate_platform_bootstrap.sh
 ```
 
-Real local cluster proof, when Docker, k3d, and kubectl are available:
+Canonical local-cluster harness:
 
 ```bash
 bash infra/tests/validate_platform_bootstrap.sh --cluster
 ```
 
-## Handoff
-
-INIT-102 should consume the channel contract, the local kubeconfig path
-`~/.kube/humility-local.yaml`, and the `local`/`dev` channel roots. INIT-102
-owns GitOps reconciliation and Flux installation; INIT-101 does not install
-Flux or apply remote Vultr resources.
-
-## INIT-102 Done State
-
-INIT-102 is complete when the canonical harness passes in both default and
-cluster modes:
+Manual runtime proof after bring-up:
 
 ```bash
-bash infra/tests/validate_platform_bootstrap.sh
-bash infra/tests/validate_platform_bootstrap.sh --cluster
+KUBECONFIG=~/.kube/humility-local.yaml \
+  kubectl get infisicalsecret,secret -n infisical-sample
 ```
 
-The done state is a local k3d control cluster named `humility-local` with Flux
-source-controller and kustomize-controller installed from the pinned
-`gitops/flux/gotk-components.yaml` manifest, an in-cluster Git daemon serving
-the rendered local GitOps snapshot, and `GitRepository/humility-local` plus
-`Kustomization/humility-local` reconciling successfully in `flux-system`.
+Expected resources are `InfisicalSecret/infisical-local-sample` and
+`Secret/infisical-local-sample`.
 
-The local proof also covers the bootstrap-only SOPS+age channel: the operator
-age key is delivered to Flux as `Secret/sops-age`, and the encrypted sentinel
-in `gitops/bootstrap/sops-sentinel.enc.yaml` reconciles through the local
-channel overlay.
+## INIT-104 Handoff
 
-## INIT-103 Handoff
+INIT-104 consumes the INIT-103 runtime-secret substrate. It should not create a
+parallel SOPS path, Helm runtime path, or alternate secret-management system.
 
-INIT-103 can build on:
+Available contract:
 
-- The local channel contract and kubeconfig at `~/.kube/humility-local.yaml`.
-- The Flux installation path in `infra/scripts/install-flux-for-channel.sh`.
-- The rendered GitOps source pipeline under `.tmp/gitops-source/local/`.
-- The local channel overlay under `gitops/channels/local/`.
-- The bootstrap-only age key channel used by Flux decryption.
+- Local Infisical server endpoint:
+  `http://infisical.infisical-system.svc.cluster.local:8080`.
+- Local channel Infisical project: `platform-local`.
+- Local channel environment: `local`.
+- Local sample path already proven by INIT-103: `/sample`.
+- Operator namespace: `infisical-system`.
+- Universal Auth Secret name: `infisical-operator-auth`.
+- Universal Auth Secret namespace: `infisical-system`.
+- Sample consumer namespace: `infisical-sample`.
+- Sample target Secret name: `infisical-local-sample`.
+- `resync_interval`: `60s`.
 
-Boundary handoff:
+Object-storage credential contract:
 
-- INIT-102 owns Flux, the GitOps overlay pipeline, and bootstrap-only SOPS+age.
-- INIT-103 owns Infisical runtime secret management, including Infisical
-  Operator installation details, `InfisicalSecret` CRDs, RBAC, and the runtime
-  secret contract.
-- The Infisical Operator should be installed by Flux as part of the local
-  channel. INIT-103 manifests should land under `gitops/channels/local/`, for
-  example as an Infisical-specific subdirectory referenced by
-  `gitops/channels/local/kustomization.yaml`.
-- Runtime `InfisicalSecret` resources are INIT-103's contract. Do not encode
-  runtime application secrets in SOPS files.
+- INIT-104 uses the Infisical project bound by D10 for storage credentials:
+  `platform-storage`.
+- INIT-104 stores object-storage credentials below
+  `/object-storage/<channel>/...`, where `<channel>` is the channel id such as
+  `local`.
+- Local MinIO keys:
 
-Open questions for INIT-103:
+  ```text
+  /object-storage/<channel>/MINIO_ROOT_USER
+  /object-storage/<channel>/MINIO_ROOT_PASSWORD
+  ```
 
-- How is the Infisical server URL represented per channel?
-- Is the Infisical project ID one-per-channel, inherited from parent channels,
-  or split by tenant/application surface?
-- Where does the Infisical service token enter bootstrap, and how is that
-  boundary kept separate from the age key used only for bootstrap decryption?
-- Which namespace owns the Infisical Operator, and which namespaces may receive
-  synced runtime Kubernetes Secrets?
-- What readiness assertions should extend the INIT-102 harness once
-  `InfisicalSecret` reconciliation exists?
+- Remote Vultr Object Storage keys:
+
+  ```text
+  /object-storage/<channel>/VULTR_OS_ACCESS_KEY
+  /object-storage/<channel>/VULTR_OS_SECRET_KEY
+  ```
+
+- INIT-104 authors its own `InfisicalSecret` CRs in the object-storage
+  namespace it owns. The expected local consumer namespace is `minio-system`.
+- INIT-104 chooses whether to reuse the INIT-103 Universal Auth credential or
+  create an INIT-104-owned Machine Identity scoped to `platform-storage`.
+- MinIO and Vultr Object Storage credentials must not be added to
+  `gitops/bootstrap/` or any SOPS-encrypted file.
+
+Open questions for INIT-104:
+
+- Does `platform-storage` get a dedicated INIT-104 Machine Identity, or does
+  it temporarily reuse `infisical-operator-auth`?
+- Is the local object-storage namespace exactly `minio-system`, and does it
+  also own the target Kubernetes Secret names?
+- What are the final target Kubernetes Secret names and key casing for MinIO
+  and Vultr Object Storage consumers?
+- Should `/object-storage/<channel>/...` be recursive in one
+  `InfisicalSecret`, or should INIT-104 split MinIO and remote credentials into
+  separate CRs?
+- What rotation and break-glass expectations are deferred to INIT-115 versus
+  owned immediately by INIT-104?

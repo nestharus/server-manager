@@ -1,6 +1,6 @@
 # GitOps
 
-Reader's guide for the INIT-102 GitOps substrate.
+Reader's guide for the local GitOps substrate.
 
 ## Layout
 
@@ -10,10 +10,30 @@ Reader's guide for the INIT-102 GitOps substrate.
   git-daemon Deployment. Rendered `GitRepository` and source-side
   `Kustomization` manifests are generated from the channel contract.
 - `gitops/channels/local/` - the local channel overlay, namespace, bootstrap
-  sentinel reference, and generated snapshot marker.
+  sentinel reference, generated snapshot marker, and runtime Infisical subtree.
+- `gitops/channels/local/infisical/` - INIT-103 runtime-secret management for
+  the local channel. `server/` and `operator/` contain committed raw YAML
+  rendered from pinned Helm charts. `sample/` contains the authored
+  `InfisicalSecret/infisical-local-sample` proof that syncs
+  `Secret/infisical-local-sample` into `infisical-sample`.
 - `gitops/bootstrap/` - SOPS+age bootstrap-only encrypted secrets. Runtime
   application secrets do not live here; they move through Infisical in
   INIT-103.
+
+`gitops/channels/local/infisical/` is part of the Flux-reconciled local
+channel. It does not introduce Helm controller, `HelmRelease`, `OCIRepository`,
+or runtime chart fetching. Helm is used only by
+`infra/scripts/render-infisical-manifests.sh` to refresh committed raw
+manifests.
+
+SOPS+age remains bootstrap-only. The Infisical server bootstrap Secret is
+allowed under `gitops/bootstrap/`; Operator Universal Auth credentials and all
+downstream runtime secrets are created outside Git and consumed through
+Infisical plus `InfisicalSecret` resources.
+
+INIT-104 must add its own object-storage `InfisicalSecret` resources in the
+owning application namespace. It must not place MinIO or Vultr Object Storage
+credentials in `gitops/bootstrap/` or any SOPS-encrypted file.
 
 ## Generated Artifacts
 

@@ -115,6 +115,86 @@ The script resolves `local.yaml`, creates `humility-local` if needed, writes
 run is a no-op when the live cluster matches the channel contract. The delete
 script is idempotent when the cluster and kubeconfig are absent.
 
+## Runtime Secrets (Infisical)
+
+INIT-103 adds the runtime secret-management layer for the local channel.
+Infisical OSS, its in-cluster PostgreSQL and Redis dependencies, the Infisical
+Kubernetes Operator, and the sample `InfisicalSecret` proof are reconciled by
+Flux from `gitops/channels/local/infisical/`.
+
+Runtime-secret toolchain prerequisites are Helm `v3.20.2` and Infisical CLI
+`v0.43.78` in addition to the INIT-102 local GitOps tools. Helm is render-time
+only: manifests are committed as raw YAML, and no Helm controller or
+`HelmRelease` runs in the cluster.
+
+Operator one-time bootstrap:
+
+1. Generate or reuse the operator-local age key:
+
+   ```bash
+   bash infra/scripts/bootstrap-sops-age-key.sh --channel local
+   ```
+
+2. Replace the age recipient in `.sops.yaml` with the printed public key, then
+   re-encrypt both bootstrap-only files for that recipient:
+
+   ```bash
+   sops updatekeys -y gitops/bootstrap/sops-sentinel.enc.yaml
+   sops updatekeys -y gitops/bootstrap/infisical-server-bootstrap.enc.yaml
+   ```
+
+   This is the only SOPS step for INIT-103: it rotates bootstrap-file
+   recipients to the operator's age key. Runtime secrets still do not enter
+   SOPS.
+
+3. Bring up the local channel:
+
+   ```bash
+   bash infra/scripts/bring-up-local-channel.sh local
+   ```
+
+   The post-Flux script renders and seeds the local GitOps source, delivers
+   the Flux SOPS age key, waits for the Infisical server, runs
+   `infra/scripts/bootstrap-infisical-identity.sh`, applies
+   `Secret/infisical-operator-auth`, waits for the Operator, and then waits
+   for the sample runtime Secret.
+
+Verify the runtime proof:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml \
+  kubectl get infisicalsecret,secret -n infisical-sample
+```
+
+Expected resources include `InfisicalSecret/infisical-local-sample` and
+`Secret/infisical-local-sample`. The target Secret must contain
+`INFISICAL_SAMPLE_KEY=infisical-local-ready`.
+
+Tear down with the same local delete path:
+
+```bash
+bash infra/scripts/delete-local-channel.sh --channel local
+```
+
+Troubleshooting an `InfisicalSecret` that is not reconciling starts with:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n infisical-sample describe infisicalsecret infisical-local-sample
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n infisical-system logs deploy/infisical-opera-controller-manager
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n infisical-system get secret infisical-operator-auth
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n infisical-system logs deploy/infisical-infisical-standalone-infisical
+KUBECONFIG=~/.kube/humility-local.yaml kubectl -n flux-system describe kustomization humility-local
+```
+
+If the server is unavailable, also inspect `StatefulSet/postgresql`,
+`StatefulSet/redis-master`, their PVCs, and
+`Secret/infisical-server-bootstrap` in `infisical-system`.
+
+Boundary: SOPS+age stays bootstrap-only. The only encrypted bootstrap files are
+the Flux sentinel and Infisical server bootstrap Secret under
+`gitops/bootstrap/`. Infisical owns runtime secrets, including downstream
+application, object storage, database, Discord, and service credentials.
+
 ## GitOps Substrate
 
 INIT-102 adds the canonical local GitOps reconciliation path. The local channel
@@ -229,7 +309,7 @@ The spawn script refuses outputs outside `.tmp/` and parents with
 
 ## Local Verification
 
-Canonical INIT-102 verification without creating a cluster:
+Canonical platform bootstrap verification without creating a cluster:
 
 ```bash
 bash infra/tests/validate_platform_bootstrap.sh
@@ -240,7 +320,7 @@ GitOps rendering, Flux lockfile shape, SOPS bootstrap boundary, OpenTofu
 validation, cloud-init strictness, VKE retirement, and no-cluster script
 idempotency.
 
-Canonical INIT-102 real local cluster proof:
+Canonical real local cluster proof:
 
 ```bash
 bash infra/tests/validate_platform_bootstrap.sh --cluster
@@ -249,15 +329,18 @@ bash infra/tests/validate_platform_bootstrap.sh --cluster
 Cluster mode requires Docker, k3d, kubectl, flux, helm, sops, age, age-keygen,
 and infisical. It verifies `kubectl get nodes` against
 `~/.kube/humility-local.yaml`, confirms all nodes are `Ready`, waits for Flux
-`GitRepository` and `Kustomization` readiness, verifies the snapshot marker
-reached the cluster, checks git-daemon Pod restart recovery, reruns bring-up,
-deletes the cluster, and checks delete idempotency.
+`GitRepository` and `Kustomization` readiness, waits for Infisical server,
+PostgreSQL, Redis, Operator, Universal Auth, `InfisicalSecret`, and target
+Secret readiness, verifies the snapshot marker reached the cluster, checks
+Postgres and git-daemon Pod restart recovery, reruns bring-up, deletes the
+cluster, and checks delete idempotency.
 
 ## Anti-Scope
 
 This directory does not install or operate:
 
-- Runtime secret management or Infisical installation: INIT-103.
+- Object storage, MinIO, Vultr Object Storage, or S3 backup targets: INIT-104
+  and INIT-112.
 - Crossplane app-cluster provisioning: INIT-106.
 - DNS automation, TLS, cert-manager, ingress, and edge policy: later INITs.
 - Application workloads, API service deployment, Discord daemon deployment,
