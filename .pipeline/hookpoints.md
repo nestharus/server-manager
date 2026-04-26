@@ -1,320 +1,320 @@
-# INIT-106 Phase 5 Hookpoints
+# INIT-107 Phase 5 Hookpoints
 
-## Reuse Points
-- Reuse `gitops/channels/local/kustomization.yaml` as the local apply entrypoint.
-- Reuse INIT-103 and INIT-105 raw rendered chart layout under component subdirectories.
-- Reuse channel source/resolved schema strictness and inheritance.
-- Reuse INIT-101 k3s version and cloud-init idempotency marker.
-- Reuse INIT-103 InfisicalSecret pattern for runtime Vultr credential materialization.
-- Reuse bootstrap harness pass/fail helpers and cluster-mode gating.
+## Hookpoints
+- Channel schema hookpoint: infra/schemas/platform-channel.schema.json and infra/schemas/platform-channel-resolved.schema.json.
+- Channel value hookpoint: infra/channels/local.yaml and inherited fixtures.
+- Namespace hookpoints: gitops/sources/local/git-daemon.yaml and each gitops/channels/local component namespace.yaml.
+- Security manifest hookpoint: new gitops/channels/local/security kustomization included by gitops/channels/local/kustomization.yaml.
+- NetworkPolicy hookpoint: new raw manifests per namespace, not Helm chart values, to replace INIT-103/104 deferred placeholders.
+- RBAC hookpoint: gitops/channels/local/app-clusters/providers/provider-runtime.yaml currently owns the cluster-admin binding to replace.
+- AppCluster provisioner hookpoint: gitops/channels/local/app-clusters/compositions/appcluster-k3d-local.yaml contains the composed Job pod spec.
+- Infisical hardening hookpoint: gitops/channels/local/infisical/server/rendered/infisical-standalone-1.8.0.yaml and operator rendered manifest.
+- PDB hookpoint: add to MinIO and Infisical server kustomizations or the shared security kustomization with explicit namespaces.
+- Harness hookpoint: infra/tests/validate_platform_bootstrap.sh static sections and cluster phase.
+- Focused proof hookpoint: new infra/tests/validate_cluster_security_local.sh.
 
-## New Hookpoints
-- Add `gitops/channels/local/app-clusters` under the local Flux overlay.
-- Add `infra/tests/validate_app_clusters_local.sh` for cluster proof.
-- Add `app_cluster` channel block to local and dev.
-- Add `gitops/contracts/remote/app-clusters` for remote Vultr contract material.
+## Reuse
+- Reuse existing pass/fail shell harness conventions.
+- Reuse Python YAML/jsonschema parsing style already embedded in validate_platform_bootstrap.sh.
+- Reuse kustomize rendering checks instead of adding a policy engine dependency.
+- Reuse channel resolver inheritance; security is additive data, not a new resolver path.
 
-## Collision Checks
-- Crossplane package CRDs arrive after provider installation, so Flux retries are expected during first convergence.
-- The local k3d control cluster must expose `/var/run/docker.sock` to pods for nested k3d creation.
-- The nested cluster exists at the host Docker level and needs explicit cleanup in `delete-local-channel.sh`.
-- provider-kubernetes needs broad local permissions to create the proof Job; INIT-107 must reduce or replace this.
+## Delete/Replace
+- Replace provider-kubernetes-cluster-admin with namespaced RBAC.
+- Replace comments deferring Infisical/Postgres/Redis network policy with actual policies.
+- Do not add compatibility aliases for security schema fields.
 
-## Do Not Build
-- Do not add helm-controller resources.
-- Do not create a custom provider.
-- Do not put the Vultr API token in SOPS.
-- Do not deploy workloads to the app cluster.
-- Do not add compatibility aliases for old schema names.
-- Evidence detail 1: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 2: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 3: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 4: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 5: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 6: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 7: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 8: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 9: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 10: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 11: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 12: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 13: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 14: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 15: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 16: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 17: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 18: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 19: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 20: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 21: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 22: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 23: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 24: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 25: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 26: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 27: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 28: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 29: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 30: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 31: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 32: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 33: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 34: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 35: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 36: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 37: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 38: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 39: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 40: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 41: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 42: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 43: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 44: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 45: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 46: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 47: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 48: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 49: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 50: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 51: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 52: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 53: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 54: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 55: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 56: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 57: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 58: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 59: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 60: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 61: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 62: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 63: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 64: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 65: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 66: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 67: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 68: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 69: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 70: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 71: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 72: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 73: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 74: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 75: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 76: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 77: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 78: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 79: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 80: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 81: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 82: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 83: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 84: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 85: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 86: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 87: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 88: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 89: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 90: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 91: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 92: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 93: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 94: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 95: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 96: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 97: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 98: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 99: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 100: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 101: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 102: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 103: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 104: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 105: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 106: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 107: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 108: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 109: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 110: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 111: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 112: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 113: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 114: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 115: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 116: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 117: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 118: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 119: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 120: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 121: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 122: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 123: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 124: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 125: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 126: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 127: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 128: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 129: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 130: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 131: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 132: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 133: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 134: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 135: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 136: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 137: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 138: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 139: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 140: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 141: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 142: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 143: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 144: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 145: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 146: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 147: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 148: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 149: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 150: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 151: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 152: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 153: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 154: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 155: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 156: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 157: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 158: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 159: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 160: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 161: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 162: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 163: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 164: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 165: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 166: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 167: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 168: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 169: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 170: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 171: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 172: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 173: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 174: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 175: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 176: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 177: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 178: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 179: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 180: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 181: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 182: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 183: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 184: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 185: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 186: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 187: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 188: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 189: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 190: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 191: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 192: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 193: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 194: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 195: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 196: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 197: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 198: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 199: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 200: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 201: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 202: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 203: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 204: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 205: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 206: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 207: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 208: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 209: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 210: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 211: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 212: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 213: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 214: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 215: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 216: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 217: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 218: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 219: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 220: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 221: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 222: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 223: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 224: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 225: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 226: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 227: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 228: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 229: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 230: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 231: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 232: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 233: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 234: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 235: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 236: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 237: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 238: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 239: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 240: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 241: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 242: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 243: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 244: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 245: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 246: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 247: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 248: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 249: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 250: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 251: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 252: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 253: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 254: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 255: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 256: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 257: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 258: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 259: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 260: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 261: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 262: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 263: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 264: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 265: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 266: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 267: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 268: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 269: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 270: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 271: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 272: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 273: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 274: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 275: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 276: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 277: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 278: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 279: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 280: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 281: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 282: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 283: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 284: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 285: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 286: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 287: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 288: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 289: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 290: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 291: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
-- Evidence detail 292: INIT-106 keeps Crossplane raw-rendered, local-first, Infisical-backed, and scoped to app-cluster provisioning without INIT-107 security baseline or INIT-113 workloads.
+- Evidence detail 1: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 2: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 3: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 4: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 5: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 6: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 7: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 8: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 9: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 10: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 11: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 12: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 13: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 14: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 15: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 16: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 17: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 18: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 19: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 20: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 21: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 22: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 23: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 24: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 25: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 26: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 27: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 28: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 29: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 30: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 31: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 32: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 33: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 34: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 35: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 36: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 37: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 38: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 39: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 40: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 41: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 42: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 43: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 44: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 45: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 46: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 47: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 48: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 49: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 50: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 51: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 52: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 53: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 54: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 55: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 56: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 57: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 58: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 59: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 60: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 61: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 62: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 63: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 64: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 65: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 66: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 67: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 68: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 69: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 70: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 71: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 72: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 73: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 74: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 75: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 76: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 77: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 78: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 79: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 80: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 81: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 82: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 83: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 84: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 85: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 86: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 87: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 88: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 89: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 90: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 91: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 92: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 93: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 94: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 95: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 96: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 97: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 98: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 99: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 100: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 101: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 102: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 103: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 104: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 105: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 106: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 107: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 108: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 109: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 110: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 111: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 112: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 113: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 114: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 115: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 116: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 117: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 118: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 119: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 120: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 121: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 122: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 123: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 124: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 125: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 126: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 127: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 128: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 129: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 130: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 131: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 132: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 133: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 134: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 135: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 136: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 137: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 138: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 139: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 140: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 141: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 142: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 143: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 144: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 145: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 146: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 147: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 148: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 149: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 150: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 151: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 152: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 153: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 154: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 155: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 156: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 157: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 158: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 159: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 160: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 161: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 162: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 163: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 164: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 165: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 166: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 167: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 168: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 169: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 170: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 171: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 172: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 173: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 174: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 175: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 176: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 177: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 178: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 179: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 180: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 181: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 182: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 183: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 184: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 185: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 186: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 187: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 188: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 189: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 190: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 191: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 192: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 193: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 194: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 195: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 196: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 197: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 198: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 199: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 200: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 201: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 202: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 203: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 204: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 205: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 206: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 207: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 208: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 209: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 210: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 211: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 212: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 213: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 214: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 215: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 216: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 217: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 218: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 219: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 220: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 221: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 222: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 223: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 224: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 225: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 226: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 227: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 228: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 229: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 230: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 231: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 232: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 233: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 234: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 235: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 236: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 237: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 238: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 239: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 240: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 241: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 242: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 243: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 244: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 245: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 246: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 247: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 248: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 249: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 250: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 251: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 252: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 253: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 254: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 255: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 256: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 257: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 258: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 259: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 260: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 261: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 262: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 263: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 264: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 265: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 266: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 267: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 268: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 269: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 270: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 271: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 272: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 273: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 274: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 275: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 276: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 277: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 278: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 279: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 280: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 281: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 282: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 283: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 284: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 285: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 286: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 287: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 288: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 289: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 290: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 291: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 292: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 293: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
+- Evidence detail 294: INIT-107 treats cluster security as an enforced local contract, not a deferred production hardening task; PSS, NetworkPolicy, RBAC, pod hardening, PDBs, and harness proof all land together.
