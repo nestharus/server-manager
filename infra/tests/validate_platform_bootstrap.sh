@@ -422,6 +422,29 @@ PY
     fail "local k3d channel without infisical fails schema validation"
   fi
 
+  rm -rf "$registry"
+  cp -R "${INFRA_DIR}/channels" "$registry"
+  if "$py_bin" - "${registry}/local.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text(encoding="utf-8"))
+data["infisical"]["server_url"] = "http://infisical.infisical-system.svc.cluster.local:8080/"
+path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+PY
+  then
+    if "$py_bin" "${INFRA_DIR}/scripts/validate_platform_channels.py" --registry "$registry" >/dev/null 2>&1; then
+      fail "infisical server_url rejects trailing slash"
+    else
+      pass "infisical server_url rejects trailing slash"
+    fi
+  else
+    fail "infisical server_url rejects trailing slash"
+  fi
+
   assert_repo_file_exists "gitops/channels/local/infisical/sample/kustomization.yaml"
   assert_repo_file_exists "gitops/channels/local/infisical/sample/namespace.yaml"
   assert_repo_file_exists "gitops/channels/local/infisical/sample/infisicalsecret.yaml"

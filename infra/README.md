@@ -198,6 +198,11 @@ The local Infisical chart references `Secret/infisical-server-bootstrap` for
 the server connection strings and the bundled Postgres/Redis passwords; rendered
 manifests must not commit chart-default credential literals.
 
+NetworkPolicy isolation for Infisical Postgres and Redis is deferred to
+INIT-107's cluster security baseline. The Bitnami chart defaults are disabled
+in `gitops/channels/local/infisical/server/render-values.yaml` because they
+look restrictive while allowing broad ingress or egress.
+
 ## GitOps Substrate
 
 INIT-102 adds the canonical local GitOps reconciliation path. The local channel
