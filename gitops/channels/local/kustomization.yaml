@@ -11,3 +11,4 @@ resources:
   - object-storage
   - tls
   - dns
+  - app-clusters
