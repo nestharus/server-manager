@@ -10,3 +10,4 @@ resources:
   - infisical/sample
   - object-storage
   - tls
+  - dns
