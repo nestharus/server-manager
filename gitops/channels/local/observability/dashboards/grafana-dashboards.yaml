@@ -9,10 +9,153 @@ metadata:
     platform.humility.gg/init: "117"
 data:
   flux-gitops-health.json: |
-    {"uid":"flux-gitops-health","title":"Flux GitOps Health","schemaVersion":39,"version":1,"templating":{"list":[{"name":"tenant","type":"query","datasource":{"type":"prometheus","uid":"Prometheus"},"query":"label_values(up, tenant)","current":{"text":"platform","value":"platform"}}]},"panels":[{"type":"timeseries","title":"Flux targets up","targets":[{"expr":"sum by (namespace, app) (up{namespace=\"flux-system\", tenant=~\"$tenant\"})"}],"gridPos":{"x":0,"y":0,"w":12,"h":8}},{"type":"stat","title":"Flux scrape health","targets":[{"expr":"avg(up{namespace=\"flux-system\"})"}],"gridPos":{"x":12,"y":0,"w":12,"h":8}}]}
+    {
+      "uid": "flux-gitops-health",
+      "title": "Flux GitOps Health",
+      "schemaVersion": 39,
+      "version": 1,
+      "templating": {
+        "list": [
+          {
+            "name": "tenant",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "Prometheus"},
+            "query": "label_values(up, tenant)",
+            "current": {"text": "platform", "value": "platform"}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Flux targets up",
+          "targets": [
+            {"expr": "sum by (namespace, app) (up{namespace=\"flux-system\", tenant=~\"$tenant\"})"}
+          ],
+          "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+        },
+        {
+          "type": "stat",
+          "title": "Flux scrape health",
+          "targets": [
+            {"expr": "avg(up{namespace=\"flux-system\", tenant=~\"$tenant\"})"}
+          ],
+          "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+        }
+      ]
+    }
   cnpg.json: |
-    {"uid":"cnpg","title":"CNPG","schemaVersion":39,"version":1,"templating":{"list":[{"name":"tenant","type":"query","datasource":{"type":"prometheus","uid":"Prometheus"},"query":"label_values(up, tenant)","current":{"text":"platform","value":"platform"}}]},"panels":[{"type":"timeseries","title":"CNPG operator targets","targets":[{"expr":"sum by (pod) (up{namespace=\"cnpg-system\", tenant=~\"$tenant\"})"}],"gridPos":{"x":0,"y":0,"w":12,"h":8}},{"type":"timeseries","title":"Postgres target readiness","targets":[{"expr":"sum by (namespace) (up{namespace=~\"sample-app-db|server-manager\", tenant=~\"$tenant\"})"}],"gridPos":{"x":12,"y":0,"w":12,"h":8}}]}
+    {
+      "uid": "cnpg",
+      "title": "CNPG",
+      "schemaVersion": 39,
+      "version": 1,
+      "templating": {
+        "list": [
+          {
+            "name": "tenant",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "Prometheus"},
+            "query": "label_values(up, tenant)",
+            "current": {"text": "platform", "value": "platform"}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "CNPG database targets",
+          "targets": [
+            {"expr": "sum by (pod) (up{namespace=~\"sample-app-db|server-manager\", tenant=~\"$tenant\"})"}
+          ],
+          "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+        },
+        {
+          "type": "timeseries",
+          "title": "Postgres target readiness",
+          "targets": [
+            {"expr": "sum by (namespace) (up{namespace=~\"sample-app-db|server-manager\", tenant=~\"$tenant\"})"}
+          ],
+          "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+        }
+      ]
+    }
   kong-request-rate.json: |
-    {"uid":"kong-request-rate","title":"Kong Request Rate","schemaVersion":39,"version":1,"templating":{"list":[{"name":"tenant","type":"query","datasource":{"type":"prometheus","uid":"Prometheus"},"query":"label_values(up, tenant)","current":{"text":"platform","value":"platform"}}]},"panels":[{"type":"timeseries","title":"Kong proxy/controller up","targets":[{"expr":"sum by (pod) (up{namespace=\"kong-system\", tenant=~\"$tenant\"})"}],"gridPos":{"x":0,"y":0,"w":12,"h":8}},{"type":"timeseries","title":"Request rate when Kong metrics are available","targets":[{"expr":"sum by (tenant) (rate(kong_http_requests_total{tenant=~\"$tenant\"}[5m]))"}],"gridPos":{"x":12,"y":0,"w":12,"h":8}}]}
+    {
+      "uid": "kong-request-rate",
+      "title": "Kong Request Rate",
+      "schemaVersion": 39,
+      "version": 1,
+      "templating": {
+        "list": [
+          {
+            "name": "tenant",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "Prometheus"},
+            "query": "label_values(up, tenant)",
+            "current": {"text": "platform", "value": "platform"}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Kong proxy/controller up",
+          "targets": [
+            {"expr": "sum by (pod) (up{namespace=\"kong-system\", tenant=~\"$tenant\"})"}
+          ],
+          "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+        },
+        {
+          "type": "timeseries",
+          "title": "Request rate when Kong metrics are available",
+          "targets": [
+            {"expr": "sum by (tenant) (rate(kong_http_requests_total{tenant=~\"$tenant\"}[5m]))"}
+          ],
+          "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+        }
+      ]
+    }
   cedar-policy-decisions.json: |
-    {"uid":"cedar-policy-decisions","title":"Cedar Policy Decisions","schemaVersion":39,"version":1,"templating":{"list":[{"name":"tenant","type":"query","datasource":{"type":"prometheus","uid":"Prometheus"},"query":"label_values(up, tenant)","current":{"text":"platform","value":"platform"}}]},"panels":[{"type":"timeseries","title":"OPAL/Cedar targets","targets":[{"expr":"sum by (pod) (up{namespace=\"auth-system\", app=~\"opal.*\", tenant=~\"$tenant\"})"}],"gridPos":{"x":0,"y":0,"w":12,"h":8}},{"type":"logs","title":"Policy decision logs","datasource":{"type":"loki","uid":"Loki"},"targets":[{"expr":"{channel=\"local\"} |= \"policy\""}],"gridPos":{"x":12,"y":0,"w":12,"h":8}}]}
+    {
+      "uid": "cedar-policy-decisions",
+      "title": "Cedar Policy Decisions",
+      "schemaVersion": 39,
+      "version": 1,
+      "templating": {
+        "list": [
+          {
+            "name": "tenant",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "Prometheus"},
+            "query": "label_values(up, tenant)",
+            "current": {"text": "platform", "value": "platform"}
+          },
+          {
+            "name": "channel",
+            "type": "constant",
+            "query": "local",
+            "current": {"text": "local", "value": "local"}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "OPAL/Cedar targets",
+          "targets": [
+            {"expr": "sum by (pod) (up{namespace=\"auth-system\", app=~\"opal.*\", tenant=~\"$tenant\"})"}
+          ],
+          "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+        },
+        {
+          "type": "logs",
+          "title": "Policy decision logs",
+          "datasource": {"type": "loki", "uid": "Loki"},
+          "targets": [
+            {"expr": "{channel=~\"$channel\", tenant=~\"$tenant\"} |= \"policy\""}
+          ],
+          "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+        }
+      ]
+    }

@@ -22,19 +22,28 @@ data:
           - action: upsert
             key: channel
             value: local
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
     exporters:
       debug:
         verbosity: basic
+      # Local channel uses lokiexporter because the pinned collector/Loki pair
+      # has already been validated by the INIT-117 harness. OTLP-native Loki
+      # ingestion belongs with the post-deployment image compatibility pass.
       loki:
         endpoint: http://loki.observability-system.svc.cluster.local:3100/loki/api/v1/push
         default_labels_enabled:
           exporter: false
           job: true
     service:
+      extensions: [health_check]
       telemetry:
         metrics:
           address: 0.0.0.0:8888
       pipelines:
+        # Local mode accepts traces and emits them to debug output only; a
+        # persistent trace backend is post-INIT-117 deployment scope.
         traces:
           receivers: [otlp]
           processors: [resource/platform, batch]

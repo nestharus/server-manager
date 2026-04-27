@@ -34,10 +34,13 @@ data:
         relabel_configs:
           - source_labels: [__meta_kubernetes_namespace]
             action: keep
-            regex: (flux-system|crossplane-system|cert-manager|infisical-system|minio-system|cnpg-system|kong-system|server-manager|buildkite-agent|observability-system)
+            regex: (flux-system|crossplane-system|cert-manager|infisical-system|minio-system|cnpg-system|kong-system|auth-system|server-manager|buildkite-agent|sample-app-db)
           - source_labels: [__meta_kubernetes_pod_container_port_name]
             action: keep
-            regex: (metrics|http-metrics|cmetrics)
+            regex: (metrics|http-metrics|http-prom|cmetrics)
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: drop
+            regex: pomerium-proxy
           - source_labels: [__meta_kubernetes_namespace]
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]

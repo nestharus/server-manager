@@ -18,6 +18,10 @@ spec:
       served: true
       storage: true
       schema:
+        # Local-only contract stub: this openAPIV3Schema intentionally
+        # preserves unknown fields so raw ServiceMonitor manifests can be
+        # applied without installing prometheus-operator in the local channel.
+        # It is not a prometheus-operator CRD replacement.
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true

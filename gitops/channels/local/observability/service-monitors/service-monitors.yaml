@@ -103,11 +103,10 @@ metadata:
     platform.humility.gg/init: "117"
 spec:
   namespaceSelector:
-    matchNames: ["cnpg-system", "sample-app-db", "server-manager"]
+    matchNames: ["sample-app-db", "server-manager"]
   selector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: Exists
+    matchLabels:
+      app.kubernetes.io/name: postgresql
   endpoints:
     - port: metrics
       interval: 30s

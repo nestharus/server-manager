@@ -140,11 +140,20 @@ def test_loki_uses_minio_object_storage_and_infisical_credentials() -> None:
     assert "${MINIO_ROOT_PASSWORD}" in loki_config
 
     env_refs = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
-    assert {
-        item["name"]: item["valueFrom"]["secretKeyRef"]["name"] for item in env_refs
-    } == {
-        "MINIO_ROOT_USER": "loki-object-storage",
-        "MINIO_ROOT_PASSWORD": "loki-object-storage",
+    secret_refs = {
+        item["name"]: item["valueFrom"]["secretKeyRef"]
+        for item in env_refs
+        if "valueFrom" in item and "secretKeyRef" in item["valueFrom"]
+    }
+    assert secret_refs == {
+        "MINIO_ROOT_USER": {
+            "name": "loki-object-storage",
+            "key": "MINIO_ROOT_USER",
+        },
+        "MINIO_ROOT_PASSWORD": {
+            "name": "loki-object-storage",
+            "key": "MINIO_ROOT_PASSWORD",
+        },
     }
     assert {doc["metadata"]["name"] for doc in infisical} == {
         "observability-runtime",
@@ -167,11 +176,19 @@ def test_dashboards_are_tenant_aware_and_have_expected_uids() -> None:
         "kong-request-rate",
         "cedar-policy-decisions",
     }
-    for uid, dashboard in dashboards.items():
-        assert dashboard["uid"] == uid
+    for filename_uid, dashboard in dashboards.items():
+        assert dashboard["uid"] == filename_uid, (
+            f"Dashboard UID must match filename: {filename_uid}"
+        )
         variables = dashboard["templating"]["list"]
-        assert variables[0]["name"] == "tenant"
-        assert "label_values(up, tenant)" in variables[0]["query"]
+        tenant_var = next(
+            (variable for variable in variables if variable["name"] == "tenant"),
+            None,
+        )
+        assert tenant_var is not None, (
+            f"dashboard {filename_uid} is missing tenant variable"
+        )
+        assert "label_values(up, tenant)" in tenant_var["query"]
 
 
 def test_prometheus_rules_include_required_sample_alerts() -> None:

@@ -17,4 +17,6 @@ data:
       group_interval: 1m
       repeat_interval: 4h
     receivers:
+      # Local validation keeps alerts queryable in Alertmanager without sending
+      # notifications. Remote channels must replace this with real receivers.
       - name: local-observability-log

@@ -38,11 +38,27 @@ spec:
               containerPort: 4318
             - name: metrics
               containerPort: 8888
+            - name: health
+              containerPort: 13133
           readinessProbe:
-            tcpSocket:
-              port: metrics
+            httpGet:
+              path: /
+              port: health
             initialDelaySeconds: 10
             periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

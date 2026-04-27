@@ -23,7 +23,12 @@ spec:
   policyTypes: ["Ingress"]
   ingress:
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kong-system
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -38,7 +43,42 @@ spec:
   policyTypes: ["Egress"]
   egress:
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: flux-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: crossplane-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cert-manager
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infisical-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: minio-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kong-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: auth-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: server-manager
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: sample-app-db
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: buildkite-agent
     - to:
         - namespaceSelector:
             matchLabels:

@@ -98,7 +98,8 @@ async def test_metrics_endpoint_returns_prometheus_text(
     assert response.headers["content-type"].startswith("text/plain")
     assert "server_manager_api_info" in response.text
     assert f'version="{settings.app_version}"' in response.text
-    assert 'tenant="platform"' in response.text
+    assert f'channel="{settings.platform_channel}"' in response.text
+    assert f'tenant="{settings.platform_tenant}"' in response.text
 
 
 def test_create_api_app_loads_settings_when_none(

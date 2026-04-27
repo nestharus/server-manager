@@ -36,12 +36,16 @@ spec:
                 secretKeyRef:
                   name: grafana-admin
                   key: GF_SECURITY_ADMIN_USER
+                  # Local starts without seeded Infisical values; remote channels
+                  # must make the Grafana admin secret mandatory.
                   optional: true
             - name: GF_SECURITY_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: grafana-admin
                   key: GF_SECURITY_ADMIN_PASSWORD
+                  # Local starts without seeded Infisical values; remote channels
+                  # must make the Grafana admin secret mandatory.
                   optional: true
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
@@ -64,6 +68,14 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           volumeMounts:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
@@ -72,10 +84,12 @@ spec:
               mountPath: /etc/grafana/provisioning/dashboards
               readOnly: true
             - name: dashboards
-              mountPath: /var/lib/grafana/dashboards
+              mountPath: /etc/grafana/dashboards
               readOnly: true
             - name: data
               mountPath: /var/lib/grafana
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: datasources
           configMap:
@@ -87,4 +101,8 @@ spec:
           configMap:
             name: grafana-dashboards
         - name: data
+          # Local-only: provisioned dashboards survive through ConfigMaps, but
+          # Grafana runtime state is ephemeral. Remote channels must use a PVC.
+          emptyDir: {}
+        - name: tmp
           emptyDir: {}

@@ -12,6 +12,8 @@ from app.core.settings import Settings, load_settings
 ALL_SETTINGS_ENV_VARS = (
     "APP_NAME",
     "APP_VERSION",
+    "PLATFORM_CHANNEL",
+    "PLATFORM_TENANT",
     "DEBUG",
     "API_PREFIX",
     "DISCORD_BOT_TOKEN",
@@ -156,6 +158,17 @@ def test_app_version_defaults_to_0_1_0(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.app_version == "0.1.0"
 
 
+def test_platform_labels_default_to_local_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_env(monkeypatch)
+
+    settings = Settings()
+
+    assert settings.platform_channel == "local"
+    assert settings.platform_tenant == "platform"
+
+
 def test_debug_defaults_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
 
@@ -176,6 +189,8 @@ def test_settings_reads_values_from_environment(monkeypatch: pytest.MonkeyPatch)
     _set_required_env(monkeypatch)
     monkeypatch.setenv("APP_NAME", "custom-api")
     monkeypatch.setenv("APP_VERSION", "9.9.9")
+    monkeypatch.setenv("PLATFORM_CHANNEL", "staging")
+    monkeypatch.setenv("PLATFORM_TENANT", "ops")
     monkeypatch.setenv("DEBUG", "true")
     monkeypatch.setenv("API_PREFIX", "/internal")
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "custom-token")
@@ -192,6 +207,8 @@ def test_settings_reads_values_from_environment(monkeypatch: pytest.MonkeyPatch)
 
     assert settings.app_name == "custom-api"
     assert settings.app_version == "9.9.9"
+    assert settings.platform_channel == "staging"
+    assert settings.platform_tenant == "ops"
     assert settings.debug is True
     assert settings.api_prefix == "/internal"
     assert settings.discord_bot_token == "custom-token"
