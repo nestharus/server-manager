@@ -3,7 +3,7 @@ kind: Kustomization
 namespace: auth-system
 resources:
   - rendered/opal-0.0.29.yaml
-  - sample-policy-configmap.yaml
+  - access-policy-configmap.yaml
   - bootstrap-job.yaml
 patches:
   - path: client-probes-patch.yaml

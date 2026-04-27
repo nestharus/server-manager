@@ -16,6 +16,9 @@ resources:
   - dns
   - ingress
   - auth
+  - access-policy
   - app-clusters
   - applications
   - security
+patches:
+  - path: access-policy/operator-rbac/crossplane-admin-delete.yaml

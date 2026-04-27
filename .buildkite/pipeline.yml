@@ -30,6 +30,10 @@ steps:
     label: "INIT-114 auth stack static validation"
     command: "infra/tests/validate_auth_stack_local.sh --static-only"
 
+  - key: init-115-access-policy-static
+    label: "INIT-115 access policy static validation"
+    command: "infra/tests/validate_access_policy_local.sh --static-only"
+
   - wait
 
   - key: registry-build-push

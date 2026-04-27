@@ -1,0 +1,14 @@
+[
+  {
+    "id": "local-server-manager-api-user-read",
+    "content": "permit(principal == User::\"sample@local.humility.local\", action == Action::\"api:read\", resource == Resource::\"server-manager-api\");"
+  },
+  {
+    "id": "local-server-manager-api-buildkite-deploy",
+    "content": "permit(principal == Service::\"buildkite-agent.local\", action == Action::\"api:ci:deploy\", resource == Resource::\"server-manager-api\");"
+  },
+  {
+    "id": "local-cluster-api-crossplane-reconcile",
+    "content": "permit(principal == Service::\"crossplane-provider.local\", action == Action::\"cluster:claim:reconcile\", resource == Resource::\"cluster-api\");"
+  }
+]

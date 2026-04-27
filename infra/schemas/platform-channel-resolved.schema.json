@@ -70,6 +70,9 @@
     "auth_stack": {
       "$ref": "#/$defs/authStack"
     },
+    "access_policy": {
+      "$ref": "#/$defs/accessPolicy"
+    },
     "data_plane": {
       "$ref": "#/$defs/dataPlane"
     },
@@ -1432,6 +1435,298 @@
         },
         "protected_api": {
           "$ref": "#/$defs/authStackProtectedApi"
+        }
+      }
+    },
+    "accessPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_repo_path",
+        "bundle_config_map_name",
+        "bootstrap_job_name",
+        "policy_review",
+        "services",
+        "service_identity",
+        "credential_rotation",
+        "break_glass",
+        "object_storage_policy",
+        "operator_rbac"
+      ],
+      "properties": {
+        "policy_repo_path": {
+          "type": "string",
+          "pattern": "^policy/cedar/channels/[a-z0-9][a-z0-9-]*$"
+        },
+        "bundle_config_map_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "bootstrap_job_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "policy_review": {
+          "$ref": "#/$defs/accessPolicyReview"
+        },
+        "services": {
+          "$ref": "#/$defs/accessPolicyServices"
+        },
+        "service_identity": {
+          "$ref": "#/$defs/serviceIdentityIssuer"
+        },
+        "credential_rotation": {
+          "$ref": "#/$defs/credentialRotation"
+        },
+        "break_glass": {
+          "$ref": "#/$defs/breakGlass"
+        },
+        "object_storage_policy": {
+          "$ref": "#/$defs/objectStoragePolicy"
+        },
+        "operator_rbac": {
+          "$ref": "#/$defs/operatorRbac"
+        }
+      }
+    },
+    "accessPolicyReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_checks"
+      ],
+      "properties": {
+        "required_checks": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 8
+          }
+        }
+      }
+    },
+    "accessPolicyServices": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server_manager_api"
+      ],
+      "properties": {
+        "server_manager_api": {
+          "$ref": "#/$defs/accessPolicyService"
+        }
+      }
+    },
+    "accessPolicyService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service_name",
+        "bundle_path",
+        "sample_user",
+        "sample_service_principal"
+      ],
+      "properties": {
+        "service_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "bundle_path": {
+          "type": "string",
+          "pattern": "^policy/cedar/channels/[a-z0-9][a-z0-9-]*/services/[a-z0-9][a-z0-9-]*$"
+        },
+        "sample_user": {
+          "type": "string",
+          "format": "email"
+        },
+        "sample_service_principal": {
+          "type": "string",
+          "pattern": "^Service::\\\"[A-Za-z0-9._-]+\\\"$"
+        }
+      }
+    },
+    "serviceIdentityIssuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuer",
+        "audience",
+        "claim_namespace",
+        "identities"
+      ],
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "pattern": "^https://[A-Za-z0-9][A-Za-z0-9._~:/@!$&'()+,;=%-]*$"
+        },
+        "audience": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "claim_namespace": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9./_-]+$"
+        },
+        "identities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "buildkite_agent",
+            "crossplane_provider"
+          ],
+          "properties": {
+            "buildkite_agent": {
+              "$ref": "#/$defs/serviceIdentity"
+            },
+            "crossplane_provider": {
+              "$ref": "#/$defs/serviceIdentity"
+            }
+          }
+        }
+      }
+    },
+    "serviceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "cedar_principal",
+        "allowed_actions"
+      ],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "pattern": "^system:serviceaccount:[a-z0-9-]+:[a-z0-9-]+$"
+        },
+        "cedar_principal": {
+          "type": "string",
+          "pattern": "^Service::\\\"[A-Za-z0-9._-]+\\\"$"
+        },
+        "allowed_actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^Action::\\\"[A-Za-z0-9:_-]+\\\"$"
+          }
+        }
+      }
+    },
+    "credentialRotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cadence_days",
+        "infisical_paths",
+        "script"
+      ],
+      "properties": {
+        "cadence_days": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "infisical_universal_auth_tokens",
+            "sops_age_key",
+            "sops_recipients"
+          ],
+          "properties": {
+            "infisical_universal_auth_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sops_age_key": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sops_recipients": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "infisical_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^/[A-Za-z0-9._/-]+$"
+          }
+        },
+        "script": {
+          "const": "infra/scripts/rotate-platform-credentials.sh"
+        }
+      }
+    },
+    "breakGlass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "script",
+        "sentinel_path",
+        "flux_kustomization",
+        "flux_namespace"
+      ],
+      "properties": {
+        "script": {
+          "const": "infra/scripts/break-glass-sops-recovery.sh"
+        },
+        "sentinel_path": {
+          "const": "gitops/bootstrap/sops-sentinel.enc.yaml"
+        },
+        "flux_kustomization": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "flux_namespace": {
+          "const": "flux-system"
+        }
+      }
+    },
+    "objectStoragePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "versioning",
+        "encryption",
+        "lifecycle_days",
+        "script"
+      ],
+      "properties": {
+        "versioning": {
+          "const": "enabled"
+        },
+        "encryption": {
+          "const": "sse-s3"
+        },
+        "lifecycle_days": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "script": {
+          "const": "infra/scripts/apply-object-storage-policies.sh"
+        }
+      }
+    },
+    "operatorRbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "crossplane_admin_binding_removed",
+        "operator_group",
+        "claim_namespace"
+      ],
+      "properties": {
+        "crossplane_admin_binding_removed": {
+          "type": "boolean"
+        },
+        "operator_group": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:_-]+$"
+        },
+        "claim_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
         }
       }
     },

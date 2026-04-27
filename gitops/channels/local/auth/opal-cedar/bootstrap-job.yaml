@@ -1,12 +1,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: cedar-sample-policy-bootstrap
+  name: cedar-access-policy-bootstrap
   namespace: auth-system
   labels:
     app.kubernetes.io/name: opal-cedar
     app.kubernetes.io/component: policy-bootstrap
-    platform.humility.gg/init: "114"
+    platform.humility.gg/init: "115"
 spec:
   backoffLimit: 12
   ttlSecondsAfterFinished: 3600
@@ -15,7 +15,7 @@ spec:
       labels:
         app.kubernetes.io/name: opal-cedar
         app.kubernetes.io/component: policy-bootstrap
-        platform.humility.gg/init: "114"
+        platform.humility.gg/init: "115"
     spec:
       automountServiceAccountToken: false
       restartPolicy: OnFailure
@@ -71,4 +71,4 @@ spec:
       volumes:
         - name: policy
           configMap:
-            name: cedar-sample-policy
+            name: cedar-access-policy-bundle

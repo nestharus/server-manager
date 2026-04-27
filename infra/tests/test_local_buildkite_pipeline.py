@@ -33,6 +33,8 @@ def test_load_pipeline_accepts_command_and_wait_steps() -> None:
         "unit-tests",
         "init-111-data-plane-static",
         "init-113-application-workloads-static",
+        "init-114-auth-stack-static",
+        "init-115-access-policy-static",
         "registry-build-push",
         "init-113-build-images",
     ]

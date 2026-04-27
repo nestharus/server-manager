@@ -1,0 +1,21 @@
+{
+  "issuer": "https://auth.dev.humility.gg/application/o/humility-service-identities/",
+  "audience": "server-manager-api",
+  "claim_namespace": "humility.gg/service",
+  "identities": {
+    "buildkite_agent": {
+      "subject": "system:serviceaccount:buildkite-agent:buildkite-agent",
+      "cedar_principal": "Service::\"buildkite-agent.dev\"",
+      "allowed_actions": [
+        "Action::\"api:ci:deploy\""
+      ]
+    },
+    "crossplane_provider": {
+      "subject": "system:serviceaccount:crossplane-system:provider-kubernetes",
+      "cedar_principal": "Service::\"crossplane-provider.dev\"",
+      "allowed_actions": [
+        "Action::\"cluster:claim:reconcile\""
+      ]
+    }
+  }
+}
