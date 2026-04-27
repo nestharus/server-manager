@@ -297,6 +297,7 @@ security:
       - git-system
       - cnpg-system
       - kong-system
+      - observability-system
       - step-ca-system
       - step-issuer-system
     restricted_namespaces:
@@ -307,6 +308,7 @@ security:
       - infisical-system
       - local
       - minio-system
+      - observability-system
       - platform-app-clusters
       - atlas-operator
       - sample-app-db
@@ -321,6 +323,7 @@ security:
       - infisical-system
       - local
       - minio-system
+      - observability-system
       - platform-app-clusters
       - sample-app-db
 tenant_isolation:
@@ -355,3 +358,48 @@ tenant_isolation:
       channels:
         - local
       operator_group: humility:tenant:other:operators
+observability:
+  namespace: observability-system
+  prometheus:
+    image: prom/prometheus:v2.54.1
+  grafana:
+    image: grafana/grafana:11.2.0
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+  loki:
+    image: grafana/loki:3.1.1
+  otel_collector:
+    image: otel/opentelemetry-collector-contrib:0.106.1
+  object_storage:
+    provider: minio
+    endpoint: http://minio.minio-system.svc.cluster.local:9000
+    bucket: humility-local-observability
+    region: us-east-1
+    credentials_secret_name: loki-object-storage
+    credentials_secret_namespace: observability-system
+    infisical_project: platform-storage
+    infisical_environment: local
+    infisical_path: /object-storage/local/
+  service_monitors:
+    - flux
+    - crossplane
+    - cert-manager
+    - infisical
+    - minio
+    - cnpg
+    - kong
+    - pomerium
+    - authentik
+    - opal
+    - server-manager-api
+    - buildkite-agent
+  dashboards:
+    - flux-gitops-health
+    - cnpg
+    - kong-request-rate
+    - cedar-policy-decisions
+  alerts:
+    - PodCrashLooping
+    - ClusterDown
+    - CertificateExpiringSoon
+  tenant_label: platform.humility.gg/tenant

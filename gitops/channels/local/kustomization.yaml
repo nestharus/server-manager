@@ -20,6 +20,7 @@ resources:
   - app-clusters
   - applications
   - tenants
+  - observability
   - security
 patches:
   - path: access-policy/operator-rbac/crossplane-admin-delete.yaml
