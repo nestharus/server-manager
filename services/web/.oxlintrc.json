@@ -1,0 +1,29 @@
+{
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "warn"
+  },
+  "plugins": [
+    "unicorn",
+    "import",
+    "promise",
+    "jsdoc",
+    "oxc"
+  ],
+  "rules": {
+    "react/jsx-key": "off",
+    "react/jsx-no-undef": "off",
+    "react-hooks/rules-of-hooks": "off",
+    "react-hooks/exhaustive-deps": "off",
+    "unicorn/no-null": "off",
+    "no-unassigned-vars": "off",
+    "import/no-unassigned-import": "off",
+    "promise/always-return": "off"
+  },
+  "settings": {
+    "import/resolver": {
+      "typescript": true
+    }
+  }
+}

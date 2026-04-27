@@ -1,0 +1,51 @@
+{
+  "name": "@humility/server-manager-web",
+  "version": "0.0.0-init-118",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "npm run typecheck:tsgo || npm run typecheck:tsc",
+    "typecheck:tsgo": "tsgo --project tsconfig.json --noEmit",
+    "typecheck:tsc": "tsc --project tsconfig.json --noEmit",
+    "lint": "oxlint --config .oxlintrc.json src tests",
+    "format": "oxfmt --check src tests package.json tsconfig.json vite.config.ts playwright.config.ts",
+    "test": "playwright test",
+    "test:compat": "playwright test tests/compat.spec.ts",
+    "tokens:bootstrap": "node scripts/bootstrap-fa-wa-tokens.mjs",
+    "tokens:npmrc": "node scripts/write-npmrc.mjs"
+  },
+  "dependencies": {
+    "@ark-ui/solid": "5.36.2",
+    "@fortawesome/fontawesome-svg-core": "7.2.0",
+    "@solidjs/web": "2.0.0-beta.8",
+    "@tanstack/solid-form": "1.29.1",
+    "@tanstack/solid-query": "5.100.5",
+    "@tanstack/solid-query-devtools": "5.100.5",
+    "@tanstack/solid-router": "1.168.25",
+    "@tanstack/solid-router-devtools": "1.166.13",
+    "@tanstack/solid-store": "0.11.0",
+    "@tanstack/solid-table": "8.21.3",
+    "@tanstack/solid-virtual": "3.13.24",
+    "@tanstack/store": "0.11.0",
+    "solid-js": "2.0.0-beta.8",
+    "vite": "8.0.10",
+    "vite-plugin-solid": "3.0.0-next.5",
+    "yaml": "2.8.3",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1",
+    "@types/node": "24.10.1",
+    "@typescript/native-preview": "7.0.0-dev.20260427.1",
+    "oxfmt": "0.47.0",
+    "oxlint": "1.62.0",
+    "typescript": "6.0.3"
+  },
+  "engines": {
+    "node": ">=22.15.0",
+    "npm": ">=11.6.2"
+  }
+}
