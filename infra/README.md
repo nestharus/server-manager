@@ -582,6 +582,10 @@ Remote `dev` records the Vultr Container Registry contract only:
 INIT-117 adds the local observability stack under
 `gitops/channels/local/observability`:
 
+The remote observability contract is intentionally config-only until
+post-INIT-117 remote deployment work extends this local subtree for remote
+object storage, ingress, retention, and alert routing.
+
 - Prometheus raw manifests with local scrape config and basic alert rules.
 - Grafana raw manifests with Prometheus/Loki datasources and dashboard
   ConfigMaps.

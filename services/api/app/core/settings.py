@@ -13,6 +13,8 @@ from app.contracts.runtime_settings import (
 class Settings(BaseSettings):
     app_name: str = "server-manager-api"
     app_version: str = "0.1.0"
+    platform_channel: str = "local"
+    platform_tenant: str = "platform"
     debug: bool = False
     api_prefix: str = "/api/v1"
 

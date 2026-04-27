@@ -9,6 +9,7 @@ PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
 PORT_FORWARD_PIDS=()
+TMP_DIR="$(mktemp -d)"
 
 usage() {
   cat <<'EOF'
@@ -48,9 +49,12 @@ die() {
 }
 
 cleanup() {
-  for pid in "${PORT_FORWARD_PIDS[@]}"; do
-    kill "$pid" >/dev/null 2>&1 || true
-  done
+  if [[ "${#PORT_FORWARD_PIDS[@]}" -gt 0 ]]; then
+    for pid in "${PORT_FORWARD_PIDS[@]}"; do
+      kill "$pid" >/dev/null 2>&1 || true
+    done
+  fi
+  rm -rf "$TMP_DIR"
 }
 
 trap cleanup EXIT
@@ -78,6 +82,8 @@ done
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
+command -v rg >/dev/null 2>&1 || die "rg is required"
+python3 -c "import yaml" 2>/dev/null || die "python3 PyYAML module is required"
 
 OBS_DIR="${REPO_ROOT}/gitops/channels/local/observability"
 resolved="$(python3 "$RESOLVER" --channel local)"
@@ -109,14 +115,19 @@ jq -e --argjson expected "$expected_alerts" '.observability.alerts == $expected'
 pass "observability alert contract"
 
 if command -v kubectl >/dev/null 2>&1; then
-  kubectl kustomize "$OBS_DIR" >/tmp/init117-observability-render.yaml
+  render_tmp="${TMP_DIR}/observability-render.yaml"
+  kubectl kustomize "$OBS_DIR" >"$render_tmp"
+  grep -q 'kind: Deployment' "$render_tmp" || die "rendered observability manifests missing Deployment"
+  grep -q 'kind: DaemonSet' "$render_tmp" || die "rendered observability manifests missing DaemonSet"
+  grep -q 'kind: ServiceMonitor' "$render_tmp" || die "rendered observability manifests missing ServiceMonitor"
   pass "observability raw manifests kustomize"
 else
   die "kubectl is required for static kustomize validation"
 fi
 
-if rg -n 'kind: HelmRelease|helm.toolkit.fluxcd.io|HelmRepository|helm-controller' "$OBS_DIR" >/tmp/init117-helm-scan.txt; then
-  cat /tmp/init117-helm-scan.txt >&2
+helm_scan_file="${TMP_DIR}/helm-scan.txt"
+if rg -n 'kind: HelmRelease|helm.toolkit.fluxcd.io|HelmRepository|helm-controller' "$OBS_DIR" >"$helm_scan_file"; then
+  cat "$helm_scan_file" >&2
   die "observability manifests avoid helm-controller resources"
 fi
 pass "observability manifests avoid helm-controller resources"
@@ -134,6 +145,17 @@ docs = [
 names = [doc["metadata"]["name"] for doc in docs if doc["kind"] == "ServiceMonitor"]
 expected = ["flux","crossplane","cert-manager","infisical","minio","cnpg","kong","pomerium","authentik","opal","server-manager-api","buildkite-agent"]
 assert names == expected, names
+for doc in docs:
+    if doc["kind"] != "ServiceMonitor":
+        continue
+    spec = doc["spec"]
+    assert spec.get("namespaceSelector", {}).get("matchNames"), doc["metadata"]["name"]
+    assert spec.get("selector"), doc["metadata"]["name"]
+    endpoints = spec.get("endpoints")
+    assert isinstance(endpoints, list) and endpoints, doc["metadata"]["name"]
+    for endpoint in endpoints:
+        assert endpoint.get("port"), doc["metadata"]["name"]
+        assert endpoint.get("interval"), doc["metadata"]["name"]
 PY
 pass "ServiceMonitor resources cover all required targets"
 
@@ -144,10 +166,10 @@ grep -q 'projectSlug: platform-storage' "$OBS_DIR/secrets/observability-infisica
 pass "Loki uses MinIO and Infisical-managed credentials"
 
 grep -q 'label_values(up, tenant)' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "Grafana dashboards expose tenant variable"
-grep -q 'uid":"flux-gitops-health' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "Flux dashboard exists"
-grep -q 'uid":"cnpg' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "CNPG dashboard exists"
-grep -q 'uid":"kong-request-rate' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "Kong dashboard exists"
-grep -q 'uid":"cedar-policy-decisions' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "Cedar dashboard exists"
+grep -q '"uid": "flux-gitops-health"' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "Flux dashboard exists"
+grep -q '"uid": "cnpg"' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "CNPG dashboard exists"
+grep -q '"uid": "kong-request-rate"' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "Kong dashboard exists"
+grep -q '"uid": "cedar-policy-decisions"' "$OBS_DIR/dashboards/grafana-dashboards.yaml" || die "Cedar dashboard exists"
 pass "tenant-aware sample dashboards exist"
 
 grep -q 'alert: PodCrashLooping' "$OBS_DIR/prometheus/rules-configmap.yaml" || die "PodCrashLooping alert exists"
@@ -186,9 +208,24 @@ start_port_forward() {
   local service="$1"
   local local_port="$2"
   local remote_port="$3"
-  kubectl_cmd -n observability-system port-forward "service/${service}" "${local_port}:${remote_port}" >/tmp/init117-${service}-pf.log 2>&1 &
-  PORT_FORWARD_PIDS+=("$!")
-  sleep 2
+  local log_file="${TMP_DIR}/${service}-pf.log"
+  kubectl_cmd -n observability-system port-forward "service/${service}" "${local_port}:${remote_port}" >"$log_file" 2>&1 &
+  local pid="$!"
+  PORT_FORWARD_PIDS+=("$pid")
+
+  for _ in $(seq 1 30); do
+    if grep -q 'Forwarding from' "$log_file"; then
+      return 0
+    fi
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      cat "$log_file" >&2 || true
+      die "port-forward for ${service} exited before becoming ready"
+    fi
+    sleep 1
+  done
+
+  cat "$log_file" >&2 || true
+  die "port-forward for ${service} did not become ready"
 }
 
 start_port_forward prometheus 19090 9090
@@ -211,22 +248,30 @@ start_port_forward alertmanager 19093 9093
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 curl -fsS -X POST -H 'Content-Type: application/json' \
   --data "[{\"labels\":{\"alertname\":\"Init117SampleAlert\",\"severity\":\"info\",\"channel\":\"local\",\"tenant\":\"platform\"},\"annotations\":{\"summary\":\"INIT-117 sample alert\"},\"startsAt\":\"${now}\"}]" \
-  http://127.0.0.1:19093/api/v2/alerts >/dev/null
+  http://127.0.0.1:19093/api/v2/alerts >"${TMP_DIR}/alertmanager-post.out" 2>"${TMP_DIR}/alertmanager-post.err" \
+  || die "failed to POST sample alert to Alertmanager: $(cat "${TMP_DIR}/alertmanager-post.err")"
 curl -fsS http://127.0.0.1:19093/api/v2/alerts \
   | jq -e 'any(.[]; .labels.alertname == "Init117SampleAlert" and .labels.tenant == "platform")' >/dev/null \
   || die "sample alert fired through Alertmanager"
 pass "sample alert fired through Alertmanager"
 
 start_port_forward loki 13100 3100
-ts="$(date +%s%N)"
+ts="$(date +%s)000000000"
 curl -fsS -X POST -H 'Content-Type: application/json' \
   --data "{\"streams\":[{\"stream\":{\"job\":\"init-117-proof\",\"channel\":\"local\",\"tenant\":\"platform\"},\"values\":[[\"${ts}\",\"INIT-117 Loki sample log\"]]}]}" \
-  http://127.0.0.1:13100/loki/api/v1/push >/dev/null
-sleep 2
-curl -fsS --get --data-urlencode 'query={job="init-117-proof"} |= "INIT-117 Loki sample log"' \
-  http://127.0.0.1:13100/loki/api/v1/query \
-  | jq -e '.data.result | length > 0' >/dev/null \
-  || die "sample log appears in Loki"
+  http://127.0.0.1:13100/loki/api/v1/push >"${TMP_DIR}/loki-push.out" 2>"${TMP_DIR}/loki-push.err" \
+  || die "failed to push sample log to Loki: $(cat "${TMP_DIR}/loki-push.err")"
+log_found=0
+for _ in $(seq 1 10); do
+  sleep 2
+  if curl -fsS --get --data-urlencode 'query={job="init-117-proof"} |= "INIT-117 Loki sample log"' \
+    http://127.0.0.1:13100/loki/api/v1/query \
+    | jq -e '.data.result | length > 0' >/dev/null; then
+    log_found=1
+    break
+  fi
+done
+[[ "$log_found" -eq 1 ]] || die "sample log appears in Loki"
 pass "sample log appears in Loki"
 
 finish

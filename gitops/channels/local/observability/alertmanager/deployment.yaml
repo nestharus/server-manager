@@ -53,6 +53,13 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           volumeMounts:
             - name: config
               mountPath: /etc/alertmanager
@@ -64,4 +71,6 @@ spec:
           configMap:
             name: alertmanager-config
         - name: data
+          # Local-only: silences and notification state are ephemeral.
+          # Remote channels must use persistent storage.
           emptyDir: {}

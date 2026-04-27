@@ -64,7 +64,7 @@ INIT-100
         -> INIT-114
           -> INIT-115
           -> INIT-116
-          -> INIT-117
+            -> INIT-117
 ```
 
 Parallelism is allowed only after each initiative's proposal and risk gate make

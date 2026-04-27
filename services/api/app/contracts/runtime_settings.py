@@ -42,6 +42,8 @@ API_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
         {
             "APP_NAME",
             "APP_VERSION",
+            "PLATFORM_CHANNEL",
+            "PLATFORM_TENANT",
             "DEBUG",
             "API_PREFIX",
             "DISCORD_STAGING_GUILD_ID",
@@ -53,4 +55,3 @@ API_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
     ),
     secret_mounts=frozenset(),
 )
-

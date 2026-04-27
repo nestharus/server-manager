@@ -18,15 +18,15 @@ data:
               severity: warning
               channel: local
             annotations:
-              summary: Pod is restarting repeatedly
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is restarting repeatedly"
           - alert: ClusterDown
-            expr: absent(up{job="prometheus"} == 1)
+            expr: absent(up{job="prometheus"}) or up{job="prometheus"} != 1
             for: 1m
             labels:
               severity: critical
               channel: local
             annotations:
-              summary: Kubernetes API server scrape target is absent
+              summary: Prometheus self-scrape target is absent or unhealthy
           - alert: CertificateExpiringSoon
             expr: certmanager_certificate_expiration_timestamp_seconds - time() < 604800
             for: 10m
@@ -34,4 +34,4 @@ data:
               severity: warning
               channel: local
             annotations:
-              summary: Certificate expires within seven days
+              summary: "Certificate {{ $labels.name }} in {{ $labels.namespace }} expires within seven days"
