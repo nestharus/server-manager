@@ -1,7 +1,5 @@
-# INIT-108 Risk Gate: Audit
+# INIT-117 Audit Risk
 
-Result: LOW
+Verdict: LOW.
 
-- The proposal uses existing k3d, Docker, kustomize, channel schema, and Infisical patterns.
-- Local visible Discord actions: none.
-- Main residual risk is local Docker/k3d environment availability, covered by harness prerequisites.
+The proposal covers each binding deliverable: Prometheus, Grafana, Alertmanager, OTel Collector, Loki, ServiceMonitors, dashboards, alerts, tenant filtering, MinIO-backed Loki storage, Infisical-managed credentials, local validation, and Phase 5 wrap-up. The only deferred items are explicitly out of scope: production SLOs, incident automation, remote deployment execution, and third-party alerting.

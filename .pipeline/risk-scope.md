@@ -1,7 +1,5 @@
-# INIT-108 Risk Gate: Scope
+# INIT-117 Scope Risk
 
-Result: LOW
+Verdict: LOW.
 
-- The proposal excludes INIT-109 CI/CD and production replication.
-- Remote Vultr registry remains config-only.
-- All implementation surfaces map to the binding scope.
+The work stays inside observability and Phase 5 documentation. It does not alter Discord-visible behavior, application business logic, tenant authorization rules, remote provider provisioning, or production alert routing. The API change is a narrow Prometheus text endpoint for scrapeability.
