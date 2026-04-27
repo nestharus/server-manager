@@ -32,7 +32,7 @@ export function ArkSelect(props: {
       <Select.Control class={styles.control}>
         <Select.Trigger class={styles.trigger}>
           <Select.ValueText placeholder="Select" />
-          <Select.Indicator>▾</Select.Indicator>
+          <Select.Indicator>v</Select.Indicator>
         </Select.Trigger>
       </Select.Control>
       <Select.Positioner>
@@ -42,7 +42,7 @@ export function ArkSelect(props: {
               {(item) => (
                 <Select.Item item={item()} class={styles.option}>
                   <Select.ItemText>{item().label}</Select.ItemText>
-                  <Select.ItemIndicator>✓</Select.ItemIndicator>
+                  <Select.ItemIndicator>selected</Select.ItemIndicator>
                 </Select.Item>
               )}
             </For>
