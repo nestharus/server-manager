@@ -1,7 +1,5 @@
-# INIT-108 Risk Gate: Shortcut
+# INIT-117 Shortcut Risk
 
-Result: LOW
+Verdict: LOW.
 
-- The local proof is real build, push, pull, and run rather than a static-only substitute.
-- Registry credentials use InfisicalSecret instead of SOPS.
-- Pull-through cache is configured in k3d/containerd, not documented as a manual workaround.
+No compatibility shim, feature flag, HelmRelease, or credential literal is introduced. ServiceMonitor resources are explicit API contracts while raw Prometheus config performs local scraping, which avoids adding an unscoped operator. Loki uses MinIO and Infisical-managed credentials rather than local filesystem persistence or checked-in secrets.
