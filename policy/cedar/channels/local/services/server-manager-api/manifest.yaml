@@ -9,3 +9,5 @@ review_checks:
   - non-sample user is denied the protected API proof endpoint
   - Buildkite service identity can request CI deploy authorization
   - Crossplane service identity can request claim reconciliation authorization
+  - sample tenant principal can access sample local and dev channel resources
+  - sample tenant principal is denied other tenant channel resources

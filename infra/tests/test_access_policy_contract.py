@@ -96,6 +96,9 @@ def test_cedar_policy_bundle_is_structured_per_channel_and_service() -> None:
         f"{POLICY_ID_PREFIX}-user-read",
         f"{POLICY_ID_PREFIX}-buildkite-deploy",
         "local-cluster-api-crossplane-reconcile",
+        "local-tenant-sample-local-access",
+        "local-tenant-sample-dev-access",
+        "local-tenant-other-local-access",
     }
     assert identities["identities"]["buildkite_agent"]["cedar_principal"] == (
         f'Service::"{BUILDKITE_SERVICE_ID}"'

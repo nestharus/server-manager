@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-local
+  labels:
+    platform.humility.gg/tenant: sample
+    platform.humility.gg/channel: local
+    platform.humility.gg/tenant-channel: sample-local
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

@@ -323,3 +323,35 @@ security:
       - minio-system
       - platform-app-clusters
       - sample-app-db
+tenant_isolation:
+  namespace_pattern: "{tenant}-{channel}"
+  labels:
+    tenant: platform.humility.gg/tenant
+    channel: platform.humility.gg/channel
+    tenant_channel: platform.humility.gg/tenant-channel
+  rbac:
+    operator_group_prefix: humility:tenant
+    role_name: tenant-operator
+    role_binding_name: tenant-operators
+  network_policy:
+    default_deny: true
+    allow_dns_egress: true
+    allow_same_tenant_cross_channel: true
+  cedar:
+    principal_type: Tenant
+    resource_type: TenantChannel
+    action: Action::"tenant:channel:access"
+  infisical:
+    project_pattern: tenant-{tenant}-{channel}
+    environment: local
+    secrets_path: /runtime
+  samples:
+    - tenant: sample
+      channels:
+        - local
+        - dev
+      operator_group: humility:tenant:sample:operators
+    - tenant: other
+      channels:
+        - local
+      operator_group: humility:tenant:other:operators
