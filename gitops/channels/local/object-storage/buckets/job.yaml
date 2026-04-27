@@ -36,8 +36,15 @@ spec:
             - /bin/sh
             - -ec
             - |
-              mc alias set local http://minio.minio-system.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-              mc ready local
+              ready=0
+              for attempt in $(seq 1 60); do
+                if mc alias set local http://minio.minio-system.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc ready local; then
+                  ready=1
+                  break
+                fi
+                sleep 5
+              done
+              test "$ready" = 1
               mc mb --ignore-existing local/humility-local-sample
           env:
             - name: MC_CONFIG_DIR

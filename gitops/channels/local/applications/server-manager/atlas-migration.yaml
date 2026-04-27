@@ -15,5 +15,4 @@ spec:
     configMapRef:
       name: server-manager-atlas-guard-migrations
   revisionsSchema: atlas_schema_revisions
-  backoffLimit: 5
-
+  backoffLimit: 60

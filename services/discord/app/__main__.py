@@ -98,6 +98,11 @@ async def run_discord_daemon(settings: Settings | None = None) -> DiscordRuntime
             base_url=resolved_settings.api_base_url,
             client=http_client,
         )
+        if getattr(resolved_settings, "discord_dry_run", False):
+            logger.info("Discord dry-run mode enabled; API reachability proved, gateway login skipped.")
+            while True:
+                await asyncio.sleep(3600)
+
         api_client = build_api_client(settings=resolved_settings, client=http_client)
         bot = build_bot_with_registry(settings=resolved_settings, api_client=api_client)
 

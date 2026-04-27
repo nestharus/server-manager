@@ -1,0 +1,11 @@
+{
+  "name": "@humility/infra-e2e-playwright",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "flow": "node browser-flow.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.59.1"
+  }
+}

@@ -15,4 +15,4 @@ spec:
     configMapRef:
       name: sample-app-atlas-migrations
   revisionsSchema: atlas_schema_revisions
-  backoffLimit: 5
+  backoffLimit: 60

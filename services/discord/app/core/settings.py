@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     discord_bot_token: str = Field(repr=False)
     discord_guild_id: int = Field(gt=0)
     api_base_url: str = Field(min_length=1)
+    discord_dry_run: bool = False
 
     def to_read(self) -> DiscordSettingsRead:
         return DiscordSettingsRead(

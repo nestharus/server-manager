@@ -36,6 +36,6 @@ class DiscordSettingsRead(BaseModel):
 
 DISCORD_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
     required_env_vars=frozenset({"DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "API_BASE_URL"}),
-    optional_env_vars=frozenset(),
+    optional_env_vars=frozenset({"DISCORD_DRY_RUN"}),
     secret_mounts=frozenset(),
 )

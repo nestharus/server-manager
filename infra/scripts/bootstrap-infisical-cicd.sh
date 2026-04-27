@@ -378,7 +378,11 @@ set_token_if_absent() {
     return
   fi
 
-  [[ -n "$token_value" ]] || die "${TOKEN_KEY} is required in the caller environment for first bootstrap"
+  if [[ -z "$token_value" ]]; then
+    log "${TOKEN_KEY} is not set; leaving ${PROJECT_SLUG}${SECRETS_PATH} without an agent token for local-only mode"
+    return
+  fi
+
   infisical secrets set "${TOKEN_KEY}=${token_value}" \
     --domain "http://127.0.0.1:${LOCAL_PORT}/api" \
     --token "$ADMIN_TOKEN" \

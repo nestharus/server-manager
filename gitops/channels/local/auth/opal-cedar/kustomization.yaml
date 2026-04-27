@@ -7,3 +7,12 @@ resources:
   - bootstrap-job.yaml
 patches:
   - path: client-probes-patch.yaml
+  - target:
+      kind: Pod
+      name: opal-e2e
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: opal-e2e

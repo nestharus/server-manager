@@ -8,6 +8,9 @@ AGE_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-sops-age-key.sh"
 INFISICAL_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-identity.sh"
 INFISICAL_STORAGE_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-storage.sh"
 INFISICAL_DATABASES_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-databases.sh"
+INFISICAL_AUTH_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-auth.sh"
+INFISICAL_SERVER_MANAGER_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-server-manager.sh"
+INFISICAL_CICD_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-cicd.sh"
 CHANNEL_REQUEST="local"
 CHANNEL_ID=""
 WAIT_TIMEOUT="180s"
@@ -355,6 +358,16 @@ wait_for_target_secret() {
   die "Secret/${INFISICAL_SAMPLE_NAME} did not contain expected ${INFISICAL_SAMPLE_KEY}"
 }
 
+free_local_port() {
+  "$PYTHON_BIN" - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
 bootstrap_infisical_identity() {
   log "Bootstrapping Infisical Operator Universal Auth identity"
   bash "$INFISICAL_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
@@ -362,7 +375,7 @@ bootstrap_infisical_identity() {
 
 bootstrap_infisical_storage() {
   log "Bootstrapping Infisical object-storage credentials"
-  bash "$INFISICAL_STORAGE_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
+  bash "$INFISICAL_STORAGE_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH" --local-port "$(free_local_port)"
 }
 
 refresh_minio_after_storage_bootstrap() {
@@ -377,7 +390,22 @@ refresh_minio_after_storage_bootstrap() {
 
 bootstrap_infisical_databases() {
   log "Bootstrapping Infisical database credentials"
-  bash "$INFISICAL_DATABASES_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH"
+  bash "$INFISICAL_DATABASES_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH" --local-port "$(free_local_port)"
+}
+
+bootstrap_infisical_auth() {
+  log "Bootstrapping Infisical auth credentials"
+  bash "$INFISICAL_AUTH_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH" --local-port "$(free_local_port)"
+}
+
+bootstrap_infisical_server_manager() {
+  log "Bootstrapping Infisical server-manager runtime credentials"
+  bash "$INFISICAL_SERVER_MANAGER_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH" --local-port "$(free_local_port)"
+}
+
+bootstrap_infisical_cicd() {
+  log "Bootstrapping Infisical CI/CD credentials"
+  bash "$INFISICAL_CICD_BOOTSTRAP" --channel "$CHANNEL_ID" --kubeconfig "$KUBECONFIG_PATH" --local-port "$(free_local_port)"
 }
 
 refresh_infisical_operator_after_bootstrap() {
@@ -461,6 +489,9 @@ main() {
   bootstrap_infisical_storage
   refresh_minio_after_storage_bootstrap
   bootstrap_infisical_databases
+  bootstrap_infisical_auth
+  bootstrap_infisical_server_manager
+  bootstrap_infisical_cicd
   refresh_infisical_operator_after_bootstrap
   wait_for_infisical_runtime
   wait_for_reconciliation

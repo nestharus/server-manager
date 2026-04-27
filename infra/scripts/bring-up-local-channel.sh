@@ -231,8 +231,8 @@ ensure_local_registry() {
   container_name="$(local_registry_container_name)"
   volume_name="${container_name}-data"
 
-  if docker inspect "$container_name" >/dev/null 2>&1; then
-    if [[ "$(docker inspect -f '{{.State.Running}}' "$container_name")" != "true" ]]; then
+  if docker container inspect "$container_name" >/dev/null 2>&1; then
+    if [[ "$(docker container inspect -f '{{.State.Running}}' "$container_name")" != "true" ]]; then
       log "Starting local image registry '${container_name}'"
       docker start "$container_name" >/dev/null
     else
@@ -261,8 +261,8 @@ ensure_registry_cache() {
   container_name="$(cache_container_name "$cache_name")"
   volume_name="k3d-${cache_name}-data"
 
-  if docker inspect "$container_name" >/dev/null 2>&1; then
-    if [[ "$(docker inspect -f '{{.State.Running}}' "$container_name")" != "true" ]]; then
+  if docker container inspect "$container_name" >/dev/null 2>&1; then
+    if [[ "$(docker container inspect -f '{{.State.Running}}' "$container_name")" != "true" ]]; then
       log "Starting registry cache '${container_name}'"
       docker start "$container_name" >/dev/null
     else
@@ -326,6 +326,7 @@ write_registry_config() {
       printf '  "%s":\n' "$registry"
       printf '    endpoint:\n'
       printf '      - http://%s:5000\n' "$(cache_container_name "$cache_name")"
+      printf '      - %s\n' "$remote_url"
     done <<<"$mirrors"
   } >"$REGISTRY_CONFIG_PATH"
 }
@@ -346,7 +347,7 @@ connect_registry_caches_to_cluster_network() {
     [[ -n "$registry" ]] || continue
     container_name="$(cache_container_name "$cache_name")"
     docker network inspect "$network_name" >/dev/null
-    if docker inspect -f "{{json .NetworkSettings.Networks}}" "$container_name" | grep -q "\"${network_name}\""; then
+    if docker container inspect -f "{{json .NetworkSettings.Networks}}" "$container_name" | grep -q "\"${network_name}\""; then
       log "Registry cache '${container_name}' already attached to ${network_name}"
     else
       log "Attaching registry cache '${container_name}' to ${network_name}"
@@ -363,7 +364,7 @@ connect_local_registry_to_cluster_network() {
 
   container_name="$(local_registry_container_name)"
   docker network inspect "$network_name" >/dev/null
-  if docker inspect -f "{{json .NetworkSettings.Networks}}" "$container_name" | grep -q "\"${network_name}\""; then
+  if docker container inspect -f "{{json .NetworkSettings.Networks}}" "$container_name" | grep -q "\"${network_name}\""; then
     log "Local image registry '${container_name}' already attached to ${network_name}"
   else
     log "Attaching local image registry '${container_name}' to ${network_name}"
