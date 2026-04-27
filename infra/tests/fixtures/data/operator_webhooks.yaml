@@ -1,0 +1,74 @@
+closed_namespaces:
+  - flux-system
+  - crossplane-system
+  - cert-manager
+  - cnpg-system
+  - kong-system
+  - minio-system
+  - infisical-system
+  - server-manager
+  - auth-system
+  - sample-app-db
+  - buildkite-agent
+
+operator_webhook_namespaces:
+  - crossplane-system
+  - cert-manager
+  - cnpg-system
+
+probe_defaults:
+  allowed_probe_namespace: observability-system
+  denied_probe_namespace: default
+  service_probe_path: /healthz
+  direct_pod_probe_path: /healthz
+  metrics_probe_path: /metrics
+  curl_image: curlimages/curl:8.16.0
+  curl_timeout_seconds: 5
+  prometheus_base_url: http://prometheus.observability-system.svc:9090
+
+operator_webhooks:
+  crossplane-system:
+    admission_probe:
+      apiVersion: apiextensions.crossplane.io/v1
+      kind: Composition
+      metadata:
+        name: r01-webhook-reachability.example.org
+      spec:
+        compositeTypeRef:
+          apiVersion: platform.humility.gg/v1alpha1
+          kind: XR01WebhookReachability
+        mode: Pipeline
+        pipeline:
+          - step: noop
+            functionRef:
+              name: r01-webhook-reachability-noop
+    prometheus_query: max(up{namespace="crossplane-system", service=~".*crossplane.*|.*webhook.*"})
+
+  cert-manager:
+    admission_probe:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: r01-webhook-reachability
+        namespace: default
+      spec:
+        secretName: r01-webhook-reachability-tls
+        dnsNames:
+          - r01-webhook-reachability.local.humility.local
+        issuerRef:
+          name: r01-webhook-reachability
+          kind: Issuer
+    prometheus_query: max(up{namespace="cert-manager", service=~".*cert-manager.*|.*webhook.*"})
+
+  cnpg-system:
+    admission_probe:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: r01-webhook-reachability
+        namespace: default
+      spec:
+        instances: 1
+        storage:
+          size: 1Gi
+    prometheus_query: max(up{namespace="cnpg-system", service=~".*cnpg.*|.*webhook.*"})
