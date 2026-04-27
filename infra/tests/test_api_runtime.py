@@ -76,7 +76,29 @@ def test_create_api_app_accepts_settings(monkeypatch: pytest.MonkeyPatch) -> Non
         getattr(route, "path", None) for route in app.routes
     }
     assert "/api/v1/health" in route_paths
+    assert "/api/v1/metrics" in route_paths
     assert "/api/v1/ready" in route_paths
+
+
+@pytest.mark.asyncio()
+async def test_metrics_endpoint_returns_prometheus_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_env(monkeypatch)
+    settings = Settings()
+    app = create_api_app(settings=settings)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get("/api/v1/metrics")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "server_manager_api_info" in response.text
+    assert f'version="{settings.app_version}"' in response.text
+    assert 'tenant="platform"' in response.text
 
 
 def test_create_api_app_loads_settings_when_none(

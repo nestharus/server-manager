@@ -1,0 +1,224 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: flux
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: flux
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["flux-system"]
+  selector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["source-controller", "kustomize-controller", "notification-controller"]
+  endpoints:
+    - port: http-prom
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: crossplane
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: crossplane
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["crossplane-system"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: crossplane
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: cert-manager
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["cert-manager"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+  endpoints:
+    - port: http-metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: infisical
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: infisical
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["infisical-system"]
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["infisical", "secrets-operator"]
+  endpoints:
+    - port: http
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: minio
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: minio
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["minio-system"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+  endpoints:
+    - port: s3
+      path: /minio/v2/metrics/cluster
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cnpg
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: cnpg
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["cnpg-system", "sample-app-db", "server-manager"]
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: Exists
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kong
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: kong
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["kong-system"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kong
+  endpoints:
+    - port: cmetrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pomerium
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: pomerium
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["auth-system"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pomerium
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: authentik
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: authentik
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["auth-system"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: authentik
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: opal
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: opal
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["auth-system"]
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["opal-server", "opal-client"]
+  endpoints:
+    - port: http
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: server-manager-api
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["server-manager"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: server-manager-api
+  endpoints:
+    - port: http
+      path: /api/v1/metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: buildkite-agent
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: buildkite-agent
+    platform.humility.gg/init: "117"
+spec:
+  namespaceSelector:
+    matchNames: ["buildkite-agent"]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: buildkite-agent
+  endpoints:
+    - port: metrics
+      interval: 30s

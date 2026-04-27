@@ -35,6 +35,8 @@ def test_load_pipeline_accepts_command_and_wait_steps() -> None:
         "init-113-application-workloads-static",
         "init-114-auth-stack-static",
         "init-115-access-policy-static",
+        "init-116-tenant-isolation-static",
+        "init-117-observability-static",
         "registry-build-push",
         "init-113-build-images",
     ]
