@@ -10,5 +10,17 @@
   {
     "id": "local-cluster-api-crossplane-reconcile",
     "content": "permit(principal == Service::\"crossplane-provider.local\", action == Action::\"cluster:claim:reconcile\", resource == Resource::\"cluster-api\");"
+  },
+  {
+    "id": "local-tenant-sample-local-access",
+    "content": "permit(principal == Tenant::\"sample\", action == Action::\"tenant:channel:access\", resource == TenantChannel::\"sample:local\");"
+  },
+  {
+    "id": "local-tenant-sample-dev-access",
+    "content": "permit(principal == Tenant::\"sample\", action == Action::\"tenant:channel:access\", resource == TenantChannel::\"sample:dev\");"
+  },
+  {
+    "id": "local-tenant-other-local-access",
+    "content": "permit(principal == Tenant::\"other\", action == Action::\"tenant:channel:access\", resource == TenantChannel::\"other:local\");"
   }
 ]

@@ -90,6 +90,9 @@
     },
     "security": {
       "$ref": "#/$defs/security"
+    },
+    "tenant_isolation": {
+      "$ref": "#/$defs/tenantIsolation"
     }
   },
   "allOf": [
@@ -120,7 +123,8 @@
           "tls",
           "dns",
           "app_cluster",
-          "security"
+          "security",
+          "tenant_isolation"
         ],
         "properties": {
           "object_storage": {
@@ -2462,6 +2466,173 @@
       "properties": {
         "default_deny_namespaces": {
           "$ref": "#/$defs/namespaceList"
+        }
+      }
+    },
+    "tenantIsolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace_pattern",
+        "labels",
+        "rbac",
+        "network_policy",
+        "cedar",
+        "infisical",
+        "samples"
+      ],
+      "properties": {
+        "namespace_pattern": {
+          "const": "{tenant}-{channel}"
+        },
+        "labels": {
+          "$ref": "#/$defs/tenantIsolationLabels"
+        },
+        "rbac": {
+          "$ref": "#/$defs/tenantIsolationRbac"
+        },
+        "network_policy": {
+          "$ref": "#/$defs/tenantIsolationNetworkPolicy"
+        },
+        "cedar": {
+          "$ref": "#/$defs/tenantIsolationCedar"
+        },
+        "infisical": {
+          "$ref": "#/$defs/tenantIsolationInfisical"
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tenantIsolationSample"
+          }
+        }
+      }
+    },
+    "tenantIsolationLabels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant",
+        "channel",
+        "tenant_channel"
+      ],
+      "properties": {
+        "tenant": {
+          "const": "platform.humility.gg/tenant"
+        },
+        "channel": {
+          "const": "platform.humility.gg/channel"
+        },
+        "tenant_channel": {
+          "const": "platform.humility.gg/tenant-channel"
+        }
+      }
+    },
+    "tenantIsolationRbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operator_group_prefix",
+        "role_name",
+        "role_binding_name"
+      ],
+      "properties": {
+        "operator_group_prefix": {
+          "const": "humility:tenant"
+        },
+        "role_name": {
+          "const": "tenant-operator"
+        },
+        "role_binding_name": {
+          "const": "tenant-operators"
+        }
+      }
+    },
+    "tenantIsolationNetworkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default_deny",
+        "allow_dns_egress",
+        "allow_same_tenant_cross_channel"
+      ],
+      "properties": {
+        "default_deny": {
+          "const": true
+        },
+        "allow_dns_egress": {
+          "const": true
+        },
+        "allow_same_tenant_cross_channel": {
+          "const": true
+        }
+      }
+    },
+    "tenantIsolationCedar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_type",
+        "resource_type",
+        "action"
+      ],
+      "properties": {
+        "principal_type": {
+          "const": "Tenant"
+        },
+        "resource_type": {
+          "const": "TenantChannel"
+        },
+        "action": {
+          "const": "Action::\"tenant:channel:access\""
+        }
+      }
+    },
+    "tenantIsolationInfisical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_pattern",
+        "environment",
+        "secrets_path"
+      ],
+      "properties": {
+        "project_pattern": {
+          "const": "tenant-{tenant}-{channel}"
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "secrets_path": {
+          "const": "/runtime"
+        }
+      }
+    },
+    "tenantIsolationSample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant",
+        "channels",
+        "operator_group"
+      ],
+      "properties": {
+        "tenant": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/channelId"
+          },
+          "uniqueItems": true
+        },
+        "operator_group": {
+          "type": "string",
+          "pattern": "^humility:tenant:[a-z0-9][a-z0-9-]*:operators$"
         }
       }
     }
