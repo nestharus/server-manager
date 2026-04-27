@@ -43,6 +43,7 @@ remotely. SOPS+age is bootstrap-only. Infisical is the runtime secret store.
 | INIT-115 | Access policy and service identity | Pomerium policy-as-code, break-glass, Smallstep scope, service identity, service-mesh decision | 107, 114 | yes | M/L | done |
 | INIT-116 | Tenant and channel isolation | Operationalize tenant/channel isolation across cluster, namespace, DB, object storage, Discord identity | 106, 111, 113, 114 | yes | L | done |
 | INIT-117 | Observability stack | Prometheus + Grafana + Alertmanager + OpenTelemetry Collector + Loki; metrics from CNPG/Crossplane/Flux/Cedar/Authentik/Kong/api/discord; tenant-aware dashboards | 102, 107, 116 | yes | XL | done |
+| INIT-118 | Web UI substrate | Single SPA covering public + auth-gated surfaces; Solid 2 + Vite + TanStack + Ark UI Solid + vanilla CSS + FontAwesome Pro+ + Oxc/tsgo; Pomerium-fronted in local k3d | 102, 103, 108, 109, 110, 113, 114 | yes | XL | pending |
 
 ## Dependency Order
 

@@ -1,21 +1,41 @@
-# INIT-117 Phase 1 Research: Observability Stack
+# INIT-118 Phase 1 Research: Web UI Substrate
 
-## Scope
-- Deliver Prometheus, Grafana, Alertmanager, OpenTelemetry Collector, and Loki as raw manifests in the local GitOps channel.
-- Expose ServiceMonitor resources for Flux, Crossplane, cert-manager, Infisical, MinIO, CNPG, Kong, Pomerium, Authentik, OPAL, server-manager API, and Buildkite agent.
-- Store Grafana dashboards as ConfigMaps and make dashboard filtering tenant-aware with the INIT-116 tenant label.
-- Back Loki with the INIT-104 MinIO object store. Runtime credentials come from Infisical, not SOPS or literals.
-- Prove local-first operation through Pod readiness, Prometheus targets, dashboard provisioning, Alertmanager sample alert ingestion, and a Loki sample log.
+INIT-118 consumes the existing frontend research rather than reopening stack
+selection. The locked stack is Solid 2 beta plus Vite, TanStack Router/Query/
+Form/Store/Table/Virtual, Ark UI Solid, vanilla CSS Modules and cascade layers,
+FontAwesome SVG Core, Oxlint/Oxfmt, and TypeScript native preview. Binding
+inputs are `.pipeline/08-frontend-stack.md` ("Corrected stack synthesis"),
+`.pipeline/09-solid-component-primitives-findings.md` ("Recommendation"),
+`.pipeline/10-ark-gap-components-findings.md` ("Gap components"),
+`.pipeline/11-webawesome-fontawesome-findings.md` ("Path C"), and
+`.pipeline/12-fa-wa-agent-integration-findings.md` ("Operational handoff").
 
-## Findings
-- The repository already uses raw Kustomize subtrees under `gitops/channels/local`; observability should be another channel subtree instead of a separate deployment mechanism.
-- The existing channel schema is the right contract surface for component pins, object storage, ServiceMonitor names, dashboards, and alerts.
-- Prometheus Operator is not otherwise installed. A minimal ServiceMonitor CRD can satisfy the API contract while raw Prometheus scrape config performs the actual local scrape proof.
-- Loki can use MinIO through S3-compatible configuration and `-config.expand-env=true`, keeping access keys in an Infisical-managed Secret.
-- OTel Collector can run as a DaemonSet receiving OTLP traces/logs without hostPath log scraping, which keeps the security posture compatible with the current cluster baseline.
-- Grafana can load datasources and dashboards from ConfigMaps, so dashboard render proof does not require mutable UI state.
+The implementation pins the observed beta set: `solid-js@2.0.0-beta.8`,
+`@solidjs/web@2.0.0-beta.8`, `vite-plugin-solid@3.0.0-next.5`, `vite@8.0.10`,
+Ark UI `5.36.2`, Oxlint `1.62.0`, Oxfmt `0.47.0`, Playwright `1.59.1`, and
+`@typescript/native-preview@7.0.0-dev.20260427.1` for `tsgo`. Solid 2 beta has
+split web rendering into `@solidjs/web`; the release gate therefore treats the
+Solid 2 renderer and current Solid 1-oriented adapters as a compatibility risk.
 
-## Anti-Findings
-- HelmRelease and helm-controller are unnecessary and remain out of scope.
-- Production SLI/SLO definitions, incident automation, and PagerDuty-style integrations are post-deployment work.
-- Kube-state-metrics is useful for richer alert semantics, but INIT-117 can land the alert contract and local proof without adding a new controller.
+## Toolchain Availability
+
+- Node `v22.15.0`, npm `11.6.2`, Bun `1.3.4`, and Playwright `1.59.1` are present.
+- `solid-js@next` resolves to `2.0.0-beta.8`; `@solidjs/web@next` resolves to
+  the same beta.
+- Vite `8.0.10`, `vite-plugin-solid@3.0.0-next.5`, Oxlint `1.62.0`, Oxfmt
+  `0.47.0`, and `@typescript/native-preview@7.0.0-dev.20260427.1` install.
+- There is no npm package named `tsgo`; the `tsgo` binary is provided by
+  `@typescript/native-preview`.
+- Ark UI installs because its peer range allows Solid `>=1.6.0`, but its
+  explicit Solid 2 support remains a release-gated compatibility item.
+
+## Proposal Priorities
+
+- Keep Pomerium as the auth boundary; the SPA reads `/api/v1/me` only.
+- Ship one local k3d proof: Pod Ready, public route reachable, admin route gated.
+- Keep CSS vanilla through layers, tokens, and modules; do not add Tailwind,
+  Panda, WebAwesome, or a styling DSL.
+- Put FontAwesome token handling in scripts and templates, never committed
+  `.npmrc` token material.
+- Make the Solid 2 beta adapter risk visible through compatibility tests and
+  the INIT-119+ handoff.
