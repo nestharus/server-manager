@@ -1,0 +1,6 @@
+legacy-peer-deps=true
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}
+@fortawesome:registry=https://npm.fontawesome.com/
+//npm.fontawesome.com/:_authToken=${FA_NPM_TOKEN}
+@awesome.me:registry=https://npm.fontawesome.com/
+//npm.fontawesome.com/:_authToken=${WA_NPM_TOKEN}
