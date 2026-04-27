@@ -21,7 +21,7 @@ export function ArkCombobox(props: {
       <Combobox.Label class={styles.label}>{props.label}</Combobox.Label>
       <Combobox.Control class={styles.control}>
         <Combobox.Input class={styles.input} />
-        <Combobox.Trigger class={styles.iconTrigger}>▾</Combobox.Trigger>
+        <Combobox.Trigger class={styles.iconTrigger}>v</Combobox.Trigger>
       </Combobox.Control>
       <Combobox.Positioner>
         <Combobox.Content class={styles.popover}>
