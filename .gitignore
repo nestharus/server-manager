@@ -28,5 +28,6 @@ worktrees/
 .refs/
 .DS_Store
 infra/channels/*/.generated/
+infra/tests/e2e/playwright/sessions/
 *.kubeconfig
 **/.terraform/

@@ -112,8 +112,8 @@ cleanup_flux_resources() {
   fi
 
   log "Deleting Flux custom resources"
-  kubectl --kubeconfig "$kubeconfig_path" delete kustomizations.kustomize.toolkit.fluxcd.io --all -A --ignore-not-found=true >/dev/null 2>&1 || true
-  kubectl --kubeconfig "$kubeconfig_path" delete gitrepositories.source.toolkit.fluxcd.io --all -A --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl --kubeconfig "$kubeconfig_path" delete kustomizations.kustomize.toolkit.fluxcd.io --all -A --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+  kubectl --kubeconfig "$kubeconfig_path" delete gitrepositories.source.toolkit.fluxcd.io --all -A --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
 
   if command -v flux >/dev/null 2>&1; then
     log "Uninstalling Flux controllers"
@@ -134,7 +134,7 @@ delete_registry_caches() {
   while IFS= read -r cache_name; do
     [[ -n "$cache_name" ]] || continue
     container_name="k3d-${cache_name}"
-    if docker inspect "$container_name" >/dev/null 2>&1; then
+    if docker container inspect "$container_name" >/dev/null 2>&1; then
       log "Deleting registry cache '${container_name}'"
       docker rm -f "$container_name" >/dev/null 2>&1 || true
       docker volume rm "${container_name}-data" >/dev/null 2>&1 || true
@@ -155,7 +155,7 @@ delete_local_registry() {
   [[ -n "$registry_name" && "$registry_name" != "null" && "$registry_name" != "None" ]] || return 0
 
   container_name="k3d-${registry_name}"
-  if docker inspect "$container_name" >/dev/null 2>&1; then
+  if docker container inspect "$container_name" >/dev/null 2>&1; then
     log "Deleting local image registry '${container_name}'"
     docker rm -f "$container_name" >/dev/null 2>&1 || true
     docker volume rm "${container_name}-data" >/dev/null 2>&1 || true

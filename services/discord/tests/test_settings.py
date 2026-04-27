@@ -13,6 +13,7 @@ ALL_SETTINGS_ENV_VARS = (
     "DISCORD_BOT_TOKEN",
     "DISCORD_GUILD_ID",
     "API_BASE_URL",
+    "DISCORD_DRY_RUN",
 )
 
 
@@ -32,6 +33,7 @@ def test_settings_construction_with_all_required_fields_succeeds() -> None:
     assert isinstance(settings.discord_guild_id, int)
     assert settings.discord_guild_id == 1
     assert settings.api_base_url == "http://api.test"
+    assert settings.discord_dry_run is False
 
 
 def test_missing_discord_bot_token_raises_validation_error(
@@ -107,6 +109,20 @@ def test_settings_reads_values_from_environment(
     assert settings.discord_bot_token == "env-token"
     assert settings.discord_guild_id == 42
     assert settings.api_base_url == "http://env.api"
+    assert settings.discord_dry_run is False
+
+
+def test_settings_reads_dry_run_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "env-token")
+    monkeypatch.setenv("DISCORD_GUILD_ID", "42")
+    monkeypatch.setenv("API_BASE_URL", "http://env.api")
+    monkeypatch.setenv("DISCORD_DRY_RUN", "1")
+
+    settings = Settings()
+
+    assert settings.discord_dry_run is True
 
 
 def test_discord_settings_to_read_returns_discord_settings_read() -> None:
@@ -145,5 +161,5 @@ def test_discord_settings_source_matches_service_code_env_vars() -> None:
     assert DISCORD_SETTINGS_SOURCE.required_env_vars == frozenset(
         {"DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "API_BASE_URL"}
     )
-    assert DISCORD_SETTINGS_SOURCE.optional_env_vars == frozenset()
+    assert DISCORD_SETTINGS_SOURCE.optional_env_vars == frozenset({"DISCORD_DRY_RUN"})
     assert DISCORD_SETTINGS_SOURCE.secret_mounts == frozenset()

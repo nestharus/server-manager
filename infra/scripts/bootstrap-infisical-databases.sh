@@ -160,7 +160,7 @@ target_url_secret_value() {
   kubectl_cmd -n "$DB_SECRET_NAMESPACE" get secret "$DB_URL_SECRET_NAME" -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d || true
 }
 
-runtime_already_bootstrapped() {
+sample_runtime_already_bootstrapped() {
   [[ -n "$(operator_ua_secret_value clientId)" ]] || return 1
   [[ -n "$(operator_ua_secret_value clientSecret)" ]] || return 1
   [[ -n "$(target_secret_value username)" ]] || return 1
@@ -486,6 +486,36 @@ generate_password() {
   openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n'
 }
 
+bootstrap_database_path() {
+  local secrets_path="$1"
+  local username="$2"
+  local database="$3"
+  local host="$4"
+  local port="$5"
+  local ssl_mode="$6"
+
+  SECRETS_PATH="$secrets_path"
+  DB_USERNAME="$username"
+  DB_DATABASE="$database"
+  DB_HOST="$host"
+  DB_PORT="$port"
+  DB_SSL_MODE="$ssl_mode"
+
+  ensure_secret_folder
+  set_secret_if_absent "username" "$DB_USERNAME"
+  set_secret_if_absent "database" "$DB_DATABASE"
+  set_secret_if_absent "host" "$DB_HOST"
+  set_secret_if_absent "port" "$DB_PORT"
+  set_secret_if_absent "password" "$(generate_password)"
+
+  DB_PASSWORD="$(secret_value_or_empty password)"
+  [[ -n "$DB_PASSWORD" ]] || die "database password was not readable after bootstrap for ${SECRETS_PATH}"
+  DB_PASSWORD_ENCODED="$(urlencode "$DB_PASSWORD")"
+  set_secret_if_absent "url" "postgres://${DB_USERNAME}:${DB_PASSWORD_ENCODED}@${DB_HOST}:${DB_PORT}/${DB_DATABASE}?sslmode=${DB_SSL_MODE}"
+
+  log "Infisical project ${PROJECT_SLUG} path ${SECRETS_PATH} is bootstrapped for channel ${CHANNEL}"
+}
+
 need_command kubectl
 need_command curl
 need_command jq
@@ -497,9 +527,8 @@ need_command openssl
 resolve_channel_databases
 wait_for_server
 verify_operator_ua_secret
-if runtime_already_bootstrapped; then
+if sample_runtime_already_bootstrapped; then
   log "Infisical database credentials already synced to Secret/${DB_APP_SECRET_NAME} and Secret/${DB_URL_SECRET_NAME}"
-  exit 0
 fi
 start_port_forward
 
@@ -517,18 +546,21 @@ if [[ -n "$PROJECT_ORG_ID" ]]; then
 fi
 
 ensure_environment
-ensure_secret_folder
 IDENTITY_ID="$(find_identity)"
 ensure_identity_project_membership "$IDENTITY_ID"
-set_secret_if_absent "username" "$DB_USERNAME"
-set_secret_if_absent "database" "$DB_DATABASE"
-set_secret_if_absent "host" "$DB_HOST"
-set_secret_if_absent "port" "$DB_PORT"
-set_secret_if_absent "password" "$(generate_password)"
 
-DB_PASSWORD="$(secret_value_or_empty password)"
-[[ -n "$DB_PASSWORD" ]] || die "database password was not readable after bootstrap"
-DB_PASSWORD_ENCODED="$(urlencode "$DB_PASSWORD")"
-set_secret_if_absent "url" "postgres://${DB_USERNAME}:${DB_PASSWORD_ENCODED}@${DB_HOST}:${DB_PORT}/${DB_DATABASE}?sslmode=${DB_SSL_MODE}"
+bootstrap_database_path \
+  "$SECRETS_PATH" \
+  "$DB_USERNAME" \
+  "$DB_DATABASE" \
+  "$DB_HOST" \
+  "$DB_PORT" \
+  "$DB_SSL_MODE"
 
-log "Infisical project ${PROJECT_SLUG} path ${SECRETS_PATH} is bootstrapped for channel ${CHANNEL}"
+bootstrap_database_path \
+  "/postgres/local/server-manager" \
+  "server_manager" \
+  "server_manager" \
+  "server-manager-postgres-rw.server-manager.svc.cluster.local" \
+  "5432" \
+  "$DB_SSL_MODE"

@@ -1,0 +1,15 @@
+agents:
+  queue: cicd-local
+
+env:
+  CHANNEL_ID: local
+
+steps:
+  - key: init-119-fullstack-e2e
+    label: "INIT-119 full-stack infra E2E"
+    timeout_in_minutes: 180
+    command: "infra/tests/e2e/run-fullstack.sh"
+    artifact_paths:
+      - ".tmp/init-119-e2e/**/*"
+      - ".tmp/init-119-bringup-diagnostics/**/*"
+      - "docs/infra-e2e-status.md"

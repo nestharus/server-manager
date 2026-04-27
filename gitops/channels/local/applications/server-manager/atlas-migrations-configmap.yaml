@@ -9,4 +9,6 @@ metadata:
 data:
   20260426011300_atlas_guard.sql: |
     SELECT 1;
-
+  atlas.sum: |
+    h1:BKcMDU8+ruTW9nAs1PJeD4KItHx/pqkEuHAWWZ4LnFY=
+    20260426011300_atlas_guard.sql h1:Jz6mgmNdl+b8knl259HzxnicrNaQcZ1IvnD9OlbzH/4=
