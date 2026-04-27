@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: build-server-manager-images.sh [--channel local] [--tag TAG] [--print-only]
 
-Builds the server-manager API and Discord daemon images through the INIT-108
+Builds the server-manager API, Discord daemon, and web SPA images through the INIT-108
 channel image builder.
 
 Options:
@@ -77,7 +77,7 @@ main() {
 
   build_image server-manager-api containers/server-manager/Containerfile.api
   build_image server-manager-discord containers/server-manager/Containerfile.discord
+  build_image server-manager-web containers/server-manager/Containerfile.web
 }
 
 main "$@"
-

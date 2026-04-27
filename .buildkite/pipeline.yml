@@ -8,6 +8,7 @@ env:
   IMAGE_CONTEXT: containers/samples/registry-smoke
   IMAGE_FILE: containers/samples/registry-smoke/Containerfile
   INIT113_IMAGE_TAG: init-113-local
+  INIT118_IMAGE_TAG: init-118-local
 
 steps:
   - key: init-109-smoke
@@ -42,6 +43,10 @@ steps:
     label: "INIT-117 observability static validation"
     command: "infra/tests/validate_observability_local.sh --static-only"
 
+  - key: init-118-web-ui-static
+    label: "INIT-118 web UI static validation"
+    command: "infra/tests/validate_web_ui_local.sh --static-only"
+
   - wait
 
   - key: registry-build-push
@@ -60,3 +65,13 @@ steps:
       infra/scripts/build-server-manager-images.sh
       --channel "${CHANNEL_ID}"
       --tag "${INIT113_IMAGE_TAG}"
+
+  - key: init-118-build-web
+    label: "Build and push server-manager web image"
+    command: >
+      infra/scripts/build-channel-image.sh
+      --channel "${CHANNEL_ID}"
+      --app server-manager-web
+      --tag "${INIT118_IMAGE_TAG}"
+      --context .
+      --file containers/server-manager/Containerfile.web
