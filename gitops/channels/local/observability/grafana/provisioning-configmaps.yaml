@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: grafana
+    platform.humility.gg/init: "117"
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.observability-system.svc.cluster.local:9090
+        isDefault: true
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki.observability-system.svc.cluster.local:3100
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: grafana
+    platform.humility.gg/init: "117"
+data:
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: platform
+        orgId: 1
+        folder: Phase 5
+        type: file
+        disableDeletion: true
+        editable: false
+        options:
+          path: /var/lib/grafana/dashboards
