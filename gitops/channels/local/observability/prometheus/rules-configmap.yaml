@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: observability-system
+  labels:
+    app.kubernetes.io/name: prometheus
+    platform.humility.gg/init: "117"
+data:
+  alerts.yml: |
+    groups:
+      - name: platform-basic-alerts
+        rules:
+          - alert: PodCrashLooping
+            expr: increase(kube_pod_container_status_restarts_total[10m]) > 3
+            for: 5m
+            labels:
+              severity: warning
+              channel: local
+            annotations:
+              summary: Pod is restarting repeatedly
+          - alert: ClusterDown
+            expr: absent(up{job="prometheus"} == 1)
+            for: 1m
+            labels:
+              severity: critical
+              channel: local
+            annotations:
+              summary: Kubernetes API server scrape target is absent
+          - alert: CertificateExpiringSoon
+            expr: certmanager_certificate_expiration_timestamp_seconds - time() < 604800
+            for: 10m
+            labels:
+              severity: warning
+              channel: local
+            annotations:
+              summary: Certificate expires within seven days
