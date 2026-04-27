@@ -4,17 +4,19 @@ Authoritative operator documentation for the Humility deployment substrate.
 
 ## Overview
 
-`infra/` contains the Phase 5 control-cluster substrate: Vultr-locked
-OpenTofu, self-managed k3s, channel templates, local-first deployment scripts,
-and the INIT-102 GitOps substrate. The local channel runs k3s through k3d.
-Remote channels describe k3s on Vultr Cloud Compute VMs bootstrapped by
-cloud-init.
+`infra/` contains the completed Phase 5 control-cluster substrate:
+Vultr-locked OpenTofu, self-managed k3s, channel templates, local-first
+deployment scripts, GitOps, runtime secrets, storage, ingress, data plane,
+application workloads, auth, policy, tenant isolation, and observability. The
+local channel runs k3s through k3d. Remote channels describe k3s on Vultr Cloud
+Compute VMs bootstrapped by cloud-init.
 
 Local is a real deployment target, not a dry run. The completion proof creates
 `humility-local`, installs Flux source and kustomize controllers, seeds an
 in-cluster Git source from the local GitOps snapshot, and reaches it with
 `kubectl` through `~/.kube/humility-local.yaml`. Remote Vultr work is
-plan-only until a later deployment initiative.
+plan-only until post-INIT-117 deployment work supplies credentials and applies
+a remote channel.
 
 ## Local Prerequisites
 
@@ -57,6 +59,7 @@ infra/
   roots/channels/local/             # Committed local OpenTofu root
   roots/channels/dev/               # Committed remote plan OpenTofu root
   tests/validate_platform_bootstrap.sh
+  tests/validate_observability_local.sh
 ```
 
 Retired INIT-008 artifacts are intentionally absent: no
@@ -574,19 +577,51 @@ Remote `dev` records the Vultr Container Registry contract only:
 `ewr.vultrcr.com/humility`, with `Secret/vultr-cr-credentials` in
 `app-runtime` sourced from Infisical path `/registry/dev`.
 
+## Observability
+
+INIT-117 adds the local observability stack under
+`gitops/channels/local/observability`:
+
+- Prometheus raw manifests with local scrape config and basic alert rules.
+- Grafana raw manifests with Prometheus/Loki datasources and dashboard
+  ConfigMaps.
+- Alertmanager raw manifests for local alert ingestion.
+- OpenTelemetry Collector as a DaemonSet for OTLP trace and log intake.
+- Loki raw manifests backed by the INIT-104 MinIO object store, using
+  Infisical-managed credentials.
+- ServiceMonitor resources for Flux, Crossplane, cert-manager, Infisical,
+  MinIO, CNPG, Kong, Pomerium, Authentik, OPAL, the API workload, and
+  Buildkite agent.
+- Tenant-aware dashboards using `platform.humility.gg/tenant`.
+
+Static proof:
+
+```bash
+bash infra/tests/validate_observability_local.sh --static-only
+```
+
+Runtime proof after local channel reconciliation:
+
+```bash
+bash infra/tests/validate_observability_local.sh \
+  --kubeconfig ~/.kube/humility-local.yaml
+```
+
+The runtime proof checks observability Pods Ready, prints Prometheus targets,
+confirms Grafana dashboard provisioning, sends a sample Alertmanager alert, and
+pushes/queries a sample Loki log line.
+
 ## Anti-Scope
 
 This directory does not install or operate:
 
 - Vultr Object Storage bucket provisioning: later remote deployment work.
-- Crossplane app-cluster provisioning: INIT-106.
-- Ingress and edge policy: INIT-110 and later.
 - Real Cloudflare DNS records and production ACME issuance: post-INIT-117
   deployment work.
-- Application workloads, API service deployment, Discord daemon deployment,
-  databases, queues, or observability workloads: INIT-113 and later.
-- Remote k3s apply, remote HA, remote kubeconfig retrieval, or Vultr load
-  balancer registration.
+- Remote k3s apply, remote HA execution, remote kubeconfig retrieval, or Vultr
+  load balancer registration.
+- Production SLI/SLO definitions, incident response automation, and
+  third-party alert integrations.
 
 Remote HA is scheduled for INIT-118. Remote apply is post-INIT-117 deployment
 work.
