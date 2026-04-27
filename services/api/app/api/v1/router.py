@@ -16,6 +16,7 @@ from app.api.v1.endpoints import (
     chapters,
     compliance,
     health,
+    me,
     metrics,
     members,
     notifications,
@@ -28,6 +29,7 @@ from app.api.v1.endpoints import (
     system,
     tickets,
     trust,
+    web,
 )
 
 router = APIRouter()
@@ -38,6 +40,7 @@ router.include_router(chapter_templates.router, tags=["chapter-templates"])
 router.include_router(chapters.router, tags=["chapters"])
 router.include_router(compliance.router)
 router.include_router(health.router, tags=["health"])
+router.include_router(me.router, tags=["me"])
 router.include_router(metrics.router, tags=["metrics"])
 router.include_router(members.router, tags=["members"])
 router.include_router(notifications.router, tags=["notification-rules"])
@@ -50,3 +53,4 @@ router.include_router(roster.router, tags=["roster"])
 router.include_router(system.router, tags=["system"])
 router.include_router(tickets.router, tags=["tickets"])
 router.include_router(trust.router, tags=["trust"])
+router.include_router(web.router, tags=["web"])
