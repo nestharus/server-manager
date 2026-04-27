@@ -149,6 +149,62 @@ auth_stack:
     backend_namespace: server-manager
     backend_port: 8000
     proof_path: /api/v1/protected/authz-proof
+access_policy:
+  policy_repo_path: policy/cedar/channels/local
+  bundle_config_map_name: cedar-access-policy-bundle
+  bootstrap_job_name: cedar-access-policy-bootstrap
+  policy_review:
+    required_checks:
+      - cedar bundle renders from channel/service paths
+      - service identity claims map to Cedar Service principals
+      - break-glass dry-run completes before runtime recovery
+  services:
+    server_manager_api:
+      service_name: server-manager-api
+      bundle_path: policy/cedar/channels/local/services/server-manager-api
+      sample_user: sample@local.humility.local
+      sample_service_principal: Service::"buildkite-agent.local"
+  service_identity:
+    issuer: https://auth.local.humility.local/application/o/humility-service-identities/
+    audience: server-manager-api
+    claim_namespace: humility.gg/service
+    identities:
+      buildkite_agent:
+        subject: system:serviceaccount:buildkite-agent:buildkite-agent
+        cedar_principal: Service::"buildkite-agent.local"
+        allowed_actions:
+          - Action::"api:ci:deploy"
+      crossplane_provider:
+        subject: system:serviceaccount:crossplane-system:provider-kubernetes
+        cedar_principal: Service::"crossplane-provider.local"
+        allowed_actions:
+          - Action::"cluster:claim:reconcile"
+  credential_rotation:
+    cadence_days:
+      infisical_universal_auth_tokens: 30
+      sops_age_key: 180
+      sops_recipients: 180
+    infisical_paths:
+      - /auth/local/authentik
+      - /auth/local/pomerium
+      - /buildkite/local
+      - /object-storage/local
+      - /postgres/local/server-manager
+    script: infra/scripts/rotate-platform-credentials.sh
+  break_glass:
+    script: infra/scripts/break-glass-sops-recovery.sh
+    sentinel_path: gitops/bootstrap/sops-sentinel.enc.yaml
+    flux_kustomization: humility-local
+    flux_namespace: flux-system
+  object_storage_policy:
+    versioning: enabled
+    encryption: sse-s3
+    lifecycle_days: 30
+    script: infra/scripts/apply-object-storage-policies.sh
+  operator_rbac:
+    crossplane_admin_binding_removed: true
+    operator_group: humility:platform-operators
+    claim_namespace: platform-app-clusters
 data_plane:
   provider: cloudnative-pg
   cnpg:

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: service-identity-issuer
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: service-identity-issuer
+    platform.humility.gg/init: "115"
+data:
+  issuer: https://auth.local.humility.local/application/o/humility-service-identities/
+  audience: server-manager-api
+  claim_namespace: humility.gg/service
+  buildkite_agent_subject: system:serviceaccount:buildkite-agent:buildkite-agent
+  buildkite_agent_principal: Service::"buildkite-agent.local"
+  crossplane_provider_subject: system:serviceaccount:crossplane-system:provider-kubernetes
+  crossplane_provider_principal: Service::"crossplane-provider.local"

@@ -1,0 +1,11 @@
+schema_version: 1
+channel: local
+service: server-manager-api
+bundle_id: local.server-manager-api
+policies_file: policies.json
+service_identities_file: service-identities.json
+review_checks:
+  - sample user can read the protected API proof endpoint
+  - non-sample user is denied the protected API proof endpoint
+  - Buildkite service identity can request CI deploy authorization
+  - Crossplane service identity can request claim reconciliation authorization

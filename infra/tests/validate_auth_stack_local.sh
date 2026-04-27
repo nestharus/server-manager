@@ -139,6 +139,7 @@ assert_static_files() {
   assert_file "gitops/channels/local/auth/pomerium/rendered/pomerium-34.0.1.yaml"
   assert_file "gitops/channels/local/auth/opal-cedar/render-values.yaml"
   assert_file "gitops/channels/local/auth/opal-cedar/rendered/opal-0.0.29.yaml"
+  assert_file "gitops/channels/local/auth/opal-cedar/access-policy-configmap.yaml"
   assert_file "gitops/channels/local/auth/opal-cedar/bootstrap-job.yaml"
 }
 
@@ -194,7 +195,7 @@ assert_kustomize() {
   grep -q 'host: auth.local.humility.local' "$auth_render" || die "Authentik ingress rendered"
   grep -q 'host: protected-api.local.humility.local' "$auth_render" || die "protected API ingress rendered"
   grep -q 'permitio/opal-client-cedar:0.7.12' "$auth_render" || die "Cedar OPAL client image rendered"
-  grep -q 'name: cedar-sample-policy-bootstrap' "$auth_render" || die "Cedar bootstrap Job rendered"
+  grep -q 'name: cedar-access-policy-bootstrap' "$auth_render" || die "Cedar bootstrap Job rendered"
   grep -q 'CEDAR_AUTHORIZATION_URL' "$local_render" || die "API Cedar authorization env rendered"
   pass "auth stack resources rendered"
 }
@@ -245,8 +246,8 @@ assert_runtime() {
 
   kubectl_cmd -n "$AUTH_NAMESPACE" rollout status deployment/opal-client --timeout=300s >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" rollout status deployment/opal-server --timeout=300s >/dev/null
-  kubectl_cmd -n "$AUTH_NAMESPACE" wait job/cedar-sample-policy-bootstrap --for=condition=Complete --timeout=300s >/dev/null
-  pass "OPAL/Cedar available and sample policy loaded"
+  kubectl_cmd -n "$AUTH_NAMESPACE" wait job/cedar-access-policy-bootstrap --for=condition=Complete --timeout=300s >/dev/null
+  pass "OPAL/Cedar available and access policy loaded"
 
   kubectl_cmd -n "$AUTH_NAMESPACE" delete pod init-114-cedar --ignore-not-found >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" run init-114-cedar \
