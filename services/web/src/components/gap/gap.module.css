@@ -1,0 +1,79 @@
+@layer components {
+  .meterGroup {
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .meterLabel {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    font-weight: 650;
+  }
+
+  .meter {
+    inline-size: 100%;
+    block-size: 0.8rem;
+  }
+
+  .toolbar {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-panel);
+    background: var(--surface-raised);
+    padding: 0.25rem;
+  }
+
+  .toolbar button {
+    min-inline-size: 2.25rem;
+    min-block-size: 2rem;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--text-secondary);
+    background: transparent;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+
+  .toolbar button:focus-visible {
+    outline: 3px solid var(--focus-ring);
+  }
+
+  .toolbar button:hover {
+    color: var(--text-primary);
+    background: var(--surface-selected);
+  }
+
+  .breadcrumbs {
+    max-inline-size: var(--content-max);
+    inline-size: 100%;
+    margin-inline: auto;
+    padding: 0.65rem 1rem 0;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+  }
+
+  .breadcrumbs ol {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .breadcrumbs li + li::before {
+    content: "/";
+    margin-inline-end: 0.35rem;
+    color: var(--text-muted);
+  }
+
+  .breadcrumbs a {
+    color: inherit;
+  }
+}
