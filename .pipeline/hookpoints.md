@@ -1,24 +1,33 @@
-# INIT-117 Phase 5 Hookpoints
+# INIT-118 Phase 5 Hookpoints
 
-## Existing Surfaces
-- `infra/channels/local.yaml` and `infra/schemas/*.json` own channel contracts.
-- `gitops/channels/local/kustomization.yaml` is the local GitOps root.
-- `gitops/channels/local/*` subtrees are raw Kustomize component boundaries.
-- `infra/tests/validate_*_local.sh` scripts provide static/runtime local proof patterns.
-- `.buildkite/pipeline.yml` runs static INIT validation in local Buildkite mode.
-- `services/api/app/api/v1/router.py` owns API route mounting.
+## Reuse Points
 
-## Reuse
-- Reuse MinIO from INIT-104 as the Loki S3 backend.
-- Reuse InfisicalSecret patterns from INIT-103/109/113/114 for runtime credentials.
-- Reuse INIT-116 tenant labels for dashboard variables.
-- Reuse Kustomize raw manifests and local validation harness patterns.
+- `forms/dark-nemesis.yaml` is the initial public form schema.
+- `services/api/app/api/v1/router.py` remains the API router hookpoint.
+- `services/api/app/repositories/chapters.py` establishes the chapter table and
+  aggregate-head join shape reused by the web admin list.
+- `gitops/channels/local/applications/server-manager` provides the raw-manifest
+  application pattern.
+- `gitops/channels/local/auth/pomerium` owns Pomerium routes and ingress.
+- `infra/tests/validate_*_local.sh` provides the pass/fail/skip harness shape.
+- `.buildkite/pipeline.yml` already carries INIT static checks and image builds.
 
-## Delete/Avoid
-- Do not add helm-controller resources.
-- Do not add local filesystem-only Loki persistence.
-- Do not commit Grafana admin or object-storage credentials.
-- Do not add incident routing integrations.
+## Collisions
 
-## Parallel Work
-Schema/channel, core stack manifests, dashboard/logging manifests, ServiceMonitor/network policies, API metrics/tests, and docs are separable implementation slices.
+- Solid 2 beta no longer exposes Solid 1-compatible `solid-js/web`; Vite and
+  current adapters still expect older export shapes. INIT-118 records this as a
+  compatibility gate and isolates it in `services/web/src/solid-compat`.
+- `.refs/ui-designer/` is dated reference material and must not steer the design.
+- Existing `server-manager` namespace remains API/Discord-owned; the SPA uses a
+  separate `web` namespace so `kubectl get pods -n web` is unambiguous.
+
+## Deletion Candidates
+
+None in production code. Future work can delete compatibility files once the
+Solid 2 ecosystem packages natively target the new exports.
+
+## Implementation Blockers
+
+No hard blockers. Cluster runtime proof requires a live local k3d channel,
+registry, Pomerium, and Authentik credentials. Non-cluster proof is sufficient
+for static CI.

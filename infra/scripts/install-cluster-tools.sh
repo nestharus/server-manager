@@ -8,6 +8,16 @@ SOPS_VERSION="v3.12.2"
 AGE_VERSION="v1.3.1"
 INFISICAL_VERSION="v0.43.78"
 MC_VERSION="RELEASE.2025-08-13T08-35-41Z"
+NODE_VERSION="v22.15.0"
+NPM_VERSION="11.6.2"
+SOLID_VERSION="2.0.0-beta.8"
+SOLID_WEB_VERSION="2.0.0-beta.8"
+VITE_VERSION="8.0.10"
+VITE_PLUGIN_SOLID_VERSION="3.0.0-next.5"
+OXFEMT_VERSION="0.47.0"
+OXLINT_VERSION="1.62.0"
+TYPESCRIPT_NATIVE_PREVIEW_VERSION="7.0.0-dev.20260427.1"
+PLAYWRIGHT_VERSION="1.59.1"
 
 FLUX_SHA256="c53cc990ae266f7840f64c81515d701d8821d558a9062aa4211d71b38cf044be"
 HELM_SHA256="258e830a9e613c8a7a302d6059b4bb3b9758f2f3e1bb8ea0d707ce10a9a72fea"
@@ -351,6 +361,37 @@ check_mc() {
   return 1
 }
 
+check_frontend_tools() {
+  local status=0
+  local installed=""
+
+  if command -v node >/dev/null 2>&1; then
+    installed="$(node --version)"
+    [[ "$installed" == "$NODE_VERSION" ]] && echo "$(color "$GREEN" "OK"): node ${installed}" || {
+      echo "$(color "$YELLOW" "MISMATCH"): node ${installed}; expected ${NODE_VERSION}"
+      status=1
+    }
+  else
+    echo "$(color "$YELLOW" "MISSING"): node ${NODE_VERSION}"
+    status=1
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    installed="$(npm --version)"
+    [[ "$installed" == "$NPM_VERSION" ]] && echo "$(color "$GREEN" "OK"): npm ${installed}" || {
+      echo "$(color "$YELLOW" "MISMATCH"): npm ${installed}; expected ${NPM_VERSION}"
+      status=1
+    }
+  else
+    echo "$(color "$YELLOW" "MISSING"): npm ${NPM_VERSION}"
+    status=1
+  fi
+
+  echo "$(color "$GREEN" "PIN"): solid-js ${SOLID_VERSION}; @solidjs/web ${SOLID_WEB_VERSION}; vite ${VITE_VERSION}; vite-plugin-solid ${VITE_PLUGIN_SOLID_VERSION}"
+  echo "$(color "$GREEN" "PIN"): oxlint ${OXLINT_VERSION}; oxfmt ${OXFEMT_VERSION}; @typescript/native-preview ${TYPESCRIPT_NATIVE_PREVIEW_VERSION}; playwright ${PLAYWRIGHT_VERSION}"
+  return "$status"
+}
+
 check_all() {
   local status=0
 
@@ -361,6 +402,7 @@ check_all() {
   check_age || status=1
   check_infisical || status=1
   check_mc || status=1
+  check_frontend_tools || status=1
 
   return "$status"
 }
