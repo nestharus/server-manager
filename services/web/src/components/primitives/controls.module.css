@@ -1,0 +1,50 @@
+@layer components {
+  .button {
+    min-inline-size: 2.5rem;
+    min-block-size: 2.25rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    padding: 0.45rem 0.8rem;
+    font: inherit;
+    font-weight: 650;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    cursor: pointer;
+  }
+
+  .button:focus-visible,
+  .input:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .primary {
+    color: var(--button-primary-fg);
+    background: var(--button-primary-bg);
+  }
+
+  .secondary {
+    color: var(--button-secondary-fg);
+    background: var(--button-secondary-bg);
+    border-color: var(--border-subtle);
+  }
+
+  .ghost {
+    color: var(--text-primary);
+    background: transparent;
+    border-color: var(--border-subtle);
+  }
+
+  .input {
+    inline-size: 100%;
+    min-block-size: 2.45rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-control);
+    padding: 0.45rem 0.65rem;
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    font: inherit;
+  }
+}
