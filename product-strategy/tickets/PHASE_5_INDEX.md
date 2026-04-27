@@ -40,9 +40,9 @@ remotely. SOPS+age is bootstrap-only. Infisical is the runtime secret store.
 | INIT-112 | Backup and DR | CNPG backups to S3-compatible storage, RPO/RTO, restore drill, deletion safety | 104, 111 | yes | L | done |
 | INIT-113 | Application workloads | Deploy api and discord workloads; local bot uses beta guild, remote uses Humility | 103, 108, 110, 111 | yes | XL | done |
 | INIT-114 | Auth stack | Authentik, OPAL/Cedar, Pomerium, identity claims, route and policy integration | 103, 110, 113 | yes | XL | done |
-| INIT-115 | Access policy and service identity | Pomerium policy-as-code, break-glass, Smallstep scope, service identity, service-mesh decision | 107, 114 | yes | M/L | pending |
-| INIT-116 | Tenant and channel isolation | Operationalize tenant/channel isolation across cluster, namespace, DB, object storage, Discord identity | 106, 111, 113, 114 | yes | L | pending |
-| INIT-117 | Observability | Prometheus/Grafana/Alertmanager, OpenTelemetry Collector, Loki, dashboards, alerts, hardening | 107, 113, 114 | yes | L | pending |
+| INIT-115 | Access policy and service identity | Pomerium policy-as-code, break-glass, Smallstep scope, service identity, service-mesh decision | 107, 114 | yes | M/L | done |
+| INIT-116 | Tenant and channel isolation | Operationalize tenant/channel isolation across cluster, namespace, DB, object storage, Discord identity | 106, 111, 113, 114 | yes | L | done |
+| INIT-117 | Observability stack | Prometheus + Grafana + Alertmanager + OpenTelemetry Collector + Loki; metrics from CNPG/Crossplane/Flux/Cedar/Authentik/Kong/api/discord; tenant-aware dashboards | 102, 107, 116 | yes | XL | done |
 
 ## Dependency Order
 
