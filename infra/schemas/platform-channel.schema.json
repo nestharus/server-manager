@@ -99,6 +99,9 @@
     },
     "tenant_isolation": {
       "$ref": "#/$defs/tenantIsolation"
+    },
+    "observability": {
+      "$ref": "#/$defs/observability"
     }
   },
   "allOf": [
@@ -398,6 +401,45 @@
                   },
                   "namespace": {
                     "const": "registry-smoke"
+                  }
+                }
+              }
+            }
+          },
+          "observability": {
+            "required": [
+              "namespace",
+              "prometheus",
+              "grafana",
+              "alertmanager",
+              "loki",
+              "otel_collector",
+              "object_storage",
+              "tenant_label"
+            ],
+            "properties": {
+              "namespace": {
+                "const": "observability-system"
+              },
+              "tenant_label": {
+                "const": "platform.humility.gg/tenant"
+              },
+              "object_storage": {
+                "properties": {
+                  "provider": {
+                    "const": "minio"
+                  },
+                  "endpoint": {
+                    "const": "http://minio.minio-system.svc.cluster.local:9000"
+                  },
+                  "bucket": {
+                    "const": "humility-local-observability"
+                  },
+                  "infisical_project": {
+                    "const": "platform-storage"
+                  },
+                  "infisical_path": {
+                    "const": "/object-storage/local/"
                   }
                 }
               }
@@ -2666,6 +2708,146 @@
         "operator_group": {
           "type": "string",
           "pattern": "^humility:tenant:[a-z0-9][a-z0-9-]*:operators$"
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "prometheus",
+        "grafana",
+        "alertmanager",
+        "loki",
+        "otel_collector",
+        "object_storage",
+        "service_monitors",
+        "dashboards",
+        "alerts",
+        "tenant_label"
+      ],
+      "properties": {
+        "namespace": {
+          "$ref": "#/$defs/channelId"
+        },
+        "prometheus": {
+          "$ref": "#/$defs/observabilityComponent"
+        },
+        "grafana": {
+          "$ref": "#/$defs/observabilityComponent"
+        },
+        "alertmanager": {
+          "$ref": "#/$defs/observabilityComponent"
+        },
+        "loki": {
+          "$ref": "#/$defs/observabilityComponent"
+        },
+        "otel_collector": {
+          "$ref": "#/$defs/observabilityComponent"
+        },
+        "object_storage": {
+          "$ref": "#/$defs/observabilityObjectStorage"
+        },
+        "service_monitors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "uniqueItems": true
+        },
+        "dashboards": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "uniqueItems": true
+        },
+        "alerts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9]*$"
+          },
+          "uniqueItems": true
+        },
+        "tenant_label": {
+          "const": "platform.humility.gg/tenant"
+        }
+      }
+    },
+    "observabilityComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image"
+      ],
+      "properties": {
+        "image": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "observabilityObjectStorage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "endpoint",
+        "bucket",
+        "region",
+        "credentials_secret_name",
+        "credentials_secret_namespace",
+        "infisical_project",
+        "infisical_environment",
+        "infisical_path"
+      ],
+      "properties": {
+        "provider": {
+          "enum": [
+            "minio",
+            "vultr-object-storage"
+          ]
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$"
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"
+        },
+        "region": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "credentials_secret_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "credentials_secret_namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "infisical_project": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$"
+        },
+        "infisical_environment": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "infisical_path": {
+          "type": "string",
+          "pattern": "^/([A-Za-z0-9._-]+(/|$))*$"
         }
       }
     }
