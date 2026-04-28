@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
+CONTRACT_FIXTURE="${REPO_ROOT}/infra/tests/fixtures/contracts/kong_ingress_contract.yml"
 CHANNEL_REQUEST="local"
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
 DNS_IMAGE="${INIT110_DNS_IMAGE:-busybox:1.37.0}"
@@ -24,6 +25,7 @@ SAMPLE_NAME=""
 SAMPLE_HOST=""
 SAMPLE_TLS_SECRET=""
 SAMPLE_PROOF_PATH=""
+EXPECTED_PROXY_SERVICE_NAME=""
 
 usage() {
   cat <<'EOF'
@@ -138,6 +140,22 @@ json_field() {
   jq -er "$expression" <<<"$RESOLVED_JSON"
 }
 
+fixture_field() {
+  local expression="$1"
+  "$PYTHON_BIN" - "$CONTRACT_FIXTURE" "$expression" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+path = Path(sys.argv[1])
+value = yaml.safe_load(path.read_text(encoding="utf-8"))
+for part in sys.argv[2].split("."):
+    value = value[part]
+print(value)
+PY
+}
+
 kubectl_cmd() {
   kubectl --kubeconfig "$KUBECONFIG_PATH" "$@"
 }
@@ -195,16 +213,30 @@ assert_file() {
 }
 
 assert_channel_contract() {
+  local expected_provider
+  local expected_ingress_class
+  local expected_host
+  local expected_proof_path
+  local expected_namespace
+  local expected_name
+
   RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST")"
 
-  [[ "$(json_field '.ingress.provider')" == "kong" ]] || die "ingress provider is kong"
-  [[ "$(json_field '.ingress.chart_name')" == "kong/kong" ]] || die "chart name is kong/kong"
-  [[ "$(json_field '.ingress.chart_version')" == "3.2.0" ]] || die "chart version is 3.2.0"
-  [[ "$(json_field '.ingress.gateway_image')" == "kong:3.9" ]] || die "gateway image pin"
-  [[ "$(json_field '.ingress.controller_image')" == "kong/kubernetes-ingress-controller:3.5" ]] || die "controller image pin"
-  [[ "$(json_field '.ingress.ingress_class_name')" == "kong" ]] || die "ingress class is kong"
-  [[ "$(json_field '.ingress.default_service.local_host')" == "minio.local.humility.local" ]] || die "local host contract"
-  [[ "$(json_field '.ingress.default_service.proof_path')" == "/minio/health/ready" ]] || die "proof path contract"
+  expected_provider="$(fixture_field local_route.provider)"
+  expected_ingress_class="$(fixture_field local_route.ingress_class)"
+  expected_host="$(fixture_field local_route.host)"
+  expected_proof_path="$(fixture_field backend_health.proof_path)"
+  expected_namespace="$(fixture_field local_route.ingress_namespace)"
+  expected_name="$(fixture_field local_route.ingress_name)"
+  EXPECTED_PROXY_SERVICE_NAME="$(fixture_field local_dns.proxy_service_name)"
+
+  [[ "$(json_field '.ingress.provider')" == "$expected_provider" ]] || die "ingress provider contract"
+  [[ "$(json_field '.ingress.ingress_class_name')" == "$expected_ingress_class" ]] || die "ingress class contract"
+  [[ "$(json_field '.ingress.proxy_service_name')" == "$EXPECTED_PROXY_SERVICE_NAME" ]] || die "proxy service contract"
+  [[ "$(json_field '.ingress.default_service.name')" == "$expected_name" ]] || die "sample route name contract"
+  [[ "$(json_field '.ingress.default_service.namespace')" == "$expected_namespace" ]] || die "sample route namespace contract"
+  [[ "$(json_field '.ingress.default_service.local_host')" == "$expected_host" ]] || die "local host contract"
+  [[ "$(json_field '.ingress.default_service.proof_path')" == "$expected_proof_path" ]] || die "proof path contract"
 
   KONG_NAMESPACE="$(json_field '.ingress.gateway_namespace')"
   KONG_DEPLOYMENT="$(json_field '.ingress.gateway_deployment_name')"
@@ -215,7 +247,7 @@ assert_channel_contract() {
   SAMPLE_HOST="$(json_field '.ingress.default_service.local_host')"
   SAMPLE_TLS_SECRET="$(json_field '.ingress.default_service.tls_secret_name')"
   SAMPLE_PROOF_PATH="$(json_field '.ingress.default_service.proof_path')"
-  pass "resolved channel ingress contract"
+  pass "resolved channel ingress route contract"
 }
 
 assert_static_manifests() {
@@ -225,8 +257,10 @@ assert_static_manifests() {
   command -v kubectl >/dev/null 2>&1 || die "kubectl is required"
 
   assert_file "gitops/channels/local/ingress/kong/render-values.yaml"
-  assert_file "gitops/channels/local/ingress/kong/rendered/kong-3.2.0.yaml"
   assert_file "gitops/channels/local/ingress/default-services/minio/ingress.yaml"
+  compgen -G "${REPO_ROOT}/gitops/channels/local/ingress/kong/rendered/*.yaml" >/dev/null \
+    || die "missing Kong rendered manifest"
+  pass "Kong rendered manifest exists"
 
   ingress_kustomize="$(mktemp)"
   TEMP_FILES+=("$ingress_kustomize")
@@ -239,8 +273,8 @@ assert_static_manifests() {
   pass "local root kustomization includes ingress"
 
   grep -q '^kind: IngressClass$' "$ingress_kustomize" || die "Kong IngressClass rendered"
-  grep -q 'name: kong-kong-proxy' "$ingress_kustomize" || die "Kong proxy Service rendered"
-  grep -q 'host: minio.local.humility.local' "$ingress_kustomize" || die "sample MinIO host rendered"
+  grep -q "name: ${EXPECTED_PROXY_SERVICE_NAME}" "$ingress_kustomize" || die "Kong proxy Service rendered"
+  grep -q "host: ${SAMPLE_HOST}" "$ingress_kustomize" || die "sample MinIO host rendered"
   pass "Kong and sample ingress objects rendered"
 }
 

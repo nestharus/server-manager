@@ -1,9 +1,20 @@
 local_route:
+  provider: kong
   host: minio.local.humility.local
-  proof_path: /minio/health/ready
   ingress_class: kong
+  ingress_name: minio
+  ingress_namespace: minio-system
+certificate:
   tls_secret: minio-local-ingress-tls
+  annotations:
+    cert-manager.io/issuer: humility-local-step-ca
+    cert-manager.io/issuer-kind: StepClusterIssuer
+    cert-manager.io/issuer-group: certmanager.step.sm
+backend_health:
+  proof_path: /minio/health/ready
   backend_service: minio
   backend_port: 9000
+local_dns:
   alias_namespace: local
+  proxy_service_name: kong-kong-proxy
   proxy_service_dns: kong-kong-proxy.kong-system.svc.cluster.local

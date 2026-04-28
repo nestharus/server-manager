@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kong-proxy-ingress
+  namespace: kong-system
+  labels:
+    app.kubernetes.io/name: kong
+    app.kubernetes.io/component: ingress-controller
+    platform.humility.gg/init: "110"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kong
+      app.kubernetes.io/instance: kong
+      app.kubernetes.io/component: app
+  policyTypes:
+    - Ingress
+  ingress:
+    - {}
