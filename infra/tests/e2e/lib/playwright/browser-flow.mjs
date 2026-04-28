@@ -88,11 +88,25 @@ async function loginIfNeeded(page) {
   await passwordField.fill(password);
 
   const pwSubmit = page.locator('button[type="submit"]').first();
+  const startUrl = page.url();
   await pwSubmit.click();
 
+  // After the SPA submits the password, Authentik renders an
+  // ak-stage-redirect that triggers window.location.assign(...). Wait for
+  // that navigation to happen. If we don't move past Authentik within
+  // 30s, fall through; the test's own assert step will reveal the state.
   await page
-    .waitForURL((url) => !/auth\.local\.humility\.local\/if\/flow|authenticate\.local\.humility\.local\/\.pomerium\/sign_in/.test(url.toString()), { timeout: 60_000 })
+    .waitForURL((url) => url.toString() !== startUrl, { timeout: 60_000 })
     .catch(() => {});
+  // Poll for the final landing host (anywhere off auth.local.humility.local).
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const cur = page.url();
+    if (!/auth\.local\.humility\.local/.test(cur)) {
+      await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => {});
+      return;
+    }
+    await page.waitForTimeout(1000);
+  }
 }
 
 await mkdir(sessionDir, { recursive: true });
