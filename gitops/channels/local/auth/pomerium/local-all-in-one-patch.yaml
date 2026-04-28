@@ -26,8 +26,21 @@ metadata:
 spec:
   template:
     spec:
+      volumes:
+        - name: step-ca-trust
+          configMap:
+            name: pomerium-step-ca-trust
+            optional: true
       containers:
         - name: pomerium
           env:
             - name: SERVICES
               value: all
+            - name: CERTIFICATE_AUTHORITY_FILE
+              value: /etc/pomerium/step-ca/ca.pem
+            - name: SSL_CERT_DIR
+              value: /etc/ssl/certs:/etc/pomerium/step-ca
+          volumeMounts:
+            - name: step-ca-trust
+              mountPath: /etc/pomerium/step-ca
+              readOnly: true

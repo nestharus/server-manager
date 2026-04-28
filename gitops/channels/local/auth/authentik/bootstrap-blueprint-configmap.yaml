@@ -30,7 +30,7 @@ data:
           username: sample
           name: Humility Sample User
           email: !Env [SAMPLE_USER_EMAIL, sample@local.humility.local]
-          password: !Env [SAMPLE_USER_PASSWORD]
+          password: !Env [SAMPLE_USER_PASSWORD, ""]
           is_active: true
           groups:
             - !Find [authentik_core.group, [name, Humility Local Users]]

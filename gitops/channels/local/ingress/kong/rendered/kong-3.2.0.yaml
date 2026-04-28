@@ -4019,11 +4019,11 @@ metadata:
     helm.sh/chart: kong-3.2.0
     app.kubernetes.io/instance: "kong"
     app.kubernetes.io/managed-by: "Helm"
-    
+
     app.kubernetes.io/version: "3.9"
     enable-metrics: "true"
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   ports:
   - name: kong-proxy
     port: 80

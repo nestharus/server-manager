@@ -380,6 +380,19 @@ secret_exists() {
   [[ -n "$value" ]]
 }
 
+get_secret() {
+  local secret_path="$1"
+  local name="$2"
+  infisical secrets get "$name" \
+    --domain "http://127.0.0.1:${LOCAL_PORT}/api" \
+    --token "$ADMIN_TOKEN" \
+    --projectId "$PROJECT_ID" \
+    --env "$ENVIRONMENT_SLUG" \
+    --path "$secret_path" \
+    --plain \
+    --silent 2>/dev/null
+}
+
 set_secret_if_absent() {
   local secret_path="$1"
   local name="$2"
@@ -474,5 +487,14 @@ else
   set_secret_if_absent "$POMERIUM_PATH" "COOKIE_SECRET" "$(generate_standard_base64_secret 32)"
   set_secret_if_absent "$POMERIUM_PATH" "SIGNING_KEY" "$(generate_pomerium_signing_key)"
 fi
+
+# Mirror OIDC_CLIENT_ID/SECRET into the Authentik path so the Authentik
+# blueprint runner reads matching values from authentik-config and creates
+# the OAuth2 Provider + Application that Pomerium expects at
+# https://auth.local.humility.local/application/o/pomerium/.
+POMERIUM_OIDC_CLIENT_ID="$(get_secret "$POMERIUM_PATH" "OIDC_CLIENT_ID")"
+POMERIUM_OIDC_CLIENT_SECRET="$(get_secret "$POMERIUM_PATH" "OIDC_CLIENT_SECRET")"
+set_secret "$AUTHENTIK_PATH" "OIDC_CLIENT_ID" "$POMERIUM_OIDC_CLIENT_ID"
+set_secret "$AUTHENTIK_PATH" "OIDC_CLIENT_SECRET" "$POMERIUM_OIDC_CLIENT_SECRET"
 
 log "Infisical project ${PROJECT_SLUG} auth paths are bootstrapped for channel ${CHANNEL_REQUEST}"

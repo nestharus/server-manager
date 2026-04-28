@@ -59,38 +59,47 @@ async function loginIfNeeded(page) {
     return;
   }
 
-  const userInput = await firstVisible(
-    page.locator('input[type="email"], input[name="uid"], input[name="username"], input[name="identification"], input[autocomplete="username"]'),
-  );
-  if (!userInput) {
-    throw new Error(`could not find Authentik username field at ${page.url()}`);
+  // If we're on Pomerium's intermediate sign_in endpoint, wait for the
+  // upstream redirect to land us on the Authentik IdP login screen.
+  if (/authenticate\.local\.humility\.local\/\.pomerium\/sign_in/.test(page.url())) {
+    await page
+      .waitForURL(/auth\.local\.humility\.local/, { timeout: 30_000, waitUntil: "domcontentloaded" })
+      .catch(() => {});
   }
-  await userInput.fill(username);
 
-  const passwordInput = await firstVisible(
-    page.locator('input[type="password"], input[name="password"], input[autocomplete="current-password"]'),
-  );
-  if (!passwordInput) {
-    throw new Error(`could not find Authentik password field at ${page.url()}`);
-  }
-  await passwordInput.fill(password);
+  // Authentik 2026.x uses Lit web components (<ak-stage-identification>,
+  // <ak-stage-password>) with form inputs in the shadow root. Playwright's
+  // locator engine pierces shadow DOM, so we drive the form by clicking
+  // through actual input elements — preserving the OAuth state cookies
+  // that Pomerium needs on the callback.
+  await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
 
-  const submit = await firstVisible(page.locator('button[type="submit"], input[type="submit"]'));
-  if (!submit) {
-    throw new Error(`could not find Authentik submit button at ${page.url()}`);
-  }
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {}),
-    submit.click(),
-  ]);
+  const userField = page
+    .locator('input[name="uidField"], input[name="username"], input[name="email"], input[type="email"], input[autocomplete="username"]')
+    .first();
+  await userField.waitFor({ state: "visible", timeout: 30_000 });
+  await userField.fill(username);
+
+  const idSubmit = page.locator('button[type="submit"]').first();
+  await idSubmit.click();
+
+  const passwordField = page.locator('input[type="password"], input[name="password"]').first();
+  await passwordField.waitFor({ state: "visible", timeout: 30_000 });
+  await passwordField.fill(password);
+
+  const pwSubmit = page.locator('button[type="submit"]').first();
+  await pwSubmit.click();
+
+  await page
+    .waitForURL((url) => !/auth\.local\.humility\.local\/if\/flow|authenticate\.local\.humility\.local\/\.pomerium\/sign_in/.test(url.toString()), { timeout: 60_000 })
+    .catch(() => {});
 }
 
 await mkdir(sessionDir, { recursive: true });
 const statePath = join(sessionDir, `${flow}-sample-user.json`);
 const hostLoopback = process.env.E2E_HOST_LOOPBACK || "127.0.0.1";
-const hostHttpsPort = process.env.E2E_HOST_HTTPS_PORT || "8443";
 const launchArgs = [
-  `--host-resolver-rules=MAP *.local.humility.local:443 ${hostLoopback}:${hostHttpsPort}`,
+  `--host-resolver-rules=MAP *.local.humility.local ${hostLoopback}`,
   "--ignore-certificate-errors",
 ];
 const browser = await chromium.launch({ headless: true, args: launchArgs });
@@ -106,6 +115,12 @@ try {
   const page = await context.newPage();
   await page.goto(target.url, { waitUntil: "domcontentloaded", timeout: 45_000 });
   await loginIfNeeded(page);
+  // Re-navigate to the original target URL once auth cookies are set, so
+  // Pomerium serves the protected resource directly instead of any
+  // post-auth landing page.
+  if (page.url() !== target.url) {
+    await page.goto(target.url, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
+  }
   await target.assert(page);
   await context.storageState({ path: statePath });
   await writeFile(join(sessionDir, `${flow}.last-url.txt`), page.url());
