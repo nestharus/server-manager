@@ -1,0 +1,9 @@
+local_route:
+  host: minio.local.humility.local
+  proof_path: /minio/health/ready
+  ingress_class: kong
+  tls_secret: minio-local-ingress-tls
+  backend_service: minio
+  backend_port: 9000
+  alias_namespace: local
+  proxy_service_dns: kong-kong-proxy.kong-system.svc.cluster.local

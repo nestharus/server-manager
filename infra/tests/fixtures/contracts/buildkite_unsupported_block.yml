@@ -1,0 +1,2 @@
+steps:
+  - block: "manual approval is not part of the local runner contract"

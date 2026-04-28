@@ -1,0 +1,22 @@
+scrape_targets:
+  - flux
+  - crossplane
+  - cert-manager
+  - infisical
+  - minio
+  - cnpg
+  - kong
+  - pomerium
+  - authentik
+  - opal
+  - server-manager-api
+  - buildkite-agent
+dashboards:
+  required_tenant_variable: tenant
+sample_alerts:
+  - PodCrashLooping
+  - ClusterDown
+  - CertificateExpiringSoon
+sample_log_query:
+  selector: '{namespace="server-manager"}'
+  contains: server-manager-api

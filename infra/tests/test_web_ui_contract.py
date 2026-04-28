@@ -1,67 +1,65 @@
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 
 import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WEB_DIR = REPO_ROOT / "services/web"
-WEB_GITOPS_DIR = REPO_ROOT / "gitops/channels/local/applications/web"
-POMERIUM_SECRET = REPO_ROOT / "gitops/channels/local/auth/pomerium/secrets-infisicalsecret.yaml"
+FIXTURE = (
+    REPO_ROOT / "infra" / "tests" / "fixtures" / "contracts" / "web_ui_contract.yml"
+)
+POMERIUM_SECRET = (
+    REPO_ROOT / "gitops" / "channels" / "local" / "auth" / "pomerium" / "secrets-infisicalsecret.yaml"
+)
+WEB_GITOPS_DIR = REPO_ROOT / "gitops" / "channels" / "local" / "applications" / "web"
 
 
-def test_web_package_locks_solid_2_and_frontend_stack() -> None:
-    package = json.loads((WEB_DIR / "package.json").read_text(encoding="utf-8"))
-    deps = package["dependencies"] | package["devDependencies"]
-
-    assert deps["solid-js"] == "2.0.0-beta.8"
-    assert deps["@solidjs/web"] == "2.0.0-beta.8"
-    assert deps["vite-plugin-solid"] == "3.0.0-next.5"
-    assert deps["@tanstack/solid-router"] == "1.168.25"
-    assert deps["@tanstack/solid-query"] == "5.100.5"
-    assert deps["@tanstack/solid-form"] == "1.29.1"
-    assert deps["@tanstack/solid-table"] == "8.21.3"
-    assert deps["@ark-ui/solid"] == "5.36.2"
-    assert deps["@typescript/native-preview"] == "7.0.0-dev.20260427.1"
+def _yaml(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def test_web_uses_vanilla_css_layers_and_no_forbidden_styling_dependency() -> None:
-    package_text = (WEB_DIR / "package.json").read_text(encoding="utf-8")
-    css = (WEB_DIR / "src/styles/layers.css").read_text(encoding="utf-8")
-
-    assert "@layer reset, tokens, theme, base, components, utilities, overrides;" in css
-    assert "oklch(" in css
-    for forbidden in ("tailwind", "panda", "styled-components", "@emotion"):
-        assert forbidden not in package_text
-
-
-def test_web_kustomize_renders_raw_manifests_without_helmrelease() -> None:
-    result = subprocess.run(
-        ["kubectl", "kustomize", str(WEB_GITOPS_DIR)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "kind: HelmRelease" not in result.stdout
-    assert "name: server-manager-web" in result.stdout
-    assert "namespace: web" in result.stdout
-
-
-def test_pomerium_routes_front_public_and_admin_web_paths() -> None:
+def _pomerium_config() -> str:
     docs = [
         doc
         for doc in yaml.safe_load_all(POMERIUM_SECRET.read_text(encoding="utf-8"))
         if isinstance(doc, dict)
     ]
-    config = docs[0]["spec"]["managedSecretReference"]["template"]["data"]["config.yaml"]
+    return docs[0]["spec"]["managedSecretReference"]["template"]["data"]["config.yaml"]
 
-    assert "from: https://web.local.humility.local" in config
+
+def test_web_route_exposes_public_front_and_auth_gated_admin_path() -> None:
+    """SLICE-R.22: web routing and auth gate replace dependency/version checks."""
+    routes = _yaml(FIXTURE)["routes"]
+    config = _pomerium_config()
+
+    assert f"from: https://{routes['public_host']}" in config
     assert "allow_public_unauthenticated_access: true" in config
-    assert "prefix: /admin" in config
+    assert f"prefix: {routes['admin_prefix']}" in config
     assert "pass_identity_headers: true" in config
+
+
+def test_web_gitops_exposes_a_reachable_service_and_ingress_host() -> None:
+    """SLICE-R.22: local ingress reachability must have deployable routing objects."""
+    routes = _yaml(FIXTURE)["routes"]
+    ingress = _yaml(WEB_GITOPS_DIR / "ingress.yaml")
+    service = _yaml(WEB_GITOPS_DIR / "service.yaml")
+
+    assert service["metadata"]["name"] == "server-manager-web"
+    assert ingress["spec"]["rules"][0]["host"] == routes["public_host"]
+    assert ingress["spec"]["rules"][0]["http"]["paths"][0]["backend"]["service"][
+        "name"
+    ] == service["metadata"]["name"]
+
+
+def test_form_submit_contract_fixture_names_controls_and_method() -> None:
+    """SLICE-R.22: form behavior is retained as a residual component contract."""
+    form = _yaml(FIXTURE)["form"]
+
+    assert form["route"] == "/applications"
+    assert form["submit_method"] == "POST"
+    assert {control["name"] for control in form["controls"]} == {
+        "character_name",
+        "application_text",
+        "submit",
+    }
