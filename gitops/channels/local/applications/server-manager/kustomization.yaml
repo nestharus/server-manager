@@ -7,6 +7,7 @@ resources:
   - database-url-infisicalsecret.yaml
   - backup-credentials-infisicalsecret.yaml
   - storage-credentials-infisicalsecret.yaml
+  - object-storage-bucket-credentials-infisicalsecret.yaml
   - postgres-cluster.yaml
   - scheduled-backup.yaml
   - atlas-migrations-configmap.yaml
@@ -19,4 +20,3 @@ resources:
   - discord-deployment.yaml
   - object-storage-bucket-job.yaml
   - networkpolicies.yaml
-
