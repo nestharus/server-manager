@@ -87,7 +87,13 @@ async function loginIfNeeded(page) {
 
 await mkdir(sessionDir, { recursive: true });
 const statePath = join(sessionDir, `${flow}-sample-user.json`);
-const browser = await chromium.launch({ headless: true });
+const hostLoopback = process.env.E2E_HOST_LOOPBACK || "127.0.0.1";
+const hostHttpsPort = process.env.E2E_HOST_HTTPS_PORT || "8443";
+const launchArgs = [
+  `--host-resolver-rules=MAP *.local.humility.local:443 ${hostLoopback}:${hostHttpsPort}`,
+  "--ignore-certificate-errors",
+];
+const browser = await chromium.launch({ headless: true, args: launchArgs });
 try {
   const contextOptions = {
     ignoreHTTPSErrors: true,

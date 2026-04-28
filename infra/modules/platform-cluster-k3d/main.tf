@@ -47,6 +47,8 @@ print(sum(1 for node in nodes if node.get("labels", {}).get("k3d.cluster") == cl
           --servers "$SERVERS" \
           --agents "$AGENTS" \
           --registry-create "$REGISTRY_NAME:0.0.0.0:$REGISTRY_PORT" \
+          --port "8080:80@loadbalancer" \
+          --port "8443:443@loadbalancer" \
           --kubeconfig-update-default=false \
           --wait
       fi
