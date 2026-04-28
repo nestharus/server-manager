@@ -8,15 +8,17 @@ CHANNEL_REQUEST="local"
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
 IMAGE_TAG=""
 KEEP=0
+CLUSTER_MODE=0
 
 usage() {
   cat <<'EOF'
-Usage: validate_container_delivery_local.sh [--channel local] [--kubeconfig PATH] [--tag TAG] [--keep]
+Usage: validate_container_delivery_local.sh [--cluster] [--channel local] [--kubeconfig PATH] [--tag TAG] [--keep]
 
 Builds the INIT-108 registry-smoke image, pushes it to the local k3d registry,
 and runs a Pod that pulls the image through the cluster registry endpoint.
 
 Options:
+  --cluster          Run explicit cluster runtime validation
   --channel <id>     Channel id to resolve (default: local)
   --kubeconfig PATH  Kubeconfig for the local k3d channel
   --tag TAG          Override the channel sample tag
@@ -47,6 +49,9 @@ python_bin() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --cluster)
+        CLUSTER_MODE=1
+        ;;
       --channel)
         [[ $# -ge 2 ]] || die "--channel requires a value"
         CHANNEL_REQUEST="$2"
@@ -123,6 +128,9 @@ main() {
   command -v docker >/dev/null 2>&1 || die "docker is required"
   command -v kubectl >/dev/null 2>&1 || die "kubectl is required"
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required"
+  if [[ "$CLUSTER_MODE" -eq 1 ]]; then
+    log "Cluster runtime mode requested"
+  fi
   [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
 
   RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST")"

@@ -2,17 +2,22 @@
 set -euo pipefail
 
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
+CLUSTER_MODE=0
 CLAIM_NAMESPACE="platform-app-clusters"
 CLAIM_NAME="local-sample"
 APP_CLUSTER_NAME="humility-local-app"
 
 usage() {
   cat <<'EOF'
-Usage: validate_app_clusters_local.sh [--kubeconfig PATH]
+Usage: validate_app_clusters_local.sh [--cluster] [--kubeconfig PATH]
 
 Validates the INIT-106 local Crossplane app-cluster proof against an existing
 local channel: Crossplane controllers available, provider packages healthy,
 AppCluster/local-sample Ready=True, and nested k3d app cluster running.
+
+Options:
+  --cluster          Run explicit cluster runtime validation
+  --kubeconfig PATH  Kubeconfig for the local k3d channel
 EOF
 }
 
@@ -27,6 +32,9 @@ log() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --cluster)
+      CLUSTER_MODE=1
+      ;;
     --kubeconfig)
       [[ $# -ge 2 ]] || die "--kubeconfig requires a value"
       KUBECONFIG_PATH="$2"
@@ -96,6 +104,9 @@ raise SystemExit(1)
 require_command kubectl
 require_command python3
 require_command k3d
+if [[ "$CLUSTER_MODE" -eq 1 ]]; then
+  log "Cluster runtime mode requested"
+fi
 [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
 
 kubectl_cmd -n crossplane-system wait deployment/crossplane --for=condition=Available --timeout=300s >/dev/null

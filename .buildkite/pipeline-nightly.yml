@@ -1,0 +1,23 @@
+agents:
+  queue: cicd-local
+
+env:
+  CHANNEL_ID: local
+  KUBECONFIG_PATH: "${HOME}/.kube/humility-local.yaml"
+
+steps:
+  - key: nightly-aggregate-humility-local-cluster-bringup
+    label: "Nightly aggregate humility-local cluster runtime bring-up"
+    command: "infra/scripts/bring-up-local-channel.sh --channel local --force --cluster-only"
+
+  - wait
+
+  - key: nightly-aggregate-cluster-runtime-coverage
+    label: "Nightly aggregate cluster runtime coverage"
+    timeout_in_minutes: 180
+    command: |
+      infra/tests/validate_object_storage_local.sh --cluster
+      infra/tests/validate_tls_dns_local.sh --cluster
+      infra/tests/validate_app_clusters_local.sh --cluster
+      infra/tests/validate_cluster_security_local.sh --cluster
+      infra/tests/validate_container_delivery_local.sh --cluster

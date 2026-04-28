@@ -2,14 +2,19 @@
 set -euo pipefail
 
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
+CLUSTER_MODE=0
 
 usage() {
   cat <<'EOF'
-Usage: validate_tls_dns_local.sh [--kubeconfig PATH]
+Usage: validate_tls_dns_local.sh [--cluster] [--kubeconfig PATH]
 
 Validates the local INIT-105 TLS/DNS proof against an existing cluster:
 cert-manager availability, step-ca availability, StepClusterIssuer readiness,
 sample Certificate Ready=True, and CoreDNS resolution for humility.local.
+
+Options:
+  --cluster          Run explicit cluster runtime validation
+  --kubeconfig PATH  Kubeconfig for the local k3d channel
 EOF
 }
 
@@ -24,6 +29,9 @@ log() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --cluster)
+      CLUSTER_MODE=1
+      ;;
     --kubeconfig)
       [[ $# -ge 2 ]] || die "--kubeconfig requires a value"
       KUBECONFIG_PATH="$2"
@@ -92,6 +100,9 @@ raise SystemExit(1)
 
 require_command kubectl
 require_command python3
+if [[ "$CLUSTER_MODE" -eq 1 ]]; then
+  log "Cluster runtime mode requested"
+fi
 [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
 
 kubectl_cmd -n cert-manager wait deployment/cert-manager --for=condition=Available --timeout=300s >/dev/null
