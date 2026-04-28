@@ -1,0 +1,3 @@
+steps:
+  - input: "release-notes"
+    label: "input is not part of the local runner contract"

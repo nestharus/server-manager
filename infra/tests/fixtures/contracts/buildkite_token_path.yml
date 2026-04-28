@@ -1,0 +1,8 @@
+infisical_token_path:
+  project: platform-cicd
+  environment: local
+  path: /buildkite/local
+  key: BUILDKITE_AGENT_TOKEN
+forbidden_committed_token_patterns:
+  - "bk[a-z]_[A-Za-z0-9]{20,}"
+  - "literal assignment to the Buildkite agent token environment variable"
