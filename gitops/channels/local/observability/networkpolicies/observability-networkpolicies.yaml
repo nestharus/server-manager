@@ -109,23 +109,6 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-observability-scrape
-  namespace: crossplane-system
-  labels:
-    app.kubernetes.io/name: observability
-    platform.humility.gg/init: "117"
-spec:
-  podSelector: {}
-  policyTypes: ["Ingress"]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: observability-system
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
   name: allow-webhook-reachability
   namespace: crossplane-system
   labels:
@@ -157,23 +140,6 @@ spec:
             cidr: 172.28.0.3/32
         - ipBlock:
             cidr: 172.28.0.4/32
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-observability-scrape
-  namespace: cert-manager
-  labels:
-    app.kubernetes.io/name: observability
-    platform.humility.gg/init: "117"
-spec:
-  podSelector: {}
-  policyTypes: ["Ingress"]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: observability-system
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -210,23 +176,6 @@ spec:
             cidr: 172.28.0.3/32
         - ipBlock:
             cidr: 172.28.0.4/32
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-observability-scrape
-  namespace: cnpg-system
-  labels:
-    app.kubernetes.io/name: observability
-    platform.humility.gg/init: "117"
-spec:
-  podSelector: {}
-  policyTypes: ["Ingress"]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: observability-system
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
