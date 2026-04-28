@@ -83,12 +83,38 @@ command -v jq >/dev/null 2>&1 || die "jq is required"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 
 resolved="$(python3 "$RESOLVER" --channel local)"
-jq -e '
-  .tenant_isolation.namespace_pattern == "{tenant}-{channel}" and
-  .tenant_isolation.rbac.operator_group_prefix == "humility:tenant" and
-  .tenant_isolation.network_policy.allow_same_tenant_cross_channel == true and
-  .tenant_isolation.infisical.project_pattern == "tenant-{tenant}-{channel}"
-' <<<"$resolved" >/dev/null || die "tenant isolation channel contract"
+python3 - "$REPO_ROOT" "$resolved" <<'PY' || die "tenant isolation channel contract"
+import json
+import sys
+from pathlib import Path
+
+import yaml
+
+root = Path(sys.argv[1])
+resolved = json.loads(sys.argv[2])
+fixture = yaml.safe_load(
+    (root / "infra/tests/fixtures/contracts/tenant_isolation_matrix.yml").read_text()
+)
+paths = fixture["contract_paths"]
+tenant_isolation = resolved["tenant_isolation"]
+
+def require(path, expected):
+    cursor = tenant_isolation
+    for key in path:
+        assert key in cursor, f"missing tenant_isolation.{'.'.join(path)}"
+        cursor = cursor[key]
+    assert cursor == expected, f"tenant_isolation.{'.'.join(path)} expected {expected!r}, got {cursor!r}"
+
+assert tenant_isolation["namespace_pattern"] == paths["namespace_pattern"]
+require(("rbac", "operator_group_prefix"), paths["rbac_operator_group_prefix"])
+require(
+    ("network_policy", "allow_same_tenant_cross_channel"),
+    paths["network_policy_allow_same_tenant_cross_channel"],
+)
+require(("infisical", "project_pattern"), paths["infisical_project_pattern"])
+require(("storage", "s3_prefix_pattern"), paths["s3_prefix_pattern"])
+require(("database", "schema_pattern"), paths["db_schema_pattern"])
+PY
 pass "resolved tenant isolation channel contract"
 
 python3 - "$REPO_ROOT" <<'PY' || die "tenant manifests encode namespace, RBAC, NetworkPolicy, and Infisical isolation"
@@ -98,6 +124,7 @@ from pathlib import Path
 import yaml
 
 root = Path(sys.argv[1])
+fixture = yaml.safe_load((root / "infra/tests/fixtures/contracts/tenant_isolation_matrix.yml").read_text())
 docs = []
 for path in sorted((root / "gitops/channels/local/tenants").glob("*/*.yaml")):
     if path.name == "kustomization.yaml":
@@ -108,11 +135,10 @@ by_key = {
     (doc["kind"], doc["metadata"]["name"], doc["metadata"].get("namespace")): doc
     for doc in docs
 }
-for namespace, tenant, channel, project in [
-    ("sample-local", "sample", "local", "tenant-sample-local"),
-    ("sample-dev", "sample", "dev", "tenant-sample-dev"),
-    ("other-local", "other", "local", "tenant-other-local"),
-]:
+for tenant_spec in fixture["tenants"]:
+    namespace = tenant_spec["namespace"]
+    tenant = tenant_spec["tenant"]
+    channel = tenant_spec["channel"]
     labels = by_key[("Namespace", namespace, None)]["metadata"]["labels"]
     assert labels["platform.humility.gg/tenant"] == tenant
     assert labels["platform.humility.gg/channel"] == channel
@@ -125,7 +151,7 @@ for namespace, tenant, channel, project in [
     }
     secret = by_key[("InfisicalSecret", "tenant-runtime", namespace)]
     scope = secret["spec"]["authentication"]["universalAuth"]["secretsScope"]
-    assert scope["projectSlug"] == project
+    assert scope["projectSlug"] == tenant_spec["infisical_project"]
     assert scope["secretsPath"] == "/runtime"
 PY
 pass "tenant manifests encode namespace, RBAC, NetworkPolicy, and Infisical isolation"

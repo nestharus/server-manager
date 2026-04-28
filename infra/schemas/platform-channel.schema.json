@@ -2575,6 +2575,12 @@
         "infisical": {
           "$ref": "#/$defs/tenantIsolationInfisical"
         },
+        "storage": {
+          "$ref": "#/$defs/tenantIsolationStorage"
+        },
+        "database": {
+          "$ref": "#/$defs/tenantIsolationDatabase"
+        },
         "samples": {
           "type": "array",
           "items": {
@@ -2681,6 +2687,30 @@
         },
         "secrets_path": {
           "const": "/runtime"
+        }
+      }
+    },
+    "tenantIsolationStorage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "s3_prefix_pattern"
+      ],
+      "properties": {
+        "s3_prefix_pattern": {
+          "const": "tenants/{tenant}/{channel}/"
+        }
+      }
+    },
+    "tenantIsolationDatabase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_pattern"
+      ],
+      "properties": {
+        "schema_pattern": {
+          "const": "tenant_{tenant}_{channel}"
         }
       }
     },
