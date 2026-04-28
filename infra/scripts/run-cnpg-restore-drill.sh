@@ -369,3 +369,5 @@ printf '%s\n' "$RESTORE_RESULT" | sed -n '2p' | grep -qx 't' || die "restored dr
 log "PASS: restore verified ${VERIFY_TABLE} and drill row ${ROW_ID}"
 
 log "PROOF: backup=${BACKUP_NAME} backup_id=${BACKUP_ID:-unknown} bucket=${BACKUP_BUCKET} prefix=${BACKUP_PREFIX} restore_cluster=${RESTORE_CLUSTER} row=${ROW_ID}"
+log "PROOF: restored_schema=${VERIFY_TABLE} restore_cluster=${RESTORE_CLUSTER}"
+log "PROOF: restored_row=${ROW_ID} restore_cluster=${RESTORE_CLUSTER}"

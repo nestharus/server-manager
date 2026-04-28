@@ -4,14 +4,26 @@ scheduled_backup:
   cluster: sample-app-postgres
   destination_prefix: s3://humility-local-backups/cnpg/local/sample-app-postgres
   retention_policy: 7d
+fixtures:
+  seed_sql: infra/tests/fixtures/backup-dr/seed.sql
+  manual_backup: infra/tests/fixtures/backup-dr/manual-backup.yaml
+  restore_cluster: infra/tests/fixtures/backup-dr/restore-cluster.yaml
 restore_drill:
   manual_backup_kind: Backup
+  manual_backup_name: sample-app-postgres-manual-drill
   transient_cluster: sample-app-postgres-restore-drill
   schema: sample_app
   table: widgets
+  primary_key: recovery-drill-widget
   inserted_row:
+    id: recovery-drill-widget
     name: recovery-drill-widget
     source: seed-before-backup
   restored_row:
+    id: recovery-drill-widget
     name: recovery-drill-widget
     source: seed-before-backup
+  proof_markers:
+    backup_object: "PROOF: backup="
+    restored_schema: "PROOF: restored_schema="
+    restored_row: "PROOF: restored_row="

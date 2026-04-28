@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RESOLVER="${REPO_ROOT}/infra/scripts/resolve_platform_channel.py"
 RESTORE_DRILL="${REPO_ROOT}/infra/scripts/run-cnpg-restore-drill.sh"
 SNAPSHOT_SCRIPT="${REPO_ROOT}/infra/scripts/snapshot-k3d-volumes.sh"
+BACKUP_DR_FIXTURE_DIR="${REPO_ROOT}/infra/tests/fixtures/backup-dr"
 
 CHANNEL_REQUEST="local"
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
@@ -158,6 +159,7 @@ assert_static_manifests() {
   assert_file "infra/scripts/snapshot-k3d-volumes.sh"
   assert_executable "infra/scripts/run-cnpg-restore-drill.sh"
   assert_executable "infra/scripts/snapshot-k3d-volumes.sh"
+  assert_backup_dr_fixtures
 
   object_storage_render="$(mktemp)"
   data_plane_render="$(mktemp)"
@@ -188,6 +190,28 @@ assert_static_manifests() {
   pass "no helm-controller or HelmRelease resources"
 }
 
+assert_backup_dr_fixtures() {
+  assert_file "infra/tests/fixtures/backup-dr/seed.sql"
+  assert_file "infra/tests/fixtures/backup-dr/manual-backup.yaml"
+  assert_file "infra/tests/fixtures/backup-dr/restore-cluster.yaml"
+
+  rg -q 'CREATE TABLE IF NOT EXISTS sample_app\.widgets' "${BACKUP_DR_FIXTURE_DIR}/seed.sql" \
+    || die "backup/DR seed fixture does not create sample_app.widgets"
+  rg -q 'recovery-drill-widget' "${BACKUP_DR_FIXTURE_DIR}/seed.sql" \
+    || die "backup/DR seed fixture does not insert the deterministic drill row"
+  rg -q '^kind:[[:space:]]+Backup$' "${BACKUP_DR_FIXTURE_DIR}/manual-backup.yaml" \
+    || die "manual backup fixture is not a CNPG Backup"
+  rg -q 'name:[[:space:]]+sample-app-postgres-manual-drill' "${BACKUP_DR_FIXTURE_DIR}/manual-backup.yaml" \
+    || die "manual backup fixture does not name the deterministic drill backup"
+  rg -q '^kind:[[:space:]]+Cluster$' "${BACKUP_DR_FIXTURE_DIR}/restore-cluster.yaml" \
+    || die "restore fixture is not a CNPG Cluster"
+  rg -q 'sample-app-postgres-restore-drill' "${BACKUP_DR_FIXTURE_DIR}/restore-cluster.yaml" \
+    || die "restore fixture does not define a fresh drill cluster"
+  rg -q 'sample-app-postgres-manual-drill' "${BACKUP_DR_FIXTURE_DIR}/restore-cluster.yaml" \
+    || die "restore fixture does not recover from the deterministic manual backup"
+  pass "backup/DR fixtures define seed SQL, manual backup, and restore cluster"
+}
+
 assert_runtime() {
   local drill_log
 
@@ -204,6 +228,8 @@ assert_runtime() {
   TEMP_FILES+=("$drill_log")
   "$RESTORE_DRILL" --channel "$CHANNEL_REQUEST" --kubeconfig "$KUBECONFIG_PATH" | tee "$drill_log"
   grep -q '^PROOF: backup=' "$drill_log" || die "restore drill did not emit proof"
+  grep -q '^PROOF: restored_schema=' "$drill_log" || die "restore drill did not emit restored schema proof"
+  grep -q '^PROOF: restored_row=' "$drill_log" || die "restore drill did not emit restored row proof"
   pass "restore drill created backup in MinIO and verified restore"
 }
 

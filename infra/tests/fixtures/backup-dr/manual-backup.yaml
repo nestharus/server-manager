@@ -1,0 +1,9 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: sample-app-postgres-manual-drill
+  namespace: sample-app-db
+spec:
+  cluster:
+    name: sample-app-postgres
+  method: barmanObjectStore
