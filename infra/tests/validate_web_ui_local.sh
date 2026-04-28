@@ -17,7 +17,7 @@ usage() {
 Usage: validate_web_ui_local.sh [--kubeconfig PATH] [--tag TAG] [--static-only] [--skip-image-build]
 
 Validates SLICE-R.22 web UI behavior:
-  - fixture-derived public route, authenticated admin route, API auth gate, and form submit contract
+  - fixture-derived public route, authenticated admin route, API auth gate, and public form submit contract
   - Playwright spec coverage for route, auth, submit, Ark, FontAwesome, and TanStack behavior
   - optional local runtime proof: image build, Pod Ready, public route 200, admin route auth response
 EOF
@@ -109,8 +109,11 @@ assert(contract.routes.public.path === "/", "public route path")
 assert(contract.routes.admin.requires_auth === true, "admin route requires auth")
 assert(contract.auth.unauthenticated_api_status === 401, "unauthenticated_api_status")
 assert(contract.form.submit.method === "POST", "form submit method")
+assert(contract.form.submit.endpoint === "/api/public/applications", "public form submit endpoint")
 assert(contract.form.submit.success_status === 201, "form success status")
 assert(contract.form.fields.map((field) => field.name).sort().join(",") === "application_text,character_name", "form fields")
+assert(contract.form.submit.payload_fields.map((field) => field.name).sort().join(",") === "responses.application_text,responses.character_name,scope.scope_id,scope.scope_kind", "public submit payload fields")
+assert(contract.form.submit.client_application_id_pattern.includes("-4"), "client_application_id UUIDv4 pattern")
 assert(Object.keys(contract.ui_libraries).sort().join(",") === "ark,fontawesome,tanstack", "UI library coverage")
 ' "$CONTRACT_FIXTURE" || die "web UI contract fixture is valid"
   pass "web UI contract fixture is valid"
@@ -123,6 +126,8 @@ assert_playwright_contract_spec() {
   rg -q 'page\.route' "$spec" || die "Playwright spec stubs API routes"
   rg -q 'unauthenticated_api_status' "$spec" || die "Playwright spec covers auth-gated API behavior"
   rg -q 'success_status' "$spec" || die "Playwright spec covers form submit response"
+  rg -q '/api/public/applications' "$CONTRACT_FIXTURE" || die "fixture targets public submit route"
+  rg -q 'client_application_id_pattern' "$spec" || die "Playwright spec covers public client id contract"
   rg -q 'ui_libraries' "$spec" || die "Playwright spec covers UI library integration"
   if rg -q 'Dark Nemesis application|2\.0\.0-beta' "$spec"; then
     die "Playwright spec must not assert captured demo text or package versions"

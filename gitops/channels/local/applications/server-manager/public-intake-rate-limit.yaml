@@ -1,0 +1,43 @@
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: public-intake-rate-limit
+  namespace: server-manager
+plugin: rate-limiting
+config:
+  minute: 5
+  hour: 50
+  policy: local
+  fault_tolerant: true
+  hide_client_headers: false
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: server-manager-public-intake-api
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    platform.humility.gg/init: "120"
+  annotations:
+    cert-manager.io/issuer: humility-local-step-ca
+    cert-manager.io/issuer-kind: StepClusterIssuer
+    cert-manager.io/issuer-group: certmanager.step.sm
+    konghq.com/plugins: public-intake-rate-limit
+spec:
+  ingressClassName: kong
+  tls:
+    - hosts:
+        - api.local.humility.local
+      secretName: server-manager-api-local-ingress-tls
+  rules:
+    - host: api.local.humility.local
+      http:
+        paths:
+          - path: /api/v1/public/applications
+            pathType: Prefix
+            backend:
+              service:
+                name: server-manager-api
+                port:
+                  number: 8000

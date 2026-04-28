@@ -39,35 +39,40 @@ const targets = {
         waitUntil: "domcontentloaded",
         timeout: 45_000,
       });
-      await page.route(`**${webContract.form.submit.endpoint}`, async (route) => {
-        const request = route.request();
-        if (request.method() !== webContract.form.submit.method) {
-          await route.continue();
-          return;
-        }
-        let payload;
-        try {
-          payload = JSON.parse(request.postData() ?? "");
-        } catch (error) {
-          throw new Error(`application submit body was not JSON: ${error.message}`);
-        }
-        for (const field of webContract.form.fields) {
-          if (!Object.hasOwn(payload, field.name)) {
-            throw new Error(`application submit body missing field: ${field.name}`);
-          }
-        }
-        await route.fulfill({
-          status: webContract.form.submit.success_status,
-          contentType: "application/json",
-          body: JSON.stringify({ message: webContract.form.submit.success_message }),
-        });
-      });
       await page.getByRole("heading", { name: "Humility applications" }).waitFor({ timeout: 30_000 });
       for (const field of webContract.form.fields) {
         await page.getByLabel(field.label).fill(field.value);
       }
+      const submitResponsePromise = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.hostname === "web.local.humility.local" &&
+          url.pathname === webContract.form.submit.endpoint &&
+          response.request().method() === webContract.form.submit.method
+        );
+      }, { timeout: 45_000 });
       await page.getByRole("button", { name: webContract.form.submit.button_name }).click();
-      await page.getByText(webContract.form.submit.success_message).waitFor({ timeout: 30_000 });
+      const submitResponse = await submitResponsePromise;
+      if (submitResponse.status() !== webContract.form.submit.success_status) {
+        const body = await submitResponse.text().catch(() => "<unreadable>");
+        throw new Error(`public application submit returned ${submitResponse.status()}: ${body.slice(0, 500)}`);
+      }
+      const correlationId = submitResponse.headers()["x-correlation-id"];
+      if (!correlationId) {
+        throw new Error("public application submit response missing X-Correlation-Id");
+      }
+      const body = await submitResponse.json();
+      if (body.message !== webContract.form.submit.success_message) {
+        throw new Error(`public application submit response message mismatch: ${JSON.stringify(body)}`);
+      }
+      if (!body.application_id) {
+        throw new Error(`public application submit response missing application_id: ${JSON.stringify(body)}`);
+      }
+      await writeFile(
+        join(sessionDir, `${flow}-public-submit.json`),
+        JSON.stringify({ application_id: body.application_id, correlation_id: correlationId }, null, 2),
+      );
+      await page.locator("#submit-status").getByText(webContract.form.submit.success_message).waitFor({ timeout: 30_000 });
     },
   },
 };

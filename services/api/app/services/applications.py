@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from psycopg import Connection, errors
+from psycopg.rows import dict_row
 
 from app.contracts.actor import ActorIdentity
+from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.applications import (
     APPLICATION_REASSIGN_ACTION_TYPE,
     APPLICATION_REASSIGN_CHANGE_TYPE,
@@ -30,9 +33,11 @@ from app.contracts.applications import (
     FormDefinitionNotFoundError,
     InvalidApplicationResponseError,
     InvalidApplicationTransitionError,
+    PublicApplicationSubmission,
 )
 from app.contracts.authority import AuthorityRequirement
 from app.contracts.mutations import MutationRequest, MutationResult, StaleMutationError, StateChangeDraft
+from app.core.context import get_current_audit_context, use_audit_context
 from app.repositories.applications import (
     get_application,
     get_application_by_client_application_id,
@@ -45,6 +50,7 @@ from app.repositories.db import PostgresDatabase
 from app.repositories.forms import get_current_form_for_scope
 from app.repositories.members import fetch_member_by_id
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.members import resolve_or_create_public_intake_member
 from app.services.mutations import mutate_entity
 
 
@@ -75,7 +81,7 @@ VALID_TRANSITIONS = {
 }
 
 AUDIT_ACTION_TYPE = {
-    "route": "application.submit",
+    "route": "application.route",
     "claim": "application.claim",
     "review": "application.review",
     "request_interview": "application.interview",
@@ -141,6 +147,52 @@ APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST = {
     "responses",
     "client_application_id",
 }
+
+AUTHENTICATED_SUBMIT_SURFACE = "api:/api/v1/applications"
+PUBLIC_SUBMIT_SURFACE = "api:/api/v1/public/applications"
+PUBLIC_INTAKE_ACTOR = ActorIdentity(actor_kind="service", actor_id="public-intake")
+PUBLIC_INTAKE_MEMBER_SALT = "local-public-intake-salt"
+PUBLIC_INTAKE_NAMESPACE = UUID("0a5f3229-6145-4ce9-8b5f-8a8cd7b04c6c")
+
+
+class _SubmissionAuthority(StrEnum):
+    USER = "user"
+    PUBLIC_INTAKE = "public_intake"
+
+
+class _SubmitApplicationResult(tuple[ApplicationRead, MutationResult]):
+    def __new__(
+        cls,
+        read: ApplicationRead,
+        result: MutationResult,
+    ) -> "_SubmitApplicationResult":
+        return super().__new__(cls, (read, result))
+
+    @property
+    def read(self) -> ApplicationRead:
+        return self[0]
+
+    @property
+    def result(self) -> MutationResult:
+        return self[1]
+
+    def __await__(self):
+        async def _read() -> ApplicationRead:
+            return self.read
+
+        return _read().__await__()
+
+
+def _generated_audit_context() -> AuditContextRead:
+    correlation_id = uuid4()
+    return AuditContextRead(
+        correlation_id=correlation_id,
+        causation_id=None,
+        headers=CorrelationHeadersRead(
+            x_correlation_id=correlation_id,
+            x_causation_id=None,
+        ),
+    )
 
 
 def application_aggregate_id(application_id: UUID) -> str:
@@ -392,6 +444,47 @@ def validate_application_responses(
             raise InvalidApplicationResponseError(f"{field_id} must be a boolean")
 
 
+def _get_current_form_for_submit(
+    connection: Connection[Any],
+    *,
+    scope_kind: str,
+    scope_id: str | None,
+) -> dict[str, Any] | None:
+    form_row = get_current_form_for_scope(
+        connection,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+    )
+    if form_row is not None:
+        return form_row
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return cursor.execute(
+            """
+            SELECT id,
+                   scope_kind,
+                   scope_id,
+                   version,
+                   name,
+                   target_type,
+                   fields,
+                   routing_rules,
+                   status,
+                   published_by_kind,
+                   published_by_id,
+                   published_at,
+                   archived_at,
+                   created_at
+            FROM form_definitions
+            WHERE scope_kind = %s
+              AND scope_id IS NOT DISTINCT FROM %s
+              AND status = 'current'
+            ORDER BY version DESC
+            LIMIT 1
+            """,
+            (scope_kind, scope_id),
+        ).fetchone()
+
+
 def validate_required_transition_fields(
     action: str,
     request: ApplicationTransitionRequest,
@@ -476,11 +569,24 @@ def _transition_reason(request: ApplicationTransitionRequest) -> str | None:
     return stripped or None
 
 
-def submit_application(
+def _submit_application_internal(
     db: PostgresDatabase,
     request: ApplicationSubmission,
     actor: ActorIdentity,
-) -> tuple[ApplicationRead, MutationResult]:
+    *,
+    request_surface: str,
+    submission_authority: _SubmissionAuthority,
+) -> _SubmitApplicationResult:
+    if get_current_audit_context() is None:
+        with use_audit_context(_generated_audit_context()):
+            return _submit_application_internal(
+                db,
+                request,
+                actor,
+                request_surface=request_surface,
+                submission_authority=submission_authority,
+            )
+
     validated = ApplicationSubmission.model_validate(request)
     application_id = uuid4()
     submitted_at = datetime.now(UTC)
@@ -489,7 +595,7 @@ def submit_application(
         if fetch_member_by_id(connection, validated.applicant_id) is None:
             raise ValueError(f"member {validated.applicant_id} was not found")
 
-        form_row = get_current_form_for_scope(
+        form_row = _get_current_form_for_submit(
             connection,
             scope_kind=validated.scope.scope_kind,
             scope_id=validated.scope.scope_id,
@@ -506,13 +612,14 @@ def submit_application(
             if existing is not None:
                 raise DuplicateApplicationCreateError(_row_to_read(existing))
 
-        _require_submit_authority(
-            db,
-            actor=actor,
-            applicant_id=validated.applicant_id,
-            scope_kind=form_row["scope_kind"],
-            scope_id=form_row["scope_id"],
-        )
+        if submission_authority == _SubmissionAuthority.USER:
+            _require_submit_authority(
+                db,
+                actor=actor,
+                applicant_id=validated.applicant_id,
+                scope_kind=form_row["scope_kind"],
+                scope_id=form_row["scope_id"],
+            )
 
         snapshot = build_form_snapshot(form_row)
         validate_application_responses(snapshot["fields"], validated.responses)
@@ -575,7 +682,7 @@ def submit_application(
                 request=_make_request(
                     expected_version=0,
                     actor=actor,
-                    request_surface="api:/api/v1/applications",
+                    request_surface=request_surface,
                 ),
                 action_type="application.submit",
                 action_payload=action_payload,
@@ -607,10 +714,59 @@ def submit_application(
             actor=actor,
             action_payload=action_payload,
             payload_allowlist=APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST,
-            request_surface="api:/api/v1/applications",
+            request_surface=request_surface,
         )
         read = _row_to_read(_fetch_application_row(connection, application_id))
-    return read, result
+    return _SubmitApplicationResult(read, result)
+
+
+def submit_application(
+    db: PostgresDatabase,
+    request: ApplicationSubmission,
+    actor: ActorIdentity,
+) -> _SubmitApplicationResult:
+    return _submit_application_internal(
+        db,
+        request,
+        actor,
+        request_surface=AUTHENTICATED_SUBMIT_SURFACE,
+        submission_authority=_SubmissionAuthority.USER,
+    )
+
+
+async def submit_public_application(
+    db: PostgresDatabase,
+    public_submission: PublicApplicationSubmission,
+) -> UUID:
+    validated = PublicApplicationSubmission.model_validate(public_submission)
+    if validated.client_application_id is None:
+        public_submission_id = uuid4()
+        client_application_id = f"public:{public_submission_id}"
+    else:
+        client_application_id = validated.client_application_id
+        public_submission_id = uuid5(
+            PUBLIC_INTAKE_NAMESPACE,
+            f"{client_application_id}|{PUBLIC_INTAKE_MEMBER_SALT}",
+        )
+    member = await resolve_or_create_public_intake_member(
+        db,
+        public_submission_id=public_submission_id,
+        channel_salt=PUBLIC_INTAKE_MEMBER_SALT,
+    )
+    internal_submission = ApplicationSubmission(
+        applicant_id=member.id,
+        scope=validated.scope,
+        responses=validated.responses,
+        client_application_id=client_application_id,
+    )
+    created = _submit_application_internal(
+        db,
+        internal_submission,
+        PUBLIC_INTAKE_ACTOR,
+        request_surface=PUBLIC_SUBMIT_SURFACE,
+        submission_authority=_SubmissionAuthority.PUBLIC_INTAKE,
+    )
+    return created.read.id
 
 
 def read_application(

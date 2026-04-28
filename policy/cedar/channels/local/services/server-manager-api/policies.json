@@ -8,6 +8,14 @@
     "content": "permit(principal == Service::\"buildkite-agent.local\", action == Action::\"api:ci:deploy\", resource == Resource::\"server-manager-api\");"
   },
   {
+    "id": "public-intake-allow",
+    "content": "permit(principal == Public::\"web-intake.local\", action == Action::\"application:submit_public\", resource == Resource::\"server-manager-api:public-applications\");"
+  },
+  {
+    "id": "public-intake-no-read",
+    "content": "forbid(principal == Public::\"web-intake.local\", action == Action::\"api:read\", resource == Resource::\"server-manager-api\");"
+  },
+  {
     "id": "local-cluster-api-crossplane-reconcile",
     "content": "permit(principal == Service::\"crossplane-provider.local\", action == Action::\"cluster:claim:reconcile\", resource == Resource::\"cluster-api\");"
   },

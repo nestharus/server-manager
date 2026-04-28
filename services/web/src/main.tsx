@@ -7,8 +7,15 @@ if (!root) {
 }
 
 type FormPayload = {
-  character_name: string;
-  application_text: string;
+  scope: {
+    scope_kind: "global";
+    scope_id: null;
+  };
+  responses: {
+    character_name: string;
+    application_text: string;
+  };
+  client_application_id: string;
 };
 
 const isApplications = () => window.location.pathname === "/applications";
@@ -110,6 +117,15 @@ function render() {
   bindApplicationRoute();
 }
 
+function getClientApplicationId() {
+  const storageKey = "humility.publicApplication.clientApplicationId";
+  const existing = sessionStorage.getItem(storageKey);
+  if (existing) return existing;
+  const generated = crypto.randomUUID();
+  sessionStorage.setItem(storageKey, generated);
+  return generated;
+}
+
 function bindApplicationRoute() {
   const form = document.querySelector<HTMLFormElement>("#application-form");
   const status = document.querySelector<HTMLElement>("#submit-status");
@@ -125,15 +141,22 @@ function bindApplicationRoute() {
     event.preventDefault();
     const formData = new FormData(form);
     const payload: FormPayload = {
-      character_name: String(formData.get("character_name") ?? ""),
-      application_text: String(formData.get("application_text") ?? ""),
+      scope: {
+        scope_kind: "global",
+        scope_id: null,
+      },
+      responses: {
+        character_name: String(formData.get("character_name") ?? ""),
+        application_text: String(formData.get("application_text") ?? ""),
+      },
+      client_application_id: getClientApplicationId(),
     };
-    const response = await fetch("/api/applications", {
+    const response = await fetch("/api/public/applications", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(payload),
     });
-    const body = (await response.json()) as { message?: string };
+    const body = (await response.json()) as { message?: string; application_id?: string };
     if (status) status.textContent = body.message ?? `Application returned ${response.status}`;
   });
 

@@ -21,6 +21,9 @@ type Contract = {
       method: string;
       success_status: number;
       success_message: string;
+      success_application_id: string;
+      client_application_id_pattern: string;
+      payload_fields: Array<{ name: string; value?: string | null; source_field?: string }>;
     };
   };
   ui_libraries: {
@@ -44,6 +47,23 @@ function loadContract(): Contract {
 
 const contract = loadContract();
 
+function payloadValue(payload: Record<string, unknown>, dottedPath: string): unknown {
+  return dottedPath.split(".").reduce<unknown>((current, part) => {
+    if (current && typeof current === "object" && part in current) {
+      return (current as Record<string, unknown>)[part];
+    }
+    return undefined;
+  }, payload);
+}
+
+function fieldValue(name: string): string {
+  const field = contract.form.fields.find((candidate) => candidate.name === name);
+  if (!field) {
+    throw new Error(`missing form field fixture: ${name}`);
+  }
+  return field.value;
+}
+
 test("web UI routes public and auth-gated surfaces", async ({ page }) => {
   await page.route(`**${contract.auth.probe_endpoint}`, async (route) => {
     await route.fulfill({
@@ -54,9 +74,7 @@ test("web UI routes public and auth-gated surfaces", async ({ page }) => {
   });
 
   await page.goto(contract.routes.public.path);
-  await expect(
-    page.getByRole("heading", { name: contract.routes.public.heading }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: contract.routes.public.heading })).toBeVisible();
 
   const status = await page.evaluate(async (endpoint) => {
     const response = await fetch(endpoint);
@@ -68,20 +86,33 @@ test("web UI routes public and auth-gated surfaces", async ({ page }) => {
 });
 
 test("web UI submits the application form through the API contract", async ({ page }) => {
+  // Risk annotation: group=TG-8; named_risk=spa_submit_contract_drift;
+  // level=component; source=proposals/02-public-application-intake.md#§8 AS-1 AS-3.
   let submitted = false;
 
   await page.route(`**${contract.form.submit.endpoint}`, async (route) => {
     const request = route.request();
+    expect(request.url().endsWith(contract.form.submit.endpoint)).toBe(true);
     expect(request.method()).toBe(contract.form.submit.method);
     const payload = request.postDataJSON() as Record<string, unknown>;
-    for (const field of contract.form.fields) {
-      expect(payload[field.name]).toBe(field.value);
+    for (const field of contract.form.submit.payload_fields) {
+      const expected =
+        "source_field" in field && field.source_field
+          ? fieldValue(field.source_field)
+          : field.value;
+      expect(payloadValue(payload, field.name)).toBe(expected);
     }
+    expect(payloadValue(payload, "client_application_id")).toMatch(
+      new RegExp(contract.form.submit.client_application_id_pattern),
+    );
     submitted = true;
     await route.fulfill({
       status: contract.form.submit.success_status,
       contentType: "application/json",
-      body: JSON.stringify({ message: contract.form.submit.success_message }),
+      body: JSON.stringify({
+        message: contract.form.submit.success_message,
+        application_id: contract.form.submit.success_application_id,
+      }),
     });
   });
 
@@ -91,7 +122,7 @@ test("web UI submits the application form through the API contract", async ({ pa
   }
   await page.getByRole("button", { name: contract.form.submit.button_name }).click();
 
-  await expect(page.getByText(contract.form.submit.success_message)).toBeVisible();
+  await expect(page.locator("#submit-status")).toContainText(contract.form.submit.success_message);
   expect(submitted).toBe(true);
 });
 
@@ -111,8 +142,6 @@ test("web UI keeps Ark FontAwesome and TanStack controls integrated", async ({ p
     page.getByTestId(contract.ui_libraries.fontawesome.submit_icon_test_id),
   ).toBeVisible();
 
-  await page
-    .getByRole("button", { name: contract.ui_libraries.ark.dialog_button_name })
-    .click();
+  await page.getByRole("button", { name: contract.ui_libraries.ark.dialog_button_name }).click();
   await expect(page.getByRole("dialog")).toContainText(contract.ui_libraries.ark.dialog_text);
 });

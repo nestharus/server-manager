@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+from http import HTTPStatus
+
+from fastapi import APIRouter, Depends
+
+from app.contracts.applications import (
+    PublicApplicationSubmission,
+    PublicApplicationSubmissionReceipt,
+)
+from app.repositories.db import PostgresDatabase
+from app.services.applications import submit_public_application
+from app.services.authorization import authorize_public_intake
+
+from ._shared import get_db, raise_known_application_error
+
+
+router = APIRouter(prefix="/api/v1/public/applications")
+
+
+@router.post(
+    "",
+    response_model=PublicApplicationSubmissionReceipt,
+    status_code=HTTPStatus.CREATED,
+)
+async def submit_public_application_endpoint(
+    body: PublicApplicationSubmission,
+    db: PostgresDatabase = Depends(get_db),
+    _authz: None = Depends(authorize_public_intake),
+) -> PublicApplicationSubmissionReceipt:
+    try:
+        application_id = await submit_public_application(db, body)
+    except Exception as error:
+        raise_known_application_error(error)
+    return PublicApplicationSubmissionReceipt(
+        message="Application received",
+        application_id=application_id,
+    )

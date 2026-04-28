@@ -7,6 +7,14 @@ decisions:
     action: Action::"api:read"
     resource: Resource::"server-manager-api"
     effect: deny
+  - principal: Public::"web-intake.local"
+    action: Action::"application:submit_public"
+    resource: Resource::"server-manager-api:public-applications"
+    effect: allow
+  - principal: Public::"web-intake.local"
+    action: Action::"api:read"
+    resource: Resource::"server-manager-api"
+    effect: deny
   - principal: Service::"buildkite-agent.local"
     action: Action::"api:ci:deploy"
     resource: Resource::"server-manager-api"
