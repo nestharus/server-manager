@@ -3,14 +3,93 @@ tenants:
     tenant: sample
     channel: local
     infisical_project: tenant-sample-local
+    operator_group: humility:tenant:sample:operators
+    s3_prefix: tenants/sample/local/
+    db_schema: tenant_sample_local
   - namespace: sample-dev
     tenant: sample
     channel: dev
     infisical_project: tenant-sample-dev
+    operator_group: humility:tenant:sample:operators
+    s3_prefix: tenants/sample/dev/
+    db_schema: tenant_sample_dev
   - namespace: other-local
     tenant: other
     channel: local
     infisical_project: tenant-other-local
+    operator_group: humility:tenant:other:operators
+    s3_prefix: tenants/other/local/
+    db_schema: tenant_other_local
+contract_paths:
+  namespace_pattern: "{tenant}-{channel}"
+  rbac_operator_group_prefix: "humility:tenant"
+  network_policy_allow_same_tenant_cross_channel: true
+  infisical_project_pattern: "tenant-{tenant}-{channel}"
+  s3_prefix_pattern: "tenants/{tenant}/{channel}/"
+  db_schema_pattern: "tenant_{tenant}_{channel}"
+access_matrix:
+  - surface: namespace
+    actor_tenant: sample
+    target_namespace: sample-local
+    expected: allow
+  - surface: namespace
+    actor_tenant: sample
+    target_namespace: sample-dev
+    expected: allow
+  - surface: namespace
+    actor_tenant: sample
+    target_namespace: other-local
+    expected: deny
+  - surface: rbac
+    actor_group: humility:tenant:sample:operators
+    verb: get
+    resource: pods
+    target_namespace: sample-local
+    expected: allow
+  - surface: rbac
+    actor_group: humility:tenant:sample:operators
+    verb: get
+    resource: pods
+    target_namespace: sample-dev
+    expected: allow
+  - surface: rbac
+    actor_group: humility:tenant:sample:operators
+    verb: get
+    resource: pods
+    target_namespace: other-local
+    expected: deny
+  - surface: network_policy
+    source_namespace: sample-local
+    target_namespace: sample-dev
+    expected: allow
+  - surface: network_policy
+    source_namespace: sample-local
+    target_namespace: other-local
+    expected: deny
+  - surface: infisical
+    actor_project: tenant-sample-local
+    target_project: tenant-sample-dev
+    expected: deny
+  - surface: infisical
+    actor_project: tenant-sample-local
+    target_project: tenant-other-local
+    expected: deny
+  - surface: s3
+    actor_prefix: tenants/sample/local/
+    target_prefix: tenants/sample/dev/
+    expected: deny
+  - surface: s3
+    actor_prefix: tenants/sample/local/
+    target_prefix: tenants/other/local/
+    expected: deny
+  - surface: db
+    actor_schema: tenant_sample_local
+    target_schema: tenant_sample_dev
+    expected: deny
+  - surface: db
+    actor_schema: tenant_sample_local
+    target_schema: tenant_other_local
+    expected: deny
 cedar_decisions:
   - principal: Tenant::"sample"
     action: Action::"tenant:channel:access"

@@ -348,6 +348,10 @@ tenant_isolation:
     project_pattern: tenant-{tenant}-{channel}
     environment: local
     secrets_path: /runtime
+  storage:
+    s3_prefix_pattern: tenants/{tenant}/{channel}/
+  database:
+    schema_pattern: tenant_{tenant}_{channel}
   samples:
     - tenant: sample
       channels:
