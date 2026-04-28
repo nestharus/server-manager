@@ -1,0 +1,6 @@
+steps:
+  - group: "grouped steps are not part of the local runner contract"
+    steps:
+      - label: "nested command"
+        key: nested-command
+        command: "echo nested"

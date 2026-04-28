@@ -1,0 +1,3 @@
+steps:
+  - trigger: "remote-production-pipeline"
+    label: "trigger is not part of the local runner contract"

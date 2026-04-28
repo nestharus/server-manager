@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -41,6 +43,19 @@ def test_fixture_pipeline_accepts_command_wait_and_artifact_steps() -> None:
     ]
 
 
+def test_empty_step_selection_keeps_declared_local_surface() -> None:
+    """INIT-109 L015/L030: default selection runs all command steps."""
+    runner = load_runner()
+    _, steps = runner.load_pipeline(FIXTURE_DIR / "buildkite_runner_pipeline.yml")
+
+    selected = runner.select_steps(steps, [])
+
+    command_keys = [
+        step.key for step in selected if isinstance(step, runner.CommandStep)
+    ]
+    assert command_keys == ["first-command", "artifact-command"]
+
+
 def test_select_steps_preserves_requested_order() -> None:
     """INIT-109 proposal Slice 3: repeated --step-key selects requested order."""
     runner = load_runner()
@@ -60,12 +75,96 @@ def test_unknown_step_key_fails() -> None:
         runner.select_steps(steps, ["missing"])
 
 
-def test_unsupported_block_step_fails() -> None:
-    """INIT-109 contract lines L017-L020: local mode rejects unsupported steps."""
+@pytest.mark.parametrize(
+    ("fixture_name", "contract_line"),
+    [
+        ("buildkite_unsupported_block.yml", "L017"),
+        ("buildkite_unsupported_trigger.yml", "L018"),
+        ("buildkite_unsupported_input.yml", "L019"),
+        ("buildkite_unsupported_group.yml", "L020"),
+    ],
+)
+def test_unsupported_step_types_fail(fixture_name: str, contract_line: str) -> None:
+    """INIT-109 L017-L020: local mode rejects unsupported Buildkite step types."""
     runner = load_runner()
 
-    with pytest.raises(runner.LocalPipelineError, match="unsupported local step type"):
-        runner.load_pipeline(FIXTURE_DIR / "buildkite_unsupported_block.yml")
+    with pytest.raises(
+        runner.LocalPipelineError,
+        match=f"unsupported local step type.*{contract_line}|unsupported local step type",
+    ):
+        runner.load_pipeline(FIXTURE_DIR / fixture_name)
+
+
+def test_run_steps_merges_env_and_preserves_process_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """INIT-109 L021-L026: process, top-level, and step env become command env."""
+    runner = load_runner()
+    output_path = tmp_path / "env.json"
+    monkeypatch.setenv("PROCESS_ONLY", "from-process")
+    code = (
+        "import json, os, pathlib\n"
+        f"pathlib.Path({str(output_path)!r}).write_text("
+        "json.dumps({"
+        "'PROCESS_ONLY': os.environ.get('PROCESS_ONLY'),"
+        "'TOP_ONLY': os.environ.get('TOP_ONLY'),"
+        "'SHARED_VALUE': os.environ.get('SHARED_VALUE'),"
+        "'STEP_ONLY': os.environ.get('STEP_ONLY'),"
+        "'BUILDKITE_LOCAL': os.environ.get('BUILDKITE_LOCAL'),"
+        "'BUILDKITE': os.environ.get('BUILDKITE')"
+        "}, sort_keys=True), encoding='utf-8')"
+    )
+    step = runner.CommandStep(
+        index=1,
+        key="env-contract",
+        label="Env contract",
+        command=f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}",
+        env={"SHARED_VALUE": "step", "STEP_ONLY": "present"},
+    )
+
+    result = runner.run_steps(
+        top_env={"TOP_ONLY": "present", "SHARED_VALUE": "top"},
+        steps=[step],
+        dry_run=False,
+    )
+
+    assert result == 0
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "BUILDKITE": "true",
+        "BUILDKITE_LOCAL": "true",
+        "PROCESS_ONLY": "from-process",
+        "SHARED_VALUE": "step",
+        "STEP_ONLY": "present",
+        "TOP_ONLY": "present",
+    }
+
+
+def test_run_steps_stops_after_first_command_failure(tmp_path: Path) -> None:
+    """INIT-109 L027: a failed command stops later local pipeline commands."""
+    runner = load_runner()
+    sentinel = tmp_path / "should-not-exist.txt"
+    second_code = (
+        "from pathlib import Path; "
+        f"Path({str(sentinel)!r}).write_text('ran', encoding='utf-8')"
+    )
+    second_command = (
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(second_code)}"
+    )
+    steps = [
+        runner.CommandStep(index=1, key="fail", label="Fail", command="exit 7", env={}),
+        runner.CommandStep(
+            index=2,
+            key="after-fail",
+            label="After fail",
+            command=second_command,
+            env={},
+        ),
+    ]
+
+    result = runner.run_steps(top_env={}, steps=steps, dry_run=False)
+
+    assert result == 7
+    assert not sentinel.exists()
 
 
 def test_dry_run_executes_no_commands(capsys: pytest.CaptureFixture[str]) -> None:
