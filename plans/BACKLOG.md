@@ -1,0 +1,271 @@
+# Server-manager engineering backlog
+
+This is the **single authoritative list** of unfinished work,
+follow-ups, residuals, and deferred-scope items for this
+repository. New items are appended here as slices/initiatives
+finish; the next initiative is picked from the top of the highest
+priority section.
+
+Do **not** scatter follow-ups across STEP6C_DONE residuals,
+proposal Out-of-scope sections, or RCA "Recommended fix" sections
+without also adding them here. Those artifacts are provenance;
+this file is the index.
+
+Each item: stable id, one-line title, source citation, one-paragraph
+description, status. When picking up work, change status
+`[open]` → `[in-progress]` → `[done]` (with the closing commit
+SHA) or `[wontfix]` (with reason).
+
+---
+
+## Priority: HIGH
+
+### BL-001 [open] — Cedar bootstrap-job's bundle PUT silently no-ops in some cases
+
+- **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R3; observed
+  during INIT-120 e2e validation (2026-04-28)
+- **Symptom:** `cedar-access-policy-bootstrap` Job runs `curl -X PUT
+  -H "Content-Type: application/json" --data-binary
+  @/policy/policies.json http://opal-client:8180/v1/policies` and
+  exits 0. Cedar agent's `GET /v1/policies` returns `[]`. Manual
+  Python `urllib` PUT of the same bundle from the API pod loaded
+  the policies correctly. Suspect curl `--data-binary` semantics
+  with cedar-agent's PUT handler, or a silent overwrite-with-empty
+  on bundle ID conflict.
+- **Impact:** Every fresh `humility-local` cluster bringup is
+  vulnerable to silently broken authorization. Adjacent E2E specs
+  (15-auth-stack, 16-access-policy, 17-tenant-isolation) work today
+  only because the seed-time bootstrap happens to win the race.
+- **Plan:** Run RCA workflow on the bootstrap PUT path. Confirm
+  whether to switch to per-policy POST or fix the curl invocation.
+  Implementation will likely change
+  `gitops/channels/local/auth/opal-cedar/bootstrap-job.yaml`.
+
+### BL-002 [open] — Public intake e2e requires a global-scope form_definitions row that no GitOps seed creates
+
+- **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R4; observed
+  during INIT-120 e2e validation (2026-04-28)
+- **Symptom:** `POST /api/v1/public/applications` calls
+  `get_current_form_for_scope(scope_kind='global')` and raises
+  `application_not_found` if no form exists. Fresh `humility-local`
+  cluster has no global-scope `form_definitions` row, so the public
+  intake e2e fails until manual SQL inserts one.
+- **Impact:** Public intake breaks on every fresh cluster bringup.
+  Workaround was a manual SQL INSERT during INIT-120 validation.
+- **Plan:** Add either a Kustomize-applied seed Job in
+  `gitops/channels/local/applications/server-manager/` or a
+  fixture-loader helper invoked before test 19-web-ui in
+  `infra/tests/e2e/run-fullstack.sh`. Decide which based on
+  whether the form should exist in production-like deployments
+  (Job) vs only test environments (fixture loader).
+
+### BL-003 [open] — `build-channel-image.sh` Docker layer cache serves stale `npm run build` output
+
+- **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R1; observed
+  during INIT-120 web-image rebuild (2026-04-28)
+- **Symptom:** `docker build` reuses the `npm run build` layer based
+  on COPY input hashes, but Vite's content-hashed bundle filenames
+  (`index-<hash>.js`) make the deployed bundle look stale even when
+  the layer hash is correct. Symptom in INIT-120: `services/web/src/main.tsx`
+  changed but the deployed pod's bundle was the old one
+  (`index-B8WWo-DS.js` instead of `index-CtukCxsq.js`). Resolved with
+  `docker build --no-cache`.
+- **Impact:** Iterative web changes silently fail to deploy until
+  the cache is busted, wasting time during dev/test cycles.
+- **Plan:** Add `--no-cache` flag option to
+  `infra/scripts/build-channel-image.sh` and call it from CI. Or
+  invalidate cache via a `.dockerignore` strategy that always
+  re-COPYs source. Or consider Kaniko/buildkit cache-from with
+  better invalidation semantics.
+
+### BL-004 [open] — k3d nodes cache same-tag images, defeating `imagePullPolicy: IfNotPresent` rolls
+
+- **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R2; observed
+  during INIT-120 web/api rolls (2026-04-28)
+- **Symptom:** Deployments use `imagePullPolicy: IfNotPresent` with
+  stable tags (`init-118-local`, `init-113-local`). After
+  `docker push` to the registry with the same tag, k3d nodes
+  retain the previously-pulled image; `kubectl rollout restart`
+  reuses the cached image. Resolved with `crictl rmi` on each
+  k3d node before rolling.
+- **Impact:** Same-tag rebuilds need a manual cache-clear step that
+  isn't documented in the bringup runbooks. Easy to misdiagnose
+  as "my code change didn't take" when the build was fine.
+- **Plan:** Either (a) move to digest-pinned image references via a
+  build-step that writes `image: <registry>/<app>@sha256:...` into
+  the rendered GitOps, or (b) append a build-id/timestamp tag
+  suffix and update the kustomization to reference it. (a) is the
+  more durable answer.
+
+### BL-005 [open] — Synthetic public-intake members pollute roster queries
+
+- **Source:** `proposals/02-public-application-intake.md:327-339` (AS-2),
+  `plans/risk/init-120-shortcut.md`
+- **Description:** INIT-120 creates `members` rows whose
+  `discord_user_id` starts with `public:` for anonymous applicants.
+  Existing roster-facing queries (member listing, trust profile
+  aggregations, member status counts) include these synthetic rows
+  unless explicitly filtered. The proposal's risk gate accepted
+  this with the assumption that future cleanup or roster filters
+  would land alongside Discord OAuth linking.
+- **Impact:** Reporting accuracy degrades silently as public submissions
+  accumulate. Officers querying "members" via Discord commands or
+  admin UI get inflated counts that mix real Discord members with
+  synthetic intake placeholders.
+- **Plan:** Enumerate every roster-facing API endpoint and add a
+  query-level `discord_user_id NOT LIKE 'public:%'` filter, or
+  refactor `members.id` to namespace synthetic rows differently
+  (separate table or `kind` column). Coordinate with BL-009 (Discord
+  OAuth linking) since the long-term answer may be conversion.
+
+---
+
+## Priority: MEDIUM
+
+### BL-006 [open] — Public submit response shape — verify final envelope is what we want long-term
+
+- **Source:** `proposals/02-public-application-intake.md` Implementation
+  decision B1
+- **Description:** Public route returns `{message, application_id}`
+  by deliberate design — not the full `ApplicationRead`. Worth
+  revisiting after the surface has been live for a few weeks to
+  confirm support/debug needs are met.
+- **Plan:** Lightweight review; bump priority if reports show
+  confusion. Otherwise leave open as low-cost ongoing.
+
+### BL-007 [open] — psql `:'name'` substitution in `kubectl exec ... -- psql -c` does not expand
+
+- **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R5; fixed inline
+  in `infra/tests/e2e/tests/19-web-ui.sh` during INIT-120
+- **Symptom:** psql's `-v name=value` flag sets a script variable;
+  expansion only happens when reading SQL from a script file or
+  stdin, NOT from `-c "..."` strings. Test wrappers that use
+  `:'name'` syntax with `-c` get a syntax error.
+- **Impact:** Future test authors will hit this same bug if they
+  follow the now-fixed-but-was-buggy pattern.
+- **Plan:** Document the convention in
+  `~/ai/conventions/test-reports.md` or a new
+  `infra/tests/README.md` snippet. Audit existing test scripts
+  with `grep -rn "psql.*:'.*'" infra/tests` to confirm no other
+  files share the bug.
+
+### BL-008 [open] — INIT-121: Discord OAuth linking + synthetic→real member conversion
+
+- **Source:** `proposals/02-public-application-intake.md:441` (Out
+  of scope for follow-up); deferred from INIT-120
+- **Description:** Public web applicants currently land as synthetic
+  members (`discord_user_id="public:<sha>"`). A proper applicant
+  should be linkable to a real Discord identity once they
+  authenticate; their pending application(s) and any audit history
+  should fold into the real member row.
+- **Plan:** New initiative. RCA → Phase 2.5 problem map → Phase 3
+  proposal. Likely surface: extend Authentik OIDC flow, add
+  `members.linked_at`, write a conversion service that updates
+  `applications.applicant_id` and migrates audit refs.
+
+### BL-009 [open] — INIT-122: Discord-visible side effects for public web submissions
+
+- **Source:** `proposals/02-public-application-intake.md:444-446` (Out
+  of scope for follow-up — Tier 3 approval)
+- **Description:** Public web submissions create a `queued`
+  application but no Discord message, thread, or notification —
+  officers have no in-Discord trigger that a public submission
+  needs review. The Discord-driven submission flow already does
+  these side effects; the web path needs convergence.
+- **Plan:** New initiative subject to Tier 3 approval rules per
+  `~/ai/workflows/tiered-approval.md`. RCA establishes existing
+  Discord side-effect surface; proposal designs queue/thread/
+  notification fan-out.
+
+### BL-010 [open] — INIT-123: Web form richer inputs (chapter selector, multi-page, file upload)
+
+- **Source:** `proposals/02-public-application-intake.md:445` (Out
+  of scope for follow-up)
+- **Description:** Day-1 form has two visible fields targeting
+  global scope. Roadmap wants chapter selection, file uploads,
+  multi-page forms with conditional fields. The fixture
+  `infra/tests/fixtures/web-ui/contract.json` is the contract
+  surface to extend.
+- **Plan:** New initiative when product priority surfaces. Touch:
+  SPA form renderer, `form_definitions.fields` shape, validator,
+  and the e2e contract.
+
+### BL-011 [open] — Legacy SQLite `/apply` modernization or deletion
+
+- **Source:** `proposals/02-public-application-intake.md:443` (Out
+  of scope for follow-up); originally referenced in
+  `proposals/18-applications.md`
+- **Description:** `daemon/applications.py` registers `/apply` and
+  collects modal answers but only stores them in memory; never
+  posts to the API. This was the original Discord-first applicant
+  flow. The newer `services/discord/app/handlers/application_submission.py`
+  does the right thing through the API. The legacy path is dead
+  code that confuses future readers.
+- **Plan:** Delete `daemon/applications.py` and any imports/registrations
+  it has. Verify nothing else in `daemon/` depends on its stubs.
+  Consolidate any tests under `services/discord/tests/`.
+
+### BL-012 [open] — Cedar `Public::` entity-type assumption — monitor for OPAL/Cedar schema enforcement
+
+- **Source:** `proposals/02-public-application-intake.md:327-339` (AS-4)
+- **Description:** INIT-120 introduces `Public::"web-intake.<channel>"`
+  as a new entity type. OPAL/Cedar today accepts any entity name
+  because no schema is loaded. If OPAL/Cedar adopts strict
+  schema validation in a future version, this principal type
+  could be rejected.
+- **Plan:** Add an integration test that asserts `Public::"web-intake.local"`
+  is accepted by OPAL bootstrap. Watch OPAL release notes for
+  schema-enforcement changes.
+
+---
+
+## Priority: LOW
+
+### BL-013 [open] — INIT-124: Public intake remote channel apply
+
+- **Source:** `proposals/02-public-application-intake.md:447` (Out
+  of scope for follow-up)
+- **Description:** INIT-120 ships local-only manifests
+  (Kong rate-limit, Cedar policy, Pomerium binding). Remote channel
+  config in `gitops/channels/dev/` does not have application
+  workload specs yet.
+- **Plan:** Block on remote channel application-workload
+  materialization (separate initiative). Then this is a
+  channel-template port: same logical resources, channel-derived
+  hosts.
+
+### BL-014 [open] — Kong rate-limit binding feasibility — version-pin watch
+
+- **Source:** `proposals/02-public-application-intake.md:327-339` (AS-5)
+- **Description:** INIT-120's path-specific KongPlugin binding
+  depends on Kong/KIC supporting that pattern. Current Kong 3.2.0
+  + KIC supports it. Future major bumps could break the binding.
+- **Plan:** Watch Kong/KIC releases for breaking changes;
+  re-evaluate per-service binding if path-specific support
+  changes.
+
+### BL-015 [open] — Web `test-results/` Playwright artifacts cluttered the worktree
+
+- **Source:** Observed during INIT-120 commit; partial fix in
+  `services/web/.gitignore` shipped with INIT-120
+- **Description:** `services/web/test-results/` is a Playwright
+  artifact directory created during local test runs. INIT-120
+  added it to `services/web/.gitignore`. Verify other Playwright
+  artifact paths (e.g., `playwright-report/`) are also ignored.
+- **Plan:** Audit `services/web/.gitignore` against Playwright's
+  default artifact paths. Add anything missing.
+
+---
+
+## Notes
+
+- New entries land at the bottom of their priority section by default;
+  promote/demote based on impact and dependency order.
+- When closing an entry: change status to `[done]` and add the
+  commit SHA. Do NOT delete entries — the closed list is the audit
+  trail.
+- When opening a new initiative for a backlog item, name the
+  initiative (INIT-N) in the entry so future readers can follow
+  the chain.
+- When an entry is no longer relevant, mark `[wontfix]` with a
+  one-line reason. Same audit-trail rule.
