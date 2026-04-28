@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 const flow = process.env.E2E_BROWSER_FLOW;
@@ -11,6 +12,12 @@ const password = process.env.AUTHENTIK_PASSWORD;
 if (!flow || !sessionDir || !username || !password) {
   throw new Error("E2E_BROWSER_FLOW, E2E_SESSION_DIR, AUTHENTIK_USERNAME, and AUTHENTIK_PASSWORD are required");
 }
+
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(moduleDir, "../../../../..");
+const webContract = JSON.parse(
+  readFileSync(resolve(repoRoot, "infra/tests/fixtures/web-ui/contract.json"), "utf8"),
+);
 
 const targets = {
   "auth-stack": {
@@ -28,11 +35,39 @@ const targets = {
     assert: async (page) => {
       await page.getByRole("heading", { name: "Chapter administration" }).waitFor({ timeout: 30_000 });
       await page.getByTestId("chapter-table").waitFor({ timeout: 30_000 });
-      await page.goto("https://web.local.humility.local/");
-      await page.getByRole("heading", { name: "Dark Nemesis application" }).waitFor({ timeout: 30_000 });
-      await page.getByLabel("What is your in-game name?").fill("E2E Applicant");
-      await page.getByRole("button", { name: "Preview submission" }).click();
-      await page.getByText("E2E Applicant").waitFor({ timeout: 10_000 });
+      await page.goto(`https://web.local.humility.local${webContract.form.route}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 45_000,
+      });
+      await page.route(`**${webContract.form.submit.endpoint}`, async (route) => {
+        const request = route.request();
+        if (request.method() !== webContract.form.submit.method) {
+          await route.continue();
+          return;
+        }
+        let payload;
+        try {
+          payload = JSON.parse(request.postData() ?? "");
+        } catch (error) {
+          throw new Error(`application submit body was not JSON: ${error.message}`);
+        }
+        for (const field of webContract.form.fields) {
+          if (!Object.hasOwn(payload, field.name)) {
+            throw new Error(`application submit body missing field: ${field.name}`);
+          }
+        }
+        await route.fulfill({
+          status: webContract.form.submit.success_status,
+          contentType: "application/json",
+          body: JSON.stringify({ message: webContract.form.submit.success_message }),
+        });
+      });
+      await page.getByRole("heading", { name: "Humility applications" }).waitFor({ timeout: 30_000 });
+      for (const field of webContract.form.fields) {
+        await page.getByLabel(field.label).fill(field.value);
+      }
+      await page.getByRole("button", { name: webContract.form.submit.button_name }).click();
+      await page.getByText(webContract.form.submit.success_message).waitFor({ timeout: 30_000 });
     },
   },
 };
@@ -40,17 +75,6 @@ const targets = {
 const target = targets[flow];
 if (!target) {
   throw new Error(`unknown browser flow: ${flow}`);
-}
-
-async function firstVisible(locator) {
-  const count = await locator.count();
-  for (let index = 0; index < count; index += 1) {
-    const item = locator.nth(index);
-    if (await item.isVisible().catch(() => false)) {
-      return item;
-    }
-  }
-  return null;
 }
 
 async function loginIfNeeded(page) {
@@ -74,34 +98,26 @@ async function loginIfNeeded(page) {
   // that Pomerium needs on the callback.
   await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
 
-  const userField = page
-    .locator('input[name="uidField"], input[name="username"], input[name="email"], input[type="email"], input[autocomplete="username"]')
-    .first();
+  const userField = page.locator("input#ak-identifier-input");
   await userField.waitFor({ state: "visible", timeout: 30_000 });
   await userField.fill(username);
 
-  const idSubmit = page.locator('button[type="submit"]').first();
+  const idSubmit = page.locator('button[type="submit"]:has-text("Log in")');
   await idSubmit.click();
 
-  const passwordField = page.locator('input[type="password"], input[name="password"]').first();
+  const passwordField = page.locator("input#ak-stage-password-input");
   await passwordField.waitFor({ state: "visible", timeout: 30_000 });
+  await page.waitForTimeout(500);
   await passwordField.fill(password);
 
-  const pwSubmit = page.locator('button[type="submit"]').first();
-  const startUrl = page.url();
+  const pwSubmit = page.locator('button[type="submit"]:has-text("Continue")');
   await pwSubmit.click();
 
-  // After the SPA submits the password, Authentik renders an
-  // ak-stage-redirect that triggers window.location.assign(...). Wait for
-  // that navigation to happen. If we don't move past Authentik within
-  // 30s, fall through; the test's own assert step will reveal the state.
-  await page
-    .waitForURL((url) => url.toString() !== startUrl, { timeout: 60_000 })
-    .catch(() => {});
-  // Poll for the final landing host (anywhere off auth.local.humility.local).
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const cur = page.url();
-    if (!/auth\.local\.humility\.local/.test(cur)) {
+    const waitingOnAuth = /auth\.local\.humility\.local/.test(cur);
+    const waitingOnAuthenticate = /authenticate\.local\.humility\.local\/(oauth2\/callback|\.pomerium\/sign_in)/.test(cur);
+    if (!waitingOnAuth && !waitingOnAuthenticate) {
       await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => {});
       return;
     }

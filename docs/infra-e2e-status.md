@@ -1,6 +1,6 @@
 # INIT-119 Infra E2E Status
 
-Generated: 2026-04-28T11:27:34Z
+Generated: 2026-04-28T15:31:31Z
 
 Bring-up seconds: NOT RECORDED
 
@@ -20,8 +20,8 @@ Bring-up seconds: NOT RECORDED
 | 12-data-plane | PASS | validate-data-plane completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/12-data-plane.log) |
 | 13-backup-dr | PASS | validate-backup-dr completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/13-backup-dr.log) |
 | 14-application-workloads | PASS | validate-application-workloads completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/14-application-workloads.log) |
-| 15-auth-stack | FAIL | Playwright OAuth proof requires a reachable local browser path and seeded Authentik OIDC app (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/15-auth-stack.log) |
+| 15-auth-stack | PASS | validate-auth-stack completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/15-auth-stack.log) |
 | 16-access-policy | PASS | validate-access-policy completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/16-access-policy.log) |
 | 17-tenant-isolation | PASS | validate-tenant-isolation completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/17-tenant-isolation.log) |
 | 18-observability | PASS | validate-observability completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/18-observability.log) |
-| 19-web-ui | FAIL | validate-web-ui completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/19-web-ui.log) |
+| 19-web-ui | PASS | validate-web-ui completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/19-web-ui.log) |

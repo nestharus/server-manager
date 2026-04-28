@@ -34,3 +34,13 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: server-manager
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server-manager-api
+      ports:
+        - protocol: TCP
+          port: 8000

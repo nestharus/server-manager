@@ -5,3 +5,24 @@ resources:
   - ingress-class.yaml
   - networkpolicy.yaml
   - rendered/kong-3.2.0.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: kong-kong
+      namespace: kong-system
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/1/env/-
+        value:
+          name: KONG_NGINX_PROXY_PROXY_BUFFER_SIZE
+          value: "32k"
+      - op: add
+        path: /spec/template/spec/containers/1/env/-
+        value:
+          name: KONG_NGINX_PROXY_PROXY_BUFFERS
+          value: "8 32k"
+      - op: add
+        path: /spec/template/spec/containers/1/env/-
+        value:
+          name: KONG_NGINX_PROXY_PROXY_BUSY_BUFFERS_SIZE
+          value: "64k"
