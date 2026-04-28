@@ -138,6 +138,8 @@ spec:
         spec:
           providerConfigRef:
             name: in-cluster
+          managementPolicies:
+            - Observe
           readiness:
             policy: SuccessfulCreate
           forProvider:

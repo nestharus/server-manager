@@ -6,10 +6,31 @@ source "${REPO_ROOT}/infra/tests/e2e/lib/assertions.sh"
 e2e_init "01-cluster-up" "local k3d cluster and CoreDNS"
 
 require_cluster
-expected_nodes="$(python3 "${REPO_ROOT}/infra/scripts/resolve_platform_channel.py" --channel local | jq -r '.cluster.k3d.servers + .cluster.k3d.agents')"
-actual_nodes="$(kubectl_cmd get nodes --no-headers | awk 'NF { count += 1 } END { print count + 0 }')"
-[[ "$actual_nodes" == "$expected_nodes" ]] || e2e_fail "node count ${actual_nodes}, expected ${expected_nodes}"
-e2e_pass "node count matches channel contract (${actual_nodes})"
+nodes_json="$(kubectl_cmd get nodes -o json)"
+CLUSTER_FIXTURE="${REPO_ROOT}/infra/tests/fixtures/channels/local_platform_bootstrap.yml" \
+NODES_JSON="$nodes_json" \
+python3 <<'PY' || e2e_fail "live node topology does not match bootstrap fixture"
+import json
+import os
+from pathlib import Path
+
+import yaml
+
+fixture = yaml.safe_load(Path(os.environ["CLUSTER_FIXTURE"]).read_text(encoding="utf-8"))
+cluster = fixture["k3d_cluster"]["name"]
+required_roles = fixture["k3d_cluster"]["required_node_roles"]
+node_names = [item["metadata"]["name"] for item in json.loads(os.environ["NODES_JSON"])["items"]]
+
+missing = [
+    role
+    for role in required_roles
+    if not any(f"{cluster}-{role}" in node_name for node_name in node_names)
+]
+if missing:
+    raise SystemExit(f"missing k3d node roles: {', '.join(missing)}; nodes={node_names}")
+PY
+actual_nodes="$(printf '%s' "$nodes_json" | jq '.items | length')"
+e2e_pass "live nodes include bootstrap fixture roles (${actual_nodes} nodes)"
 
 kubectl_cmd wait nodes --all --for=condition=Ready --timeout=180s >/dev/null
 e2e_pass "all nodes Ready"

@@ -55,3 +55,80 @@ subjects:
   - kind: ServiceAccount
     name: provider-kubernetes-runtime
     namespace: crossplane-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-app-cluster-connections
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: provider-kubernetes-appcluster-namespace-observer
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    resourceNames:
+      - platform-app-cluster-connections
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: provider-kubernetes-appcluster-namespace-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: provider-kubernetes-appcluster-namespace-observer
+subjects:
+  - kind: ServiceAccount
+    name: provider-kubernetes
+    namespace: crossplane-system
+  - kind: ServiceAccount
+    name: provider-kubernetes-runtime
+    namespace: crossplane-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: provider-kubernetes-appcluster-secrets
+  namespace: platform-app-cluster-connections
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: provider-kubernetes-appcluster-secrets
+  namespace: platform-app-cluster-connections
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: provider-kubernetes-appcluster-secrets
+subjects:
+  - kind: ServiceAccount
+    name: provider-kubernetes
+    namespace: crossplane-system
+  - kind: ServiceAccount
+    name: provider-kubernetes-runtime
+    namespace: crossplane-system

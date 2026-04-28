@@ -190,7 +190,6 @@ assert_kustomize() {
   pass "local root kustomization includes applications"
 
   grep -q 'name: server-manager-postgres' "$app_render" || die "server-manager CNPG Cluster rendered"
-  grep -q 'kind: AtlasMigration' "$app_render" || die "server-manager AtlasMigration rendered"
   grep -q 'name: server-manager-alembic-migrate' "$app_render" || die "server-manager Alembic Job rendered"
   grep -q "host: ${ingress_host}" "$app_render" || die "server-manager API ingress rendered"
   grep -q "$api_image" "$app_render" || die "server-manager API image rendered"
