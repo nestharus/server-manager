@@ -9,6 +9,7 @@ FAIL_COUNT=0
 SKIP_COUNT=0
 RUN_CLUSTER=0
 CLUSTER_EXERCISED=0
+STATIC_ONLY=0
 
 pass() {
   echo "  PASS: $1"
@@ -27,11 +28,12 @@ skip() {
 
 usage() {
   cat <<'EOF'
-Usage: validate_platform_bootstrap.sh [--cluster]
+Usage: validate_platform_bootstrap.sh [--static-only] [--cluster]
 
 Validates platform bootstrap files and local channel tooling.
 
 Options:
+  --static-only  Validate only the INIT-101 local bootstrap handoff contract
   --cluster   Run the full local k3d bring-up, kubectl, idempotency, and delete proof
   -h, --help  Show this help
 EOF
@@ -41,6 +43,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --cluster)
       RUN_CLUSTER=1
+      ;;
+    --static-only)
+      STATIC_ONLY=1
       ;;
     -h|--help)
       usage
@@ -54,6 +59,12 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "$STATIC_ONLY" -eq 1 && "$RUN_CLUSTER" -eq 1 ]]; then
+  echo "unknown option combination: --static-only cannot be combined with --cluster" >&2
+  usage >&2
+  exit 2
+fi
 
 assert_file_exists() {
   local file="$1"
@@ -4138,6 +4149,111 @@ PY
     fail "app-cluster rendered manifest contract"
   fi
 }
+
+print_summary_and_exit() {
+  echo ""
+  echo "Summary: ${PASS_COUNT} passed, ${FAIL_COUNT} failed, ${SKIP_COUNT} skipped"
+  if [[ "$CLUSTER_EXERCISED" -eq 1 ]]; then
+    echo "Cluster mode exercised: yes"
+  else
+    echo "Cluster mode exercised: no"
+  fi
+
+  if [[ "$FAIL_COUNT" -gt 0 ]]; then
+    exit 1
+  fi
+  exit 0
+}
+
+assert_local_bootstrap_handoff_contract() {
+  local fixture="${INFRA_DIR}/tests/fixtures/channels/local_platform_bootstrap.yml"
+  local resolved="${REPO_ROOT}/.tmp/validate-platform-bootstrap/local-bootstrap.resolved.json"
+  local py_bin
+
+  assert_file_exists "tests/fixtures/channels/local_platform_bootstrap.yml"
+  assert_file_exists "schemas/platform-channel.schema.json"
+  assert_file_exists "schemas/platform-channel-resolved.schema.json"
+  assert_file_exists "channels/local.yaml"
+  assert_file_exists "scripts/resolve_platform_channel.py"
+  assert_file_exists "scripts/validate_platform_channels.py"
+  assert_file_exists "scripts/bring-up-local-channel.sh"
+  assert_executable "scripts/bring-up-local-channel.sh"
+  assert_bring_up_script_help_works
+
+  if ! py_bin="$(python_bin)"; then
+    fail "python interpreter available for local bootstrap handoff validation"
+    return
+  fi
+
+  mkdir -p "$(dirname "$resolved")"
+  if "$py_bin" "${INFRA_DIR}/scripts/resolve_platform_channel.py" --channel local --out "$resolved" \
+    && "$py_bin" - "$fixture" "$resolved" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+import yaml
+
+fixture = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+resolved = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+
+if fixture.get("slice") != "SLICE-R.05":
+    raise SystemExit("fixture is not scoped to SLICE-R.05")
+if fixture.get("local_channel", {}).get("id") != resolved.get("id"):
+    raise SystemExit("fixture local channel id does not match resolved channel")
+cluster = resolved.get("cluster", {})
+if cluster.get("target") != "k3d-local":
+    raise SystemExit(f"local channel target mismatch: {cluster.get('target')!r}")
+k3d = cluster.get("k3d", {})
+expected = fixture.get("k3d_cluster", {})
+if k3d.get("servers") != 1 or k3d.get("agents") != 1:
+    raise SystemExit(f"unexpected local k3d topology: {k3d!r}")
+if expected.get("name") != "humility-local":
+    raise SystemExit("fixture cluster name mismatch")
+if expected.get("kubeconfig") != "~/.kube/humility-local.yaml":
+    raise SystemExit("fixture kubeconfig handoff mismatch")
+roles = set(expected.get("required_node_roles", []))
+if roles != {"server", "agent"}:
+    raise SystemExit(f"fixture node-role contract mismatch: {roles!r}")
+for key in ("reachability_checks", "readiness_checks", "in_cluster_checks"):
+    if not expected.get(key):
+        raise SystemExit(f"fixture missing {key}")
+handoff = fixture.get("bootstrap_handoff", {})
+if "API server endpoint or kubeconfig handoff reference" not in handoff.get("required_outputs", []):
+    raise SystemExit("handoff output contract missing kubeconfig/API endpoint")
+for forbidden in ("installing or validating Flux reconciliation", "installing or validating Crossplane"):
+    if forbidden not in handoff.get("forbidden_scope", []):
+        raise SystemExit(f"handoff forbidden scope missing {forbidden}")
+PY
+  then
+    pass "local bootstrap fixture matches resolved channel handoff"
+  else
+    fail "local bootstrap fixture matches resolved channel handoff"
+  fi
+
+  if grep -q -- '--cluster-only' "${INFRA_DIR}/scripts/bring-up-local-channel.sh" \
+    && grep -q 'Skipping Flux post-install because --cluster-only was passed' "${INFRA_DIR}/scripts/bring-up-local-channel.sh"; then
+    pass "bring-up supports cluster-only handoff before Flux"
+  else
+    fail "bring-up supports cluster-only handoff before Flux"
+  fi
+
+  if grep -qi 'crossplane' "${INFRA_DIR}/scripts/bring-up-local-channel.sh"; then
+    fail "bring-up local bootstrap excludes Crossplane scope"
+  else
+    pass "bring-up local bootstrap excludes Crossplane scope"
+  fi
+}
+
+run_static_only_platform_bootstrap() {
+  echo "=== Slice R.05 local platform bootstrap static validation ==="
+  assert_local_bootstrap_handoff_contract
+  print_summary_and_exit
+}
+
+if [[ "$STATIC_ONLY" -eq 1 ]]; then
+  run_static_only_platform_bootstrap
+fi
 
 echo "=== Slice 101.01 channel contract validation ==="
 
