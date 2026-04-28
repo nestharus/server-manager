@@ -186,13 +186,17 @@ spec:
               protocol: TCP
           env:
             - name: OPAL_POLICY_REPO_URL
-              value: 
+              value: "http://git-local.git-system.svc.cluster.local:8080/cgi-bin/git/humility-local.git"
             - name: OPAL_POLICY_REPO_POLLING_INTERVAL
               value: "30"
             - name: UVICORN_NUM_WORKERS
               value: "1"
+            - name: OPAL_FILTER_FILE_EXTENSIONS
+              value: ".cedar"
+            - name: OPAL_POLICY_REPO_MAIN_BRANCH
+              value: "main"
             - name: OPAL_POLICY_REPO_POLICY_EXTENSIONS
-              value: "[\".cedar\"]"
+              value: ".cedar"
           readinessProbe:
             httpGet:
               path: /healthcheck

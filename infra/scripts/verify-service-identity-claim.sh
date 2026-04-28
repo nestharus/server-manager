@@ -77,17 +77,31 @@ jq -e --arg subject "$subject" --arg principal "$principal" --arg audience "$aud
 echo "PASS: ${channel} service identity claim maps ${subject} to ${principal}"
 payload="$(jq -nc --arg principal "$principal" \
   '{principal: $principal, action: "Action::\"api:ci:deploy\"", resource: "Resource::\"server-manager-api\""}')"
+generated_rel="policy/cedar/channels/local/services/server-manager-api/generated/policies"
+expected_policy_ids="$(jq -c --arg p "$generated_rel" '[.[].id | "\($p)/\(.).cedar"] | sort' "$policy_file")"
 proof_command='
 set -e
-ready=0
-for _ in $(seq 1 30); do
-  if curl -fsS http://opal-client:8180/v1/policies >/dev/null 2>&1; then
-    ready=1
-    break
+expected="$(printf "%s" "$EXPECTED_POLICY_IDS" | tr -d "[]\"" | tr "," " ")"
+last_body=""
+missing="$expected"
+for _ in $(seq 1 120); do
+  body="$(curl -fsS http://opal-client:8180/v1/policies 2>/dev/null || true)"
+  last_body="$body"
+  missing=""
+  if [ -n "$body" ]; then
+    for id in $expected; do
+      if ! printf "%s" "$body" | grep -Eq "\"id\"[[:space:]]*:[[:space:]]*\"${id}\""; then
+        missing="${missing} ${id}"
+      fi
+    done
+    [ -z "$missing" ] && break
   fi
   sleep 1
 done
-test "$ready" = 1
+if [ -n "$missing" ]; then
+  printf "missing policy IDs:%s\nlast policies: %s\n" "$missing" "$last_body" >&2
+  exit 1
+fi
 printf "%s" "$AUTH_PAYLOAD" |
   curl -fsS -X POST \
     -H "Content-Type: application/json" \
@@ -103,7 +117,7 @@ fi
 command -v kubectl >/dev/null 2>&1 || die "kubectl is required for runtime proof"
 [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
 
-kubectl --kubeconfig "$KUBECONFIG_PATH" -n "$AUTH_NAMESPACE" wait job/cedar-access-policy-bootstrap --for=condition=Complete --timeout=300s >/dev/null
+kubectl --kubeconfig "$KUBECONFIG_PATH" -n "$AUTH_NAMESPACE" rollout status deployment/opal-client --timeout=180s >/dev/null
 kubectl --kubeconfig "$KUBECONFIG_PATH" -n "$AUTH_NAMESPACE" delete pod init-115-service-identity --ignore-not-found >/dev/null
 cleanup_pod() {
   kubectl --kubeconfig "$KUBECONFIG_PATH" -n "$AUTH_NAMESPACE" delete pod init-115-service-identity --ignore-not-found >/dev/null 2>&1 || true
@@ -113,6 +127,7 @@ kubectl --kubeconfig "$KUBECONFIG_PATH" -n "$AUTH_NAMESPACE" run init-115-servic
   --restart=Never \
   --labels=app.kubernetes.io/name=opal-cedar,platform.humility.gg/init=115 \
   --image=curlimages/curl:8.19.0 \
+  --env="EXPECTED_POLICY_IDS=${expected_policy_ids}" \
   --env="AUTH_PAYLOAD=${payload}" \
   --command -- /bin/sh -ec "$proof_command" >/dev/null
 if ! kubectl --kubeconfig "$KUBECONFIG_PATH" -n "$AUTH_NAMESPACE" wait pod/init-115-service-identity --for=jsonpath='{.status.phase}'=Succeeded --timeout=180s >/dev/null; then

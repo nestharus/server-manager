@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 import yaml
+
+from infra.tests.fixtures.cedar_policy_source import (
+    canonical_policy_map,
+    generated_policy_map,
+    render_snapshot,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -40,21 +47,61 @@ def _service_identities(fixture: dict) -> dict:
     )
 
 
-def _opal_bundle_policies(fixture: dict) -> list[dict]:
-    config_map = _yaml(_repo_path(fixture["bundle"]["gitops_configmap"]))
-    return json.loads(config_map["data"]["policies.json"])
+def _seeded_policy_files(fixture: dict) -> dict[str, str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        snapshot = Path(tmp) / "gitops-source"
+        render_snapshot(snapshot)
+        return generated_policy_map(snapshot, fixture)
 
 
 def _permits(policies: list[dict], principal: str, action: str, resource: str) -> bool:
     needles = [f"principal == {principal}", f"action == {action}", f"resource == {resource}"]
-    return any(all(needle in policy.get("content", "") for needle in needles) for policy in policies)
+    return any(
+        policy.get("content", "").lstrip().startswith("permit(")
+        and all(needle in policy.get("content", "") for needle in needles)
+        for policy in policies
+    )
 
 
 def test_cedar_policy_decisions_match_the_contract_matrix() -> None:
-    """INIT-115 / SLICE-R.19: assert allow/deny behavior, not policy-id literals."""
+    """Risk annotation: group=TG-4; named_risk=access_policy_decision_contract_drift;
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T4;
+    assumptions=A5.
+    """
     fixture = _fixture()
     policies = _policies(fixture)
+    required_cases = {
+        (
+            'User::"sample@local.humility.local"',
+            'Action::"api:read"',
+            'Resource::"server-manager-api"',
+            "allow",
+        ),
+        (
+            'User::"other@local.humility.local"',
+            'Action::"api:read"',
+            'Resource::"server-manager-api"',
+            "deny",
+        ),
+        (
+            'Service::"buildkite-agent.local"',
+            'Action::"api:ci:deploy"',
+            'Resource::"server-manager-api"',
+            "allow",
+        ),
+        (
+            'Service::"buildkite-agent.local"',
+            'Action::"api:read"',
+            'Resource::"server-manager-api"',
+            "deny",
+        ),
+    }
+    matrix_cases = {
+        (case["principal"], case["action"], case["resource"], case["effect"])
+        for case in fixture["decisions"]
+    }
 
+    assert required_cases <= matrix_cases
     for case in fixture["decisions"]:
         permitted = _permits(
             policies,
@@ -65,22 +112,22 @@ def test_cedar_policy_decisions_match_the_contract_matrix() -> None:
         assert permitted is (case["effect"] == "allow"), case
 
 
-def test_gitops_bundle_loads_the_contract_policy_set() -> None:
-    """INIT-115 handoff: OPAL bundle must load the same policy set as the repo."""
+def test_seeded_policy_files_load_the_contract_policy_set() -> None:
+    """Risk annotation: group=TG-4; named_risk=generated_seeded_bundle_differs_from_contract;
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.4;
+    assumptions=A3,A5.
+    """
     fixture = _fixture()
-    repo_policies = _policies(fixture)
-    bundle_policies = _opal_bundle_policies(fixture)
+    seeded_policies = _seeded_policy_files(fixture)
 
-    assert bundle_policies
-    assert all("content" in policy for policy in bundle_policies)
-    assert sorted(bundle_policies, key=lambda policy: policy["id"]) == sorted(
-        repo_policies,
-        key=lambda policy: policy["id"],
-    )
+    assert seeded_policies == canonical_policy_map()
 
 
 def test_service_identities_cover_machine_principals_in_the_matrix() -> None:
-    """INIT-115 proposal: Buildkite and Crossplane map to Cedar Service principals."""
+    """Risk annotation: group=TG-4; named_risk=service_identity_matrix_principals_missing;
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T4;
+    assumptions=A5.
+    """
     fixture = _fixture()
     service_identities = _service_identities(fixture)
     principals = {
@@ -93,13 +140,27 @@ def test_service_identities_cover_machine_principals_in_the_matrix() -> None:
 
 
 def test_bundle_fixtures_do_not_commit_operator_secret_material() -> None:
-    """INIT-115 anti-scope: no committed credential material in policy fixtures."""
+    """Risk annotation: group=TG-4; named_risk=operator_secret_material_in_seeded_policy_fixture;
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.4;
+    assumptions=A5.
+    """
     fixture = _fixture()
-    bundle_policies = _opal_bundle_policies(fixture)
+    bundle_policies = _seeded_policy_files(fixture)
     service_identities = _repo_path(
         fixture["bundle"]["service_identity_file"]
     ).read_text(encoding="utf-8")
-    combined = json.dumps(bundle_policies) + service_identities
+    combined = json.dumps(bundle_policies, sort_keys=True) + service_identities
 
     for forbidden in fixture["token_safety"]["forbidden_substrings"]:
         assert forbidden not in combined
+
+
+def test_access_policy_matrix_uses_seeded_policy_file_bundle_reference() -> None:
+    """Risk annotation: group=TG-4; named_risk=matrix_fixture_retains_deleted_configmap_bundle;
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.5;
+    assumptions=A5.
+    """
+    fixture = _fixture()
+
+    assert "seeded_policy_files" in fixture["bundle"]
+    assert "gitops_configmap" not in fixture["bundle"]

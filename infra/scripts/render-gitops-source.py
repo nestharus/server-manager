@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -19,8 +20,14 @@ from resolve_platform_channel import ChannelError, write_error
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GITOPS_ROOT = REPO_ROOT / "gitops"
+POLICY_ROOT = REPO_ROOT / "policy"
 MARKER_NAME = "gitops-snapshot-marker.yaml"
 MARKER_NAMESPACE = "humility-gitops-sentinel"
+POLICY_BUNDLE_RELATIVE = Path("policy/cedar/channels/local/services/server-manager-api/policies.json")
+GENERATED_POLICY_DIR_RELATIVE = Path(
+    "policy/cedar/channels/local/services/server-manager-api/generated/policies"
+)
+POLICY_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
 def _load_resolved(path: Path) -> dict[str, Any]:
@@ -78,6 +85,68 @@ def _copy_gitops_tree(out: Path) -> Path:
     else:
         snapshot_gitops.mkdir(parents=True)
     return snapshot_gitops
+
+
+def _copy_policy_tree(out: Path) -> Path:
+    snapshot_policy = out / "policy"
+    if POLICY_ROOT.is_dir():
+        shutil.copytree(POLICY_ROOT, snapshot_policy, dirs_exist_ok=True)
+    else:
+        snapshot_policy.mkdir(parents=True)
+    return snapshot_policy
+
+
+def _load_policy_bundle(policy_file: Path) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(policy_file.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"missing canonical Cedar policy file: {policy_file}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid Cedar policy JSON: {exc}") from exc
+
+    if not isinstance(payload, list):
+        raise ValueError("canonical Cedar policy JSON must be a list")
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"Cedar policy entry {index} must be an object")
+    return payload
+
+
+def _materialize_cedar_policy_files(out: Path) -> None:
+    policy_file = out / POLICY_BUNDLE_RELATIVE
+    generated_dir = out / GENERATED_POLICY_DIR_RELATIVE
+    policies = _load_policy_bundle(policy_file)
+    seen_ids: set[str] = set()
+
+    if generated_dir.exists():
+        shutil.rmtree(generated_dir)
+    generated_dir.mkdir(parents=True)
+
+    for index, policy in enumerate(policies):
+        if "id" not in policy:
+            raise ValueError(f"Cedar policy entry {index} is missing id")
+        if "content" not in policy:
+            raise ValueError(f"Cedar policy entry {index} is missing content")
+
+        policy_id = policy["id"]
+        content = policy["content"]
+        if not isinstance(policy_id, str) or not policy_id:
+            raise ValueError(f"Cedar policy entry {index} has an invalid id")
+        if not POLICY_ID_PATTERN.fullmatch(policy_id):
+            raise ValueError(f"Cedar policy id contains path-unsafe characters: {policy_id}")
+        if policy_id in seen_ids:
+            raise ValueError(f"duplicate Cedar policy id: {policy_id}")
+        if not isinstance(content, str) or content == "":
+            raise ValueError(f"Cedar policy {policy_id} has empty content")
+
+        seen_ids.add(policy_id)
+        (generated_dir / f"{policy_id}.cedar").write_text(f"{content}\n", encoding="utf-8")
+
+    cedar_files = sorted(
+        f"{GENERATED_POLICY_DIR_RELATIVE.as_posix()}/{policy_id}.cedar"
+        for policy_id in seen_ids
+    )
+    (out / ".manifest").write_text("\n".join(cedar_files) + "\n", encoding="utf-8")
 
 
 def _source_path(out: Path, gitops: dict[str, Any]) -> Path:
@@ -206,6 +275,8 @@ def render(resolved: dict[str, Any], out: Path) -> None:
     out.mkdir(parents=True)
 
     _copy_gitops_tree(out)
+    _copy_policy_tree(out)
+    _materialize_cedar_policy_files(out)
     _render_source_manifests(out, channel_id, gitops)
     _render_marker(out, gitops)
 

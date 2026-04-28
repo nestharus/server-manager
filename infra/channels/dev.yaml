@@ -93,8 +93,6 @@ ingress:
     proof_path: /minio/health/ready
 access_policy:
   policy_repo_path: policy/cedar/channels/dev
-  bundle_config_map_name: cedar-access-policy-bundle
-  bootstrap_job_name: cedar-access-policy-bootstrap
   policy_review:
     required_checks:
       - cedar bundle renders from channel/service paths
