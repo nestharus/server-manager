@@ -1,0 +1,19 @@
+{
+  "apiVersion": "cert-manager.io/v1",
+  "kind": "Certificate",
+  "metadata": {
+    "name": "humility-local-sample",
+    "namespace": "cert-manager-test"
+  },
+  "spec": {
+    "secretName": "humility-local-sample-tls",
+    "dnsNames": [
+      "minio.minio-system.humility.local"
+    ],
+    "issuerRef": {
+      "group": "certmanager.step.sm",
+      "kind": "StepClusterIssuer",
+      "name": "humility-local-step-ca"
+    }
+  }
+}
