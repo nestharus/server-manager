@@ -19,6 +19,30 @@ steps:
     label: "Unit tests"
     command: "python -m pytest tests infra/tests"
 
+  - key: api-tests
+    label: "API tests"
+    command: |
+      command -v docker >/dev/null || (echo "BLOCKED: Docker required for testcontainers" && exit 2)
+      docker info >/dev/null || (echo "BLOCKED: Docker required for testcontainers" && exit 2)
+      cd services/api
+      uv sync --dev
+      uv run pytest -v tests/
+
+  - key: discord-tests
+    label: "Discord tests"
+    command: |
+      cd services/discord
+      uv sync --dev
+      uv run pytest -v tests/
+
+  - key: web-tests
+    label: "Web tests"
+    command: |
+      command -v npm >/dev/null || (echo "BLOCKED: web tests need INIT-118 recovery" && exit 2)
+      cd services/web
+      npm ci
+      npm test
+
   - key: init-111-data-plane-static
     label: "INIT-111 data plane static validation"
     command: "infra/tests/validate_data_plane_local.sh --static-only"
