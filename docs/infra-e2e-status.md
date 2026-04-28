@@ -1,6 +1,6 @@
 # INIT-119 Infra E2E Status
 
-Generated: 2026-04-28T07:47:37Z
+Generated: 2026-04-28T11:27:34Z
 
 Bring-up seconds: NOT RECORDED
 
@@ -23,5 +23,5 @@ Bring-up seconds: NOT RECORDED
 | 15-auth-stack | FAIL | Playwright OAuth proof requires a reachable local browser path and seeded Authentik OIDC app (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/15-auth-stack.log) |
 | 16-access-policy | PASS | validate-access-policy completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/16-access-policy.log) |
 | 17-tenant-isolation | PASS | validate-tenant-isolation completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/17-tenant-isolation.log) |
-| 18-observability | FAIL | validate-observability failed; see /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/18-observability/validate-observability.log (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/18-observability.log) |
-| 19-web-ui | FAIL | validate-web-ui failed; see /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/19-web-ui/validate-web-ui.log (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/19-web-ui.log) |
+| 18-observability | PASS | validate-observability completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/18-observability.log) |
+| 19-web-ui | FAIL | validate-web-ui completed (log: /home/nes/projects/server-manager/worktrees/recovery-test-first-audit/.tmp/init-119-e2e/logs/19-web-ui.log) |

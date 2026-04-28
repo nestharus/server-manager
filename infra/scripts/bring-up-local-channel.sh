@@ -379,6 +379,9 @@ create_cluster() {
     --image "rancher/k3s:${k3d_image_tag}"
     --servers "$servers"
     --agents "$agents"
+    --port "80:80@loadbalancer"
+    --port "443:443@loadbalancer"
+    --k3s-arg "--disable=traefik@server:0"
     --kubeconfig-update-default=false
     --volume "/var/run/docker.sock:/var/run/docker.sock@all"
     --wait
@@ -417,6 +420,188 @@ install_flux_post_install() {
   fi
 
   bash "$FLUX_INSTALLER" --channel "$CHANNEL_ID"
+  distribute_step_ca_trust
+  bootstrap_pomerium_oidc_application
+}
+
+# Copies step-ca's CA bundle (root + intermediate) into the auth-system
+# namespace so Pomerium can trust the OIDC provider's TLS cert when fetching
+# the OpenID discovery doc from auth.local.humility.local.
+# Pomerium reads CERTIFICATE_AUTHORITY_FILE=/etc/pomerium/step-ca/ca.pem
+# (mounted from the ConfigMap created here) at startup.
+distribute_step_ca_trust() {
+  local kubectl_args=(--kubeconfig "$kubeconfig_path")
+
+  for attempt in $(seq 1 60); do
+    if kubectl "${kubectl_args[@]}" -n step-ca-system get configmap step-ca-certs >/dev/null 2>&1; then
+      break
+    fi
+    sleep 5
+  done
+
+  if ! kubectl "${kubectl_args[@]}" -n step-ca-system get configmap step-ca-certs >/dev/null 2>&1; then
+    log "step-ca-certs ConfigMap unavailable; skipping Pomerium step-ca trust copy"
+    return 0
+  fi
+
+  if ! kubectl "${kubectl_args[@]}" get namespace auth-system >/dev/null 2>&1; then
+    log "auth-system namespace not present; skipping Pomerium step-ca trust copy"
+    return 0
+  fi
+
+  local root_ca intermediate_ca
+  root_ca="$(kubectl "${kubectl_args[@]}" -n step-ca-system get configmap step-ca-certs -o 'jsonpath={.data.root_ca\.crt}')"
+  intermediate_ca="$(kubectl "${kubectl_args[@]}" -n step-ca-system get configmap step-ca-certs -o 'jsonpath={.data.intermediate_ca\.crt}')"
+
+  if [[ -z "$root_ca" || -z "$intermediate_ca" ]]; then
+    log "step-ca-certs ConfigMap incomplete; skipping Pomerium step-ca trust copy"
+    return 0
+  fi
+
+  local bundle_file
+  bundle_file="$(mktemp)"
+  printf '%s\n%s\n' "$intermediate_ca" "$root_ca" >"$bundle_file"
+
+  log "Distributing step-ca trust bundle to auth-system/pomerium-step-ca-trust"
+  kubectl "${kubectl_args[@]}" -n auth-system create configmap pomerium-step-ca-trust \
+    --from-file=ca.pem="$bundle_file" \
+    --dry-run=client -o yaml | kubectl "${kubectl_args[@]}" apply -f -
+
+  rm -f "$bundle_file"
+
+  if kubectl "${kubectl_args[@]}" -n auth-system get deployment pomerium-proxy >/dev/null 2>&1; then
+    kubectl "${kubectl_args[@]}" -n auth-system rollout restart deployment/pomerium-proxy >/dev/null
+    kubectl "${kubectl_args[@]}" -n auth-system rollout status deployment/pomerium-proxy --timeout=120s >/dev/null
+  fi
+}
+
+# Creates the Authentik OAuth2 Provider + Application that Pomerium uses
+# for OIDC. Runs from the host (not in-cluster) to avoid the Authentik
+# server's IPv6-only listener that prevents pod-to-pod IPv4 reach.
+# Reads the bootstrap token + client_id/secret from the authentik-config
+# Secret (populated by InfisicalSecret).
+bootstrap_pomerium_oidc_application() {
+  local kubectl_args=(--kubeconfig "$kubeconfig_path")
+
+  if ! kubectl "${kubectl_args[@]}" -n auth-system rollout status deployment/authentik-server --timeout=180s >/dev/null 2>&1; then
+    log "authentik-server not ready; skipping Pomerium OIDC bootstrap"
+    return 0
+  fi
+
+  local token client_id client_secret
+  token="$(kubectl "${kubectl_args[@]}" -n auth-system get secret authentik-config -o 'jsonpath={.data.AUTHENTIK_BOOTSTRAP_TOKEN}' | base64 -d)"
+  client_id="$(kubectl "${kubectl_args[@]}" -n auth-system get secret authentik-config -o 'jsonpath={.data.OIDC_CLIENT_ID}' | base64 -d)"
+  client_secret="$(kubectl "${kubectl_args[@]}" -n auth-system get secret authentik-config -o 'jsonpath={.data.OIDC_CLIENT_SECRET}' | base64 -d)"
+
+  if [[ -z "$token" || -z "$client_id" || -z "$client_secret" ]]; then
+    log "missing OIDC bootstrap inputs; skipping Pomerium OIDC bootstrap"
+    return 0
+  fi
+
+  local local_port="28085"
+  local pf_log
+  pf_log="$(mktemp)"
+  kubectl "${kubectl_args[@]}" -n auth-system port-forward --address 127.0.0.1 svc/authentik-server "${local_port}:80" >"$pf_log" 2>&1 &
+  local pf_pid=$!
+  trap "kill $pf_pid 2>/dev/null; rm -f '$pf_log'" RETURN
+
+  local ready=0
+  for attempt in $(seq 1 30); do
+    if curl -fsS -m 2 "http://127.0.0.1:${local_port}/-/health/ready/" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [[ "$ready" != 1 ]]; then
+    log "authentik port-forward did not become ready; skipping Pomerium OIDC bootstrap (see ${pf_log})"
+    return 0
+  fi
+
+  local api="http://127.0.0.1:${local_port}/api/v3"
+  local auth_h="Authorization: Bearer ${token}"
+
+  local authz_flow authn_flow invalidation_flow signing_kp
+  authz_flow="$(curl -fsS -H "$auth_h" "${api}/flows/instances/?slug=default-provider-authorization-implicit-consent" | python3 -c 'import sys, json; print(next((r.get("pk", "") for r in json.load(sys.stdin).get("results", [])), ""))')"
+  authn_flow="$(curl -fsS -H "$auth_h" "${api}/flows/instances/?slug=default-authentication-flow" | python3 -c 'import sys, json; print(next((r.get("pk", "") for r in json.load(sys.stdin).get("results", [])), ""))')"
+  invalidation_flow="$(curl -fsS -H "$auth_h" "${api}/flows/instances/?slug=default-provider-invalidation-flow" | python3 -c 'import sys, json; print(next((r.get("pk", "") for r in json.load(sys.stdin).get("results", [])), ""))')"
+  signing_kp="$(curl -fsS -H "$auth_h" "${api}/crypto/certificatekeypairs/?name=authentik+Self-signed+Certificate" | python3 -c 'import sys, json; print(next((r.get("pk", "") for r in json.load(sys.stdin).get("results", [])), ""))')"
+
+  if [[ -z "$authz_flow" || -z "$authn_flow" || -z "$invalidation_flow" || -z "$signing_kp" ]]; then
+    log "missing default Authentik flows or signing keypair; skipping Pomerium OIDC bootstrap"
+    return 0
+  fi
+
+  local scope_openid scope_email scope_profile
+  scope_openid="$(curl -fsS -H "$auth_h" "${api}/propertymappings/provider/scope/?managed=goauthentik.io/providers/oauth2/scope-openid" | python3 -c 'import sys, json; print(next((r.get("pk", "") for r in json.load(sys.stdin).get("results", [])), ""))')"
+  scope_email="$(curl -fsS -H "$auth_h" "${api}/propertymappings/provider/scope/?managed=goauthentik.io/providers/oauth2/scope-email" | python3 -c 'import sys, json; print(next((r.get("pk", "") for r in json.load(sys.stdin).get("results", [])), ""))')"
+  scope_profile="$(curl -fsS -H "$auth_h" "${api}/propertymappings/provider/scope/?managed=goauthentik.io/providers/oauth2/scope-profile" | python3 -c 'import sys, json; print(next((r.get("pk", "") for r in json.load(sys.stdin).get("results", [])), ""))')"
+
+  if [[ -z "$scope_openid" || -z "$scope_email" || -z "$scope_profile" ]]; then
+    log "missing default Authentik scope mappings; skipping Pomerium OIDC bootstrap"
+    return 0
+  fi
+
+  local provider_payload
+  provider_payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'name': 'pomerium',
+    'client_type': 'confidential',
+    'client_id': sys.argv[1],
+    'client_secret': sys.argv[2],
+    'authorization_flow': sys.argv[3],
+    'authentication_flow': sys.argv[4],
+    'invalidation_flow': sys.argv[5],
+    'signing_key': sys.argv[6],
+    'redirect_uris': [{'matching_mode': 'strict', 'url': 'https://authenticate.local.humility.local/oauth2/callback'}],
+    'sub_mode': 'hashed_user_id',
+    'include_claims_in_id_token': True,
+    'issuer_mode': 'per_provider',
+    'property_mappings': [sys.argv[7], sys.argv[8], sys.argv[9]],
+}))
+" "$client_id" "$client_secret" "$authz_flow" "$authn_flow" "$invalidation_flow" "$signing_kp" "$scope_openid" "$scope_email" "$scope_profile")"
+
+  local existing_provider
+  existing_provider="$(curl -fsS -H "$auth_h" "${api}/providers/oauth2/?name=pomerium" | python3 -c 'import sys, json; r=json.load(sys.stdin).get("results", []); print(r[0].get("pk", "") if r else "")')"
+  local provider_pk
+  if [[ -n "$existing_provider" ]]; then
+    log "Updating existing Authentik OAuth2Provider 'pomerium' (pk=${existing_provider})"
+    curl -fsS -X PATCH -H "$auth_h" -H "Content-Type: application/json" -d "$provider_payload" "${api}/providers/oauth2/${existing_provider}/" >/dev/null
+    provider_pk="$existing_provider"
+  else
+    log "Creating Authentik OAuth2Provider 'pomerium'"
+    provider_pk="$(curl -fsS -X POST -H "$auth_h" -H "Content-Type: application/json" -d "$provider_payload" "${api}/providers/oauth2/" | python3 -c 'import sys, json; print(json.load(sys.stdin).get("pk", ""))')"
+  fi
+
+  if [[ -z "$provider_pk" ]]; then
+    log "failed to create or update OAuth2Provider; skipping Application step"
+    return 0
+  fi
+
+  local app_payload
+  app_payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'name': 'Pomerium',
+    'slug': 'pomerium',
+    'provider': int(sys.argv[1]),
+    'policy_engine_mode': 'any',
+    'meta_launch_url': 'https://protected-api.local.humility.local/',
+}))
+" "$provider_pk")"
+
+  local existing_app
+  existing_app="$(curl -fsS -H "$auth_h" "${api}/core/applications/?slug=pomerium" | python3 -c 'import sys, json; r=json.load(sys.stdin).get("results", []); print("yes" if r else "")')"
+  if [[ "$existing_app" == "yes" ]]; then
+    log "Updating existing Authentik Application 'pomerium'"
+    curl -fsS -X PATCH -H "$auth_h" -H "Content-Type: application/json" -d "$app_payload" "${api}/core/applications/pomerium/" >/dev/null
+  else
+    log "Creating Authentik Application 'pomerium'"
+    curl -fsS -X POST -H "$auth_h" -H "Content-Type: application/json" -d "$app_payload" "${api}/core/applications/" >/dev/null
+  fi
+
+  log "Pomerium OAuth2 Provider + Application reconciled in Authentik"
 }
 
 main() {
