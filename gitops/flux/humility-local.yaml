@@ -1,0 +1,25 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: humility-local
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: http://git-local.git-system.svc.cluster.local:8080/cgi-bin/git/humility-local.git
+  ref:
+    branch: main
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: humility-local
+  namespace: flux-system
+spec:
+  interval: 1m
+  path: ./gitops/sources/local
+  prune: true
+  wait: true
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: humility-local
