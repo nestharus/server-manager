@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: netpol-deny-minio
+  labels:
+    app.kubernetes.io/name: netpol-deny-minio
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 45
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: client
+      image: busybox:1.37.0
+      command:
+        - /bin/sh
+        - -ec
+        - |
+          if nc -z -w 5 minio.minio-system.svc.cluster.local 9000; then
+            echo "unexpected MinIO connection succeeded"
+            exit 1
+          fi
+          echo "MinIO connection denied as expected"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 50m
+          memory: 64Mi

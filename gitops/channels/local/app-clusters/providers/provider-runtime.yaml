@@ -11,7 +11,7 @@ metadata:
 spec:
   serviceAccountTemplate:
     metadata:
-      name: provider-kubernetes
+      name: provider-kubernetes-runtime
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -52,46 +52,6 @@ subjects:
   - kind: ServiceAccount
     name: provider-kubernetes
     namespace: crossplane-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: provider-kubernetes-appcluster-handoff
-rules:
-  - apiGroups:
-      - ""
-    resources:
-      - namespaces
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups:
-      - ""
-    resources:
-      - secrets
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: provider-kubernetes-appcluster-handoff
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: provider-kubernetes-appcluster-handoff
-subjects:
   - kind: ServiceAccount
-    name: provider-kubernetes
+    name: provider-kubernetes-runtime
     namespace: crossplane-system
