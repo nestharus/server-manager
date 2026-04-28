@@ -19,6 +19,62 @@ steps:
     label: "Unit tests"
     command: "python -m pytest tests infra/tests"
 
+  - key: phase6-recovery-evidence-gate
+    label: "Phase 6 recovery evidence gate"
+    command: |
+      set -euo pipefail
+      shopt -s nullglob
+
+      recovery_roots=(.tmp/recovery-*)
+      if [ "${#recovery_roots[@]}" -eq 0 ]; then
+        echo "BLOCKED: no .tmp/recovery-* evidence roots found"
+        exit 1
+      fi
+
+      for recovery_root in "${recovery_roots[@]}"; do
+        red_report="${recovery_root}/red-phase/RED_PHASE.md"
+        green_report="${recovery_root}/green-phase/GREEN_PHASE.md"
+        step6b_index="${recovery_root}/phase6/step6b-output-index.md"
+        step6c_evidence="${recovery_root}/phase6/step6c-consumption.md"
+        process_report="${recovery_root}/phase6/process-tree-audit.md"
+
+        for report in \
+          "${red_report}" \
+          "${green_report}" \
+          "${step6b_index}" \
+          "${step6c_evidence}" \
+          "${process_report}"
+        do
+          if [ ! -s "${report}" ]; then
+            echo "BLOCKED: missing Phase 6 evidence report ${report}"
+            exit 1
+          fi
+        done
+
+        grep -q "^Verdict: CONFIRMED_RED$" "${red_report}" || {
+          echo "FAIL: RED_PHASE.md missing Verdict: CONFIRMED_RED"
+          exit 1
+        }
+        grep -q "^Verdict: CONFIRMED_GREEN$" "${green_report}" || {
+          echo "FAIL: GREEN_PHASE.md missing Verdict: CONFIRMED_GREEN"
+          exit 1
+        }
+        if grep -Eq "\\b(BLOCKING|BLOCKED|FAIL)\\b" "${process_report}"; then
+          echo "FAIL: process-tree-audit.md contains a blocking verdict"
+          exit 1
+        fi
+        if grep -Eq "^(Verdict|Status): .*\\bBLOCKED\\b" "${step6b_index}" "${step6c_evidence}"; then
+          echo "BLOCKED: Step 6b or Step 6c evidence reports a blocked collection"
+          exit 1
+        fi
+      done
+    artifact_paths:
+      - ".tmp/recovery-*/red-phase/RED_PHASE.md"
+      - ".tmp/recovery-*/green-phase/GREEN_PHASE.md"
+      - ".tmp/recovery-*/phase6/step6b-output-index.md"
+      - ".tmp/recovery-*/phase6/step6c-consumption.md"
+      - ".tmp/recovery-*/phase6/process-tree-audit.md"
+
   - key: api-tests
     label: "API tests"
     command: |

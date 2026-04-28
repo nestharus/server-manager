@@ -1,0 +1,31 @@
+scratch_root_glob: ".tmp/recovery-*"
+sample_report_root: "reports/recovery-sample"
+required_artifact_paths:
+  - name: red-phase verdict report
+    path: ".tmp/recovery-*/red-phase/RED_PHASE.md"
+  - name: green-phase verdict report
+    path: ".tmp/recovery-*/green-phase/GREEN_PHASE.md"
+  - name: Step 6b output index
+    path: ".tmp/recovery-*/phase6/step6b-output-index.md"
+  - name: Step 6c consumption evidence
+    path: ".tmp/recovery-*/phase6/step6c-consumption.md"
+  - name: process-tree audit report
+    path: ".tmp/recovery-*/phase6/process-tree-audit.md"
+verdict_rules:
+  - name: red phase test-authoring gate
+    report_name: "RED_PHASE.md"
+    accepted_verdict: "CONFIRMED_RED"
+  - name: green phase code-fix gate
+    report_name: "GREEN_PHASE.md"
+    accepted_verdict: "CONFIRMED_GREEN"
+required_failure_inputs:
+  - "RED_PHASE.md"
+  - "GREEN_PHASE.md"
+  - "step6b-output-index.md"
+  - "step6c-consumption.md"
+  - "process-tree-audit.md"
+  - "BLOCKED"
+process_blocking_terms:
+  - "BLOCKING"
+  - "BLOCKED"
+  - "FAIL"
