@@ -11,6 +11,8 @@ FIXTURE = (
     REPO_ROOT / "infra" / "tests" / "fixtures" / "contracts" / "observability_contract.yml"
 )
 OBS_DIR = REPO_ROOT / "gitops" / "channels" / "local" / "observability"
+VALIDATOR = REPO_ROOT / "infra" / "tests" / "validate_observability_local.sh"
+E2E_OBSERVABILITY = REPO_ROOT / "infra" / "tests" / "e2e" / "tests" / "18-observability.sh"
 
 
 def _yaml(path: Path) -> dict:
@@ -43,8 +45,10 @@ def test_dashboards_are_provisioned_with_tenant_filtering() -> None:
     expected = _yaml(FIXTURE)["dashboards"]
     config = _yaml(OBS_DIR / "dashboards" / "grafana-dashboards.yaml")
     dashboards = [json.loads(payload) for payload in config["data"].values()]
+    dashboard_uids = {dashboard["uid"] for dashboard in dashboards}
 
     assert dashboards
+    assert set(expected["required_uids"]) <= dashboard_uids
     for dashboard in dashboards:
         variables = dashboard["templating"]["list"]
         assert any(
@@ -73,3 +77,70 @@ def test_sample_log_query_contract_is_explicit() -> None:
 
     assert sample_log_query["selector"] == '{namespace="server-manager"}'
     assert sample_log_query["contains"] == "server-manager-api"
+
+
+def test_runtime_probe_fixtures_live_outside_validator_bodies() -> None:
+    """SLICE-R.21 fixture source: target query, dashboard, alert, and log proofs."""
+    contract = _yaml(FIXTURE)
+    validator = VALIDATOR.read_text(encoding="utf-8")
+    e2e = E2E_OBSERVABILITY.read_text(encoding="utf-8")
+
+    assert contract["prometheus_target_query"]["endpoint"] == "/api/v1/targets"
+    assert contract["prometheus_target_query"]["require_active_targets"] is True
+    assert contract["prometheus_target_query"]["require_all_up"] is True
+
+    dashboard = contract["dashboard_provisioning"]
+    assert dashboard["configmap"] == "grafana-dashboards"
+    assert {"flux-gitops-health.json", "cnpg.json"} <= set(dashboard["required_files"])
+
+    sample_alert = contract["sample_alert"]
+    assert sample_alert["alertname"] == "Init117SampleAlert"
+    assert sample_alert["labels"]["tenant"] == "platform"
+
+    sample_log = contract["sample_log"]
+    assert sample_log["stream"]["job"] == "init-117-proof"
+    assert sample_log["message"] in sample_log["query"]
+
+    assert str(FIXTURE.relative_to(REPO_ROOT)) in validator
+    assert "validate_observability_local.sh" in e2e
+    assert "--static-only" not in e2e
+
+
+def test_observability_networkpolicies_do_not_isolate_operator_webhooks() -> None:
+    """SLICE-R.21 must not recreate the INIT-117 webhook-isolating policy shape."""
+    guard = _yaml(FIXTURE)["webhook_isolation_guard"]
+    forbidden_source = guard["forbidden_source_namespace"]
+    forbidden_namespaces = set(guard["webhook_namespaces"])
+    offending: list[str] = []
+
+    for path in sorted(OBS_DIR.glob("**/*.yaml")):
+        for doc in _yaml_docs(path):
+            if doc.get("kind") != "NetworkPolicy":
+                continue
+            metadata = doc.get("metadata", {})
+            namespace = metadata.get("namespace")
+            if namespace not in forbidden_namespaces:
+                continue
+
+            spec = doc.get("spec", {})
+            if spec.get("podSelector") != {} or "Ingress" not in spec.get("policyTypes", []):
+                continue
+
+            ingress = spec.get("ingress", [])
+            from_rules = [
+                source
+                for rule in ingress
+                for source in rule.get("from", [])
+            ]
+            source_namespaces = {
+                source.get("namespaceSelector", {})
+                .get("matchLabels", {})
+                .get("kubernetes.io/metadata.name")
+                for source in from_rules
+            }
+            if source_namespaces == {forbidden_source}:
+                offending.append(
+                    f"{path.relative_to(REPO_ROOT)}:{namespace}/{metadata.get('name')}"
+                )
+
+    assert offending == []

@@ -86,6 +86,7 @@ command -v rg >/dev/null 2>&1 || die "rg is required"
 python3 -c "import yaml" 2>/dev/null || die "python3 PyYAML module is required"
 
 OBS_DIR="${REPO_ROOT}/gitops/channels/local/observability"
+OBS_CONTRACT="${REPO_ROOT}/infra/tests/fixtures/contracts/observability_contract.yml"
 resolved="$(python3 "$RESOLVER" --channel local)"
 
 jq -e '
@@ -102,15 +103,33 @@ jq -e '
 ' <<<"$resolved" >/dev/null || die "observability channel contract"
 pass "resolved observability channel contract"
 
-expected_monitors='["flux","crossplane","cert-manager","infisical","minio","cnpg","kong","pomerium","authentik","opal","server-manager-api","buildkite-agent"]'
+expected_monitors="$(python3 - "$OBS_CONTRACT" <<'PY'
+import json
+import sys
+import yaml
+print(json.dumps(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["scrape_targets"]))
+PY
+)"
 jq -e --argjson expected "$expected_monitors" '.observability.service_monitors == $expected' <<<"$resolved" >/dev/null || die "observability ServiceMonitor contract"
 pass "observability ServiceMonitor contract"
 
-expected_dashboards='["flux-gitops-health","cnpg","kong-request-rate","cedar-policy-decisions"]'
+expected_dashboards="$(python3 - "$OBS_CONTRACT" <<'PY'
+import json
+import sys
+import yaml
+print(json.dumps(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["dashboards"]["required_uids"]))
+PY
+)"
 jq -e --argjson expected "$expected_dashboards" '.observability.dashboards == $expected' <<<"$resolved" >/dev/null || die "observability dashboard contract"
 pass "observability dashboard contract"
 
-expected_alerts='["PodCrashLooping","ClusterDown","CertificateExpiringSoon"]'
+expected_alerts="$(python3 - "$OBS_CONTRACT" <<'PY'
+import json
+import sys
+import yaml
+print(json.dumps(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["sample_alerts"]))
+PY
+)"
 jq -e --argjson expected "$expected_alerts" '.observability.alerts == $expected' <<<"$resolved" >/dev/null || die "observability alert contract"
 pass "observability alert contract"
 
@@ -177,6 +196,50 @@ grep -q 'alert: ClusterDown' "$OBS_DIR/prometheus/rules-configmap.yaml" || die "
 grep -q 'alert: CertificateExpiringSoon' "$OBS_DIR/prometheus/rules-configmap.yaml" || die "CertificateExpiringSoon alert exists"
 pass "sample alerts exist"
 
+python3 - "$OBS_DIR" "$OBS_CONTRACT" <<'PY' || die "observability NetworkPolicies do not isolate operator webhooks"
+import sys
+from pathlib import Path
+import yaml
+
+obs_dir = Path(sys.argv[1])
+contract = yaml.safe_load(Path(sys.argv[2]).read_text())
+guard = contract["webhook_isolation_guard"]
+forbidden_source = guard["forbidden_source_namespace"]
+webhook_namespaces = set(guard["webhook_namespaces"])
+offending = []
+
+for path in sorted(obs_dir.glob("**/*.yaml")):
+    docs = yaml.safe_load_all(path.read_text())
+    for doc in docs:
+        if not isinstance(doc, dict) or doc.get("kind") != "NetworkPolicy":
+            continue
+        metadata = doc.get("metadata", {})
+        namespace = metadata.get("namespace")
+        if namespace not in webhook_namespaces:
+            continue
+        spec = doc.get("spec", {})
+        if spec.get("podSelector") != {} or "Ingress" not in spec.get("policyTypes", []):
+            continue
+        from_rules = [
+            source
+            for rule in spec.get("ingress", [])
+            for source in rule.get("from", [])
+        ]
+        source_namespaces = {
+            source.get("namespaceSelector", {})
+            .get("matchLabels", {})
+            .get("kubernetes.io/metadata.name")
+            for source in from_rules
+        }
+        if source_namespaces == {forbidden_source}:
+            offending.append(
+                f"{path.relative_to(obs_dir)}:{namespace}/{metadata.get('name')}"
+            )
+
+assert not offending, offending
+PY
+pass "observability NetworkPolicies do not isolate operator webhooks"
+
 if [[ "$STATIC_ONLY" -eq 1 ]]; then
   skip "runtime observability proof skipped by --static-only"
   finish
@@ -229,7 +292,13 @@ start_port_forward() {
 }
 
 start_port_forward prometheus 19090 9090
-targets_json="$(curl -fsS http://127.0.0.1:19090/api/v1/targets)"
+targets_endpoint="$(python3 - "$OBS_CONTRACT" <<'PY'
+import sys
+import yaml
+print(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["prometheus_target_query"]["endpoint"])
+PY
+)"
+targets_json="$(curl -fsS "http://127.0.0.1:19090${targets_endpoint}")"
 jq -e '.status == "success" and (.data.activeTargets | length > 0)' <<<"$targets_json" >/dev/null || die "Prometheus has active targets"
 jq -e 'all(.data.activeTargets[]; .health == "up")' <<<"$targets_json" >/dev/null || die "Prometheus targets are all up"
 echo "PROMETHEUS_TARGETS:"
@@ -239,32 +308,82 @@ pass "Prometheus targets are all up"
 start_port_forward grafana 13000 3000
 grafana_health="$(curl -fsS http://127.0.0.1:13000/api/health)"
 jq -e '.database == "ok"' <<<"$grafana_health" >/dev/null || die "Grafana health endpoint is ok"
+dashboard_files="$(python3 - "$OBS_CONTRACT" <<'PY'
+import json
+import sys
+import yaml
+print(json.dumps(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["dashboard_provisioning"]["required_files"]))
+PY
+)"
 kubectl_cmd -n observability-system get configmap grafana-dashboards -o json \
-  | jq -e '.data | has("flux-gitops-health.json") and has("cnpg.json") and has("kong-request-rate.json") and has("cedar-policy-decisions.json")' >/dev/null \
+  | jq -e --argjson files "$dashboard_files" '.data as $data | all($files[]; . as $file | $data | has($file))' >/dev/null \
   || die "Grafana dashboards ConfigMap is present"
 pass "Grafana dashboard renders from provisioned ConfigMap"
 
 start_port_forward alertmanager 19093 9093
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+sample_alert_payload="$(python3 - "$OBS_CONTRACT" "$now" <<'PY'
+import json
+import sys
+import yaml
+
+contract = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+sample = contract["sample_alert"]
+payload = [{
+    "labels": {"alertname": sample["alertname"], **sample["labels"]},
+    "annotations": sample["annotations"],
+    "startsAt": sys.argv[2],
+}]
+print(json.dumps(payload))
+PY
+)"
 curl -fsS -X POST -H 'Content-Type: application/json' \
-  --data "[{\"labels\":{\"alertname\":\"Init117SampleAlert\",\"severity\":\"info\",\"channel\":\"local\",\"tenant\":\"platform\"},\"annotations\":{\"summary\":\"INIT-117 sample alert\"},\"startsAt\":\"${now}\"}]" \
+  --data "$sample_alert_payload" \
   http://127.0.0.1:19093/api/v2/alerts >"${TMP_DIR}/alertmanager-post.out" 2>"${TMP_DIR}/alertmanager-post.err" \
   || die "failed to POST sample alert to Alertmanager: $(cat "${TMP_DIR}/alertmanager-post.err")"
+sample_alert_name="$(python3 - "$OBS_CONTRACT" <<'PY'
+import sys
+import yaml
+print(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["sample_alert"]["alertname"])
+PY
+)"
 curl -fsS http://127.0.0.1:19093/api/v2/alerts \
-  | jq -e 'any(.[]; .labels.alertname == "Init117SampleAlert" and .labels.tenant == "platform")' >/dev/null \
+  | jq -e --arg alertname "$sample_alert_name" 'any(.[]; .labels.alertname == $alertname and .labels.tenant == "platform")' >/dev/null \
   || die "sample alert fired through Alertmanager"
 pass "sample alert fired through Alertmanager"
 
 start_port_forward loki 13100 3100
 ts="$(date +%s)000000000"
+sample_log_payload="$(python3 - "$OBS_CONTRACT" "$ts" <<'PY'
+import json
+import sys
+import yaml
+
+contract = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+sample = contract["sample_log"]
+payload = {
+    "streams": [{
+        "stream": sample["stream"],
+        "values": [[sys.argv[2], sample["message"]]],
+    }]
+}
+print(json.dumps(payload))
+PY
+)"
+sample_log_query="$(python3 - "$OBS_CONTRACT" <<'PY'
+import sys
+import yaml
+print(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["sample_log"]["query"])
+PY
+)"
 curl -fsS -X POST -H 'Content-Type: application/json' \
-  --data "{\"streams\":[{\"stream\":{\"job\":\"init-117-proof\",\"channel\":\"local\",\"tenant\":\"platform\"},\"values\":[[\"${ts}\",\"INIT-117 Loki sample log\"]]}]}" \
+  --data "$sample_log_payload" \
   http://127.0.0.1:13100/loki/api/v1/push >"${TMP_DIR}/loki-push.out" 2>"${TMP_DIR}/loki-push.err" \
   || die "failed to push sample log to Loki: $(cat "${TMP_DIR}/loki-push.err")"
 log_found=0
 for _ in $(seq 1 10); do
   sleep 2
-  if curl -fsS --get --data-urlencode 'query={job="init-117-proof"} |= "INIT-117 Loki sample log"' \
+  if curl -fsS --get --data-urlencode "query=${sample_log_query}" \
     http://127.0.0.1:13100/loki/api/v1/query \
     | jq -e '.data.result | length > 0' >/dev/null; then
     log_found=1

@@ -13,10 +13,48 @@ scrape_targets:
   - buildkite-agent
 dashboards:
   required_tenant_variable: tenant
+  required_uids:
+    - flux-gitops-health
+    - cnpg
+    - kong-request-rate
+    - cedar-policy-decisions
 sample_alerts:
   - PodCrashLooping
   - ClusterDown
   - CertificateExpiringSoon
+prometheus_target_query:
+  endpoint: /api/v1/targets
+  require_active_targets: true
+  require_all_up: true
+dashboard_provisioning:
+  configmap: grafana-dashboards
+  required_files:
+    - flux-gitops-health.json
+    - cnpg.json
+    - kong-request-rate.json
+    - cedar-policy-decisions.json
+sample_alert:
+  alertname: Init117SampleAlert
+  labels:
+    severity: info
+    channel: local
+    tenant: platform
+  annotations:
+    summary: INIT-117 sample alert
 sample_log_query:
   selector: '{namespace="server-manager"}'
   contains: server-manager-api
+sample_log:
+  stream:
+    job: init-117-proof
+    channel: local
+    tenant: platform
+  message: INIT-117 Loki sample log
+  query: '{job="init-117-proof"} |= "INIT-117 Loki sample log"'
+webhook_isolation_guard:
+  forbidden_policy_name: allow-observability-scrape
+  forbidden_source_namespace: observability-system
+  webhook_namespaces:
+    - crossplane-system
+    - cert-manager
+    - cnpg-system
