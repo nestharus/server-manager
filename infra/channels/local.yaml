@@ -151,8 +151,6 @@ auth_stack:
     proof_path: /api/v1/protected/authz-proof
 access_policy:
   policy_repo_path: policy/cedar/channels/local
-  bundle_config_map_name: cedar-access-policy-bundle
-  bootstrap_job_name: cedar-access-policy-bootstrap
   policy_review:
     required_checks:
       - cedar bundle renders from channel/service paths

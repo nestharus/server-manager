@@ -2,9 +2,11 @@ server:
   replicas: 1
   uvicornWorkers: 1
   broadcastPgsql: false
-  policyRepoUrl: null
+  policyRepoUrl: http://git-local.git-system.svc.cluster.local:8080/cgi-bin/git/humility-local.git
   extraEnv:
-    OPAL_POLICY_REPO_POLICY_EXTENSIONS: '[".cedar"]'
+    OPAL_POLICY_REPO_POLICY_EXTENSIONS: ".cedar"
+    OPAL_FILTER_FILE_EXTENSIONS: ".cedar"
+    OPAL_POLICY_REPO_MAIN_BRANCH: main
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000

@@ -139,8 +139,6 @@ assert_static_files() {
   assert_file "gitops/channels/local/auth/pomerium/rendered/pomerium-34.0.1.yaml"
   assert_file "gitops/channels/local/auth/opal-cedar/render-values.yaml"
   assert_file "gitops/channels/local/auth/opal-cedar/rendered/opal-0.0.29.yaml"
-  assert_file "gitops/channels/local/auth/opal-cedar/access-policy-configmap.yaml"
-  assert_file "gitops/channels/local/auth/opal-cedar/bootstrap-job.yaml"
 }
 
 assert_helm_render_reproducible() {
@@ -195,8 +193,21 @@ assert_kustomize() {
   grep -q 'host: auth.local.humility.local' "$auth_render" || die "Authentik ingress rendered"
   grep -q 'host: protected-api.local.humility.local' "$auth_render" || die "protected API ingress rendered"
   grep -q 'permitio/opal-client-cedar:0.7.12' "$auth_render" || die "Cedar OPAL client image rendered"
-  grep -q 'name: cedar-access-policy-bootstrap' "$auth_render" || die "Cedar bootstrap Job rendered"
   grep -q 'CEDAR_AUTHORIZATION_URL' "$local_render" || die "API Cedar authorization env rendered"
+  python3 - <<PY || die "legacy Cedar direct writer resources rendered"
+import yaml
+from pathlib import Path
+for doc in yaml.safe_load_all(Path("$auth_render").read_text()):
+    if not isinstance(doc, dict):
+        continue
+    kind = doc.get("kind")
+    name = doc.get("metadata", {}).get("name")
+    if (kind, name) in {
+        ("Job", "cedar-access-policy-" + "bootstrap"),
+        ("ConfigMap", "cedar-access-policy-" + "bundle"),
+    }:
+        raise SystemExit(1)
+PY
   pass "auth stack resources rendered"
 }
 
@@ -225,6 +236,7 @@ ensure_helm_repo() {
 assert_runtime() {
   local allowed_body
   local denied_body
+  local expected_policy_ids
   local status
 
   if [[ "$STATIC_ONLY" -eq 1 ]]; then
@@ -246,15 +258,19 @@ assert_runtime() {
 
   kubectl_cmd -n "$AUTH_NAMESPACE" rollout status deployment/opal-client --timeout=300s >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" rollout status deployment/opal-server --timeout=300s >/dev/null
-  kubectl_cmd -n "$AUTH_NAMESPACE" wait job/cedar-access-policy-bootstrap --for=condition=Complete --timeout=300s >/dev/null
-  pass "OPAL/Cedar available and access policy loaded"
+  # OPAL Cedar uploader uses the policy file's full repo-relative path as the
+  # Cedar policy ID — see validate_access_policy_local.sh::expected_policy_ids_json.
+  local generated_rel="policy/cedar/channels/local/services/server-manager-api/generated/policies"
+  expected_policy_ids="$(jq -c --arg p "$generated_rel" '[.[].id | "\($p)/\(.).cedar"] | sort' "${REPO_ROOT}/policy/cedar/channels/local/services/server-manager-api/policies.json")"
+  pass "OPAL/Cedar deployments available"
 
   kubectl_cmd -n "$AUTH_NAMESPACE" delete pod init-114-cedar --ignore-not-found >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" run init-114-cedar \
     --restart=Never \
     --labels=app.kubernetes.io/name=opal-cedar,platform.humility.gg/init=114 \
     --image=curlimages/curl:8.16.0 \
-    --command -- /bin/sh -ec "ready=0; for attempt in \$(seq 1 30); do if curl -fsS http://opal-client:8180/v1/policies >/dev/null 2>&1; then ready=1; break; fi; sleep 1; done; test \"\$ready\" = 1; curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"sample@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized && echo && curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"other@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized" >/dev/null
+    --env="EXPECTED_POLICY_IDS=${expected_policy_ids}" \
+    --command -- /bin/sh -ec "expected=\$(printf '%s' \"\$EXPECTED_POLICY_IDS\" | tr -d '[]\"' | tr ',' ' '); missing=\"\$expected\"; for attempt in \$(seq 1 120); do body=\$(curl -fsS http://opal-client:8180/v1/policies 2>/dev/null || true); missing=''; if [ -n \"\$body\" ]; then for id in \$expected; do if ! printf '%s' \"\$body\" | grep -Eq '\"id\"[[:space:]]*:[[:space:]]*\"'\"\$id\"'\"'; then missing=\"\$missing \$id\"; fi; done; [ -z \"\$missing\" ] && break; fi; sleep 1; done; [ -z \"\$missing\" ] || { printf 'missing policy IDs:%s\nlast policies: %s\n' \"\$missing\" \"\$body\" >&2; exit 1; }; curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"sample@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized && echo && curl -fsS -X POST -H 'Content-Type: application/json' --data '{\"principal\":\"User::\\\"other@local.humility.local\\\"\",\"action\":\"Action::\\\"api:read\\\"\",\"resource\":\"Resource::\\\"server-manager-api\\\"\"}' http://opal-client:8180/v1/is_authorized" >/dev/null
   kubectl_cmd -n "$AUTH_NAMESPACE" wait pod/init-114-cedar --for=jsonpath='{.status.phase}'=Succeeded --timeout=180s >/dev/null
   allowed_body="$(kubectl_cmd -n "$AUTH_NAMESPACE" logs pod/init-114-cedar | sed -n '1p')"
   denied_body="$(kubectl_cmd -n "$AUTH_NAMESPACE" logs pod/init-114-cedar | sed -n '2p')"

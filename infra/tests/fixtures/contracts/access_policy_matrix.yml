@@ -39,7 +39,7 @@ token_safety:
 bundle:
   policy_file: policy/cedar/channels/local/services/server-manager-api/policies.json
   service_identity_file: policy/cedar/channels/local/services/server-manager-api/service-identities.json
-  gitops_configmap: gitops/channels/local/auth/opal-cedar/access-policy-configmap.yaml
+  seeded_policy_files: policy/cedar/channels/local/services/server-manager-api/generated/policies
 required_service_identities:
   buildkite_agent: Service::"buildkite-agent.local"
   crossplane_provider: Service::"crossplane-provider.local"

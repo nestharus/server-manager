@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from infra.tests._messages import SEEDED_POLICY_SOURCE_MISMATCH
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MATRIX = REPO_ROOT / "infra" / "tests" / "fixtures" / "contracts" / "access_policy_matrix.yml"
@@ -43,7 +45,8 @@ def _policy_contents(policies: list[dict]) -> str:
 
 def test_access_policy_matrix_contains_public_submit_allow_and_read_deny() -> None:
     """Risk annotation: group=TG-6; named_risk=public_policy_fixture_gap;
-    level=particular-integration; source=proposals/02-public-application-intake.md#§6 AS-4.
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T6;
+    assumptions=A5.
     """
     fixture = _yaml(MATRIX)
     decisions = fixture["decisions"]
@@ -64,7 +67,8 @@ def test_access_policy_matrix_contains_public_submit_allow_and_read_deny() -> No
 
 def test_public_intake_policy_bundle_contains_matching_permit_and_forbid() -> None:
     """Risk annotation: group=TG-6; named_risk=public_policy_fixture_gap;
-    level=particular-integration; source=proposals/02-public-application-intake.md#§6 AS-4.
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T6;
+    assumptions=A5.
     """
     fixture = _yaml(MATRIX)
     contents = _policy_contents(_policies(fixture))
@@ -81,7 +85,8 @@ def test_public_intake_policy_bundle_contains_matching_permit_and_forbid() -> No
 
 def test_public_intake_does_not_add_service_identity() -> None:
     """Risk annotation: group=TG-6; named_risk=public_service_identity_scope_creep;
-    level=particular-integration; source=proposals/02-public-application-intake.md#§6 AS-4.
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T6;
+    assumptions=A5.
     """
     fixture = _yaml(MATRIX)
     identities = _service_identities(fixture)
@@ -95,12 +100,14 @@ def test_public_intake_does_not_add_service_identity() -> None:
 
 def test_access_policy_validator_remains_matrix_driven_for_public_intake() -> None:
     """Risk annotation: group=TG-6; named_risk=validator_public_policy_drift;
-    level=particular-integration; source=proposals/02-public-application-intake.md#§6 AS-4.
+    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.3,C5.5;
+    assumptions=A5.
     """
     validator = VALIDATOR.read_text(encoding="utf-8")
 
     assert "policies.json" in validator
     assert "service-identities.json" in validator
-    assert "GitOps ConfigMap policy differs from policy repo" in validator
+    assert SEEDED_POLICY_SOURCE_MISMATCH in validator
+    assert "GitOps ConfigMap policy differs from policy repo" not in validator
     assert "application:submit_public" not in validator
     assert "web-intake.local" not in validator

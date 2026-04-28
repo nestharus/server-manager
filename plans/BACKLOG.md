@@ -20,7 +20,7 @@ SHA) or `[wontfix]` (with reason).
 
 ## Priority: HIGH
 
-### BL-001 [open] — Cedar bootstrap-job's bundle PUT silently no-ops in some cases
+### BL-001 [done] — Cedar bootstrap-job's bundle PUT silently no-ops in some cases
 
 - **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R3; observed
   during INIT-120 e2e validation (2026-04-28)
@@ -40,6 +40,22 @@ SHA) or `[wontfix]` (with reason).
   whether to switch to per-policy POST or fix the curl invocation.
   Implementation will likely change
   `gitops/channels/local/auth/opal-cedar/bootstrap-job.yaml`.
+- **Outcome (closed in INIT-121, full pipeline; verified e2e=19/19
+  on humility-local):** RCA proved the issue was a split-brain
+  policy-loading design — `OPAL_POLICY_REPO_URL` rendered empty
+  while the bundle lived only in a ConfigMap consumed by the
+  one-shot Job. Fix made OPAL the sole policy authority via the
+  in-cluster `git-daemon` already serving `humility-local.git`.
+  The renderer materializes per-policy `.cedar` files +
+  `.manifest`; OPAL Server clones, OPAL Client refetches, Cedar
+  hydrates. Bootstrap Job + ConfigMap deleted. Surfaced and fixed
+  several adjacent issues: NetworkPolicy egress to git-system,
+  `OPAL_POLICY_REPO_MAIN_BRANCH=main`, OPAL CSV-not-JSON env
+  format, separate `OPAL_FILTER_FILE_EXTENSIONS` config, and
+  Cedar policy IDs being path-form (validators updated). See
+  `.tmp/rca/cedar-bootstrap-put-FINDINGS.md`,
+  `proposals/03-cedar-policy-source.md`, and
+  `.tmp/init-121/phase6/` for the trail.
 
 ### BL-002 [open] — Public intake e2e requires a global-scope form_definitions row that no GitOps seed creates
 

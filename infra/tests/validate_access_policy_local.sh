@@ -50,11 +50,20 @@ die() {
 cleanup() {
   local temp_file
   for temp_file in "${TEMP_FILES[@]:-}"; do
-    rm -f "$temp_file" >/dev/null 2>&1 || true
+    rm -rf "$temp_file" >/dev/null 2>&1 || true
   done
   if [[ "$STATIC_ONLY" -eq 0 && -f "$KUBECONFIG_PATH" ]] && command -v kubectl >/dev/null 2>&1; then
     kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system delete pod init-115-cedar init-115-service-identity --ignore-not-found >/dev/null 2>&1 || true
   fi
+}
+
+expected_policy_ids_json() {
+  # OPAL Cedar uploader uses the policy file's full repo-relative path as the
+  # Cedar policy ID. The seeded git repo emits one .cedar file per canonical
+  # entry under <generated_dir>/<id>.cedar, so the in-Cedar IDs are
+  # `<generated_dir>/<id>.cedar`.
+  local generated_rel="policy/cedar/channels/local/services/server-manager-api/generated/policies"
+  jq -c --arg p "$generated_rel" '[.[].id | "\($p)/\(.).cedar"] | sort' "$policy_file"
 }
 
 trap cleanup EXIT
@@ -103,24 +112,32 @@ jq -e 'length >= 3' "$policy_file" >/dev/null || die "expected at least three Ce
 jq -e '.identities.buildkite_agent.cedar_principal == "Service::\"buildkite-agent.local\""' "$identity_file" >/dev/null || die "Buildkite identity contract"
 pass "structured Cedar policy bundle exists per channel and service"
 
-config_policy="$(mktemp)"
+seed_snapshot="$(mktemp -d)"
 root_render="$(mktemp)"
-TEMP_FILES+=("$config_policy" "$root_render")
-CONFIGMAP_PATH="${REPO_ROOT}/gitops/channels/local/auth/opal-cedar/access-policy-configmap.yaml" python3 - <<'PY' >"$config_policy"
+TEMP_FILES+=("$seed_snapshot" "$root_render")
+python3 "${REPO_ROOT}/infra/scripts/render-gitops-source.py" --channel local --out "$seed_snapshot" >/dev/null
+POLICY_FILE="$policy_file" SNAPSHOT_ROOT="$seed_snapshot" python3 - <<'PY' || die "Seeded Cedar policy source differs from canonical policies.json"
+import json
 import os
-import yaml
 from pathlib import Path
-doc = yaml.safe_load(Path(os.environ["CONFIGMAP_PATH"]).read_text())
-print(doc["data"]["policies.json"])
+
+policy_file = Path(os.environ["POLICY_FILE"])
+snapshot_root = Path(os.environ["SNAPSHOT_ROOT"])
+generated_dir = snapshot_root / "policy/cedar/channels/local/services/server-manager-api/generated/policies"
+canonical = {
+    policy["id"]: policy["content"] + "\n"
+    for policy in json.loads(policy_file.read_text(encoding="utf-8"))
+}
+seeded = {
+    path.stem: path.read_text(encoding="utf-8")
+    for path in sorted(generated_dir.glob("*.cedar"))
+}
+if seeded != canonical:
+    raise SystemExit(1)
 PY
-jq -S . "$policy_file" >"${config_policy}.repo"
-jq -S . "$config_policy" >"${config_policy}.gitops"
-TEMP_FILES+=("${config_policy}.repo" "${config_policy}.gitops")
-diff -u "${config_policy}.repo" "${config_policy}.gitops" >/dev/null || die "GitOps ConfigMap policy differs from policy repo"
-pass "Cedar policy bundle reconciles through GitOps ConfigMap"
+pass "Cedar policy bundle reconciles through seeded policy files"
 
 kubectl kustomize --load-restrictor=LoadRestrictionsNone "${REPO_ROOT}/gitops/channels/local" >"$root_render"
-grep -q 'name: cedar-access-policy-bootstrap' "$root_render" || die "Cedar bootstrap job missing"
 grep -q 'name: service-identity-issuer' "$root_render" || die "service identity issuer missing"
 grep -q 'name: platform-operator-appcluster-claims' "$root_render" || die "operator claim RBAC missing"
 python3 - <<PY || die "crossplane-admin ClusterRoleBinding still rendered"
@@ -131,6 +148,20 @@ for doc in yaml.safe_load_all(Path("$root_render").read_text()):
     if not isinstance(doc, dict):
         continue
     if doc.get("kind") == "ClusterRoleBinding" and doc.get("metadata", {}).get("name") == "crossplane-admin":
+        raise SystemExit(1)
+PY
+python3 - <<PY || die "legacy Cedar direct writer resources still rendered"
+import yaml
+from pathlib import Path
+for doc in yaml.safe_load_all(Path("$root_render").read_text()):
+    if not isinstance(doc, dict):
+        continue
+    kind = doc.get("kind")
+    name = doc.get("metadata", {}).get("name")
+    if (kind, name) in {
+        ("Job", "cedar-access-policy-" + "bootstrap"),
+        ("ConfigMap", "cedar-access-policy-" + "bundle"),
+    }:
         raise SystemExit(1)
 PY
 pass "local root renders access policy, service identity, and narrowed operator RBAC"
@@ -153,33 +184,57 @@ fi
 command -v kubectl >/dev/null 2>&1 || die "kubectl is required for runtime proof"
 [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
 
-kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system rollout status deployment/opal-client --timeout=300s >/dev/null
-kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system wait job/cedar-access-policy-bootstrap --for=condition=Complete --timeout=300s >/dev/null
-pass "OPAL/Cedar available and access policy loaded"
+kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system rollout status deployment/opal-client --timeout=180s >/dev/null
+expected_policy_ids="$(expected_policy_ids_json)"
+pass "OPAL/Cedar deployment available"
 
 allow_payload="$(jq -nc '{principal: "User::\"sample@local.humility.local\"", action: "Action::\"api:read\"", resource: "Resource::\"server-manager-api\""}')"
 deny_payload="$(jq -nc '{principal: "User::\"other@local.humility.local\"", action: "Action::\"api:read\"", resource: "Resource::\"server-manager-api\""}')"
 cedar_proof_command='
 set -e
-ready=0
-for _ in $(seq 1 30); do
-  if curl -fsS http://opal-client:8180/v1/policies >/dev/null 2>&1; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-test "$ready" = 1
+policy_url="http://opal-client:8180/v1/policies"
+expected="$(printf "%s" "$EXPECTED_POLICY_IDS" | tr -d "[]\"" | tr "," " ")"
+wait_for_policy_ids() {
+  last_body=""
+  missing="$expected"
+  for _ in $(seq 1 120); do
+    body="$(curl -fsS "$policy_url" 2>/dev/null || true)"
+    last_body="$body"
+    missing=""
+    if [ -n "$body" ]; then
+      for id in $expected; do
+        if ! printf "%s" "$body" | grep -Eq "\"id\"[[:space:]]*:[[:space:]]*\"${id}\""; then
+          missing="${missing} ${id}"
+        fi
+      done
+      if [ -z "$missing" ]; then
+        printf "policy IDs hydrated: %s\n" "$expected"
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  printf "missing policy IDs:%s from http://opal-client:8180/v1/policies\nlast policies: %s\n" "$missing" "$last_body" >&2
+  return 1
+}
+wait_for_policy_ids
 allow="$(printf "%s" "$ALLOW_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
 deny="$(printf "%s" "$DENY_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
+sleep 31
+wait_for_policy_ids
+allow_after_poll="$(printf "%s" "$ALLOW_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
+deny_after_poll="$(printf "%s" "$DENY_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
 printf "allow=%s\n" "$allow"
 printf "deny=%s\n" "$deny"
+printf "allow_after_poll=%s\n" "$allow_after_poll"
+printf "deny_after_poll=%s\n" "$deny_after_poll"
 '
 kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system delete pod init-115-cedar --ignore-not-found >/dev/null
 kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system run init-115-cedar \
   --restart=Never \
   --labels=app.kubernetes.io/name=opal-cedar,platform.humility.gg/init=115 \
   --image=curlimages/curl:8.19.0 \
+  --env="EXPECTED_POLICY_IDS=${expected_policy_ids}" \
   --env="ALLOW_PAYLOAD=${allow_payload}" \
   --env="DENY_PAYLOAD=${deny_payload}" \
   --command -- /bin/sh -ec "$cedar_proof_command" >/dev/null

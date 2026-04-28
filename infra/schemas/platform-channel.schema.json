@@ -1522,8 +1522,6 @@
       "additionalProperties": false,
       "required": [
         "policy_repo_path",
-        "bundle_config_map_name",
-        "bootstrap_job_name",
         "policy_review",
         "services",
         "service_identity",
@@ -1536,14 +1534,6 @@
         "policy_repo_path": {
           "type": "string",
           "pattern": "^policy/cedar/channels/[a-z0-9][a-z0-9-]*$"
-        },
-        "bundle_config_map_name": {
-          "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-        },
-        "bootstrap_job_name": {
-          "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
         },
         "policy_review": {
           "$ref": "#/$defs/accessPolicyReview"

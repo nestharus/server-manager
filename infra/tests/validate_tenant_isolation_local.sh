@@ -50,6 +50,13 @@ kubectl_cmd() {
   kubectl --kubeconfig "$KUBECONFIG_PATH" "$@"
 }
 
+expected_policy_ids_json() {
+  # OPAL Cedar uploader uses the policy file's full repo-relative path as the
+  # Cedar policy ID — see validate_access_policy_local.sh for the same logic.
+  local generated_rel="policy/cedar/channels/local/services/server-manager-api/generated/policies"
+  jq -c --arg p "$generated_rel" '[.[].id | "\($p)/\(.).cedar"] | sort' "${REPO_ROOT}/policy/cedar/channels/local/services/server-manager-api/policies.json"
+}
+
 cleanup() {
   if [[ "$STATIC_ONLY" -eq 0 && -f "$KUBECONFIG_PATH" ]] && command -v kubectl >/dev/null 2>&1; then
     kubectl_cmd -n auth-system delete pod init-116-cedar --ignore-not-found >/dev/null 2>&1 || true
@@ -203,22 +210,37 @@ other_sample="$(kubectl_cmd auth can-i get pods -n sample-local --as=tenant-othe
 [[ "$other_sample" == "no" ]] || die "other tenant can access sample-local"
 pass "tenant RBAC allows same tenant channels and denies cross-tenant access"
 
-kubectl_cmd -n auth-system rollout status deployment/opal-client --timeout=300s >/dev/null
-kubectl_cmd -n auth-system wait job/cedar-access-policy-bootstrap --for=condition=Complete --timeout=300s >/dev/null
+kubectl_cmd -n auth-system rollout status deployment/opal-client --timeout=180s >/dev/null
+expected_policy_ids="$(expected_policy_ids_json)"
 allow_local_payload="$(jq -nc '{principal: "Tenant::\"sample\"", action: "Action::\"tenant:channel:access\"", resource: "TenantChannel::\"sample:local\""}')"
 allow_dev_payload="$(jq -nc '{principal: "Tenant::\"sample\"", action: "Action::\"tenant:channel:access\"", resource: "TenantChannel::\"sample:dev\""}')"
 deny_payload="$(jq -nc '{principal: "Tenant::\"sample\"", action: "Action::\"tenant:channel:access\"", resource: "TenantChannel::\"other:local\""}')"
 cedar_proof_command='
 set -e
-ready=0
-for _ in $(seq 1 30); do
-  if curl -fsS http://opal-client:8180/v1/policies >/dev/null 2>&1; then
-    ready=1
-    break
+expected="$(printf "%s" "$EXPECTED_POLICY_IDS" | tr -d "[]\"" | tr "," " ")"
+last_body=""
+missing="$expected"
+for _ in $(seq 1 120); do
+  body="$(curl -fsS http://opal-client:8180/v1/policies 2>/dev/null || true)"
+  last_body="$body"
+  missing=""
+  if [ -n "$body" ]; then
+    for id in $expected; do
+      if ! printf "%s" "$body" | grep -Eq "\"id\"[[:space:]]*:[[:space:]]*\"${id}\""; then
+        missing="${missing} ${id}"
+      fi
+    done
+    if [ -z "$missing" ]; then
+      printf "policy IDs hydrated: %s\n" "$expected"
+      break
+    fi
   fi
   sleep 1
 done
-test "$ready" = 1
+if [ -n "$missing" ]; then
+  printf "missing policy IDs:%s\nlast policies: %s\n" "$missing" "$last_body" >&2
+  exit 1
+fi
 allow_local="$(printf "%s" "$ALLOW_LOCAL_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
 allow_dev="$(printf "%s" "$ALLOW_DEV_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
 deny="$(printf "%s" "$DENY_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
@@ -231,6 +253,7 @@ kubectl_cmd -n auth-system run init-116-cedar \
   --restart=Never \
   --labels=app.kubernetes.io/name=opal-cedar,platform.humility.gg/init=116 \
   --image=curlimages/curl:8.19.0 \
+  --env="EXPECTED_POLICY_IDS=${expected_policy_ids}" \
   --env="ALLOW_LOCAL_PAYLOAD=${allow_local_payload}" \
   --env="ALLOW_DEV_PAYLOAD=${allow_dev_payload}" \
   --env="DENY_PAYLOAD=${deny_payload}" \
