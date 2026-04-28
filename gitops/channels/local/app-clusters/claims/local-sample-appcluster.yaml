@@ -11,6 +11,9 @@ spec:
     channel: local
     target: k3d-local
     k3sVersion: v1.32.13+k3s1
+    connectionSecretRef:
+      name: local-sample-kubeconfig
+      namespace: platform-app-cluster-connections
     local:
       clusterName: humility-local-app
       servers: 1

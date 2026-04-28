@@ -1,0 +1,45 @@
+{
+  "apiVersion": "platform.humility.gg/v1alpha1",
+  "kind": "AppCluster",
+  "metadata": {
+    "name": "local-sample",
+    "namespace": "platform-app-clusters",
+    "generation": 1
+  },
+  "spec": {
+    "environmentName": "local",
+    "clusterClass": "dev",
+    "providerRef": {
+      "name": "local-k3d"
+    },
+    "kubernetesChannel": "stable",
+    "nodePools": [
+      {
+        "name": "workers",
+        "replicas": 1
+      }
+    ],
+    "deletionPolicy": "Orphan",
+    "writeConnectionSecretToRef": {
+      "name": "local-sample-kubeconfig",
+      "namespace": "platform-app-cluster-connections"
+    }
+  },
+  "status": {
+    "clusterID": "humility-local-app",
+    "externalID": "k3d:humility-local-app",
+    "apiEndpoint": "https://humility-local-app.localhost",
+    "connectionSecretRef": {
+      "name": "local-sample-kubeconfig",
+      "namespace": "platform-app-cluster-connections"
+    },
+    "conditions": [
+      {
+        "type": "Ready",
+        "status": "True",
+        "observedGeneration": 1,
+        "reason": "Provisioned"
+      }
+    ]
+  }
+}
