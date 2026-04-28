@@ -5,6 +5,15 @@ protected_api:
   pass_identity_headers: true
   backend_service: server-manager-api
   allowed_identity: sample@local.humility.local
+oidc_identity:
+  provider: authentik
+  subject: humility-sample-user
+  email: sample@local.humility.local
+  display_name: Humility Sample User
+pomerium_headers:
+  subject: x-pomerium-claim-sub
+  email: x-pomerium-claim-email
+  display_name: x-pomerium-claim-name
 cedar_statuses:
   missing_identity: 401
   denied_identity: 403
@@ -19,3 +28,50 @@ cedar_decisions:
     action: Action::"api:read"
     resource: Resource::"server-manager-api"
     effect: deny
+api_proof_cases:
+  - name: missing_identity
+    headers: {}
+    expected_status: 401
+    expected_error_code: identity_missing
+    authorizer_called: false
+  - name: denied_identity
+    headers:
+      x-pomerium-claim-email: other@local.humility.local
+    expected_status: 403
+    expected_error_code: cedar_denied
+    cedar_decision: Deny
+    expected_request:
+      principal: User::"other@local.humility.local"
+      action: Action::"api:read"
+      resource: Resource::"server-manager-api"
+  - name: policy_engine_unavailable
+    headers:
+      x-pomerium-claim-email: sample@local.humility.local
+    expected_status: 503
+    expected_error_code: cedar_unavailable
+    cedar_unavailable: true
+    expected_request:
+      principal: User::"sample@local.humility.local"
+      action: Action::"api:read"
+      resource: Resource::"server-manager-api"
+  - name: allowed_identity
+    headers:
+      x-pomerium-claim-email: sample@local.humility.local
+    expected_status: 200
+    cedar_decision: Allow
+    expected_response:
+      subject: sample@local.humility.local
+      action: Action::"api:read"
+      resource: Resource::"server-manager-api"
+      decision: Allow
+    expected_request:
+      principal: User::"sample@local.humility.local"
+      action: Action::"api:read"
+      resource: Resource::"server-manager-api"
+playwright_auth:
+  entry_host: protected-api.local.humility.local
+  entry_path: /api/v1/protected/authz-proof
+  oidc_provider_host: auth.local.humility.local
+  authenticate_host: authenticate.local.humility.local
+  login_identity: sample@local.humility.local
+  expected_authorized_status: 200
