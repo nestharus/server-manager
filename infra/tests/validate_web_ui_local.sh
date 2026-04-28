@@ -166,17 +166,30 @@ assert_runtime() {
   kubectl_cmd -n web rollout status deployment/server-manager-web --timeout=300s >/dev/null
   pass "web Deployment Available"
 
+  local public_host admin_host host_port host_loopback port_suffix
+  public_host="$(json_value routes.public.host)"
+  admin_host="$(json_value routes.admin.host)"
+  host_port="$(json_value host_https_port)"
+  host_loopback="$(json_value host_loopback)"
+  port_suffix=""
+  local resolve_args=()
+  if [[ -n "$host_port" && -n "$host_loopback" ]]; then
+    resolve_args+=(--resolve "${public_host}:${host_port}:${host_loopback}")
+    [[ "$admin_host" != "$public_host" ]] && resolve_args+=(--resolve "${admin_host}:${host_port}:${host_loopback}")
+    [[ "$host_port" != "443" ]] && port_suffix=":${host_port}"
+  fi
+
   local public_url public_expected public_code
-  public_url="https://$(json_value routes.public.host)$(json_value routes.public.path)"
+  public_url="https://${public_host}${port_suffix}$(json_value routes.public.path)"
   public_expected="$(json_value routes.public.status)"
-  public_code="$(curl -k -o /dev/null -w "%{http_code}" "$public_url" || true)"
+  public_code="$(curl -k "${resolve_args[@]}" -o /dev/null -w "%{http_code}" "$public_url" || true)"
   [[ "$public_code" != "000" ]] || die "public route was unreachable; got curl 000"
   [[ "$public_code" == "$public_expected" ]] || die "public route returned ${public_expected}; got ${public_code}"
   pass "public route returned ${public_expected}"
 
   local admin_url admin_code allowed
-  admin_url="https://$(json_value routes.admin.host)$(json_value routes.admin.path)"
-  admin_code="$(curl -k -o /dev/null -w "%{http_code}" "$admin_url" || true)"
+  admin_url="https://${admin_host}${port_suffix}$(json_value routes.admin.path)"
+  admin_code="$(curl -k "${resolve_args[@]}" -o /dev/null -w "%{http_code}" "$admin_url" || true)"
   [[ "$admin_code" != "000" ]] || die "admin route was unreachable; got curl 000"
   allowed="$(json_value routes.admin.allowed_unauthenticated_statuses)"
   node -e '
