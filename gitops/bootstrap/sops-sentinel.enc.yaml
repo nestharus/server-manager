@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Secret
 metadata:
-    name: sops-sentinel
-    namespace: flux-system
+    name: bootstrap-sentinel
+    namespace: humility-gitops-sentinel
     labels:
         channel: local
-        sentinel: sops-local-ready
+        sentinel: bootstrap-sentinel
 type: Opaque
 stringData:
-    ready: ENC[AES256_GCM,data:i6U+rA==,iv:Fc14bQd0DDiPh6gaGeqadUYfqvaTbqpw7gazAQSV3X0=,tag:t56GWjF2b4N86LG9MFyb2w==,type:str]
+    message: ENC[AES256_GCM,data:pIyOG+C6R/b7bFAT9E9bRduYa8daKrr/Xw==,iv:ipB08NgXIEcxkEEKtphAW6uE/amwSD6fKWKnXIBrTh0=,tag:L2OypEZxM4deViOgQ29fuA==,type:str]
 sops:
     age:
         - recipient: age1yv0ad3agu5wsahpplc0slswfv8d3jr6sh860eqjqnz2ra2m6uclq7d5g4c
@@ -20,7 +20,7 @@ sops:
             QWhSZFlQc2lJcHdhR2JSQmZ2bTJ1TFUK/DKHRcEC5k/SYeSIdNxWHYyUG4EDnUYT
             38kgR1qlLzgrD62BoBefLIiQ3T3E5FezCas/4ZZTjJsH20UWCDeK2g==
             -----END AGE ENCRYPTED FILE-----
-    lastmodified: "2026-04-26T04:55:04Z"
-    mac: ENC[AES256_GCM,data:1mn2EB1S8IwwAIcOTmhYnBrVseFy1DEEOwTPWiKjeIMOurGHcFDAddOfN1qrmpVwVoacdjlIxhHZG5d+bgm/Eg3vwyxvh5c++PEJy2Tmupqq1ZRYI3zlOLGJduy0jBMfVUSVOXAAgOoquiLKWcx2bBm8pMSmsr3CXslYY3y92Sw=,iv:ThOUTlKupJTnkKnkCBErn2uZmVIHD1vjIXLpkSuEzPs=,tag:BGsEOrDncvh77vkliF0Ozw==,type:str]
+    lastmodified: "2026-04-28T02:13:42Z"
+    mac: ENC[AES256_GCM,data:fjfRkSZgyM/imjfsAGcw5Mv+6+tk2jy8bHENfjLOUbiwQcwxWliZXeuwqS9KRmKSsvSKGwgHpsSWOXrPYaNFUx6eFw5t16XBGECFSZJ0VQUcS6prebZ59awUPrRYxxiJiC0he8BGlvB6Iiato0qH9h13xuo1CWOWv8bDxyoPqxg=,iv:UwGw2c5meFJR/W0rdUdvL2RyOZTeDsGE/tB41nk06PE=,tag:tJ9DwceIhebgL7LiIwW6JA==,type:str]
     encrypted_regex: ^(data|stringData)$
     version: 3.12.2
