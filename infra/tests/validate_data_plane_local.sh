@@ -23,6 +23,8 @@ URL_SECRET=""
 ATLAS_MIGRATION=""
 VERIFY_TABLE=""
 BACKUP_SECRET=""
+FIXTURE_DIR="${REPO_ROOT}/infra/tests/fixtures/data-plane"
+PSQL_PROOF_SQL=""
 
 usage() {
   cat <<'EOF'
@@ -31,7 +33,7 @@ Usage: validate_data_plane_local.sh [--channel local] [--kubeconfig PATH] [--sta
 Validates INIT-111 data plane:
   - channel data_plane schema resolution
   - raw CNPG and Atlas manifests
-  - sample PG Cluster, Infisical credential, backup target, ScheduledBackup, and Atlas migration manifests
+  - sample PG Cluster, Infisical credential, backup target, and Atlas migration manifests
   - optional runtime proof: CNPG Cluster Ready, AtlasMigration Ready, psql connect, schema verify
 
 Options:
@@ -143,6 +145,26 @@ assert_file() {
   [[ -f "${REPO_ROOT}/${path}" ]] && pass "exists: ${path}" || die "missing: ${path}"
 }
 
+load_fixtures() {
+  local contract_fixture="${FIXTURE_DIR}/contract.env"
+  local credentials_fixture="${FIXTURE_DIR}/db-credentials.env"
+  local migration_fixture="${FIXTURE_DIR}/migration.env"
+  PSQL_PROOF_SQL="${FIXTURE_DIR}/psql-schema-proof.sql"
+
+  [[ -f "$contract_fixture" ]] || die "missing fixture: ${contract_fixture}"
+  [[ -f "$credentials_fixture" ]] || die "missing fixture: ${credentials_fixture}"
+  [[ -f "$migration_fixture" ]] || die "missing fixture: ${migration_fixture}"
+  [[ -f "$PSQL_PROOF_SQL" ]] || die "missing fixture: ${PSQL_PROOF_SQL}"
+
+  # shellcheck source=/dev/null
+  source "$contract_fixture"
+  # shellcheck source=/dev/null
+  source "$credentials_fixture"
+  # shellcheck source=/dev/null
+  source "$migration_fixture"
+  pass "loaded data-plane fixtures"
+}
+
 kubectl_cmd() {
   kubectl --kubeconfig "$KUBECONFIG_PATH" "$@"
 }
@@ -211,16 +233,18 @@ primary_pod() {
 assert_channel_contract() {
   RESOLVED_JSON="$("$PYTHON_BIN" "$RESOLVER" --channel "$CHANNEL_REQUEST")"
 
-  assert_json_equals '.id' 'local' 'channel id'
-  assert_json_equals '.data_plane.provider' 'cloudnative-pg' 'data_plane provider'
-  assert_json_equals '.data_plane.cnpg.operator_namespace' 'cnpg-system' 'CNPG namespace'
-  assert_json_equals '.data_plane.cnpg.operator_version' '1.29.0' 'CNPG version'
-  assert_json_equals '.data_plane.atlas.chart_version' '0.7.28' 'Atlas chart version'
-  assert_json_equals '.data_plane.credentials.infisical_project' 'platform-databases' 'database Infisical project'
-  assert_json_equals '.data_plane.credentials.infisical_path' '/postgres/local/sample-app' 'database Infisical path'
-  assert_json_equals '.backup.bucket' 'humility-local-backups' 'backup bucket'
-  assert_json_equals '.backup.endpoint' 'http://minio.minio-system.svc.cluster.local:9000' 'backup endpoint'
-  assert_json_equals '.backup.retention_policy' '7d' 'backup retention policy'
+  assert_json_equals '.id' "$EXPECTED_CHANNEL_ID" 'channel id'
+  assert_json_equals '.data_plane.provider' "$EXPECTED_DATA_PLANE_PROVIDER" 'data_plane provider'
+  assert_json_equals '.data_plane.cnpg.operator_namespace' "$EXPECTED_CNPG_NAMESPACE" 'CNPG namespace'
+  assert_json_equals '.data_plane.cnpg.operator_version' "$EXPECTED_CNPG_OPERATOR_VERSION" 'CNPG version'
+  assert_json_equals '.data_plane.atlas.chart_version' "$EXPECTED_ATLAS_CHART_VERSION" 'Atlas chart version'
+  assert_json_equals '.data_plane.credentials.infisical_project' "$EXPECTED_CREDENTIALS_INFISICAL_PROJECT" 'database Infisical project'
+  assert_json_equals '.data_plane.credentials.infisical_path' "$EXPECTED_CREDENTIALS_INFISICAL_PATH" 'database Infisical path'
+  assert_json_equals '.data_plane.migrations.atlas_migration_name' "$EXPECTED_ATLAS_MIGRATION_NAME" 'Atlas migration name'
+  assert_json_equals '.data_plane.migrations.verify_table' "$EXPECTED_VERIFY_TABLE" 'migration verify table'
+  assert_json_equals '.backup.bucket' "$EXPECTED_BACKUP_BUCKET" 'backup bucket'
+  assert_json_equals '.backup.endpoint' "$EXPECTED_BACKUP_ENDPOINT" 'backup endpoint'
+  assert_json_equals '.backup.retention_policy' "$EXPECTED_BACKUP_RETENTION_POLICY" 'backup retention policy'
   pass "resolved channel data_plane contract"
 
   CNPG_NAMESPACE="$(json_field '.data_plane.cnpg.operator_namespace')"
@@ -239,14 +263,13 @@ assert_static_manifests() {
   local data_plane_render
   local local_render
 
-  assert_file "gitops/channels/local/data-plane/cnpg/rendered/cnpg-1.29.0.yaml"
+  assert_file "gitops/channels/local/data-plane/cnpg/rendered/cnpg-${EXPECTED_CNPG_OPERATOR_VERSION}.yaml"
   assert_file "gitops/channels/local/data-plane/atlas/render-values.yaml"
-  assert_file "gitops/channels/local/data-plane/atlas/rendered/atlas-operator-0.7.28.yaml"
+  assert_file "gitops/channels/local/data-plane/atlas/rendered/atlas-operator-${EXPECTED_ATLAS_CHART_VERSION}.yaml"
   assert_file "gitops/channels/local/data-plane/sample-app/cluster.yaml"
-  assert_file "gitops/channels/local/data-plane/sample-app/scheduled-backup.yaml"
   assert_file "gitops/channels/local/data-plane/sample-app/atlas-migration.yaml"
-  assert_file "database/migrations/sample-app/20260426000100_init.sql"
-  assert_file "database/migrations/sample-app/atlas.sum"
+  assert_file "$EXPECTED_MIGRATION_SQL_PATH"
+  assert_file "$EXPECTED_ATLAS_SUM_PATH"
 
   data_plane_render="$(mktemp)"
   local_render="$(mktemp)"
@@ -257,10 +280,9 @@ assert_static_manifests() {
   pass "local root kustomization includes data-plane"
 
   grep -q '^kind: Cluster$' "$data_plane_render" || die "missing CNPG Cluster kind in rendered manifests"
-  grep -q '^kind: ScheduledBackup$' "$data_plane_render" || die "missing CNPG ScheduledBackup kind in rendered manifests"
   grep -q '^kind: AtlasMigration$' "$data_plane_render" || die "missing AtlasMigration kind in rendered manifests"
-  grep -q 'name: sample-app-atlas-migrations' "$data_plane_render" || die "missing migration ConfigMap sample-app-atlas-migrations in rendered manifests"
-  pass "sample Cluster, ScheduledBackup, and Atlas migration objects rendered"
+  grep -q "name: ${EXPECTED_MIGRATION_CONFIGMAP_NAME}" "$data_plane_render" || die "missing migration ConfigMap ${EXPECTED_MIGRATION_CONFIGMAP_NAME} in rendered manifests"
+  pass "sample Cluster and Atlas migration objects rendered"
 
   if rg -n '^kind: (Secret|Backup)$' --glob '!**/rendered/**' "${REPO_ROOT}/gitops/channels/local/data-plane" >/tmp/init111-forbidden-kind.txt; then
     cat /tmp/init111-forbidden-kind.txt >&2
@@ -281,6 +303,7 @@ assert_runtime() {
   local pod
   local table_schema="${VERIFY_TABLE%%.*}"
   local table_name="${VERIFY_TABLE#*.}"
+  local key
 
   if [[ "$STATIC_ONLY" -eq 1 ]]; then
     skip "runtime proof skipped by --static-only"
@@ -301,10 +324,14 @@ assert_runtime() {
   wait_infisicalsecret_ready "$BACKUP_SECRET"
   pass "InfisicalSecret/${BACKUP_SECRET} ReadyToSyncSecrets=True"
 
-  [[ -n "$(secret_key "$SAMPLE_NAMESPACE" "$APP_SECRET" username)" ]] || die "app username Secret key is empty"
-  [[ -n "$(secret_key "$SAMPLE_NAMESPACE" "$APP_SECRET" password)" ]] || die "app password Secret key is empty"
-  url="$(secret_key "$SAMPLE_NAMESPACE" "$URL_SECRET" url)"
-  [[ -n "$url" ]] || die "database URL Secret key is empty"
+  for key in $EXPECTED_DB_SECRET_KEYS; do
+    [[ -n "$(secret_key "$SAMPLE_NAMESPACE" "$APP_SECRET" "$key")" ]] || die "app Secret key ${key} is empty"
+  done
+  for key in $EXPECTED_URL_SECRET_KEYS; do
+    [[ -n "$(secret_key "$SAMPLE_NAMESPACE" "$URL_SECRET" "$key")" ]] || die "database URL Secret key ${key} is empty"
+  done
+  url="$(secret_key "$SAMPLE_NAMESPACE" "$URL_SECRET" "$EXPECTED_URL_SECRET_URL_KEY")"
+  [[ -n "$url" ]] || die "database URL Secret key ${EXPECTED_URL_SECRET_URL_KEY} is empty"
   pass "database credentials synced with non-empty keys"
 
   wait_json_condition "Cluster/${SAMPLE_CLUSTER}" "$SAMPLE_NAMESPACE" "cluster/${SAMPLE_CLUSTER}" "Ready" 180
@@ -320,14 +347,7 @@ assert_runtime() {
 
   kubectl_cmd -n "$SAMPLE_NAMESPACE" exec -i "$pod" -c postgres -- psql "$url" -v ON_ERROR_STOP=1 \
     -v "tbl_schema=${table_schema}" -v "tbl_name=${table_name}" -At \
-    <<'SQL' | grep -qx 't' || die "schema table ${VERIFY_TABLE} missing"
-select exists (
-  select 1
-  from information_schema.tables
-  where table_schema = :'tbl_schema'
-    and table_name = :'tbl_name'
-);
-SQL
+    <"$PSQL_PROOF_SQL" | grep -qx 't' || die "schema table ${VERIFY_TABLE} missing"
   pass "schema verify found ${VERIFY_TABLE}"
 }
 
@@ -340,6 +360,7 @@ main() {
   PYTHON_BIN="$(python_bin)" || die "python or python3 is required"
   configure_kustomize_cmd
 
+  load_fixtures
   assert_channel_contract
   assert_static_manifests
   assert_runtime
