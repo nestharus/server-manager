@@ -2,16 +2,21 @@
 set -euo pipefail
 
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
+CLUSTER_MODE=0
 PROVIDER_K8S_SA="system:serviceaccount:crossplane-system:provider-kubernetes"
 DENY_POD="netpol-deny-minio"
 
 usage() {
   cat <<'EOF'
-Usage: validate_cluster_security_local.sh [--kubeconfig PATH]
+Usage: validate_cluster_security_local.sh [--cluster] [--kubeconfig PATH]
 
 Validates the INIT-107 local cluster security proof against an existing local
 channel: PSS admission rejects a bad Pod, NetworkPolicy denies unauthorized
 traffic, provider-kubernetes RBAC is namespaced, and stateful PDBs exist.
+
+Options:
+  --cluster          Run explicit cluster runtime validation
+  --kubeconfig PATH  Kubeconfig for the local k3d channel
 EOF
 }
 
@@ -26,6 +31,9 @@ log() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --cluster)
+      CLUSTER_MODE=1
+      ;;
     --kubeconfig)
       [[ $# -ge 2 ]] || die "--kubeconfig requires a value"
       KUBECONFIG_PATH="$2"
@@ -179,6 +187,9 @@ assert_pdbs() {
 }
 
 require_command kubectl
+if [[ "$CLUSTER_MODE" -eq 1 ]]; then
+  log "Cluster runtime mode requested"
+fi
 [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
 
 assert_namespace_label cert-manager baseline

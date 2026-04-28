@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ROUNDTRIP="${REPO_ROOT}/infra/scripts/test-s3-roundtrip.sh"
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
 PORT="19000"
+CLUSTER_MODE=0
 PORT_FORWARD_PID=""
 ROUNDTRIP_TMP_DIR=""
 RETAINED_KEY=""
@@ -12,11 +13,16 @@ RETAINED_CLEANED_UP=0
 
 usage() {
   cat <<'EOF'
-Usage: validate_object_storage_local.sh [--kubeconfig PATH] [--port PORT]
+Usage: validate_object_storage_local.sh [--cluster] [--kubeconfig PATH] [--port PORT]
 
 Validates the local INIT-104 object-storage proof against an existing cluster:
 MinIO readiness, PVC binding, InfisicalSecret reconciliation, bucket existence,
 real S3 PUT/GET/compare/DELETE, and Pod-restart durability.
+
+Options:
+  --cluster          Run explicit cluster runtime validation
+  --kubeconfig PATH  Kubeconfig for the local k3d channel
+  --port PORT        Local port for MinIO port-forward
 EOF
 }
 
@@ -57,6 +63,9 @@ trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --cluster)
+      CLUSTER_MODE=1
+      ;;
     --kubeconfig)
       [[ $# -ge 2 ]] || die "--kubeconfig requires a value"
       KUBECONFIG_PATH="$2"
@@ -200,6 +209,9 @@ require_command base64
 require_command curl
 require_command mc
 
+if [[ "$CLUSTER_MODE" -eq 1 ]]; then
+  log "Cluster runtime mode requested"
+fi
 [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
 
 kubectl_cmd get namespace minio-system >/dev/null

@@ -1,0 +1,34 @@
+agents:
+  queue: cicd-local
+
+env:
+  CHANNEL_ID: local
+  KUBECONFIG_PATH: "${HOME}/.kube/humility-local.yaml"
+
+steps:
+  - key: cluster-runtime-tooling-preflight
+    label: "Cluster runtime tooling preflight"
+    if: build.pull_request.id != null
+    command: |
+      command -v docker >/dev/null || (echo "BLOCKED: docker is required for humility-local cluster runtime validation" && exit 2)
+      docker info >/dev/null || (echo "BLOCKED: docker daemon is required for humility-local cluster runtime validation" && exit 2)
+      command -v k3d >/dev/null || (echo "BLOCKED: k3d is required for humility-local cluster runtime validation" && exit 2)
+      command -v kubectl >/dev/null || (echo "BLOCKED: kubectl is required for humility-local cluster runtime validation" && exit 2)
+
+  - key: humility-local-cluster-bringup
+    label: "Bring up humility-local cluster"
+    if: build.pull_request.id != null
+    command: "infra/scripts/bring-up-local-channel.sh --channel local --force --cluster-only"
+
+  - wait
+
+  - key: pr-cluster-merge-readiness-runtime-validators
+    label: "PR cluster merge readiness runtime validators"
+    if: build.pull_request.id != null
+    timeout_in_minutes: 180
+    command: |
+      infra/tests/validate_object_storage_local.sh --cluster
+      infra/tests/validate_tls_dns_local.sh --cluster
+      infra/tests/validate_app_clusters_local.sh --cluster
+      infra/tests/validate_cluster_security_local.sh --cluster
+      infra/tests/validate_container_delivery_local.sh --cluster
