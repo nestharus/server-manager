@@ -1,0 +1,73 @@
+{
+  "routes": {
+    "public": {
+      "host": "web.local.humility.local",
+      "path": "/",
+      "heading": "Humility applications",
+      "status": 200
+    },
+    "application_form": {
+      "path": "/applications",
+      "link_name": "Application form"
+    },
+    "admin": {
+      "host": "web.local.humility.local",
+      "path": "/admin/chapters",
+      "requires_auth": true,
+      "allowed_unauthenticated_statuses": [302, 303, 401]
+    }
+  },
+  "auth": {
+    "identity": {
+      "email": "officer@humility.local",
+      "subject": "humility-officer-1",
+      "groups": ["officers"]
+    },
+    "headers": {
+      "x-pomerium-claim-email": "officer@humility.local",
+      "x-pomerium-claim-sub": "humility-officer-1",
+      "x-pomerium-claim-groups": "officers"
+    },
+    "probe_endpoint": "/api/me",
+    "unauthenticated_api_status": 401
+  },
+  "form": {
+    "route": "/applications",
+    "fields": [
+      {
+        "type": "text",
+        "name": "character_name",
+        "label": "Character name",
+        "value": "Test Applicant"
+      },
+      {
+        "type": "textarea",
+        "name": "application_text",
+        "label": "Application text",
+        "value": "I want to join scheduled guild activities."
+      }
+    ],
+    "submit": {
+      "button_name": "Submit application",
+      "endpoint": "/api/applications",
+      "method": "POST",
+      "success_status": 201,
+      "success_message": "Application received"
+    }
+  },
+  "ui_libraries": {
+    "ark": {
+      "tab_name": "Details",
+      "dialog_button_name": "Open details",
+      "dialog_text": "Application details"
+    },
+    "fontawesome": {
+      "submit_icon_test_id": "application-submit-icon",
+      "status_icon_test_id": "application-status-icon"
+    },
+    "tanstack": {
+      "navigation_link_name": "Application form",
+      "resolved_path": "/applications"
+    }
+  }
+}

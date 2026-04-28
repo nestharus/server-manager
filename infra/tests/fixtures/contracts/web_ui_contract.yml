@@ -1,15 +1,10 @@
-routes:
-  public_host: web.local.humility.local
-  admin_prefix: /admin
-  public_status: 200
-  unauthenticated_api_status: 401
-form:
-  route: /applications
-  submit_method: POST
-  controls:
-    - type: text
-      name: character_name
-    - type: textarea
-      name: application_text
-    - type: submit
-      name: submit
+fixture_pointer: infra/tests/fixtures/web-ui/contract.json
+slice: SLICE-R.22
+behaviors:
+  - public route
+  - auth-gated admin route
+  - auth-gated API probe
+  - application form submit
+  - Ark UI controls
+  - FontAwesome icons
+  - TanStack route navigation
