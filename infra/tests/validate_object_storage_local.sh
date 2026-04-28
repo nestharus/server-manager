@@ -6,20 +6,29 @@ ROUNDTRIP="${REPO_ROOT}/infra/scripts/test-s3-roundtrip.sh"
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
 PORT="19000"
 CLUSTER_MODE=0
+STATIC_ONLY=0
 PORT_FORWARD_PID=""
 ROUNDTRIP_TMP_DIR=""
 RETAINED_KEY=""
 RETAINED_CLEANED_UP=0
+FIXTURE_DIR="${REPO_ROOT}/infra/tests/fixtures/object-storage"
+BUCKET_FIXTURE="${FIXTURE_DIR}/local-buckets.env"
+PAYLOAD_FIXTURE="${FIXTURE_DIR}/retained-durability-payload.txt"
+OBJECT_STORAGE_SAMPLE_BUCKET=""
+OBJECT_STORAGE_BACKUP_BUCKET=""
+OBJECT_STORAGE_REGION=""
+OBJECT_STORAGE_RETAINED_KEY_PREFIX=""
 
 usage() {
   cat <<'EOF'
-Usage: validate_object_storage_local.sh [--cluster] [--kubeconfig PATH] [--port PORT]
+Usage: validate_object_storage_local.sh [--static-only] [--cluster] [--kubeconfig PATH] [--port PORT]
 
 Validates the local INIT-104 object-storage proof against an existing cluster:
 MinIO readiness, PVC binding, InfisicalSecret reconciliation, bucket existence,
 real S3 PUT/GET/compare/DELETE, and Pod-restart durability.
 
 Options:
+  --static-only     Validate object-storage fixture contracts without a cluster
   --cluster          Run explicit cluster runtime validation
   --kubeconfig PATH  Kubeconfig for the local k3d channel
   --port PORT        Local port for MinIO port-forward
@@ -47,7 +56,9 @@ cleanup_retained_object() {
     return
   fi
 
-  mc rm "local-minio/humility-local-sample/${RETAINED_KEY}" >/dev/null 2>&1 || true
+  if [[ -n "${OBJECT_STORAGE_SAMPLE_BUCKET:-}" ]]; then
+    mc rm "local-minio/${OBJECT_STORAGE_SAMPLE_BUCKET}/${RETAINED_KEY}" >/dev/null 2>&1 || true
+  fi
   RETAINED_CLEANED_UP=1
 }
 
@@ -63,6 +74,9 @@ trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --static-only)
+      STATIC_ONLY=1
+      ;;
     --cluster)
       CLUSTER_MODE=1
       ;;
@@ -203,15 +217,53 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+validate_bucket_name() {
+  local name="$1"
+  [[ ${#name} -ge 3 && ${#name} -le 63 ]] || return 1
+  [[ "$name" =~ ^[a-z0-9][a-z0-9.-]*[a-z0-9]$ ]] || return 1
+  [[ "$name" != *..* ]] || return 1
+  [[ "$name" != *.-* ]] || return 1
+  [[ "$name" != *-.* ]] || return 1
+  return 0
+}
+
+load_fixtures() {
+  [[ -f "$BUCKET_FIXTURE" ]] || die "bucket fixture not found: ${BUCKET_FIXTURE}"
+  [[ -f "$PAYLOAD_FIXTURE" ]] || die "payload fixture not found: ${PAYLOAD_FIXTURE}"
+  # shellcheck source=/dev/null
+  source "$BUCKET_FIXTURE"
+}
+
+validate_fixtures() {
+  [[ -n "${OBJECT_STORAGE_SAMPLE_BUCKET:-}" ]] || die "OBJECT_STORAGE_SAMPLE_BUCKET fixture is empty"
+  [[ -n "${OBJECT_STORAGE_BACKUP_BUCKET:-}" ]] || die "OBJECT_STORAGE_BACKUP_BUCKET fixture is empty"
+  [[ -n "${OBJECT_STORAGE_REGION:-}" ]] || die "OBJECT_STORAGE_REGION fixture is empty"
+  [[ -n "${OBJECT_STORAGE_RETAINED_KEY_PREFIX:-}" ]] || die "OBJECT_STORAGE_RETAINED_KEY_PREFIX fixture is empty"
+  [[ -s "$PAYLOAD_FIXTURE" ]] || die "payload fixture is empty: ${PAYLOAD_FIXTURE}"
+  validate_bucket_name "$OBJECT_STORAGE_SAMPLE_BUCKET" || die "invalid sample bucket fixture: ${OBJECT_STORAGE_SAMPLE_BUCKET}"
+  validate_bucket_name "$OBJECT_STORAGE_BACKUP_BUCKET" || die "invalid backup bucket fixture: ${OBJECT_STORAGE_BACKUP_BUCKET}"
+  [[ "$OBJECT_STORAGE_SAMPLE_BUCKET" != "$OBJECT_STORAGE_BACKUP_BUCKET" ]] || die "sample and backup bucket fixtures must differ"
+  [[ "$OBJECT_STORAGE_RETAINED_KEY_PREFIX" != /* && "$OBJECT_STORAGE_RETAINED_KEY_PREFIX" != *".."* ]] || die "retained key prefix must be relative"
+  log "PASS: Object-storage fixtures are valid"
+}
+
+if [[ "$CLUSTER_MODE" -eq 1 ]]; then
+  log "Cluster runtime mode requested"
+fi
+
+load_fixtures
+validate_fixtures
+
+if [[ "$STATIC_ONLY" -eq 1 ]]; then
+  exit 0
+fi
+
 require_command kubectl
 require_command python3
 require_command base64
 require_command curl
 require_command mc
 
-if [[ "$CLUSTER_MODE" -eq 1 ]]; then
-  log "Cluster runtime mode requested"
-fi
 [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
 
 kubectl_cmd get namespace minio-system >/dev/null
@@ -244,24 +296,24 @@ tmpdir="$ROUNDTRIP_TMP_DIR"
 export MC_CONFIG_DIR="${tmpdir}/mc"
 mc_alias local-minio "$access_key" "$secret_key_value"
 
-mc ls local-minio/humility-local-sample >/dev/null
-log "PASS: Bucket humility-local-sample exists"
-mc ls local-minio/humility-local-backups >/dev/null
-log "PASS: Bucket humility-local-backups exists"
+mc ls "local-minio/${OBJECT_STORAGE_SAMPLE_BUCKET}" >/dev/null
+log "PASS: Bucket ${OBJECT_STORAGE_SAMPLE_BUCKET} exists"
+mc ls "local-minio/${OBJECT_STORAGE_BACKUP_BUCKET}" >/dev/null
+log "PASS: Bucket ${OBJECT_STORAGE_BACKUP_BUCKET} exists"
 
 S3_ENDPOINT="http://127.0.0.1:${PORT}" \
 S3_ACCESS_KEY_ID="$access_key" \
 S3_SECRET_ACCESS_KEY="$secret_key_value" \
-S3_REGION="us-east-1" \
-S3_BUCKET="humility-local-sample" \
+S3_REGION="$OBJECT_STORAGE_REGION" \
+S3_BUCKET="$OBJECT_STORAGE_SAMPLE_BUCKET" \
   bash "$ROUNDTRIP"
 
 retained_body="${tmpdir}/retained.txt"
 retained_download="${tmpdir}/retained-download.txt"
-retained_key="init-104-roundtrip/retained-${$}.txt"
+retained_key="${OBJECT_STORAGE_RETAINED_KEY_PREFIX}/retained-${$}.txt"
 RETAINED_KEY="$retained_key"
-printf 'init-104 retained durability sample\n' >"$retained_body"
-mc cp "$retained_body" "local-minio/humility-local-sample/${retained_key}" >/dev/null
+cp "$PAYLOAD_FIXTURE" "$retained_body"
+mc cp "$retained_body" "local-minio/${OBJECT_STORAGE_SAMPLE_BUCKET}/${retained_key}" >/dev/null
 log "PASS: Retained durability object uploaded"
 
 pod="$(kubectl_cmd -n minio-system get pod -l app.kubernetes.io/name=minio -o jsonpath='{.items[0].metadata.name}')"
@@ -274,8 +326,8 @@ stop_port_forward
 PORT_FORWARD_PID=""
 start_port_forward
 mc_alias local-minio "$access_key" "$secret_key_value"
-mc ls local-minio/humility-local-sample >/dev/null
-mc cp "local-minio/humility-local-sample/${retained_key}" "$retained_download" >/dev/null
+mc ls "local-minio/${OBJECT_STORAGE_SAMPLE_BUCKET}" >/dev/null
+mc cp "local-minio/${OBJECT_STORAGE_SAMPLE_BUCKET}/${retained_key}" "$retained_download" >/dev/null
 cmp -s "$retained_body" "$retained_download" || die "retained durability object content mismatch"
 cleanup_retained_object
 log "PASS: Pod-restart durability verified"

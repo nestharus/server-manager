@@ -43,6 +43,10 @@ steps:
       npm ci
       npm test
 
+  - key: init-104-object-storage-static
+    label: "INIT-104 object storage static validation"
+    command: "infra/tests/validate_object_storage_local.sh --static-only"
+
   - key: init-111-data-plane-static
     label: "INIT-111 data plane static validation"
     command: "infra/tests/validate_data_plane_local.sh --static-only"
