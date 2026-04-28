@@ -1,0 +1,61 @@
+slice: SLICE-R.05
+initiative: INIT-101
+contract: local platform cluster bootstrap
+source_documents:
+  - .tmp/recovery-R05-6a-contract.md
+  - proposals/01-recovery-test-first.md
+  - research/03-recovery-hookpoints.md
+  - plans/proposals/platform-bootstrap.md
+  - plans/audit-history/init-101-audit-history.md
+
+fixture_boundary:
+  channel_fixture: local
+  cluster_fixture: k3d
+  durable_test_bodies_must_not_create:
+    - channel desired-state trees
+    - long-lived cluster manifests
+    - GitOps or Crossplane resources
+
+local_channel:
+  id: local
+  supported_surface: local-first
+  handoff_target: later GitOps bootstrap
+  must_prove:
+    - stable channel identity is available to bootstrap validators
+    - kubeconfig or equivalent connection handoff is published outside the cluster
+    - bootstrap stops before Flux, Crossplane, identity, ingress, data plane, observability, and application workloads
+
+k3d_cluster:
+  name: humility-local
+  kubeconfig: ~/.kube/humility-local.yaml
+  required_node_roles:
+    - server
+    - agent
+  reachability_checks:
+    - kubectl can reach the configured API server
+    - Kubernetes readyz reports the API server ready
+  readiness_checks:
+    - every expected node reaches Ready
+    - no expected node remains NotReady or missing
+  in_cluster_checks:
+    - an ephemeral workload can resolve kubernetes.default.svc
+    - the workload is removed after the check
+
+bootstrap_handoff:
+  required_outputs:
+    - API server endpoint or kubeconfig handoff reference
+    - local channel identifier
+    - documented owner boundary for subsequent GitOps work
+  forbidden_scope:
+    - installing or validating Flux reconciliation
+    - installing or validating Crossplane
+    - provisioning application clusters
+    - validating runtime platform services
+    - mutating a remote cloud environment
+
+expected_behavior_checks:
+  - local channel contract can be validated without hardcoded implementation snapshots
+  - local cluster can be brought up or reused through the harness fixture
+  - cluster API is reachable before later-layer validators run
+  - node readiness is verified from live Kubernetes state
+  - bootstrap handoff is explicit and narrow
