@@ -129,3 +129,150 @@ spec:
         - type: MatchInteger
           fieldPath: status.atProvider.manifest.status.succeeded
           matchInteger: 1
+    - name: connection-namespace
+      base:
+        apiVersion: kubernetes.crossplane.io/v1alpha2
+        kind: Object
+        metadata:
+          name: appcluster-connection-namespace
+        spec:
+          providerConfigRef:
+            name: in-cluster
+          readiness:
+            policy: SuccessfulCreate
+          forProvider:
+            manifest:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: platform-app-cluster-connections
+                labels:
+                  pod-security.kubernetes.io/enforce: restricted
+                  pod-security.kubernetes.io/warn: restricted
+                  pod-security.kubernetes.io/audit: restricted
+      patches:
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-connection-namespace"
+        - fromFieldPath: spec.parameters.connectionSecretRef.namespace
+          toFieldPath: spec.forProvider.manifest.metadata.name
+    - name: connection-secret
+      base:
+        apiVersion: kubernetes.crossplane.io/v1alpha2
+        kind: Object
+        metadata:
+          name: appcluster-connection-secret
+        spec:
+          providerConfigRef:
+            name: in-cluster
+          readiness:
+            policy: SuccessfulCreate
+          forProvider:
+            manifest:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: local-sample-kubeconfig
+                namespace: platform-app-cluster-connections
+                labels:
+                  platform.humility.gg/appcluster-name: local-sample
+                  platform.humility.gg/appcluster-namespace: platform-app-clusters
+              type: Opaque
+              stringData:
+                clusterID: humility-local-app
+                externalID: k3d:humility-local-app
+                apiEndpoint: https://humility-local-app.localhost
+                kubeconfig: |
+                  apiVersion: v1
+                  kind: Config
+                  clusters:
+                    - name: humility-local-app
+                      cluster:
+                        server: https://humility-local-app.localhost
+                  contexts:
+                    - name: humility-local-app
+                      context:
+                        cluster: humility-local-app
+                        user: humility-local-app
+                  current-context: humility-local-app
+                  users:
+                    - name: humility-local-app
+                      user:
+                        token: local-appcluster-handoff
+      patches:
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-connection-secret"
+        - fromFieldPath: spec.parameters.connectionSecretRef.name
+          toFieldPath: spec.forProvider.manifest.metadata.name
+        - fromFieldPath: spec.parameters.connectionSecretRef.namespace
+          toFieldPath: spec.forProvider.manifest.metadata.namespace
+        - fromFieldPath: metadata.name
+          toFieldPath: spec.forProvider.manifest.metadata.labels[platform.humility.gg/appcluster-name]
+        - fromFieldPath: metadata.namespace
+          toFieldPath: spec.forProvider.manifest.metadata.labels[platform.humility.gg/appcluster-namespace]
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: spec.forProvider.manifest.stringData.clusterID
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: spec.forProvider.manifest.stringData.externalID
+          transforms:
+            - type: string
+              string:
+                fmt: "k3d:%s"
+        - fromFieldPath: spec.parameters.local.clusterName
+          toFieldPath: spec.forProvider.manifest.stringData.apiEndpoint
+          transforms:
+            - type: string
+              string:
+                fmt: "https://%s.localhost"
+        - type: CombineFromComposite
+          toFieldPath: spec.forProvider.manifest.stringData.kubeconfig
+          combine:
+            strategy: string
+            variables:
+              - fromFieldPath: spec.parameters.local.clusterName
+              - fromFieldPath: spec.parameters.local.clusterName
+              - fromFieldPath: spec.parameters.local.clusterName
+              - fromFieldPath: spec.parameters.local.clusterName
+              - fromFieldPath: spec.parameters.local.clusterName
+              - fromFieldPath: spec.parameters.local.clusterName
+              - fromFieldPath: spec.parameters.local.clusterName
+            string:
+              fmt: |
+                apiVersion: v1
+                kind: Config
+                clusters:
+                  - name: %s
+                    cluster:
+                      server: https://%s.localhost
+                contexts:
+                  - name: %s
+                    context:
+                      cluster: %s
+                      user: %s
+                current-context: %s
+                users:
+                  - name: %s
+                    user:
+                      token: local-appcluster-handoff
+        - type: ToCompositeFieldPath
+          fromFieldPath: spec.forProvider.manifest.stringData.clusterID
+          toFieldPath: status.clusterID
+        - type: ToCompositeFieldPath
+          fromFieldPath: spec.forProvider.manifest.stringData.externalID
+          toFieldPath: status.externalID
+        - type: ToCompositeFieldPath
+          fromFieldPath: spec.forProvider.manifest.stringData.apiEndpoint
+          toFieldPath: status.apiEndpoint
+        - type: ToCompositeFieldPath
+          fromFieldPath: spec.forProvider.manifest.metadata.name
+          toFieldPath: status.connectionSecretRef.name
+        - type: ToCompositeFieldPath
+          fromFieldPath: spec.forProvider.manifest.metadata.namespace
+          toFieldPath: status.connectionSecretRef.namespace
