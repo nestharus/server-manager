@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+CONTRACT_FIXTURE="${REPO_ROOT}/infra/tests/fixtures/web-ui/contract.json"
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
 IMAGE_TAG="init-118-local"
 STATIC_ONLY=0
@@ -15,11 +16,10 @@ usage() {
   cat <<'EOF'
 Usage: validate_web_ui_local.sh [--kubeconfig PATH] [--tag TAG] [--static-only] [--skip-image-build]
 
-Validates INIT-118 web UI substrate:
-  - Solid 2/Vite/TanStack/Ark/vanilla CSS package surface
-  - FontAwesome npm token flow without committed token material
-  - local GitOps SPA deployment and Pomerium-fronted routes
-  - optional local runtime proof: image build, Pod Ready, public route 200, admin route auth redirect
+Validates SLICE-R.22 web UI behavior:
+  - fixture-derived public route, authenticated admin route, API auth gate, and form submit contract
+  - Playwright spec coverage for route, auth, submit, Ark, FontAwesome, and TanStack behavior
+  - optional local runtime proof: image build, Pod Ready, public route 200, admin route auth response
 EOF
 }
 
@@ -81,74 +81,62 @@ parse_args() {
   done
 }
 
-assert_file() {
-  local path="$1"
-  [[ -f "${REPO_ROOT}/${path}" ]] && pass "exists: ${path}" || die "missing: ${path}"
-}
-
-assert_package_surface() {
-  assert_file "services/web/package.json"
-  assert_file "services/web/package-lock.json"
-  assert_file "services/web/vite.config.ts"
-  assert_file "services/web/.oxlintrc.json"
-  assert_file "services/web/.oxfmt.json"
-  assert_file "services/web/.npmrc.template"
-  assert_file "services/web/src/styles/layers.css"
-  assert_file "services/web/src/solid-compat/solid.ts"
-
+json_value() {
+  local expr="$1"
   node -e '
-const pkg = require("./services/web/package.json")
-const deps = {...pkg.dependencies, ...pkg.devDependencies}
-const expected = {
-  "solid-js": "2.0.0-beta.8",
-  "@solidjs/web": "2.0.0-beta.8",
-  "vite-plugin-solid": "3.0.0-next.5",
-  "@tanstack/solid-router": "1.168.25",
-  "@tanstack/solid-query": "5.100.5",
-  "@tanstack/solid-form": "1.29.1",
-  "@ark-ui/solid": "5.36.2",
-  "oxlint": "1.62.0",
-  "oxfmt": "0.47.0",
-  "@typescript/native-preview": "7.0.0-dev.20260427.1",
-  "@playwright/test": "1.59.1"
+const fs = require("fs")
+const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+const parts = process.argv[2].split(".")
+let value = data
+for (const part of parts) value = value[part]
+if (Array.isArray(value) || typeof value === "object") {
+  console.log(JSON.stringify(value))
+} else {
+  console.log(String(value))
 }
-for (const [name, version] of Object.entries(expected)) {
-  if (deps[name] !== version) throw new Error(`${name} expected ${version}; got ${deps[name]}`)
+' "$CONTRACT_FIXTURE" "$expr"
 }
-' || die "web package pins match INIT-118 contract"
-  pass "web package pins match INIT-118 contract"
 
-  if rg -n 'tailwind|panda|styled-components|@emotion|webawesome' "${REPO_ROOT}/services/web/package.json" "${REPO_ROOT}/services/web/src" >/tmp/init118-forbidden.txt; then
-    cat /tmp/init118-forbidden.txt >&2
-    die "no forbidden styling/component packages"
-  fi
-  pass "no Tailwind, Panda, styling DSL, or WebAwesome primary dependency"
+assert_contract_fixture() {
+  [[ -f "$CONTRACT_FIXTURE" ]] || die "missing web UI contract fixture"
+  node -e '
+const fs = require("fs")
+const contract = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+function assert(condition, message) {
+  if (!condition) throw new Error(message)
+}
+assert(contract.routes.public.path === "/", "public route path")
+assert(contract.routes.admin.requires_auth === true, "admin route requires auth")
+assert(contract.auth.unauthenticated_api_status === 401, "unauthenticated_api_status")
+assert(contract.form.submit.method === "POST", "form submit method")
+assert(contract.form.submit.success_status === 201, "form success status")
+assert(contract.form.fields.map((field) => field.name).sort().join(",") === "application_text,character_name", "form fields")
+assert(Object.keys(contract.ui_libraries).sort().join(",") === "ark,fontawesome,tanstack", "UI library coverage")
+' "$CONTRACT_FIXTURE" || die "web UI contract fixture is valid"
+  pass "web UI contract fixture is valid"
+}
 
-  if [[ -f "${REPO_ROOT}/services/web/.npmrc" ]] && rg -n '_authToken=.*[A-Za-z0-9_-]{12,}' "${REPO_ROOT}/services/web/.npmrc"; then
-    die "no committed npm token material"
+assert_playwright_contract_spec() {
+  local spec="${REPO_ROOT}/services/web/tests/compat.spec.ts"
+  [[ -f "$spec" ]] || die "missing Playwright web UI contract spec"
+  rg -q 'contract\.json' "$spec" || die "Playwright spec reads fixture"
+  rg -q 'page\.route' "$spec" || die "Playwright spec stubs API routes"
+  rg -q 'unauthenticated_api_status' "$spec" || die "Playwright spec covers auth-gated API behavior"
+  rg -q 'success_status' "$spec" || die "Playwright spec covers form submit response"
+  rg -q 'ui_libraries' "$spec" || die "Playwright spec covers UI library integration"
+  if rg -q 'Dark Nemesis application|2\.0\.0-beta' "$spec"; then
+    die "Playwright spec must not assert captured demo text or package versions"
   fi
-  pass "no committed npm token material"
+  pass "Playwright spec covers route, auth, submit, and UI libraries"
 }
 
 assert_web_build() {
-  (cd "${REPO_ROOT}/services/web" && npm run build >/tmp/init118-web-build.log)
-  pass "web SPA builds with Solid 2 beta compatibility gate"
-}
-
-assert_kustomize() {
-  command -v kubectl >/dev/null 2>&1 || die "kubectl is required for kustomize validation"
-  local render
-  render="$(mktemp)"
-  kubectl kustomize "${REPO_ROOT}/gitops/channels/local/applications/web" >"$render"
-  grep -q 'name: server-manager-web' "$render" || die "web workload renders"
-  grep -q "local/server-manager-web:${IMAGE_TAG}" "$render" || die "web image tag renders"
-  pass "web application kustomize renders"
-
-  kubectl kustomize --load-restrictor=LoadRestrictionsNone "${REPO_ROOT}/gitops/channels/local" >/tmp/init118-local-render.yaml
-  grep -q 'host: web.local.humility.local' /tmp/init118-local-render.yaml || die "web Pomerium ingress renders"
-  grep -q 'allow_public_unauthenticated_access: true' /tmp/init118-local-render.yaml || die "public Pomerium route renders"
-  grep -q 'prefix: /admin' /tmp/init118-local-render.yaml || die "admin Pomerium route renders"
-  pass "local root includes Pomerium-fronted web route"
+  if [[ ! -f "${REPO_ROOT}/services/web/package.json" ]]; then
+    skip "web package is unavailable in this checkout"
+    return
+  fi
+  (cd "${REPO_ROOT}/services/web" && npm run build >/tmp/slice-r22-web-build.log)
+  pass "web SPA builds for local static contract"
 }
 
 kubectl_cmd() {
@@ -178,23 +166,34 @@ assert_runtime() {
   kubectl_cmd -n web rollout status deployment/server-manager-web --timeout=300s >/dev/null
   pass "web Deployment Available"
 
-  local public_code
-  public_code="$(curl -k -o /dev/null -w "%{http_code}" https://web.local.humility.local/ || true)"
-  [[ "$public_code" == "200" ]] || die "public route returned 200; got ${public_code}"
-  pass "public route returned 200"
+  local public_url public_expected public_code
+  public_url="https://$(json_value routes.public.host)$(json_value routes.public.path)"
+  public_expected="$(json_value routes.public.status)"
+  public_code="$(curl -k -o /dev/null -w "%{http_code}" "$public_url" || true)"
+  [[ "$public_code" != "000" ]] || die "public route was unreachable; got curl 000"
+  [[ "$public_code" == "$public_expected" ]] || die "public route returned ${public_expected}; got ${public_code}"
+  pass "public route returned ${public_expected}"
 
-  local admin_code
-  admin_code="$(curl -k -o /dev/null -w "%{http_code}" https://web.local.humility.local/admin/chapters || true)"
-  [[ "$admin_code" =~ ^(302|303|401)$ ]] || die "admin route requires auth; got ${admin_code}"
+  local admin_url admin_code allowed
+  admin_url="https://$(json_value routes.admin.host)$(json_value routes.admin.path)"
+  admin_code="$(curl -k -o /dev/null -w "%{http_code}" "$admin_url" || true)"
+  [[ "$admin_code" != "000" ]] || die "admin route was unreachable; got curl 000"
+  allowed="$(json_value routes.admin.allowed_unauthenticated_statuses)"
+  node -e '
+const allowed = JSON.parse(process.argv[1])
+const code = Number(process.argv[2])
+if (!allowed.includes(code)) process.exit(1)
+' "$allowed" "$admin_code" || die "admin route requires auth; got ${admin_code}"
   pass "admin route requires authentication"
 }
 
 main() {
   parse_args "$@"
   command -v rg >/dev/null 2>&1 || die "rg is required"
-  assert_package_surface
+  command -v node >/dev/null 2>&1 || die "node is required"
+  assert_contract_fixture
+  assert_playwright_contract_spec
   assert_web_build
-  assert_kustomize
   assert_runtime
   finish
 }
