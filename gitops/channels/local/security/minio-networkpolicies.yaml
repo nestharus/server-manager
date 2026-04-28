@@ -14,10 +14,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: create-sample-bucket
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: create-backup-bucket
+              app.kubernetes.io/component: object-storage-bootstrap
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: sample-app-db
@@ -36,12 +33,8 @@ metadata:
   namespace: minio-system
 spec:
   podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values:
-          - create-sample-bucket
-          - create-backup-bucket
+    matchLabels:
+      app.kubernetes.io/component: object-storage-bootstrap
   policyTypes:
     - Egress
   egress:

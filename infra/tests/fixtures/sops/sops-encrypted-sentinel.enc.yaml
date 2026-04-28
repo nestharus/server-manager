@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sops-encrypted-sentinel
+  namespace: flux-system
+type: Opaque
+stringData:
+  token: ENC[AES256_GCM,data:sentinel,ciphertext:fixture,tag:fixture,type:str]
+sops:
+  age:
+    - recipient: age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        YWdlLWVuY3J5cHRlZC1maXh0dXJl
+        -----END AGE ENCRYPTED FILE-----
+  lastmodified: "2026-04-27T00:00:00Z"
+  mac: ENC[AES256_GCM,data:fixture,tag:fixture,type:str]
+  encrypted_regex: ^(data|stringData)$
+  version: 3.9.0

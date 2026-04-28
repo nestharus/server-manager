@@ -1,0 +1,24 @@
+approved_flux_root:
+  namespace: flux-system
+  source_kind: GitRepository
+  source_name: humility-local
+  kustomization_name: humility-local
+  path: ./gitops/sources/local
+  marker_path: gitops/sources/local/generated/gitops-snapshot-marker.yaml
+  marker_kind: ConfigMap
+  marker_name: gitops-snapshot-marker
+  marker_required_data_key: source_sha
+forbidden_flux_source_kinds:
+  - Bucket
+  - OCIRepository
+forbidden_root_paths:
+  - .
+  - ./
+  - ./gitops
+  - ./gitops/
+  - ./gitops/sources
+  - ./gitops/sources/
+  - ./gitops/flux
+  - ./gitops/flux/
+  - ./gitops/channels
+  - ./gitops/channels/

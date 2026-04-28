@@ -42,11 +42,23 @@ RUNTIME_SECRET_PATTERNS = (
 )
 
 
-def _encrypted_files() -> list[Path]:
-    gitops = REPO_ROOT / "gitops"
+def _encrypted_files(root: Path) -> list[Path]:
+    gitops = root / "gitops"
     if not gitops.is_dir():
         return []
-    return sorted(path.relative_to(REPO_ROOT) for path in gitops.glob("**/*.enc.yaml") if path.is_file())
+    return sorted(path.relative_to(root) for path in gitops.glob("**/*.enc.yaml") if path.is_file())
+
+
+def _yaml_files(root: Path) -> list[Path]:
+    gitops = root / "gitops"
+    if not gitops.is_dir():
+        return []
+    return sorted(
+        path.relative_to(root)
+        for pattern in ("**/*.yaml", "**/*.yml")
+        for path in gitops.glob(pattern)
+        if path.is_file()
+    )
 
 
 def _runtime_secret_match(value: str) -> str | None:
@@ -80,11 +92,27 @@ def _load_yaml(path: Path) -> Any:
         raise ValueError(f"invalid YAML: {exc}") from exc
 
 
-def main() -> int:
-    failures: list[str] = []
-    encrypted_files = _encrypted_files()
+def _has_encrypted_payload(document: dict[str, Any]) -> bool:
+    if not isinstance(document.get("sops"), dict):
+        return False
 
-    if set(encrypted_files) != ALLOWED_ENCRYPTED_FILES:
+    for field in ("data", "stringData"):
+        values = document.get(field)
+        if not isinstance(values, dict):
+            continue
+        for value in values.values():
+            if isinstance(value, str) and not value.startswith("ENC["):
+                return False
+    return True
+
+
+def main() -> int:
+    root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else REPO_ROOT
+    strict_repo_allowlist = root == REPO_ROOT
+    failures: list[str] = []
+    encrypted_files = _encrypted_files(root)
+
+    if strict_repo_allowlist and set(encrypted_files) != ALLOWED_ENCRYPTED_FILES:
         failures.append(
             "encrypted file set must be exactly "
             f"{', '.join(str(path) for path in sorted(ALLOWED_ENCRYPTED_FILES))}; "
@@ -101,7 +129,7 @@ def main() -> int:
                 if match:
                     failures.append(f"runtime-secret-shaped path component in {relative_path}: {part} ({match})")
 
-        absolute_path = REPO_ROOT / relative_path
+        absolute_path = root / relative_path
         try:
             document = _load_yaml(absolute_path)
         except ValueError as exc:
@@ -142,6 +170,26 @@ def main() -> int:
             if relative_path == INFISICAL_BOOTSTRAP_FILE and key_path in INFISICAL_BOOTSTRAP_ALLOWED_KEY_PATHS:
                 continue
             failures.append(f"runtime-secret-shaped key in {relative_path}: {key_path} ({match})")
+
+    for relative_path in _yaml_files(root):
+        if relative_path.parts[:2] != ("gitops", "bootstrap"):
+            continue
+
+        absolute_path = root / relative_path
+        try:
+            documents = list(yaml.safe_load_all(absolute_path.read_text(encoding="utf-8")))
+        except yaml.YAMLError as exc:
+            failures.append(f"{relative_path}: invalid YAML: {exc}")
+            continue
+
+        for document in documents:
+            if not isinstance(document, dict) or document.get("kind") != "Secret":
+                continue
+            if "data" not in document and "stringData" not in document:
+                continue
+            if _has_encrypted_payload(document):
+                continue
+            failures.append(f"plaintext Kubernetes Secret payload in {relative_path}")
 
     if failures:
         for failure in failures:
