@@ -1,0 +1,17 @@
+scheduled_backup:
+  name: sample-app-postgres-daily
+  namespace: sample-app-db
+  cluster: sample-app-postgres
+  destination_prefix: s3://humility-local-backups/cnpg/local/sample-app-postgres
+  retention_policy: 7d
+restore_drill:
+  manual_backup_kind: Backup
+  transient_cluster: sample-app-postgres-restore-drill
+  schema: sample_app
+  table: widgets
+  inserted_row:
+    name: recovery-drill-widget
+    source: seed-before-backup
+  restored_row:
+    name: recovery-drill-widget
+    source: seed-before-backup

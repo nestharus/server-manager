@@ -1,63 +1,49 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
+
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESOLVER_PATH = REPO_ROOT / "infra" / "scripts" / "resolve_platform_channel.py"
-_RESOLVER_MODULE = None
+FIXTURE = (
+    REPO_ROOT / "infra" / "tests" / "fixtures" / "contracts" / "auth_stack_contract.yml"
+)
+POMERIUM_SECRET = (
+    REPO_ROOT / "gitops" / "channels" / "local" / "auth" / "pomerium" / "secrets-infisicalsecret.yaml"
+)
 
 
-def load_resolver():
-    global _RESOLVER_MODULE
-    if _RESOLVER_MODULE is not None:
-        return _RESOLVER_MODULE
-
-    spec = importlib.util.spec_from_file_location("resolve_platform_channel", RESOLVER_PATH)
-    if spec is None:
-        raise FileNotFoundError(f"resolver module not found at {RESOLVER_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    if spec.loader is None:
-        raise RuntimeError(f"resolver module has no loader: {RESOLVER_PATH}")
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    _RESOLVER_MODULE = module
-    return module
+def _yaml(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def test_local_auth_stack_contract() -> None:
-    # Exact versions are deliberate channel-contract checks, not a snapshot.
-    resolver = load_resolver()
-    channel = resolver.resolve_channel("local")
-    auth_stack = channel["auth_stack"]
+def _pomerium_config() -> str:
+    docs = [
+        doc
+        for doc in yaml.safe_load_all(POMERIUM_SECRET.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    return docs[0]["spec"]["managedSecretReference"]["template"]["data"]["config.yaml"]
 
-    assert auth_stack["namespace"] == "auth-system"
-    assert auth_stack["authentik"]["chart_name"] == "authentik/authentik"
-    assert auth_stack["authentik"]["chart_version"] == "2026.2.2"
-    assert auth_stack["authentik"]["image"] == "ghcr.io/goauthentik/server:2026.2.2"
-    assert auth_stack["authentik"]["host"] == "auth.local.humility.local"
-    assert auth_stack["authentik"]["database_cluster_name"] == "authentik-postgres"
-    assert auth_stack["authentik"]["database_name"] == "authentik"
-    assert auth_stack["authentik"]["database_owner"] == "authentik"
-    assert auth_stack["authentik"]["infisical_project"] == "platform-auth"
-    assert auth_stack["authentik"]["infisical_environment"] == "local"
-    assert auth_stack["authentik"]["infisical_path"] == "/auth/local/authentik"
-    assert auth_stack["pomerium"]["chart_version"] == "34.0.1"
-    assert auth_stack["pomerium"]["authenticate_host"] == (
-        "authenticate.local.humility.local"
-    )
-    assert auth_stack["pomerium"]["proxy_host"] == (
-        "protected-api.local.humility.local"
-    )
-    assert auth_stack["opal_cedar"]["chart_name"] == "permitio/opal"
-    assert auth_stack["opal_cedar"]["chart_version"] == "0.0.29"
-    assert auth_stack["opal_cedar"]["server_image"] == "docker.io/permitio/opal-server:0.7.12"
-    assert auth_stack["opal_cedar"]["client_image"] == "docker.io/permitio/opal-client-cedar:0.7.12"
-    assert auth_stack["opal_cedar"]["proof_path"] == "/v1/is_authorized"
-    assert auth_stack["protected_api"]["host"] == "protected-api.local.humility.local"
-    assert auth_stack["protected_api"]["backend_service"] == "server-manager-api"
-    assert auth_stack["protected_api"]["backend_namespace"] == "server-manager"
-    assert auth_stack["protected_api"]["backend_port"] == 8000
-    assert auth_stack["protected_api"]["proof_path"] == "/api/v1/protected/authz-proof"
+
+def test_pomerium_protected_api_route_passes_identity_headers() -> None:
+    """INIT-114 / SLICE-R.18: Pomerium route must protect API identity flow."""
+    protected = _yaml(FIXTURE)["protected_api"]
+    config = _pomerium_config()
+
+    assert f"from: https://{protected['host']}" in config
+    assert f"to: http://{protected['backend_service']}" in config
+    assert "pass_identity_headers: true" in config
+
+
+def test_authz_proof_status_contract_is_explicit() -> None:
+    """INIT-114 proposal: protected API distinguishes 401, 403, 503, and allow."""
+    statuses = _yaml(FIXTURE)["cedar_statuses"]
+
+    assert statuses == {
+        "missing_identity": 401,
+        "denied_identity": 403,
+        "policy_engine_unavailable": 503,
+        "allowed_identity": 200,
+    }

@@ -7,7 +7,7 @@ import argparse
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ class CommandStep:
     label: str
     command: str
     env: dict[str, str]
+    artifact_paths: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,22 @@ def _string_map(value: Any, *, field: str) -> dict[str, str]:
         if not isinstance(key, str):
             raise LocalPipelineError(f"{field} keys must be strings")
         output[key] = str(item)
+    return output
+
+
+def _string_list(value: Any, *, field: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        raise LocalPipelineError(f"{field} must be a string or list")
+
+    output: list[str] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, str):
+            raise LocalPipelineError(f"{field}[{index}] must be a string")
+        output.append(item)
     return output
 
 
@@ -101,6 +118,10 @@ def load_pipeline(path: Path) -> tuple[dict[str, str], list[PipelineStep]]:
                 label=label,
                 command=command,
                 env=_string_map(raw_step.get("env"), field=f"steps[{index}].env"),
+                artifact_paths=_string_list(
+                    raw_step.get("artifact_paths"),
+                    field=f"steps[{index}].artifact_paths",
+                ),
             )
         )
 

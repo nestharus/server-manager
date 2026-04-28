@@ -1,0 +1,17 @@
+env:
+  CHANNEL_ID: local
+  GLOBAL_ONLY: from-top
+  SHARED_VALUE: top
+steps:
+  - label: "First command"
+    key: first-command
+    command: "exit 99"
+    env:
+      SHARED_VALUE: step
+      STEP_ONLY: present
+  - wait
+  - label: "Artifact command"
+    key: artifact-command
+    command: "echo artifact"
+    artifact_paths:
+      - ".tmp/buildkite-local/artifact-command.txt"

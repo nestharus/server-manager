@@ -1,0 +1,15 @@
+routes:
+  public_host: web.local.humility.local
+  admin_prefix: /admin
+  public_status: 200
+  unauthenticated_api_status: 401
+form:
+  route: /applications
+  submit_method: POST
+  controls:
+    - type: text
+      name: character_name
+    - type: textarea
+      name: application_text
+    - type: submit
+      name: submit

@@ -1,0 +1,21 @@
+protected_api:
+  host: protected-api.local.humility.local
+  route: /api/v1/protected/authz-proof
+  identity_header_required: true
+  pass_identity_headers: true
+  backend_service: server-manager-api
+  allowed_identity: sample@local.humility.local
+cedar_statuses:
+  missing_identity: 401
+  denied_identity: 403
+  policy_engine_unavailable: 503
+  allowed_identity: 200
+cedar_decisions:
+  - principal: User::"sample@local.humility.local"
+    action: Action::"api:read"
+    resource: Resource::"server-manager-api"
+    effect: allow
+  - principal: User::"other@local.humility.local"
+    action: Action::"api:read"
+    resource: Resource::"server-manager-api"
+    effect: deny

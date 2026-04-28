@@ -1,0 +1,30 @@
+decisions:
+  - principal: User::"sample@local.humility.local"
+    action: Action::"api:read"
+    resource: Resource::"server-manager-api"
+    effect: allow
+  - principal: User::"other@local.humility.local"
+    action: Action::"api:read"
+    resource: Resource::"server-manager-api"
+    effect: deny
+  - principal: Service::"buildkite-agent.local"
+    action: Action::"api:ci:deploy"
+    resource: Resource::"server-manager-api"
+    effect: allow
+  - principal: Service::"buildkite-agent.local"
+    action: Action::"api:read"
+    resource: Resource::"server-manager-api"
+    effect: deny
+  - principal: Service::"crossplane-provider.local"
+    action: Action::"cluster:claim:reconcile"
+    resource: Resource::"cluster-api"
+    effect: allow
+  - principal: Service::"unknown.local"
+    action: Action::"cluster:claim:reconcile"
+    resource: Resource::"cluster-api"
+    effect: deny
+token_safety:
+  forbidden_substrings:
+    - BUILDKITE_AGENT_TOKEN=
+    - INFISICAL_UA_CLIENT_SECRET=
+    - SOPS_AGE_KEY=

@@ -1,0 +1,26 @@
+tenants:
+  - namespace: sample-local
+    tenant: sample
+    channel: local
+    infisical_project: tenant-sample-local
+  - namespace: sample-dev
+    tenant: sample
+    channel: dev
+    infisical_project: tenant-sample-dev
+  - namespace: other-local
+    tenant: other
+    channel: local
+    infisical_project: tenant-other-local
+cedar_decisions:
+  - principal: Tenant::"sample"
+    action: Action::"tenant:channel:access"
+    resource: TenantChannel::"sample:local"
+    effect: allow
+  - principal: Tenant::"sample"
+    action: Action::"tenant:channel:access"
+    resource: TenantChannel::"sample:dev"
+    effect: allow
+  - principal: Tenant::"sample"
+    action: Action::"tenant:channel:access"
+    resource: TenantChannel::"other:local"
+    effect: deny

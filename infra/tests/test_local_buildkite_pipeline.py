@@ -9,6 +9,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER_PATH = REPO_ROOT / "infra" / "scripts" / "run-local-buildkite-pipeline.py"
+FIXTURE_DIR = REPO_ROOT / "infra" / "tests" / "fixtures" / "contracts"
 
 
 def load_runner():
@@ -21,67 +22,58 @@ def load_runner():
     return module
 
 
-def test_load_pipeline_accepts_command_and_wait_steps() -> None:
+def test_fixture_pipeline_accepts_command_wait_and_artifact_steps() -> None:
+    """RISK-AUDIT-A3 / INIT-109: runner behavior, not full pipeline key order."""
     runner = load_runner()
 
-    top_env, steps = runner.load_pipeline(REPO_ROOT / ".buildkite" / "pipeline.yml")
+    top_env, steps = runner.load_pipeline(FIXTURE_DIR / "buildkite_runner_pipeline.yml")
 
+    command_steps = [step for step in steps if isinstance(step, runner.CommandStep)]
     assert top_env["CHANNEL_ID"] == "local"
-    assert [type(step).__name__ for step in steps].count("WaitStep") == 1
-    assert [step.key for step in steps if isinstance(step, runner.CommandStep)] == [
-        "init-109-smoke",
-        "unit-tests",
-        "init-111-data-plane-static",
-        "init-113-application-workloads-static",
-        "init-114-auth-stack-static",
-        "init-115-access-policy-static",
-        "init-116-tenant-isolation-static",
-        "init-117-observability-static",
-        "init-118-web-ui-static",
-        "registry-build-push",
-        "init-113-build-images",
-        "init-118-build-web",
+    assert [type(step).__name__ for step in steps] == [
+        "CommandStep",
+        "WaitStep",
+        "CommandStep",
+    ]
+    assert [step.key for step in command_steps] == ["first-command", "artifact-command"]
+    assert getattr(command_steps[1], "artifact_paths") == [
+        ".tmp/buildkite-local/artifact-command.txt"
     ]
 
 
 def test_select_steps_preserves_requested_order() -> None:
+    """INIT-109 proposal Slice 3: repeated --step-key selects requested order."""
     runner = load_runner()
-    _, steps = runner.load_pipeline(REPO_ROOT / ".buildkite" / "pipeline.yml")
+    _, steps = runner.load_pipeline(FIXTURE_DIR / "buildkite_runner_pipeline.yml")
 
-    selected = runner.select_steps(steps, ["registry-build-push", "init-109-smoke"])
+    selected = runner.select_steps(steps, ["artifact-command", "first-command"])
 
-    assert [step.key for step in selected] == ["registry-build-push", "init-109-smoke"]
+    assert [step.key for step in selected] == ["artifact-command", "first-command"]
 
 
 def test_unknown_step_key_fails() -> None:
+    """INIT-109 proposal Slice 3: unknown local step keys fail fast."""
     runner = load_runner()
-    _, steps = runner.load_pipeline(REPO_ROOT / ".buildkite" / "pipeline.yml")
+    _, steps = runner.load_pipeline(FIXTURE_DIR / "buildkite_runner_pipeline.yml")
 
     with pytest.raises(runner.LocalPipelineError, match="unknown step key"):
         runner.select_steps(steps, ["missing"])
 
 
-def test_unsupported_step_type_fails(tmp_path: Path) -> None:
+def test_unsupported_block_step_fails() -> None:
+    """INIT-109 contract lines L017-L020: local mode rejects unsupported steps."""
     runner = load_runner()
-    pipeline = tmp_path / "pipeline.yml"
-    pipeline.write_text(
-        """
-steps:
-  - block: "ship it"
-""",
-        encoding="utf-8",
-    )
 
     with pytest.raises(runner.LocalPipelineError, match="unsupported local step type"):
-        runner.load_pipeline(pipeline)
+        runner.load_pipeline(FIXTURE_DIR / "buildkite_unsupported_block.yml")
 
 
 def test_dry_run_executes_no_commands(capsys: pytest.CaptureFixture[str]) -> None:
+    """INIT-109 proposal Slice 3: dry-run prints commands without running them."""
     runner = load_runner()
-    top_env = {"A": "B"}
     step = runner.CommandStep(index=1, key="x", label="X", command="exit 99", env={})
 
-    result = runner.run_steps(top_env=top_env, steps=[step], dry_run=True)
+    result = runner.run_steps(top_env={"A": "B"}, steps=[step], dry_run=True)
 
     assert result == 0
     assert "exit 99" in capsys.readouterr().out

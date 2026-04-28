@@ -1,0 +1,34 @@
+images:
+  api: k3d-humility-local:5000/local/server-manager-api:init-113-local
+  discord: k3d-humility-local:5000/local/server-manager-discord:init-113-local
+runtime_secrets:
+  server_manager:
+    project: server-manager
+    environment: local
+    path: /runtime/local
+    required_keys:
+      - DISCORD_BOT_TOKEN
+      - DISCORD_GUILD_ID
+      - SUPABASE_SERVICE_KEY
+  database:
+    project: platform-databases
+    environment: local
+    path: /postgres/local/server-manager
+    required_keys:
+      - username
+      - password
+  storage:
+    project: platform-storage
+    environment: local
+    path: /object-storage/local
+    required_keys:
+      - MINIO_ROOT_USER
+      - MINIO_ROOT_PASSWORD
+ingress:
+  host: api.local.humility.local
+  health_path: /api/v1/health
+  class: kong
+database:
+  cluster: server-manager-postgres
+  database: server_manager
+bucket_job_name: server-manager-minio-bucket-bootstrap
