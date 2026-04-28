@@ -80,6 +80,93 @@ e2e_build_local_images() {
     --file "${REPO_ROOT}/containers/server-manager/Containerfile.web"
 }
 
+e2e_k3d_import_image() {
+  local image="$1"
+  local import_ref="$image"
+  local archive
+  local archive_name
+  local node
+  local nodes=()
+
+  if [[ "$image" == *@sha256:* ]]; then
+    local name_without_digest="${image%@*}"
+    local name_leaf="${name_without_digest##*/}"
+    local digest="${image##*@sha256:}"
+
+    if [[ "$name_leaf" == *:* ]]; then
+      import_ref="$name_without_digest"
+    else
+      import_ref="${name_without_digest}:sha-${digest:0:12}"
+    fi
+
+    if ! docker image inspect "$import_ref" >/dev/null 2>&1; then
+      local image_id
+      image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+      docker tag "$image_id" "$import_ref"
+    fi
+  fi
+
+  echo "IMAGE: importing ${import_ref} into humility-local"
+  mapfile -t nodes < <(
+    docker ps \
+      --filter "name=^k3d-humility-local-(server|agent)-[0-9]+$" \
+      --format '{{.Names}}' \
+      | sort
+  )
+
+  if [[ "${#nodes[@]}" -eq 0 ]]; then
+    echo "WARN: no k3d runtime nodes found; falling back to k3d image import" >&2
+    k3d image import --cluster humility-local "$import_ref"
+    return
+  fi
+
+  archive="$(mktemp "${TMPDIR:-/tmp}/humility-e2e-image.XXXXXX.tar")"
+  archive_name="$(basename "$archive")"
+  if ! docker save "$import_ref" -o "$archive"; then
+    rm -f "$archive"
+    return 1
+  fi
+  if ! python3 - "$archive" <<'PY'
+import json
+import sys
+import tarfile
+
+archive = sys.argv[1]
+with tarfile.open(archive) as tar:
+    names = set(tar.getnames())
+    manifest = json.load(tar.extractfile("manifest.json"))
+
+missing = []
+for entry in manifest:
+    for name in [entry.get("Config"), *entry.get("Layers", [])]:
+        if name and name not in names:
+            missing.append(name)
+
+if missing:
+    print(f"archive missing blobs: {', '.join(missing[:5])}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  then
+    echo "WARN: Docker archive for ${import_ref} is incomplete; runtime pull will use the configured registry endpoints" >&2
+    rm -f "$archive"
+    return 1
+  fi
+  for node in "${nodes[@]}"; do
+    echo "IMAGE: loading ${import_ref} into ${node}"
+    if ! docker cp "$archive" "${node}:/tmp/${archive_name}"; then
+      rm -f "$archive"
+      return 1
+    fi
+    if ! docker exec "$node" ctr -n k8s.io images import "/tmp/${archive_name}" >/dev/null; then
+      docker exec "$node" rm -f "/tmp/${archive_name}" >/dev/null || true
+      rm -f "$archive"
+      return 1
+    fi
+    docker exec "$node" rm -f "/tmp/${archive_name}" >/dev/null
+  done
+  rm -f "$archive"
+}
+
 e2e_pull_external_images() {
   if [[ "${E2E_SKIP_EXTERNAL_IMAGE_PULL:-0}" == "1" ]]; then
     echo "SKIP: external image pre-pull skipped by E2E_SKIP_EXTERNAL_IMAGE_PULL=1"
@@ -105,8 +192,7 @@ e2e_pull_external_images() {
       done
     fi
 
-    echo "IMAGE: importing ${image} into humility-local"
-    if ! k3d image import --cluster humility-local "$image"; then
+    if ! e2e_k3d_import_image "$image"; then
       echo "WARN: could not pre-import ${image}; runtime pull will use the configured registry endpoints" >&2
     fi
   done
@@ -134,7 +220,7 @@ e2e_bringup_fullstack() {
 
   if ! "${REPO_ROOT}/infra/scripts/bring-up-local-channel.sh" --channel local; then
     capture_k8s_diagnostics "bring-up-local-channel"
-    return 1
+    echo "WARN: local channel installer did not complete; continuing to the E2E readiness gate"
   fi
 
   e2e_bootstrap_optional_secrets

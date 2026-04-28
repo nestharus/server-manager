@@ -10,8 +10,6 @@ resources:
   - object-storage-bucket-credentials-infisicalsecret.yaml
   - postgres-cluster.yaml
   - scheduled-backup.yaml
-  - atlas-migrations-configmap.yaml
-  - atlas-migration.yaml
   - alembic-migration-job.yaml
   - api-deployment.yaml
   - api-service.yaml
