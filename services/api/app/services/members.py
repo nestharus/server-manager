@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from psycopg import Connection, errors
 
 from app.contracts.actor import ActorIdentity
+from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.members import (
     InvalidMemberStatusTransitionError,
     MemberCreate,
@@ -22,6 +25,7 @@ from app.repositories.members import (
     fetch_member_by_discord_id,
     fetch_member_by_id,
 )
+from app.core.context import get_current_audit_context, use_audit_context
 from app.services.mutations import mutate_entity
 
 
@@ -32,6 +36,23 @@ VALID_TRANSITIONS = {
     ("suspended", "departed"),
     ("departed", "active"),
 }
+
+PUBLIC_INTAKE_MEMBER_ACTOR = ActorIdentity(
+    actor_kind="service",
+    actor_id="public-intake",
+)
+
+
+def _generated_audit_context() -> AuditContextRead:
+    correlation_id = uuid4()
+    return AuditContextRead(
+        correlation_id=correlation_id,
+        causation_id=None,
+        headers=CorrelationHeadersRead(
+            x_correlation_id=correlation_id,
+            x_causation_id=None,
+        ),
+    )
 
 
 def _make_request(
@@ -141,6 +162,35 @@ def create_or_get_member(
     with db.connection() as connection:
         row = _fetch_member_row(connection, member_id)
     return _member_from_row(row), result, True
+
+
+async def resolve_or_create_public_intake_member(
+    db: PostgresDatabase,
+    *,
+    public_submission_id: UUID,
+    channel_salt: str,
+) -> MemberRead:
+    digest = hashlib.sha256(f"{public_submission_id}|{channel_salt}".encode()).hexdigest()
+    request = MemberCreate(
+        discord_user_id=f"public:{digest[:32]}",
+        joined_at=datetime.now(UTC),
+        originating_actor_kind="service",
+        originating_actor_id="public-intake",
+    )
+    if get_current_audit_context() is None:
+        with use_audit_context(_generated_audit_context()):
+            member, _result, _created = create_or_get_member(
+                db,
+                request,
+                PUBLIC_INTAKE_MEMBER_ACTOR,
+            )
+    else:
+        member, _result, _created = create_or_get_member(
+            db,
+            request,
+            PUBLIC_INTAKE_MEMBER_ACTOR,
+        )
+    return member
 
 
 def get_member_by_id(

@@ -3,15 +3,16 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from app.contracts.actor import ActorIdentity
+from app.contracts.actor import ActorIdentity, ActorIdentityMissingError
 from app.contracts.applications import (
     ApplicationRead,
     ApplicationSubmission,
     ApplicationTransitionRequest,
 )
 from app.core.dependencies import get_current_actor
+from app.core.context import get_current_actor as get_context_actor
 from app.repositories.db import PostgresDatabase
 from app.services.applications import (
     read_application,
@@ -26,12 +27,27 @@ from ._shared import get_db, parse_if_match_strong, raise_known_application_erro
 router = APIRouter(prefix="/api/v1/applications")
 
 
+def get_submit_actor() -> ActorIdentity:
+    try:
+        return get_context_actor()
+    except ActorIdentityMissingError as error:
+        raise HTTPException(
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail={
+                "detail": {
+                    "code": "actor_identity_missing",
+                    "message": error.message,
+                }
+            },
+        ) from error
+
+
 @router.post("", response_model=ApplicationRead, status_code=HTTPStatus.CREATED)
 def submit_application_endpoint(
     body: ApplicationSubmission,
     response: Response,
     db: PostgresDatabase = Depends(get_db),
-    actor: ActorIdentity = Depends(get_current_actor),
+    actor: ActorIdentity = Depends(get_submit_actor),
 ) -> ApplicationRead:
     try:
         read, result = submit_application(db, body, actor)

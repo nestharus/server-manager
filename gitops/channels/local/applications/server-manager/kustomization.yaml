@@ -14,6 +14,7 @@ resources:
   - api-deployment.yaml
   - api-service.yaml
   - api-ingress.yaml
+  - public-intake-rate-limit.yaml
   - local-dns-alias.yaml
   - discord-deployment.yaml
   - object-storage-bucket-job.yaml

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -15,6 +15,7 @@ FIELD_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 APPLICATION_REASSIGN_ACTION_TYPE = "application.reassign"
 APPLICATION_REASSIGN_CHANGE_TYPE = "application.reassigned"
 APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST = frozenset({"new_owner_id"})
+JSONValue: TypeAlias = Any
 
 
 class _ApplicationModel(BaseModel):
@@ -215,6 +216,34 @@ class ApplicationSubmission(_ApplicationModel):
 
 
 ApplicationCreate = ApplicationSubmission
+
+
+class PublicApplicationSubmission(_ApplicationModel):
+    scope: ApplicationScope
+    responses: dict[str, JSONValue]
+    client_application_id: str | None = None
+
+    @field_validator("responses")
+    @classmethod
+    def _responses_non_empty(cls, value: dict[str, JSONValue]) -> dict[str, JSONValue]:
+        if not value:
+            raise ValueError("responses must be a non-empty object")
+        return value
+
+    @field_validator("client_application_id")
+    @classmethod
+    def _trim_client_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("client_application_id may not be blank")
+        return trimmed
+
+
+class PublicApplicationSubmissionReceipt(_ApplicationModel):
+    message: str
+    application_id: UUID
 
 
 class ApplicationTransitionRequest(_ApplicationModel):
@@ -462,4 +491,7 @@ __all__ = [
     "FormTargetType",
     "InvalidApplicationResponseError",
     "InvalidApplicationTransitionError",
+    "JSONValue",
+    "PublicApplicationSubmission",
+    "PublicApplicationSubmissionReceipt",
 ]

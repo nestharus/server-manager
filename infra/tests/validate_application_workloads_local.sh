@@ -164,6 +164,7 @@ assert_static_files() {
   assert_file "gitops/channels/local/applications/server-manager/api-deployment.yaml"
   assert_file "gitops/channels/local/applications/server-manager/discord-deployment.yaml"
   assert_file "gitops/channels/local/applications/server-manager/api-ingress.yaml"
+  assert_file "gitops/channels/local/applications/server-manager/public-intake-rate-limit.yaml"
   assert_file "gitops/channels/local/applications/server-manager/object-storage-bucket-job.yaml"
 }
 
@@ -195,6 +196,14 @@ assert_kustomize() {
   grep -q "$api_image" "$app_render" || die "server-manager API image rendered"
   grep -q "$discord_image" "$app_render" || die "server-manager Discord image rendered"
   pass "server-manager workload resources rendered"
+
+  grep -q 'name: public-intake-rate-limit' "$app_render" || die "public intake KongPlugin rendered"
+  grep -q 'name: server-manager-public-intake-api' "$app_render" || die "public intake API ingress rendered"
+  grep -q 'konghq.com/plugins: public-intake-rate-limit' "$app_render" || die "public intake API ingress plugin annotation rendered"
+  grep -q 'path: /api/v1/public/applications' "$app_render" || die "public intake API ingress path rendered"
+  grep -q 'name: web-public-intake' "$local_render" || die "public intake web ingress rendered"
+  grep -q 'path: /api/public/applications' "$local_render" || die "public intake web ingress path rendered"
+  pass "public intake rate-limit resources rendered"
 }
 
 assert_no_secret_literals() {
