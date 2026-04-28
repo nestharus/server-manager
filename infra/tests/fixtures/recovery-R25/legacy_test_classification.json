@@ -1,0 +1,679 @@
+{
+  "slice": "SLICE-R.25",
+  "source_documents": [
+    "proposals/01-recovery-test-first.md",
+    "research/03-recovery-hookpoints.md",
+    "research/02-coverage-audit-init-100-118.md",
+    "risk/01-recovery-scope.md",
+    "risk/01-recovery-shortcut.md"
+  ],
+  "ci_lanes": {
+    "tests/": "pytest tests services/api/tests services/discord/tests -v",
+    "services/api/tests/": "pytest tests services/api/tests services/discord/tests -v",
+    "services/discord/tests/": "pytest tests services/api/tests services/discord/tests -v"
+  },
+  "non_legacy_slice_tests": [
+    "tests/test_recovery_R25_legacy_classification.py"
+  ],
+  "entries": [
+    {
+      "path": "tests/test_daemon_init.py",
+      "disposition": "DELETE_AND_REWRITE",
+      "contract_source": "proposals/13-daemon-init.md; proposals/25-discord-main.md; services/discord runtime contract",
+      "fixture_source": "legacy root daemon test",
+      "replacement_paths": [
+        "services/discord/tests/test_bot.py",
+        "services/discord/tests/test_interaction_framework.py"
+      ]
+    },
+    {
+      "path": "tests/test_daemon_config.py",
+      "disposition": "MIGRATE",
+      "contract_source": "proposals/14-config.md; proposals/20-settings.md; proposals/23-discord-settings.md; runtime settings contracts",
+      "fixture_source": "legacy root daemon test",
+      "replacement_paths": [
+        "services/api/tests/test_settings.py",
+        "services/discord/tests/test_settings.py"
+      ]
+    },
+    {
+      "path": "tests/test_daemon_db.py",
+      "disposition": "MIGRATE",
+      "contract_source": "proposals/15-db.md; API persistence contract; Alembic migration contract",
+      "fixture_source": "legacy root daemon test",
+      "replacement_paths": [
+        "services/api/tests/test_persistence.py"
+      ]
+    },
+    {
+      "path": "tests/test_daemon_claim.py",
+      "disposition": "MIGRATE",
+      "contract_source": "proposals/16-claim.md; ticket/application ownership contracts; Discord interaction contracts",
+      "fixture_source": "legacy root daemon test",
+      "replacement_paths": [
+        "services/api/tests/test_application_interviews.py",
+        "services/api/tests/test_ticket_transitions.py",
+        "services/discord/tests/test_application_review.py",
+        "services/discord/tests/test_tickets.py"
+      ]
+    },
+    {
+      "path": "tests/test_daemon_applications.py",
+      "disposition": "MIGRATE",
+      "contract_source": "proposals/18-applications.md; application contracts; Discord application submission contract",
+      "fixture_source": "legacy root daemon test",
+      "replacement_paths": [
+        "services/api/tests/test_applications.py",
+        "services/api/tests/test_forms.py",
+        "services/discord/tests/test_application_submission.py",
+        "services/discord/tests/test_application_review.py"
+      ]
+    },
+    {
+      "path": "tests/test_daemon_entry.py",
+      "disposition": "DELETE_AND_REWRITE",
+      "contract_source": "proposals/17-daemon-entry.md; proposals/24-discord-bot.md; proposals/25-discord-main.md",
+      "fixture_source": "legacy root daemon test",
+      "replacement_paths": [
+        "services/discord/tests/test_bot.py",
+        "services/discord/tests/test_interaction_framework.py"
+      ]
+    },
+    {
+      "path": "tests/test_discord_cli.py",
+      "disposition": "DELETE_AND_REWRITE",
+      "contract_source": "proposals/05-discord-cli.md read-only CLI behavior with real or recorded Discord API boundary",
+      "fixture_source": "legacy root CLI test",
+      "residual_risk": "read-only Discord CLI behavior has no real or recorded Discord API boundary replacement in this slice"
+    },
+    {
+      "path": "services/api/tests/test_activity_model.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "plans/proposals/activity-audit-model.md; API activity and audit contracts",
+      "fixture_source": "API service conftest and existing testcontainers fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_application_boundaries.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Application boundary contract and current API endpoint contracts",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_application_interviews.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Application interview lifecycle endpoint contracts",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_applications.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Application intake contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_archive_boundaries.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-023 archive acceptance criteria and chapter contracts",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_audit_api.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-009 WU-016A audit API contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_audit_foundation.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-003 audit and correlation foundation",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_authority.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-008 / WU-014 authority lifecycle",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_authority_enforcement.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-015A authority guard acceptance criteria",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_authority_foundation.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-004 authority foundation",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_authority_override_audit.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-015B override audit policy",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_authority_transfer.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Authority transfer contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_chapter_archive_execution.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-023 archive execution contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_chapter_archive_plan.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-023 archive plan contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_chapter_governance.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-023 governance lifecycle contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_chapter_lifecycle.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-013 chapter lifecycle contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_chapter_role_foundation.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-007B chapter role foundation",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_chapter_template_foundation.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-007A template foundation",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_chapter_templates.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Chapter template CRUD contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_compliance_evaluation_worker.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-022 compliance evaluation worker contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_compliance_evidence.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Compliance evidence acceptance criteria",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_compliance_ocr_correct.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Compliance OCR correction contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_compliance_ocr_extract.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Compliance OCR extraction contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_compliance_review_api.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Compliance review API contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_compliance_rules.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Compliance rule contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_conftest.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/28-conftest.md; API testing contract",
+      "fixture_source": "API service conftest",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_contracts_base.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/22-contracts-base.md",
+      "fixture_source": "API contract tests",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_contracts_chapter_lifecycle.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/26-chapters-contract.md; chapter contracts",
+      "fixture_source": "API contract tests",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_deferred_effect_foundation.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-004 WU-008B deferred effects",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_endpoints_chapters_stubs.py",
+      "disposition": "DELETE_AND_REWRITE",
+      "contract_source": "proposals/27-chapter-endpoints.md real endpoint contract tests",
+      "fixture_source": "API service conftest",
+      "replacement_paths": [
+        "services/api/tests/test_chapter_lifecycle.py",
+        "services/api/tests/test_chapter_templates.py",
+        "services/api/tests/test_chapter_governance.py"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_factory.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/21-factory.md; runtime readiness contract",
+      "fixture_source": "API service conftest",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_forms.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/18-applications.md; application contracts",
+      "fixture_source": "API service conftest",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_harness.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/28-conftest.md; API testing contract",
+      "fixture_source": "API service conftest",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_leadership_context.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Authority leadership context contracts",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_leadership_handoff_applications.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-024 leadership handoff applications",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_leadership_handoff_tickets.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-024 leadership handoff tickets",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_members.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Member contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_mutations.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Mutation contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_notification_delivery_worker.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Notification delivery worker contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_notification_event_contract.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "WU-003B notification event envelope",
+      "fixture_source": "API service conftest",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_notification_materialization.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Notification materialization contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_notification_rules.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Notification rule contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_operational_views.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-017 read-model contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_permission_drift.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-014 drift detection",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_permission_intents.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Permission intents contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_permission_reconciliation_api.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Permission reconciliation API",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_permission_temporary_api.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-020 temporary permissions",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_permission_temporary_worker.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Temporary permission worker",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_persistence.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Persistence and migration contract",
+      "fixture_source": "API testcontainers fixtures"
+    },
+    {
+      "path": "services/api/tests/test_policies.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-010 policy preview/confirm/current contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_policy_foundation.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-005 policy preview-confirm foundation",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_protected_authz.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "INIT-114 protected authz API contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_read_models.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Read-model contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_roster.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Roster contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_scheduler_foundation.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "SLICE-004 WU-008A scheduler foundation",
+      "fixture_source": "API service conftest",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_settings.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/20-settings.md; API runtime settings contract",
+      "fixture_source": "API service conftest",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/api/tests/test_succession_plan.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Succession plan contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_ticket_boundaries.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Ticket boundary contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_ticket_categories.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Ticket category contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_ticket_create.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Ticket creation contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_ticket_initial_message_events.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Ticket event emission contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_ticket_messages.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Ticket message contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_ticket_sla.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Ticket SLA contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_ticket_transitions.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Ticket transition contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_trust.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Trust contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_trust_recompute.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Trust recompute contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_trust_signals.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Trust signal aggregation contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/api/tests/test_web_identity.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "INIT-114 web identity and authz contract",
+      "fixture_source": "API service conftest"
+    },
+    {
+      "path": "services/discord/tests/test_api_context.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "SLICE-009 WU-016B Discord correlation adapter",
+      "fixture_source": "Discord fake client fixtures"
+    },
+    {
+      "path": "services/discord/tests/test_api_transport.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-009D API transport contract",
+      "fixture_source": "Discord httpx MockTransport fixtures"
+    },
+    {
+      "path": "services/discord/tests/test_application_interview.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "Application interview interaction contract",
+      "fixture_source": "Discord fake client fixtures"
+    },
+    {
+      "path": "services/discord/tests/test_application_review.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "Application review interaction contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_application_submission.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "Application submission contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_application_waitlist.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "Application waitlist contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_bot.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/24-discord-bot.md; Discord runtime contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_chapter_provisioning.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "SLICE-013 chapter provisioning contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_harness.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/28-conftest.md; Discord testing contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_interaction_framework.py",
+      "disposition": "KEEP_AS_IS",
+      "contract_source": "WU-009C interaction registry contract",
+      "fixture_source": "Discord fake client fixtures"
+    },
+    {
+      "path": "services/discord/tests/test_main.py",
+      "disposition": "DELETE_AND_REWRITE",
+      "contract_source": "proposals/25-discord-main.md command registry contract",
+      "fixture_source": "Discord fake client fixtures",
+      "replacement_paths": [
+        "services/discord/tests/test_bot.py",
+        "services/discord/tests/test_interaction_framework.py",
+        "services/discord/tests/test_application_submission.py",
+        "services/discord/tests/test_application_review.py",
+        "services/discord/tests/test_chapter_provisioning.py",
+        "services/discord/tests/test_tickets.py"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_notifications.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "SLICE-015 notification adapter contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_onboarding.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "Onboarding/member join contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_permission_reconciliation_adapter.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "Permission reconciliation adapter contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_roster_sync.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "Roster sync contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_settings.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "proposals/23-discord-settings.md; Discord runtime settings contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    },
+    {
+      "path": "services/discord/tests/test_tickets.py",
+      "disposition": "MODERNIZE",
+      "contract_source": "Ticket interaction contract",
+      "fixture_source": "Discord fake client fixtures",
+      "modernization_evidence": [
+        "already meets modernization criteria; CI lane wired by SLICE-R.02"
+      ]
+    }
+  ]
+}
