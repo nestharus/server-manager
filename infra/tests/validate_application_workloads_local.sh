@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILDER="${REPO_ROOT}/infra/scripts/build-server-manager-images.sh"
+CONTRACT_FIXTURE="${REPO_ROOT}/infra/tests/fixtures/contracts/application_workloads_contract.yml"
 CHANNEL_REQUEST="local"
 KUBECONFIG_PATH="${HOME}/.kube/humility-local.yaml"
 IMAGE_TAG="init-113-local"
@@ -67,6 +68,7 @@ cleanup() {
     rm -f "$temp_file" >/dev/null 2>&1 || true
   done
   if [[ "$KEEP" -eq 0 && -f "$KUBECONFIG_PATH" ]] && command -v kubectl >/dev/null 2>&1; then
+    kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager delete pod init-113-api-health --ignore-not-found >/dev/null 2>&1 || true
     kubectl --kubeconfig "$KUBECONFIG_PATH" -n kong-system delete pod init-113-api-curl --ignore-not-found >/dev/null 2>&1 || true
   fi
 }
@@ -125,6 +127,22 @@ python_bin() {
   fi
 }
 
+fixture_value() {
+  local expression="$1"
+  "$PYTHON_BIN" - "$CONTRACT_FIXTURE" "$expression" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+payload = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = payload
+for part in sys.argv[2].split("."):
+    value = value[part]
+print(value)
+PY
+}
+
 assert_file() {
   local path="$1"
   [[ -f "${REPO_ROOT}/${path}" ]] && pass "exists: ${path}" || die "missing: ${path}"
@@ -152,8 +170,14 @@ assert_static_files() {
 assert_kustomize() {
   local app_render
   local local_render
+  local api_image
+  local discord_image
+  local ingress_host
 
   command -v kubectl >/dev/null 2>&1 || die "kubectl is required for kustomize validation"
+  api_image="$(fixture_value images.api)"
+  discord_image="$(fixture_value images.discord)"
+  ingress_host="$(fixture_value ingress.host)"
 
   app_render="$(mktemp)"
   local_render="$(mktemp)"
@@ -168,9 +192,9 @@ assert_kustomize() {
   grep -q 'name: server-manager-postgres' "$app_render" || die "server-manager CNPG Cluster rendered"
   grep -q 'kind: AtlasMigration' "$app_render" || die "server-manager AtlasMigration rendered"
   grep -q 'name: server-manager-alembic-migrate' "$app_render" || die "server-manager Alembic Job rendered"
-  grep -q 'host: api.local.humility.local' "$app_render" || die "server-manager API ingress rendered"
-  grep -q 'local/server-manager-api:init-113-local' "$app_render" || die "server-manager API image rendered"
-  grep -q 'local/server-manager-discord:init-113-local' "$app_render" || die "server-manager Discord image rendered"
+  grep -q "host: ${ingress_host}" "$app_render" || die "server-manager API ingress rendered"
+  grep -q "$api_image" "$app_render" || die "server-manager API image rendered"
+  grep -q "$discord_image" "$app_render" || die "server-manager Discord image rendered"
   pass "server-manager workload resources rendered"
 }
 
@@ -231,6 +255,42 @@ raise SystemExit(1)
   die "${description} did not report ${condition_type}=True"
 }
 
+restricted_pod_overrides() {
+  local container_name="$1"
+  local image="$2"
+  shift 2
+  "$PYTHON_BIN" - "$container_name" "$image" "$@" <<'PY'
+import json
+import sys
+
+container_name = sys.argv[1]
+image = sys.argv[2]
+command = sys.argv[3:]
+container = {
+    "name": container_name,
+    "image": image,
+    "securityContext": {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "runAsNonRoot": True,
+        "runAsGroup": 1000,
+        "runAsUser": 1000,
+    },
+}
+if command:
+    container["command"] = command
+print(json.dumps({
+    "apiVersion": "v1",
+    "spec": {
+        "securityContext": {
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+        "containers": [container],
+    },
+}))
+PY
+}
+
 run_image_build() {
   if [[ "$SKIP_IMAGE_BUILD" -eq 1 ]]; then
     skip "image build skipped by --skip-image-build"
@@ -270,10 +330,12 @@ assert_runtime() {
   kubectl_cmd -n server-manager exec "$primary_pod" -c postgres -- psql "$url" -v ON_ERROR_STOP=1 -c "select 1;" >/dev/null
   pass "db connected through server-manager-postgres-rw"
 
+  kubectl_cmd -n server-manager delete pod init-113-api-health --ignore-not-found >/dev/null
+  kubectl_cmd -n server-manager wait --for=delete pod/init-113-api-health --timeout=60s >/dev/null 2>&1 || true
   kubectl_cmd -n server-manager run init-113-api-health \
     --rm -i --restart=Never \
-    --image=curlimages/curl:8.16.0 \
-    --command -- curl -fsS http://server-manager-api.server-manager.svc.cluster.local:8000/api/v1/health >/tmp/init113-api-health.json
+    --overrides="$(restricted_pod_overrides init-113-api-health curlimages/curl:8.16.0 curl -fsS http://server-manager-api.server-manager.svc.cluster.local:8000/api/v1/health)" \
+    --image=curlimages/curl:8.16.0 >/tmp/init113-api-health.json
   health_body="$(cat /tmp/init113-api-health.json)"
   grep -q '"status":"alive"' <<<"$health_body" || die "API health endpoint returned alive"
   pass "API health endpoint returned alive"
@@ -282,8 +344,8 @@ assert_runtime() {
   kubectl_cmd -n kong-system wait --for=delete pod/init-113-api-curl --timeout=60s >/dev/null 2>&1 || true
   kubectl_cmd -n kong-system run init-113-api-curl \
     --restart=Never \
-    --image=curlimages/curl:8.16.0 \
-    --command -- /bin/sh -ec "curl -ksS --fail https://api.local.humility.local/api/v1/health" >/dev/null
+    --overrides="$(restricted_pod_overrides init-113-api-curl curlimages/curl:8.16.0 /bin/sh -ec "curl -ksS --fail https://api.local.humility.local/api/v1/health")" \
+    --image=curlimages/curl:8.16.0 >/dev/null
   kubectl_cmd -n kong-system wait pod/init-113-api-curl --for=jsonpath='{.status.phase}'=Succeeded --timeout=180s >/dev/null
   pass "ingress curl https://api.local.humility.local/api/v1/health returned 200"
 

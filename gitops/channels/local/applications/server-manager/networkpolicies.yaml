@@ -65,6 +65,11 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: server-manager-discord
+        - podSelector:
+            matchLabels:
+              run: init-113-api-health
+        - ipBlock:
+            cidr: 10.42.0.0/16
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: auth-system
@@ -275,25 +280,26 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-server-manager-bucket-job
-  namespace: minio-system
+  name: allow-api-health-probe-egress
+  namespace: server-manager
   labels:
-    app.kubernetes.io/name: server-manager
-    app.kubernetes.io/component: object-storage-bootstrap
+    app.kubernetes.io/name: server-manager-api
+    app.kubernetes.io/component: runtime-probe
     platform.humility.gg/init: "113"
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: server-manager
-      app.kubernetes.io/component: object-storage-bootstrap
+      run: init-113-api-health
   policyTypes:
     - Egress
   egress:
     - to:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: minio
-              app.kubernetes.io/component: object-storage
+              app.kubernetes.io/name: server-manager-api
       ports:
         - protocol: TCP
-          port: 9000
+          port: 8000
+    - ports:
+        - protocol: TCP
+          port: 8000

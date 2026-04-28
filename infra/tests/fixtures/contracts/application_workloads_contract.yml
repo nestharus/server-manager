@@ -1,11 +1,14 @@
 images:
   api: k3d-humility-local:5000/local/server-manager-api:init-113-local
   discord: k3d-humility-local:5000/local/server-manager-discord:init-113-local
+fixtures:
+  db_seed: infra/tests/fixtures/application-workloads/db-seed.sql
 runtime_secrets:
   server_manager:
     project: server-manager
     environment: local
     path: /runtime/local
+    kubernetes_secret: server-manager-runtime
     required_keys:
       - DISCORD_BOT_TOKEN
       - DISCORD_GUILD_ID
@@ -14,6 +17,7 @@ runtime_secrets:
     project: platform-databases
     environment: local
     path: /postgres/local/server-manager
+    kubernetes_secret: server-manager-postgres-url
     required_keys:
       - username
       - password
@@ -21,6 +25,7 @@ runtime_secrets:
     project: platform-storage
     environment: local
     path: /object-storage/local
+    kubernetes_secret: server-manager-object-storage
     required_keys:
       - MINIO_ROOT_USER
       - MINIO_ROOT_PASSWORD
@@ -28,7 +33,12 @@ ingress:
   host: api.local.humility.local
   health_path: /api/v1/health
   class: kong
+  service: server-manager-api
 database:
   cluster: server-manager-postgres
   database: server_manager
-bucket_job_name: server-manager-minio-bucket-bootstrap
+runtime:
+  namespace: server-manager
+  api_deployment: server-manager-api
+  discord_deployment: server-manager-discord
+  migration_job: server-manager-alembic-migrate
