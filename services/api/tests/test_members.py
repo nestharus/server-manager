@@ -268,6 +268,9 @@ async def test_patch_member_status_with_current_version_succeeds_and_advances_ve
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
 ) -> None:
+    """Risk annotation: group=TG-7; named_risk=member_status_real_member_regression;
+    level=particular-integration; source=.tmp/init-124/phase6/step6a-contract.md#C7.
+    """
     actor_id = "operator"
     discord_user_id = str(uuid4())
     joined_at = datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
@@ -304,6 +307,38 @@ async def test_patch_member_status_with_current_version_succeeds_and_advances_ve
     assert patched.status == "suspended"
     assert patched.version == 2
     assert response.headers["etag"] == '"2"'
+
+
+@pytest.mark.asyncio
+async def test_patch_member_status_rejects_synthetic_member(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-7; named_risk=member_status_synthetic_member;
+    level=particular-integration; source=.tmp/init-124/phase6/step6a-contract.md#C7.
+    """
+    actor_id = "operator"
+    synthetic = synthetic_member_guard_member_factory.synthetic()
+    _grant_permissions(
+        governance_db,
+        actor_id=actor_id,
+        permissions=frozenset({"member.write"}),
+    )
+
+    response = await migrated_async_client.patch(
+        f"{BASE_URL}/{synthetic.id}/status",
+        json={
+            "status": "suspended",
+            "reason": "operator requested",
+            "originating_actor_kind": "user",
+            "originating_actor_id": actor_id,
+        },
+        headers={**_actor_headers(actor_id=actor_id), "If-Match": '"1"'},
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "member_status_synthetic_not_allowed"
 
 
 @pytest.mark.asyncio

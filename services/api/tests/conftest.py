@@ -2,7 +2,10 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import httpx
 import psycopg
@@ -192,6 +195,44 @@ def test_harness() -> ApiTestHarnessRead:
     return API_TEST_HARNESS
 
 
+@dataclass(frozen=True)
+class SyntheticMemberGuardMember:
+    id: UUID
+    discord_user_id: str
+
+
+class SyntheticMemberGuardMemberFactory:
+    def __init__(self, db: PostgresDatabase) -> None:
+        self._db = db
+
+    def create(self, *, discord_user_id: str) -> SyntheticMemberGuardMember:
+        member_id = uuid4()
+        with self._db.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO members (id, discord_user_id, joined_at, status)
+                VALUES (%s, %s, %s, 'active')
+                """,
+                (member_id, discord_user_id, datetime.now(UTC)),
+            )
+            connection.execute(
+                """
+                INSERT INTO aggregate_heads (
+                    aggregate_type, aggregate_id, current_seq, latest_change_id
+                )
+                VALUES ('member', %s, 1, NULL)
+                """,
+                (str(member_id),),
+            )
+        return SyntheticMemberGuardMember(id=member_id, discord_user_id=discord_user_id)
+
+    def real(self) -> SyntheticMemberGuardMember:
+        return self.create(discord_user_id=str(10**17 + (uuid4().int % 10**17)))
+
+    def synthetic(self) -> SyntheticMemberGuardMember:
+        return self.create(discord_user_id=f"public:{uuid4().hex[:32]}")
+
+
 @pytest.fixture(scope="session")
 def alembic_runner(
     repo_root: Path,
@@ -295,3 +336,10 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         yield db
     finally:
         db.close()
+
+
+@pytest.fixture()
+def synthetic_member_guard_member_factory(
+    governance_db: PostgresDatabase,
+) -> SyntheticMemberGuardMemberFactory:
+    return SyntheticMemberGuardMemberFactory(governance_db)

@@ -157,6 +157,51 @@ async def _submit(client: AsyncClient, applicant_id: str, *, client_id: str = "i
     )
 
 
+async def _claim_application(
+    client: AsyncClient,
+    *,
+    application_id: str,
+    etag: str,
+    owner_id: str,
+) -> tuple[dict[str, Any], str]:
+    response = await client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": "claim"},
+        headers=_headers(owner_id, **{"If-Match": etag}),
+    )
+    assert response.status_code == HTTPStatus.OK, response.text
+    return response.json(), response.headers["etag"]
+
+
+async def _move_application_to_waitlisted(
+    client: AsyncClient,
+    *,
+    application_id: str,
+    etag: str,
+    owner_id: str,
+) -> tuple[dict[str, Any], str]:
+    claimed, claim_etag = await _claim_application(
+        client,
+        application_id=application_id,
+        etag=etag,
+        owner_id=owner_id,
+    )
+    review = await client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": "review", "notes": "needs later review"},
+        headers=_headers(owner_id, **{"If-Match": claim_etag}),
+    )
+    assert review.status_code == HTTPStatus.OK, review.text
+    waitlist = await client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": "waitlist", "reason": "come back later"},
+        headers=_headers(owner_id, **{"If-Match": review.headers["etag"]}),
+    )
+    assert waitlist.status_code == HTTPStatus.OK, waitlist.text
+    assert claimed["state"] == "claimed"
+    return waitlist.json(), waitlist.headers["etag"]
+
+
 @pytest.fixture
 def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
     db = PostgresDatabase(dsn=governance_dsn)
@@ -191,6 +236,50 @@ async def test_submit_creates_queued_application_with_pinned_snapshot(
             (UUID(body["id"]),),
         ).fetchone()[0]
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_authenticated_submit_rejects_synthetic_applicant(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-2; named_risk=authenticated_submit_synthetic_applicant;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C2.
+    """
+    await _publish_form(migrated_async_client, governance_db)
+    synthetic = synthetic_member_guard_member_factory.synthetic()
+
+    response = await _submit(
+        migrated_async_client,
+        str(synthetic.id),
+        client_id=f"synthetic-auth-{uuid4().hex}",
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "applicant_synthetic_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_authenticated_submit_still_accepts_real_discord_member(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-2; named_risk=authenticated_submit_real_member_regression;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C2.
+    """
+    await _publish_form(migrated_async_client, governance_db)
+    real = synthetic_member_guard_member_factory.real()
+
+    response = await _submit(
+        migrated_async_client,
+        str(real.id),
+        client_id=f"real-auth-{uuid4().hex}",
+    )
+
+    assert response.status_code == HTTPStatus.CREATED, response.text
+    assert response.json()["applicant_id"] == str(real.id)
 
 
 @pytest.mark.asyncio
@@ -297,6 +386,131 @@ async def test_claim_conflict_maps_stale_claim_to_409(
     )
     assert second.status_code == HTTPStatus.CONFLICT
     assert second.json()["code"] == "application_already_claimed"
+
+
+@pytest.mark.asyncio
+async def test_claim_rejects_synthetic_owner_actor(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-3; named_risk=application_owner_synthetic_claim;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C3.
+    """
+    await _publish_form(migrated_async_client, governance_db)
+    applicant = synthetic_member_guard_member_factory.real()
+    synthetic_owner = synthetic_member_guard_member_factory.synthetic()
+    _grant(
+        governance_db,
+        actor_id=str(synthetic_owner.id),
+        permissions=frozenset({"application.claim"}),
+    )
+    created = await _submit(migrated_async_client, str(applicant.id))
+
+    response = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{created.json()['id']}/transitions",
+        json={"action": "claim"},
+        headers=_headers(str(synthetic_owner.id), **{"If-Match": created.headers["etag"]}),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "owner_synthetic_not_allowed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["reassign", "reactivate"])
+async def test_owner_transition_rejects_synthetic_new_owner(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+    action: str,
+) -> None:
+    """Risk annotation: group=TG-3; named_risk=application_owner_synthetic_assignment;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C3.
+    """
+    await _publish_form(migrated_async_client, governance_db)
+    applicant = synthetic_member_guard_member_factory.real()
+    owner = synthetic_member_guard_member_factory.real()
+    synthetic_new_owner = synthetic_member_guard_member_factory.synthetic()
+    manager = synthetic_member_guard_member_factory.real()
+    _grant(
+        governance_db,
+        actor_id=str(owner.id),
+        permissions=frozenset({"application.claim", "application.review", "application.waitlist"}),
+    )
+    _grant(
+        governance_db,
+        actor_id=str(manager.id),
+        permissions=frozenset({"application.review", "application.reactivate"}),
+    )
+    created = await _submit(migrated_async_client, str(applicant.id))
+    application_id = created.json()["id"]
+    if action == "reactivate":
+        _waitlisted, etag = await _move_application_to_waitlisted(
+            migrated_async_client,
+            application_id=application_id,
+            etag=created.headers["etag"],
+            owner_id=str(owner.id),
+        )
+    else:
+        etag = created.headers["etag"]
+
+    response = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": action, "new_owner_id": str(synthetic_new_owner.id), "reason": "handoff"},
+        headers=_headers(str(manager.id), **{"If-Match": etag}),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "owner_synthetic_not_allowed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["reassign", "reactivate"])
+async def test_owner_transition_accepts_real_new_owner(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+    action: str,
+) -> None:
+    """Risk annotation: group=TG-3; named_risk=application_owner_real_member_regression;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C3.
+    """
+    await _publish_form(migrated_async_client, governance_db)
+    applicant = synthetic_member_guard_member_factory.real()
+    owner = synthetic_member_guard_member_factory.real()
+    real_new_owner = synthetic_member_guard_member_factory.real()
+    manager = synthetic_member_guard_member_factory.real()
+    _grant(
+        governance_db,
+        actor_id=str(owner.id),
+        permissions=frozenset({"application.claim", "application.review", "application.waitlist"}),
+    )
+    _grant(
+        governance_db,
+        actor_id=str(manager.id),
+        permissions=frozenset({"application.review", "application.reactivate"}),
+    )
+    created = await _submit(migrated_async_client, str(applicant.id))
+    application_id = created.json()["id"]
+    if action == "reactivate":
+        _waitlisted, etag = await _move_application_to_waitlisted(
+            migrated_async_client,
+            application_id=application_id,
+            etag=created.headers["etag"],
+            owner_id=str(owner.id),
+        )
+    else:
+        etag = created.headers["etag"]
+
+    response = await migrated_async_client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": action, "new_owner_id": str(real_new_owner.id), "reason": "handoff"},
+        headers=_headers(str(manager.id), **{"If-Match": etag}),
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["owner_id"] == str(real_new_owner.id)
 
 
 @pytest.mark.asyncio

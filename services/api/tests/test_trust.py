@@ -213,6 +213,9 @@ async def test_compute_trust_creates_profile_with_current_policy_version(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
+    """Risk annotation: group=TG-4; named_risk=trust_compute_real_member_regression;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C4.
+    """
     actor_id = "operator"
     discord_user_id = str(uuid4())
     joined_at = datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
@@ -265,6 +268,40 @@ async def test_compute_trust_creates_profile_with_current_policy_version(
     read_profile = TrustProfileRead.model_validate(read_response.json())
     assert read_profile == trust
     assert read_response.headers["etag"] == '"1"'
+
+
+@pytest.mark.asyncio
+async def test_compute_trust_rejects_synthetic_member_subject(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-4; named_risk=trust_compute_synthetic_subject;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C4.
+    """
+    actor_id = "synthetic-compute-operator"
+    _seed_trust_policy_version(
+        governance_dsn,
+        version_number=1,
+        content=_valid_trust_policy_rules(),
+    )
+    _grant_permissions(
+        governance_db,
+        actor_id=actor_id,
+        permissions=frozenset({"trust.write"}),
+    )
+    synthetic = synthetic_member_guard_member_factory.synthetic()
+
+    response = await migrated_async_client.post(
+        COMPUTE_URL.format(member_id=synthetic.id),
+        json=_trust_signals(originating_actor_id=actor_id),
+        headers=_actor_headers(actor_id=actor_id),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "trust_subject_synthetic_not_allowed"
+    assert _fetch_trust_profile_count(governance_dsn, synthetic.id) == 0
 
 
 @pytest.mark.asyncio

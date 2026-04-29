@@ -52,7 +52,10 @@ async def test_create_signal_persists_fields_without_mutating_profile(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    """AC trust signal create; D8 records signal state without changing profile."""
+    """AC trust signal create; D8 records signal state without changing profile.
+    Risk annotation: group=TG-4; named_risk=trust_signal_real_member_regression;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C4.
+    """
     actor_id = "signal-operator"
     seed_trust_policy_version(
         governance_dsn,
@@ -174,6 +177,33 @@ async def test_create_signal_persists_fields_without_mutating_profile(
     assert audit["payload_json"]["member_id"] == str(member.id)
     assert audit["diff_json"]["signal_type"] == "positive"
     assert audit["current_seq"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_signal_rejects_synthetic_member_subject(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-4; named_risk=trust_signal_synthetic_subject;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C4.
+    """
+    actor_id = "synthetic-signal-operator"
+    grant_permissions(
+        governance_db,
+        actor_id=actor_id,
+        permissions=frozenset({"trust.signal.create"}),
+    )
+    synthetic = synthetic_member_guard_member_factory.synthetic()
+
+    response = await migrated_async_client.post(
+        TRUST_SIGNALS_URL,
+        json=_signal_payload(str(synthetic.id)),
+        headers=actor_headers(actor_id=actor_id),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "trust_subject_synthetic_not_allowed"
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from http import HTTPStatus
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from psycopg import Connection
 
 from app.contracts.actor import ActorIdentity
@@ -42,6 +44,7 @@ from app.repositories.members import fetch_member_by_discord_id, fetch_member_by
 from app.repositories.mutations import get_head_for_update
 from app.repositories.roster import list_latest_role_holders
 from app.repositories.tickets import list_open_tickets_for_owner_ids
+from app.services.members import is_synthetic_member
 from app.services.mutations import _format_etag, mutate_entity
 
 OPEN_APPLICATION_STATES = frozenset(
@@ -142,6 +145,8 @@ def _normalize_holder_id(value: str, *, field_name: str) -> str:
 def _resolve_member_aliases(
     connection: Connection[Any],
     member_id: str,
+    *,
+    synthetic_policy: Literal["allow", "omit", "reject"] = "allow",
 ) -> tuple[set[str], set[UUID]]:
     canonical = _normalize_holder_id(member_id, field_name="holder_id")
     text_aliases = {canonical}
@@ -158,6 +163,20 @@ def _resolve_member_aliases(
         uuid_aliases.add(member_uuid)
         member_row = fetch_member_by_id(connection, member_uuid)
         if member_row is not None:
+            if is_synthetic_member(member_row["discord_user_id"]):
+                if synthetic_policy == "omit":
+                    return set(), set()
+                if synthetic_policy == "reject":
+                    raise HTTPException(
+                        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+                        detail={
+                            "code": "leadership_alias_synthetic_not_allowed",
+                            "message": (
+                                "Synthetic public-intake members cannot be leaders "
+                                "or alias targets."
+                            ),
+                        },
+                    )
             text_aliases.add(member_row["discord_user_id"])
 
     return text_aliases, uuid_aliases
@@ -166,6 +185,8 @@ def _resolve_member_aliases(
 def _collect_member_aliases(
     connection: Connection[Any],
     member_ids: list[str],
+    *,
+    synthetic_policy: Literal["allow", "omit", "reject"] = "allow",
 ) -> tuple[list[str], list[UUID]]:
     text_aliases: set[str] = set()
     uuid_aliases: set[UUID] = set()
@@ -173,6 +194,7 @@ def _collect_member_aliases(
         member_text_aliases, member_uuid_aliases = _resolve_member_aliases(
             connection,
             member_id,
+            synthetic_policy=synthetic_policy,
         )
         text_aliases.update(member_text_aliases)
         uuid_aliases.update(member_uuid_aliases)
@@ -527,6 +549,7 @@ def compute_succession_plan(
         grant_aliases, application_owner_ids = _collect_member_aliases(
             connection,
             holder_ids,
+            synthetic_policy="omit",
         )
         grant_rows = list_active_grants_for_grantee_ids(
             connection,

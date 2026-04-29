@@ -141,7 +141,7 @@ SHA) or `[wontfix]` (with reason).
   deferred — the import path is sufficient for local dev/test
   reliability and doesn't require gitops kustomization churn.
 
-### BL-005 [open] — Synthetic public-intake members pollute roster queries
+### BL-005 [done] — Synthetic public-intake members pollute roster queries
 
 - **Source:** `proposals/02-public-application-intake.md:327-339` (AS-2),
   `plans/risk/init-120-shortcut.md`
@@ -161,6 +161,19 @@ SHA) or `[wontfix]` (with reason).
   refactor `members.id` to namespace synthetic rows differently
   (separate table or `kind` column). Coordinate with BL-009 (Discord
   OAuth linking) since the long-term answer may be conversion.
+- **Outcome (closed in INIT-124, full pipeline w/ round-2
+  re-run; verified e2e=19/19 on humility-local):** Picked
+  Option 1 from RCA — write-boundary guard via
+  `is_synthetic_member()` predicate in
+  `services/api/app/services/members.py`. Boundary guards
+  applied at: authenticated submit, owner claim/reassign/
+  reactivate, trust signal/compute/recompute, leadership alias
+  expansion, roster entry creation, and PATCH member status.
+  Each boundary returns a stable `*_synthetic_not_allowed` error
+  code with 422. INIT-120 public-intake submit path unchanged —
+  e2e still creates synthetic members successfully. Read-side
+  hardening + `members.kind` schema column + pre-existing-pollution
+  cleanup deferred to BL-008 (Discord OAuth linking).
 
 ---
 

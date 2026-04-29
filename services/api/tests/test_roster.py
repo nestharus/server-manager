@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -161,18 +162,42 @@ def _seed_chapter_and_roles(
     return {"member": member_role_id, "officer": officer_role_id}
 
 
+def _seed_real_roster_member(db: PostgresDatabase) -> str:
+    member_id = uuid4()
+    with db.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO members (id, discord_user_id, joined_at, status)
+            VALUES (%s, %s, %s, 'active')
+            """,
+            (member_id, str(10**17 + (uuid4().int % 10**17)), datetime.now(UTC)),
+        )
+        conn.execute(
+            """
+            INSERT INTO aggregate_heads (
+                aggregate_type, aggregate_id, current_seq, latest_change_id
+            )
+            VALUES ('member', %s, 1, NULL)
+            """,
+            (str(member_id),),
+        )
+    return str(member_id)
+
+
 def _create_entry(
     client: TestClient,
+    db: PostgresDatabase,
     role_id: UUID,
     *,
-    member_id: str = "member-1",
+    member_id: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], str]:
+    roster_member_id = member_id or _seed_real_roster_member(db)
     response = client.post(
         ROSTER_URL,
         json={
             "chapter_id": "ch-1",
-            "member_id": member_id,
+            "member_id": roster_member_id,
             "role_id": str(role_id),
         },
         headers=headers or ACTOR_HEADERS,
@@ -253,15 +278,44 @@ def test_create_roster_entry_in_active_state(
     client: TestClient,
     governance_db: PostgresDatabase,
 ) -> None:
+    """Risk annotation: group=TG-6; named_risk=roster_real_member_regression;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C6.
+    """
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
 
-    body, etag = _create_entry(client, roles["member"])
+    body, etag = _create_entry(client, governance_db, roles["member"])
 
     assert body["status"] == "active"
     assert body["version"] == 1
     assert body["removal_metadata"] == {}
     assert etag == '"1"'
+
+
+def test_create_roster_entry_rejects_synthetic_member(
+    client: TestClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-6; named_risk=roster_entry_synthetic_member;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C6.
+    """
+    roles = _seed_chapter_and_roles(governance_db)
+    _seed_grant(governance_db)
+    synthetic = synthetic_member_guard_member_factory.synthetic()
+
+    response = client.post(
+        ROSTER_URL,
+        json={
+            "chapter_id": "ch-1",
+            "member_id": str(synthetic.id),
+            "role_id": str(roles["member"]),
+        },
+        headers=ACTOR_HEADERS,
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "roster_member_synthetic_not_allowed"
 
 
 def test_create_roster_entry_requires_roster_write_permission_chapter_scope(
@@ -294,13 +348,13 @@ def test_create_roster_entry_duplicate_active_returns_409(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    _create_entry(client, roles["member"])
+    entry, _etag = _create_entry(client, governance_db, roles["member"])
 
     duplicate = client.post(
         ROSTER_URL,
         json={
             "chapter_id": "ch-1",
-            "member_id": "member-1",
+            "member_id": entry["member_id"],
             "role_id": str(roles["member"]),
         },
         headers=ACTOR_HEADERS,
@@ -317,7 +371,7 @@ def test_transition_creates_roster_transition_row_with_actor(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
 
     body, next_etag, status = _transition(
         client,
@@ -357,7 +411,7 @@ def test_transition_records_reason_and_originating_user(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
 
     _transition(
         client,
@@ -403,7 +457,7 @@ def test_transition_allowed_state_pairs(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     if from_status != "active":
         entry, etag, status = _transition(client, entry["id"], etag, from_status)
         assert status == HTTPStatus.OK
@@ -431,7 +485,7 @@ def test_transition_disallowed_state_pairs_return_409(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     if setup_status != "active":
         entry, etag, status = _transition(client, entry["id"], etag, setup_status)
         assert status == HTTPStatus.OK
@@ -448,7 +502,7 @@ def test_transition_role_only_same_status_succeeds(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
 
     body, next_etag, status = _transition(
         client,
@@ -471,7 +525,7 @@ def test_transition_same_status_same_role_returns_409(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
 
     body, _, status = _transition(
         client,
@@ -491,7 +545,7 @@ def test_removed_is_terminal(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     removed, etag, status = _transition(client, entry["id"], etag, "removed")
     assert status == HTTPStatus.OK
     assert removed["status"] == "removed"
@@ -508,7 +562,7 @@ def test_transition_with_current_version_succeeds(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
 
     body, next_etag, status = _transition(client, entry["id"], etag, "on_leave")
 
@@ -523,7 +577,7 @@ def test_transition_with_stale_version_returns_412(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     _transition(client, entry["id"], etag, "on_leave")
 
     response = client.post(
@@ -546,7 +600,7 @@ def test_get_roster_entry_returns_version_and_etag(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, _ = _create_entry(client, roles["member"])
+    entry, _ = _create_entry(client, governance_db, roles["member"])
 
     response = client.get(f"{ROSTER_URL}/{entry['id']}", headers=ACTOR_HEADERS)
 
@@ -562,7 +616,7 @@ def test_transition_roster_entry_accepts_shared_connection(
     """AC1: roster transitions can participate in a caller-owned transaction and roll back atomically."""
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, _ = _create_entry(client, roles["member"])
+    entry, _ = _create_entry(client, governance_db, roles["member"])
     entry_id = UUID(entry["id"])
 
     with pytest.raises(RuntimeError, match="force rollback"):
@@ -606,7 +660,7 @@ def test_sync_failure_enqueues_deferred_effect_atomically(
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
     _seed_roster_syncer_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     entry, etag, status = _transition(client, entry["id"], etag, "on_leave")
     assert status == HTTPStatus.OK
     transition_id = _latest_transition_id(governance_dsn, entry["id"])
@@ -649,7 +703,7 @@ def test_sync_failure_idempotency_key_per_transition(
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
     _seed_roster_syncer_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     entry, etag, _ = _transition(client, entry["id"], etag, "on_leave")
     first_transition = _latest_transition_id(governance_dsn, entry["id"])
     _, etag, status = _record_sync_failure(client, entry["id"], etag, first_transition)
@@ -675,7 +729,7 @@ def test_sync_failure_preserves_roster_entry_state(
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
     _seed_roster_syncer_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     entry, etag, _ = _transition(client, entry["id"], etag, "under_review")
     transition_id = _latest_transition_id(governance_dsn, entry["id"])
 
@@ -692,7 +746,7 @@ def test_sync_failure_rejects_non_service_actors_with_403(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     entry, etag, _ = _transition(client, entry["id"], etag, "on_leave")
     transition_id = _latest_transition_id(governance_dsn, entry["id"])
 
@@ -716,7 +770,7 @@ def test_sync_failure_accepts_roster_syncer_service_actor_with_global_grant(
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
     _seed_roster_syncer_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     entry, etag, _ = _transition(client, entry["id"], etag, "on_leave")
     transition_id = _latest_transition_id(governance_dsn, entry["id"])
 
@@ -731,12 +785,12 @@ def test_partial_unique_index_allows_one_active_per_chapter_member(
 ) -> None:
     roles = _seed_chapter_and_roles(governance_db)
     _seed_grant(governance_db)
-    entry, etag = _create_entry(client, roles["member"])
+    entry, etag = _create_entry(client, governance_db, roles["member"])
     duplicate = client.post(
         ROSTER_URL,
         json={
             "chapter_id": "ch-1",
-            "member_id": "member-1",
+            "member_id": entry["member_id"],
             "role_id": str(roles["member"]),
         },
         headers=ACTOR_HEADERS,
@@ -745,7 +799,7 @@ def test_partial_unique_index_allows_one_active_per_chapter_member(
     _, _, status = _transition(client, entry["id"], etag, "removed")
     assert status == HTTPStatus.OK
 
-    replacement, _ = _create_entry(client, roles["member"])
+    replacement, _ = _create_entry(client, governance_db, roles["member"])
 
     assert replacement["status"] == "active"
     assert replacement["id"] != entry["id"]

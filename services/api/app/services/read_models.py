@@ -248,6 +248,7 @@ def read_leadership_context(
         member_text_aliases, member_uuid_aliases = _collect_member_aliases(
             connection,
             [member_id],
+            synthetic_policy="reject",
         )
         active_grant_rows = list_active_grants_for_grantee_ids(
             connection,
@@ -292,6 +293,7 @@ def read_leadership_context(
             predecessor_text_aliases, predecessor_uuid_aliases = _collect_member_aliases(
                 connection,
                 [predecessor["grantee_id"]],
+                synthetic_policy="reject",
             )
             pending_application_rows = list_open_applications_for_owner_ids(
                 connection,

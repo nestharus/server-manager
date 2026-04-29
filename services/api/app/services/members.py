@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
+from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from psycopg import Connection, errors
 
 from app.contracts.actor import ActorIdentity
@@ -41,6 +43,17 @@ PUBLIC_INTAKE_MEMBER_ACTOR = ActorIdentity(
     actor_kind="service",
     actor_id="public-intake",
 )
+SYNTHETIC_MEMBER_PREFIX = "public:"
+
+
+def is_synthetic_member(member: object | str) -> bool:
+    if isinstance(member, str):
+        discord_user_id = member
+    else:
+        discord_user_id = getattr(member, "discord_user_id", "")
+    return isinstance(discord_user_id, str) and discord_user_id.startswith(
+        SYNTHETIC_MEMBER_PREFIX
+    )
 
 
 def _generated_audit_context() -> AuditContextRead:
@@ -227,6 +240,14 @@ def patch_member_status(
         row = _fetch_member_by_id_for_update(connection, member_id)
         if row is None:
             raise MemberNotFoundError(member_id=member_id)
+        if is_synthetic_member(row["discord_user_id"]):
+            raise HTTPException(
+                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "member_status_synthetic_not_allowed",
+                    "message": "Synthetic public-intake member status cannot be mutated.",
+                },
+            )
         from_status = row["status"]
         to_status = request.status
         if from_status == to_status or (from_status, to_status) not in VALID_TRANSITIONS:
@@ -278,5 +299,6 @@ __all__ = [
     "create_or_get_member",
     "get_member_by_discord_id",
     "get_member_by_id",
+    "is_synthetic_member",
     "patch_member_status",
 ]

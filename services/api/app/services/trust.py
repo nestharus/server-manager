@@ -4,9 +4,11 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from psycopg import Connection, errors
 
 from app.contracts.actor import ActorIdentity
@@ -35,6 +37,7 @@ from app.repositories.trust import (
     list_active_signals_for_member,
     upsert_trust_profile_for_recompute,
 )
+from app.services.members import is_synthetic_member
 from app.services.mutations import mutate_entity
 
 
@@ -104,6 +107,16 @@ def _fetch_profile_row(
     if row is None:
         raise TrustProfileNotFoundError(member_id)
     return row
+
+
+def _raise_synthetic_trust_subject() -> None:
+    raise HTTPException(
+        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "trust_subject_synthetic_not_allowed",
+            "message": "Synthetic public-intake members cannot have trust signals.",
+        },
+    )
 
 
 def _as_mapping(value: Any, path: str) -> Mapping[str, Any]:
@@ -300,8 +313,11 @@ def create_trust_signal(
     }
 
     with db.connection() as connection:
-        if fetch_member_by_id(connection, request.member_id) is None:
+        member = fetch_member_by_id(connection, request.member_id)
+        if member is None:
             raise MemberNotFoundError(member_id=request.member_id)
+        if is_synthetic_member(member["discord_user_id"]):
+            _raise_synthetic_trust_subject()
 
     created_row: dict[str, Any] | None = None
 
@@ -373,8 +389,11 @@ def compute_trust(
 ) -> tuple[TrustProfileRead, MutationResult | None, bool]:
     computed_at = datetime.now(UTC)
     with db.connection() as connection:
-        if fetch_member_by_id(connection, member_id) is None:
+        member = fetch_member_by_id(connection, member_id)
+        if member is None:
             raise MemberNotFoundError(member_id=member_id)
+        if is_synthetic_member(member["discord_user_id"]):
+            _raise_synthetic_trust_subject()
         existing = fetch_trust_profile_by_member_id(connection, member_id)
         if existing is not None:
             return _profile_from_row(existing), None, False
@@ -460,8 +479,11 @@ def _recompute_once(
     as_of: datetime,
 ) -> tuple[TrustProfileRead, MutationResult]:
     with db.transaction() as connection:
-        if fetch_member_by_id(connection, member_id) is None:
+        member = fetch_member_by_id(connection, member_id)
+        if member is None:
             raise MemberNotFoundError(member_id=member_id)
+        if is_synthetic_member(member["discord_user_id"]):
+            _raise_synthetic_trust_subject()
 
         existing = get_trust_profile_for_update(connection, member_id)
         expected_version = 0 if existing is None else int(existing["version"])
