@@ -83,6 +83,36 @@ def _insert_member(
     )
 
 
+def _insert_member_on_discord_conflict_do_nothing(
+    connection: Connection[Any],
+    *,
+    row: dict[str, Any],
+    _kind: str = "discord",
+) -> bool:
+    inserted = connection.execute(
+        """
+        INSERT INTO members (
+            id,
+            discord_user_id,
+            kind,
+            joined_at,
+            status
+        )
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (discord_user_id) DO NOTHING
+        RETURNING id
+        """,
+        (
+            row["id"],
+            row["discord_user_id"],
+            _kind,
+            row["joined_at"],
+            row["status"],
+        ),
+    ).fetchone()
+    return inserted is not None
+
+
 def _update_member_status(
     connection: Connection[Any],
     *,
@@ -103,6 +133,7 @@ def _update_member_status(
 __all__ = [
     "_fetch_member_by_id_for_update",
     "_insert_member",
+    "_insert_member_on_discord_conflict_do_nothing",
     "_update_member_status",
     "fetch_member_by_discord_id",
     "fetch_member_by_id",

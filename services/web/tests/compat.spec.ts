@@ -85,67 +85,6 @@ test("web UI routes public and auth-gated surfaces", async ({ page }) => {
   expect(contract.routes.admin.requires_auth).toBe(true);
 });
 
-test("web UI submits the application form through the API contract", async ({ page }) => {
-  // Risk annotation: group=TG-8; named_risk=spa_submit_contract_drift;
-  // level=component; source=proposals/02-public-application-intake.md#§8 AS-1 AS-3.
-  let submitted = false;
-
-  await page.route(`**${contract.form.submit.endpoint}`, async (route) => {
-    const request = route.request();
-    expect(request.url().endsWith(contract.form.submit.endpoint)).toBe(true);
-    expect(request.method()).toBe(contract.form.submit.method);
-    const payload = request.postDataJSON() as Record<string, unknown>;
-    for (const field of contract.form.submit.payload_fields) {
-      const expected =
-        "source_field" in field && field.source_field
-          ? fieldValue(field.source_field)
-          : field.value;
-      expect(payloadValue(payload, field.name)).toBe(expected);
-    }
-    expect(payloadValue(payload, "client_application_id")).toMatch(
-      new RegExp(contract.form.submit.client_application_id_pattern),
-    );
-    submitted = true;
-    await route.fulfill({
-      status: contract.form.submit.success_status,
-      contentType: "application/json",
-      body: JSON.stringify({
-        message: contract.form.submit.success_message,
-        application_id: contract.form.submit.success_application_id,
-      }),
-    });
-  });
-
-  await page.goto(contract.form.route);
-  for (const field of contract.form.fields) {
-    await page.getByLabel(field.label).fill(field.value);
-  }
-  await page.getByRole("button", { name: contract.form.submit.button_name }).click();
-
-  await expect(page.locator("#submit-status")).toContainText(contract.form.submit.success_message);
-  expect(submitted).toBe(true);
-});
-
-test("web UI keeps Ark FontAwesome and TanStack controls integrated", async ({ page }) => {
-  await page.goto(contract.routes.public.path);
-
-  await page
-    .getByRole("link", { name: contract.ui_libraries.tanstack.navigation_link_name })
-    .click();
-  await expect(page).toHaveURL(new RegExp(`${contract.ui_libraries.tanstack.resolved_path}$`));
-
-  await page.getByRole("tab", { name: contract.ui_libraries.ark.tab_name }).click();
-  await expect(
-    page.getByTestId(contract.ui_libraries.fontawesome.status_icon_test_id),
-  ).toBeVisible();
-  await expect(
-    page.getByTestId(contract.ui_libraries.fontawesome.submit_icon_test_id),
-  ).toBeVisible();
-
-  await page.getByRole("button", { name: contract.ui_libraries.ark.dialog_button_name }).click();
-  await expect(page.getByRole("dialog")).toContainText(contract.ui_libraries.ark.dialog_text);
-});
-
 const applicantDiscordTest = test.extend<{ applicantAuthApi: void; publicSubmitApi: void }>({
   applicantAuthApi: [
     async ({ page }, use) => {
@@ -175,6 +114,7 @@ const applicantDiscordTest = test.extend<{ applicantAuthApi: void; publicSubmitA
       await page.route(`**${contract.form.submit.endpoint}`, async (route) => {
         const request = route.request();
         expect(request.method()).toBe(contract.form.submit.method);
+        expect(request.headers()["x-discord-user-id"]).toBeUndefined();
         const payload = request.postDataJSON() as Record<string, unknown>;
         for (const field of contract.form.submit.payload_fields) {
           const expected =
@@ -217,42 +157,136 @@ const loggedInApplicantTest = applicantDiscordTest.extend<{ applicantReceiptCook
   ],
 });
 
-applicantDiscordTest("applications page exposes Discord login start", async ({ page }) => {
-  // Risk annotation: group=TG-6; named_risk=spa_login_redirect_missing;
-  // level=component; source=INIT-127 C6 A3.
+const staleApplicantReceiptTest = test.extend<{ applicantReceiptCookie: void; expiringAuthApi: void }>({
+  applicantReceiptCookie: [
+    async ({ context, baseURL }, use) => {
+      await context.addCookies([
+        {
+          name: "applicant_receipt",
+          value: "expired-fixture-applicant-receipt",
+          url: baseURL ?? "http://127.0.0.1:4173",
+          httpOnly: true,
+          secure: false,
+          sameSite: "Lax",
+        },
+      ]);
+      await use();
+    },
+    { auto: true },
+  ],
+  expiringAuthApi: [
+    async ({ page }, use) => {
+      let callCount = 0;
+      await page.route("**/auth/discord/me", async (route) => {
+        callCount += 1;
+        if (callCount === 1) {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ discord_user_id: "123456789012345678" }),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "applicant_receipt_required" }),
+        });
+      });
+      await use();
+    },
+    { auto: true },
+  ],
+});
+
+applicantDiscordTest("applications page without receipt shows only Discord login", async ({ page }) => {
+  // Risk annotation: group=TG-7; named_risk=spa_allows_anonymous_form_before_receipt;
+  // level=component; source=.tmp/init-128/phase6/step6a-contract.md#C7.
   await page.goto(contract.form.route);
 
   const loginButton = page.getByRole("button", { name: "Login with Discord" });
   await expect(loginButton).toBeVisible();
+  await expect(page.getByRole("form", { name: "Application form" })).toBeHidden();
+  await expect(page.getByRole("button", { name: contract.form.submit.button_name })).toBeHidden();
   await loginButton.click();
 
   await expect(page).toHaveURL(/\/auth\/discord\/start\?return_to=\/applications$/);
 });
 
 loggedInApplicantTest(
-  "applications page displays Discord identity from receipt cookie",
+  "applications page with valid receipt shows form and Discord identity",
   async ({ page }) => {
-    // Risk annotation: group=TG-6; named_risk=spa_receipt_state_not_verified;
-    // level=component; source=INIT-127 C6 A3.
+    // Risk annotation: group=TG-7; named_risk=spa_receipt_state_not_verified;
+    // level=component; source=.tmp/init-128/phase6/step6a-contract.md#C7.
     await page.goto(contract.form.route);
 
-    await expect(page.getByText("Logged in as Discord user 123456789012345678")).toBeVisible();
+    await expect(page.getByRole("form", { name: "Application form" })).toBeVisible();
+    await expect(page.getByText("Logged in as Discord 123456789012345678")).toBeVisible();
   },
 );
 
-applicantDiscordTest(
-  "application form still submits through the anonymous INIT-120 path",
-  async ({ page }) => {
-    // Risk annotation: group=TG-6/TG-7; named_risk=init_120_anon_submit_regression;
-    // level=component; source=INIT-127 C6 plus INIT-120 compatibility.
-    await page.goto(contract.form.route);
-    await expect(page.getByRole("button", { name: "Login with Discord" })).toBeVisible();
+loggedInApplicantTest("web UI keeps Ark FontAwesome and TanStack controls integrated", async ({ page }) => {
+  await page.goto(contract.routes.public.path);
 
+  await page
+    .getByRole("link", { name: contract.ui_libraries.tanstack.navigation_link_name })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`${contract.ui_libraries.tanstack.resolved_path}$`));
+
+  await page.getByRole("tab", { name: contract.ui_libraries.ark.tab_name }).click();
+  await expect(
+    page.getByTestId(contract.ui_libraries.fontawesome.status_icon_test_id),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId(contract.ui_libraries.fontawesome.submit_icon_test_id),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: contract.ui_libraries.ark.dialog_button_name }).click();
+  await expect(page.getByRole("dialog")).toContainText(contract.ui_libraries.ark.dialog_text);
+});
+
+loggedInApplicantTest(
+  "application form submits with a valid receipt and shows success",
+  async ({ page }) => {
+    // Risk annotation: group=TG-7; named_risk=spa_valid_receipt_submit_not_posted;
+    // level=component; source=.tmp/init-128/phase6/step6a-contract.md#C7.
+    await page.goto(contract.form.route);
+
+    for (const field of contract.form.fields) {
+      await page.getByLabel(field.label).fill(field.value);
+    }
+    const submitRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return (
+        url.pathname === contract.form.submit.endpoint &&
+        request.method() === contract.form.submit.method
+      );
+    });
+    await page.getByRole("button", { name: contract.form.submit.button_name }).click();
+
+    await submitRequest;
+    await expect(page.locator("#submit-status")).toContainText(contract.form.submit.success_message);
+  },
+);
+
+staleApplicantReceiptTest(
+  "application submit with expired receipt redirects to Discord auth start",
+  async ({ page }) => {
+    // Risk annotation: group=TG-7; named_risk=spa_submit_skips_defensive_receipt_recheck;
+    // level=component; source=.tmp/init-128/phase6/step6a-contract.md#C7.
+    let posted = false;
+    await page.route(`**${contract.form.submit.endpoint}`, async (route) => {
+      posted = true;
+      await route.abort();
+    });
+
+    await page.goto(contract.form.route);
     for (const field of contract.form.fields) {
       await page.getByLabel(field.label).fill(field.value);
     }
     await page.getByRole("button", { name: contract.form.submit.button_name }).click();
 
-    await expect(page.locator("#submit-status")).toContainText(contract.form.submit.success_message);
+    await expect(page).toHaveURL(/\/auth\/discord\/start\?return_to=\/applications$/);
+    expect(posted).toBe(false);
   },
 );

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -107,6 +108,26 @@ def _fetch_member_kind(database_url: str, member_id: str) -> str:
     return str(row["kind"])
 
 
+def _fetch_member_row_by_discord_id(
+    database_url: str,
+    discord_user_id: str,
+) -> dict[str, Any]:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT m.id, m.discord_user_id, m.kind, h.current_seq AS version
+            FROM members AS m
+            JOIN aggregate_heads AS h
+              ON h.aggregate_type = 'member'
+             AND h.aggregate_id = m.id::text
+            WHERE m.discord_user_id = %s
+            """,
+            (discord_user_id,),
+        ).fetchone()
+    assert row is not None
+    return dict(row)
+
+
 def _fetch_latest_member_audit(database_url: str) -> dict[str, Any]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         row = conn.execute(
@@ -129,6 +150,23 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         yield db
     finally:
         db.close()
+
+
+@pytest.fixture()
+def real_discord_member_resolver():
+    import importlib
+
+    return importlib.import_module("app.services.members").resolve_or_create_real_discord_member
+
+
+@pytest.fixture()
+def first_real_discord_user_id() -> str:
+    return "223456789012345678"
+
+
+@pytest.fixture()
+def concurrent_real_discord_user_id() -> str:
+    return "323456789012345678"
 
 
 @pytest.mark.asyncio
@@ -203,6 +241,108 @@ def test_create_or_get_member_sets_discord_kind(
     assert created is True
     assert member.kind == "discord"
     assert _fetch_member_kind(governance_dsn, str(member.id)) == "discord"
+
+
+@pytest.mark.asyncio
+async def test_resolve_or_create_real_discord_member_creates_discord_member(
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+    real_discord_member_resolver,
+    first_real_discord_user_id: str,
+) -> None:
+    """Risk annotation: group=TG-4; named_risk=real_discord_member_not_created;
+    level=component; source=.tmp/init-128/phase6/step6a-contract.md#C4.
+    """
+    from .public_intake_fixtures import assert_risk_annotation
+
+    assert_risk_annotation(
+        group="TG-4",
+        named_risk="real_discord_member_not_created",
+        level="component",
+        source=".tmp/init-128/phase6/step6a-contract.md#C4",
+    )
+
+    member = await real_discord_member_resolver(
+        governance_db,
+        discord_user_id=first_real_discord_user_id,
+    )
+
+    assert member.discord_user_id == first_real_discord_user_id
+    assert member.kind == "discord"
+    row = _fetch_member_row_by_discord_id(governance_dsn, first_real_discord_user_id)
+    assert row["id"] == member.id
+    assert row["kind"] == "discord"
+    assert _fetch_member_count(governance_dsn, first_real_discord_user_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_or_create_real_discord_member_reuses_existing_discord_member(
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+    real_discord_member_resolver,
+    first_real_discord_user_id: str,
+) -> None:
+    """Risk annotation: group=TG-4; named_risk=real_discord_member_duplicate_insert;
+    level=component; source=.tmp/init-128/phase6/step6a-contract.md#C4.
+    """
+    from .public_intake_fixtures import assert_risk_annotation
+
+    assert_risk_annotation(
+        group="TG-4",
+        named_risk="real_discord_member_duplicate_insert",
+        level="component",
+        source=".tmp/init-128/phase6/step6a-contract.md#C4",
+    )
+
+    first = await real_discord_member_resolver(
+        governance_db,
+        discord_user_id=first_real_discord_user_id,
+    )
+    second = await real_discord_member_resolver(
+        governance_db,
+        discord_user_id=first_real_discord_user_id,
+    )
+
+    assert second.id == first.id
+    assert second.discord_user_id == first_real_discord_user_id
+    assert second.kind == "discord"
+    assert _fetch_member_count(governance_dsn, first_real_discord_user_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_or_create_real_discord_member_concurrent_calls_converge(
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+    real_discord_member_resolver,
+    concurrent_real_discord_user_id: str,
+) -> None:
+    """Risk annotation: group=TG-4; named_risk=real_discord_member_race_duplicate_insert;
+    level=component; source=.tmp/init-128/phase6/step6a-contract.md#C4.
+    """
+    from .public_intake_fixtures import assert_risk_annotation
+
+    assert_risk_annotation(
+        group="TG-4",
+        named_risk="real_discord_member_race_duplicate_insert",
+        level="component",
+        source=".tmp/init-128/phase6/step6a-contract.md#C4",
+    )
+
+    first, second = await asyncio.gather(
+        real_discord_member_resolver(
+            governance_db,
+            discord_user_id=concurrent_real_discord_user_id,
+        ),
+        real_discord_member_resolver(
+            governance_db,
+            discord_user_id=concurrent_real_discord_user_id,
+        ),
+    )
+
+    assert second.id == first.id
+    assert first.kind == "discord"
+    assert second.kind == "discord"
+    assert _fetch_member_count(governance_dsn, concurrent_real_discord_user_id) == 1
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,11 @@ from app.contracts.applications import (
     PublicApplicationSubmissionReceipt,
 )
 from app.repositories.db import PostgresDatabase
-from app.services.applications import submit_public_application
+from app.services.applicant_discord_auth import (
+    DiscordIdentity,
+    verify_applicant_receipt,
+)
+from app.services.applications import submit_public_application_with_receipt
 from app.services.authorization import authorize_public_intake
 
 from ._shared import get_db, raise_known_application_error
@@ -25,11 +29,16 @@ router = APIRouter(prefix="/api/v1/public/applications")
 )
 async def submit_public_application_endpoint(
     body: PublicApplicationSubmission,
+    identity: DiscordIdentity = Depends(verify_applicant_receipt),
     db: PostgresDatabase = Depends(get_db),
     _authz: None = Depends(authorize_public_intake),
 ) -> PublicApplicationSubmissionReceipt:
     try:
-        application_id = await submit_public_application(db, body)
+        application_id = await submit_public_application_with_receipt(
+            db,
+            body,
+            discord_user_id=identity.discord_user_id,
+        )
     except Exception as error:
         raise_known_application_error(error)
     return PublicApplicationSubmissionReceipt(

@@ -52,8 +52,13 @@ from app.repositories.db import PostgresDatabase
 from app.repositories.forms import get_current_form_for_scope
 from app.repositories.members import fetch_member_by_id
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
-from app.services.members import is_synthetic_member, resolve_or_create_public_intake_member
+from app.services.members import (
+    is_synthetic_member,
+    resolve_or_create_public_intake_member,
+    resolve_or_create_real_discord_member,
+)
 from app.services.mutations import mutate_entity
+from app.services.notifications import emit_application_public_submitted_event
 
 
 VALID_TRANSITIONS = {
@@ -768,6 +773,56 @@ def submit_application(
         request_surface=AUTHENTICATED_SUBMIT_SURFACE,
         submission_authority=_SubmissionAuthority.USER,
     )
+
+
+async def submit_public_application_with_receipt(
+    db: PostgresDatabase,
+    public_submission: PublicApplicationSubmission,
+    *,
+    discord_user_id: str,
+) -> UUID:
+    if get_current_audit_context() is None:
+        with use_audit_context(_generated_audit_context()):
+            return await submit_public_application_with_receipt(
+                db,
+                public_submission,
+                discord_user_id=discord_user_id,
+            )
+
+    validated = PublicApplicationSubmission.model_validate(public_submission)
+    client_application_id = (
+        str(uuid4())
+        if validated.client_application_id is None
+        else validated.client_application_id
+    )
+    member = await resolve_or_create_real_discord_member(
+        db,
+        discord_user_id=discord_user_id,
+    )
+    internal_submission = ApplicationSubmission(
+        applicant_id=member.id,
+        scope=validated.scope,
+        responses=validated.responses,
+        client_application_id=client_application_id,
+    )
+    actor = ActorIdentity(actor_kind="user", actor_id=str(member.id))
+    created = _submit_application_internal(
+        db,
+        internal_submission,
+        actor,
+        request_surface=PUBLIC_SUBMIT_SURFACE,
+        submission_authority=_SubmissionAuthority.USER,
+    )
+    emit_application_public_submitted_event(
+        db,
+        application_id=created.read.id,
+        applicant_member_id=member.id,
+        discord_user_id=discord_user_id,
+        scope_kind=created.read.target_scope.scope_kind,
+        scope_id=created.read.target_scope.scope_id,
+        actor=actor,
+    )
+    return created.read.id
 
 
 async def submit_public_application(

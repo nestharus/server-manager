@@ -12,6 +12,7 @@ from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
+from app.services import applicant_discord_auth
 from app.services.authority import grant_authority
 
 
@@ -20,6 +21,8 @@ AUTHENTICATED_SUBMIT_SURFACE = "api:/api/v1/applications"
 PUBLIC_INTAKE_ACTOR_KIND = "service"
 PUBLIC_INTAKE_ACTOR_ID = "public-intake"
 PUBLIC_MEMBER_SALT = "local-public-intake-salt"
+APPLICANT_RECEIPT_SIGNING_KEY = "local-applicant-receipt-signing-key-change-me"
+APPLICANT_DISCORD_USER_ID = "123456789012345678"
 
 
 def public_application_payload(
@@ -36,6 +39,24 @@ def public_application_payload(
     if client_application_id is not None:
         payload["client_application_id"] = client_application_id
     return payload
+
+
+def applicant_receipt_token(
+    *,
+    discord_user_id: str = APPLICANT_DISCORD_USER_ID,
+    signing_key: str = APPLICANT_RECEIPT_SIGNING_KEY,
+    issued_at: datetime | None = None,
+) -> str:
+    return applicant_discord_auth.sign_applicant_receipt(
+        discord_user_id=discord_user_id,
+        signing_key=signing_key,
+        issued_at=issued_at or datetime.now(UTC),
+    )
+
+
+def tamper_receipt_token(token: str) -> str:
+    header, payload, signature = token.split(".")
+    return f"{header}.{payload}.{signature[:-1]}x"
 
 
 def audit_context() -> AuditContextRead:
@@ -167,6 +188,34 @@ def fetch_application_row(database_url: str, application_id: UUID) -> dict[str, 
     return dict(row)
 
 
+def fetch_application_by_client_id(
+    database_url: str,
+    client_application_id: str,
+) -> dict[str, Any]:
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        row = connection.execute(
+            """
+            SELECT
+                a.id,
+                a.applicant_id,
+                a.state,
+                a.client_application_id,
+                h.current_seq AS version,
+                m.discord_user_id AS applicant_discord_user_id,
+                m.kind AS applicant_kind
+            FROM applications AS a
+            JOIN members AS m ON m.id = a.applicant_id
+            JOIN aggregate_heads AS h
+              ON h.aggregate_type = 'application'
+             AND h.aggregate_id = a.id::text
+            WHERE a.client_application_id = %s
+            """,
+            (client_application_id,),
+        ).fetchone()
+    assert row is not None, f"missing application row for {client_application_id}"
+    return dict(row)
+
+
 def fetch_member_kind(database_url: str, member_id: UUID) -> str:
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
         row = connection.execute(
@@ -218,6 +267,63 @@ def fetch_application_actions(database_url: str, application_id: UUID) -> list[d
                 (str(application_id),),
             ).fetchall()
         ]
+
+
+def fetch_public_submitted_events(
+    database_url: str,
+    *,
+    application_id: UUID | None = None,
+) -> list[dict[str, Any]]:
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, event_type, payload_json
+            FROM notification_events
+            WHERE event_type = 'application.public_submitted'
+            ORDER BY created_at ASC, id ASC
+            """
+        ).fetchall()
+    events = [dict(row) for row in rows]
+    if application_id is None:
+        return events
+    return [
+        event
+        for event in events
+        if event["payload_json"].get("application_id") == str(application_id)
+    ]
+
+
+def fetch_notification_materialize_effects(
+    database_url: str,
+) -> list[dict[str, Any]]:
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        return [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT subsystem, effect_type, payload_json
+                FROM deferred_effects
+                WHERE subsystem = 'notifications'
+                  AND effect_type = 'notifications_materialize'
+                ORDER BY created_at ASC, id ASC
+                """
+            ).fetchall()
+        ]
+
+
+def count_table_rows(database_url: str, table_name: str) -> int:
+    if table_name not in {
+        "members",
+        "applications",
+        "activity_actions",
+        "notification_events",
+        "deferred_effects",
+    }:
+        raise ValueError(f"unsupported test table: {table_name}")
+    with psycopg.connect(database_url) as connection:
+        return int(
+            connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+        )
 
 
 def count_members_by_discord_id(database_url: str, discord_user_id: str) -> int:

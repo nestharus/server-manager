@@ -77,7 +77,7 @@ def discord_auth_callback(
         "applicant_receipt",
         receipt,
         max_age=settings.applicant_receipt_ttl_seconds,
-        path="/applications",
+        path="/",
         secure=True,
         httponly=True,
         samesite="Lax",
@@ -95,7 +95,7 @@ def me(
 
     settings: Settings = request.app.state.settings
     try:
-        payload = applicant_discord_auth.verify_applicant_receipt(
+        payload = applicant_discord_auth.verify_applicant_receipt_jwt(
             applicant_receipt,
             signing_key=settings.applicant_receipt_signing_key.get_secret_value(),
         )

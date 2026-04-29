@@ -8,6 +8,7 @@ from psycopg import Connection
 from app.contracts.actor import ActorIdentity
 from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
 from app.contracts.notifications import (
+    NotificationEventDraft,
     NotificationRuleCreate,
     NotificationRuleListRead,
     NotificationRuleNotFoundError,
@@ -22,6 +23,7 @@ from app.repositories.notifications import (
     list_notification_rules as list_notification_rule_rows,
     update_notification_rule,
 )
+from app.services import notification_events
 from app.services.mutations import mutate_entity
 
 RULE_PAYLOAD_FIELDS = {
@@ -35,6 +37,14 @@ RULE_PAYLOAD_FIELDS = {
     "grouping",
     "enabled",
 }
+APPLICATION_PUBLIC_SUBMITTED_PAYLOAD_ALLOWLIST = frozenset(
+    {
+        "application_id",
+        "applicant_member_id",
+        "discord_user_id",
+        "recipient_discord_user_id",
+    }
+)
 
 
 def _make_request(
@@ -67,6 +77,36 @@ def _rule_from_row(row: dict[str, Any]) -> NotificationRuleRead:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         version=int(row["version"]),
+    )
+
+
+def emit_application_public_submitted_event(
+    db: PostgresDatabase,
+    *,
+    application_id: UUID,
+    applicant_member_id: UUID,
+    discord_user_id: str,
+    scope_kind: str | None,
+    scope_id: str | None,
+    actor: ActorIdentity,
+    connection: Connection[Any] | None = None,
+) -> None:
+    notification_events.emit(
+        db,
+        event=NotificationEventDraft(
+            event_type="application.public_submitted",
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            payload_json={
+                "application_id": str(application_id),
+                "applicant_member_id": str(applicant_member_id),
+                "discord_user_id": discord_user_id,
+                "recipient_discord_user_id": discord_user_id,
+            },
+        ),
+        actor=actor,
+        connection=connection,
+        payload_allowlist=APPLICATION_PUBLIC_SUBMITTED_PAYLOAD_ALLOWLIST,
     )
 
 

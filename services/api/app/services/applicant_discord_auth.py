@@ -13,8 +13,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from fastapi import HTTPException
 import jwt
 from jwt import PyJWKClient
+from pydantic import BaseModel
+from starlette.requests import Request as StarletteRequest
 
 
 DISCORD_SNOWFLAKE_RE = re.compile(r"^[0-9]{17,20}$")
@@ -36,6 +39,10 @@ class ApplicantAuthFlow:
     code_challenge: str
     redirect_uri: str
     return_to: str
+
+
+class DiscordIdentity(BaseModel):
+    discord_user_id: str
 
 
 def create_auth_flow(*, redirect_uri: str, return_to: str) -> ApplicantAuthFlow:
@@ -158,7 +165,7 @@ def sign_applicant_receipt(
     return jwt.encode(payload, signing_key, algorithm="HS256")
 
 
-def verify_applicant_receipt(
+def verify_applicant_receipt_jwt(
     token: str,
     *,
     signing_key: str,
@@ -195,6 +202,52 @@ def verify_applicant_receipt(
     if exp <= current_ts or iat > current_ts:
         raise ApplicantReceiptError("receipt expired")
     return payload
+
+
+def verify_applicant_receipt(
+    request: StarletteRequest,
+    *,
+    signing_key: str | None = None,
+    now: datetime | None = None,
+) -> DiscordIdentity | dict[str, Any]:
+    if isinstance(request, str):
+        if signing_key is None:
+            raise TypeError("signing_key is required when verifying a receipt token")
+        return verify_applicant_receipt_jwt(
+            request,
+            signing_key=signing_key,
+            now=now,
+        )
+
+    cookie = request.cookies.get("applicant_receipt")
+    if not cookie:
+        _raise_applicant_receipt_required()
+
+    settings = request.app.state.settings
+    try:
+        payload = verify_applicant_receipt_jwt(
+            cookie,
+            signing_key=settings.applicant_receipt_signing_key.get_secret_value(),
+            now=now,
+        )
+    except ApplicantReceiptError as exc:
+        raise _applicant_receipt_required_error() from exc
+
+    return DiscordIdentity(discord_user_id=payload["discord_user_id"])
+
+
+def _applicant_receipt_required_error() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail={
+            "code": "applicant_receipt_required",
+            "message": "Discord login is required to submit.",
+        },
+    )
+
+
+def _raise_applicant_receipt_required() -> None:
+    raise _applicant_receipt_required_error()
 
 
 def _pkce_challenge(verifier: str) -> str:
