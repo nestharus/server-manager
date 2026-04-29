@@ -519,11 +519,64 @@ SHA) or `[wontfix]` (with reason).
       application-review permission set. 6 unit/integration
       tests, full API suite 727 passed (1 known pre-existing
       fail), e2e 19/19 on humility-local.
-    - **BL-019D-β [open] — INIT-133B** — SPA officer review
-      surface (queue page, detail page, claim/transition/message
-      actions). Consumes 019B + 019C + 019D-α.
-- **Dependency graph:** 019B → 019C → 019D. 019B and 019C can
-  also be split if needed.
+    - **BL-019D-β [decomposed at risk gate] — INIT-133B** —
+      original framing (queue + detail + transcript + messages +
+      transitions in one slice) blocked by the Phase 4 audit risk
+      gate on 2026-04-29. The single-slice INIT-133B-i proposal at
+      `proposals/13-init-133B-i-officer-queue.md` and its risk
+      gates `plans/risk/init-133B-i-{audit,scope,shortcut,supported-surface}.md`
+      are kept as audit-trail artifacts informing the
+      decomposition below.
+      - **Audit finding A1 (HIGH):** the proposed officer
+        web-bridge derived `ActorIdentity.actor_id` from the
+        `applicant_receipt` cookie's `discord_user_id`. Nothing
+        binds that Discord identity to the Pomerium subject, so
+        an officer could claim/list applications under whatever
+        Discord receipt happens to be in their browser, with the
+        audit row recording the wrong actor. The Pomerium
+        Authentik app currently emits only `email`, `sub`,
+        `groups`, `name` claims; the Discord-user-id claim
+        machinery in `gitops/channels/local/auth/authentik/bootstrap-blueprint-configmap.yaml`
+        belongs to the applicant OAuth app
+        (`init-127-applicant-discord-oauth.yaml`), not the
+        Pomerium officer app. A trustworthy officer-actor binding
+        is missing from the chain.
+      - **Decomposition (proposed):**
+        - **BL-019D-β-0a [open]** — Solid Router migration only.
+          Replace the live vanilla `services/web/src/main.tsx`
+          with the already-scaffolded TanStack Solid Router
+          (`services/web/src/app/{router,providers,store}.tsx`,
+          `RuntimeApp.tsx`,
+          `features/{public,admin,forms}/*Route.tsx`). 1:1
+          behavioral mirror of `/`, `/applications`,
+          `/admin/chapters`. No new routes. No backend changes.
+          No Pomerium changes. Resolves the parallel-systems
+          anti-pattern AGENTS.md prohibits and unblocks β-i
+          without touching auth.
+        - **BL-019D-β-0b [open]** — Officer Discord identity
+          binding. Establish the trusted chain:
+          Authentik officer Discord OAuth blueprint → Pomerium
+          forwards `x-pomerium-claim-discord-user-id` → API
+          `me.py` exposes it → web-officer bridge derives
+          `ActorIdentity.actor_id` from a Pomerium-asserted
+          Discord user id resolved against `members.kind='discord'`,
+          NOT from the applicant_receipt cookie. The applicant
+          receipt remains scoped to applicant routes only.
+          Mechanism choice (extend Authentik claims vs add a
+          `member_links` table vs other) is a product/positioning
+          call for the user.
+        - **BL-019D-β-i [open]** — Officer queue page + claim.
+          Consumes β-0a (Solid Router) + β-0b (officer Discord
+          identity). Adds `/applications/queue` route, web-officer
+          API bridge for list+claim, Pomerium protection for the
+          new prefixes.
+        - **BL-019D-β-ii [open]** — Application detail page +
+          transcript view (read-only). Consumes β-i routing.
+        - **BL-019D-β-iii [open]** — Message thread + non-claim
+          transitions (review/approve/deny/waitlist/interview/
+          reactivate/withdraw/reassign).
+- **Dependency graph:** 019B → 019C → 019D-α (done) → β-0a + β-0b
+  (parallel) → β-i → β-ii → β-iii.
 - **Priority:** MEDIUM (blocks BL-009 Discord-side rollout +
   BL-020 DM materialization).
 
