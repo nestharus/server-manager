@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 MemberStatus = Literal["active", "suspended", "departed"]
+MemberKind = Literal["discord", "public_intake"]
 OriginatingActorKind = Literal["user", "service"]
 
 
@@ -25,6 +26,7 @@ class MemberCreate(_MemberModel):
 class MemberRead(_MemberModel):
     id: UUID
     discord_user_id: str
+    kind: MemberKind
     joined_at: datetime
     status: MemberStatus
     created_at: datetime
@@ -64,6 +66,7 @@ class InvalidMemberStatusTransitionError(Exception):
 __all__ = [
     "InvalidMemberStatusTransitionError",
     "MemberCreate",
+    "MemberKind",
     "MemberNotFoundError",
     "MemberRead",
     "MemberStatus",

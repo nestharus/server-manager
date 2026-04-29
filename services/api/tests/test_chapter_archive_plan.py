@@ -84,8 +84,8 @@ def test_archive_plan_enumerates_pending_work_without_mutating(
         )
         connection.execute(
             """
-            INSERT INTO members (id, discord_user_id, joined_at, status)
-            VALUES (%s, %s, CURRENT_TIMESTAMP, 'active')
+            INSERT INTO members (id, discord_user_id, joined_at, status, kind)
+            VALUES (%s, %s, CURRENT_TIMESTAMP, 'active', 'discord')
             """,
             (member_id, f"discord-{member_id}"),
         )

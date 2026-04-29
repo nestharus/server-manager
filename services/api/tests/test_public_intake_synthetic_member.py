@@ -14,6 +14,7 @@ from .public_intake_fixtures import (
     count_members_by_discord_id,
     create_real_member,
     fetch_member_discord_ids,
+    fetch_member_kind,
 )
 
 
@@ -26,12 +27,21 @@ async def test_public_intake_member_uses_public_digest_namespace(
 ) -> None:
     """Risk annotation: group=TG-2; named_risk=synthetic_member_identity_pollution;
     level=component; source=proposals/02-public-application-intake.md#§2 AS-2.
+    Risk annotation: group=TG-3; named_risk=public_intake_kind_stamping;
+    level=component; source=.tmp/init-125a/phase6/step6a-contract.md#C3 and
+    proposals/06-members-kind.md#Public-intake-creator.
     """
     assert_risk_annotation(
         group="TG-2",
         named_risk="synthetic_member_identity_pollution",
         level="component",
         source="proposals/02-public-application-intake.md#§2",
+    )
+    assert_risk_annotation(
+        group="TG-3",
+        named_risk="public_intake_kind_stamping",
+        level="component",
+        source="proposals/06-members-kind.md#Public-intake-creator",
     )
 
     member = await resolve_or_create_public_intake_member(
@@ -41,8 +51,35 @@ async def test_public_intake_member_uses_public_digest_namespace(
     )
 
     assert re.fullmatch(r"public:[0-9a-f]{32}", member.discord_user_id)
+    assert member.kind == "public_intake"
+    assert fetch_member_kind(governance_dsn, member.id) == "public_intake"
     assert member.status == "active"
     assert count_members_by_discord_id(governance_dsn, member.discord_user_id) == 1
+
+
+async def test_public_intake_member_sets_public_intake_kind(
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    """Risk annotation: group=TG-3; named_risk=public_intake_kind_stamping;
+    level=component; source=.tmp/init-125a/phase6/step6a-contract.md#C3 and
+    proposals/06-members-kind.md#Public-intake-creator.
+    """
+    assert_risk_annotation(
+        group="TG-3",
+        named_risk="public_intake_kind_stamping",
+        level="component",
+        source="proposals/06-members-kind.md#Public-intake-creator",
+    )
+
+    member = await resolve_or_create_public_intake_member(
+        governance_db,
+        public_submission_id=uuid4(),
+        channel_salt=PUBLIC_MEMBER_SALT,
+    )
+
+    assert member.kind == "public_intake"
+    assert fetch_member_kind(governance_dsn, member.id) == "public_intake"
 
 
 async def test_public_intake_member_resolution_is_idempotent(
@@ -51,12 +88,21 @@ async def test_public_intake_member_resolution_is_idempotent(
 ) -> None:
     """Risk annotation: group=TG-2; named_risk=synthetic_member_identity_pollution;
     level=component; source=proposals/02-public-application-intake.md#§2 AS-2.
+    Risk annotation: group=TG-3; named_risk=public_intake_kind_stamping;
+    level=component; source=.tmp/init-125a/phase6/step6a-contract.md#C3 and
+    proposals/06-members-kind.md#Public-intake-creator.
     """
     assert_risk_annotation(
         group="TG-2",
         named_risk="synthetic_member_identity_pollution",
         level="component",
         source="proposals/02-public-application-intake.md#§2",
+    )
+    assert_risk_annotation(
+        group="TG-3",
+        named_risk="public_intake_kind_stamping",
+        level="component",
+        source="proposals/06-members-kind.md#Public-intake-creator",
     )
     public_submission_id = uuid4()
 
@@ -73,6 +119,9 @@ async def test_public_intake_member_resolution_is_idempotent(
 
     assert second.id == first.id
     assert second.discord_user_id == first.discord_user_id
+    assert first.kind == "public_intake"
+    assert second.kind == "public_intake"
+    assert fetch_member_kind(governance_dsn, first.id) == "public_intake"
     assert count_members_by_discord_id(governance_dsn, first.discord_user_id) == 1
 
 

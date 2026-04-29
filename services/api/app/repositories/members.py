@@ -10,6 +10,7 @@ from psycopg.rows import dict_row
 _MEMBER_SELECT = """
     SELECT m.id,
            m.discord_user_id,
+           m.kind,
            m.joined_at,
            m.status,
            m.created_at,
@@ -59,20 +60,23 @@ def _insert_member(
     connection: Connection[Any],
     *,
     row: dict[str, Any],
+    _kind: str = "discord",
 ) -> None:
     connection.execute(
         """
         INSERT INTO members (
             id,
             discord_user_id,
+            kind,
             joined_at,
             status
         )
-        VALUES (%s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s)
         """,
         (
             row["id"],
             row["discord_user_id"],
+            _kind,
             row["joined_at"],
             row["status"],
         ),

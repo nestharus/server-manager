@@ -11,44 +11,56 @@ from app.services import members as members_service
     ("candidate", "expected"),
     [
         pytest.param(
-            "public:abc123",
+            SimpleNamespace(
+                kind="discord",
+                discord_user_id="public:prefix-is-not-the-discriminator",
+            ),
+            False,
+            id="object-kind-discord",
+        ),
+        pytest.param(
+            SimpleNamespace(
+                kind="public_intake",
+                discord_user_id="9876543210",
+            ),
             True,
-            id="raw-public-prefix",
+            id="object-kind-public-intake",
         ),
         pytest.param(
-            "9876543210",
+            {
+                "kind": "discord",
+                "discord_user_id": "public:prefix-is-not-the-discriminator",
+            },
             False,
-            id="raw-numeric-discord-id",
+            id="mapping-kind-discord",
         ),
         pytest.param(
-            SimpleNamespace(discord_user_id="public:member-object"),
+            {
+                "kind": "public_intake",
+                "discord_user_id": "9876543210",
+            },
             True,
-            id="member-like-public-prefix",
+            id="mapping-kind-public-intake",
         ),
         pytest.param(
-            SimpleNamespace(discord_user_id="9876543210"),
+            SimpleNamespace(discord_user_id="public:missing-kind"),
             False,
-            id="member-like-numeric-discord-id",
+            id="object-without-kind-defensive-default",
         ),
         pytest.param(
-            "",
+            "public:raw-string-is-not-supported",
             False,
-            id="empty-string",
-        ),
-        pytest.param(
-            None,
-            False,
-            id="none",
+            id="raw-string-no-prefix-overload",
         ),
     ],
 )
-def test_is_synthetic_member_identifies_only_public_prefix(
+def test_is_synthetic_member_uses_kind_discriminator(
     candidate: object,
     expected: bool,
 ) -> None:
-    """Risk annotation: group=TG-1; named_risk=synthetic_predicate_drift;
-    level=unit; source=.tmp/init-124/phase6/step6a-contract.md#C1 and
-    proposals/05-synthetic-member-guard.md#Assumption-register-A1.
+    """Risk annotation: group=TG-2; named_risk=helper_prefix_discriminator_drift;
+    level=unit; source=.tmp/init-125a/phase6/step6a-contract.md#C3 and
+    proposals/06-members-kind.md#Helper-unit.
     """
 
     assert members_service.is_synthetic_member(candidate) is expected

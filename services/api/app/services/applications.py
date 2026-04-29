@@ -331,7 +331,7 @@ def _require_non_synthetic_application_member(
     member = fetch_member_by_id(connection, member_id)
     if member is None:
         raise ValueError(f"member {member_id} was not found")
-    if is_synthetic_member(member["discord_user_id"]):
+    if is_synthetic_member(member):
         _raise_synthetic_application_error(code=code, message=message)
     return member
 
@@ -621,7 +621,7 @@ def _submit_application_internal(
             raise ValueError(f"member {validated.applicant_id} was not found")
         if (
             submission_authority != _SubmissionAuthority.PUBLIC_INTAKE
-            and is_synthetic_member(applicant["discord_user_id"])
+            and is_synthetic_member(applicant)
         ):
             _raise_synthetic_application_error(
                 code="applicant_synthetic_not_allowed",

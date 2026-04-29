@@ -220,7 +220,7 @@ SHA) or `[wontfix]` (with reason).
   doc needed since there are no other instances and the comment
   is at the exact place future authors will copy from.
 
-### BL-008 [open] — INIT-121: Discord OAuth linking + synthetic→real member conversion
+### BL-008 [in-progress, sub-slice A done] — Discord OAuth linking + synthetic→real member conversion
 
 - **Source:** `proposals/02-public-application-intake.md:441` (Out
   of scope for follow-up); deferred from INIT-120
@@ -233,6 +233,18 @@ SHA) or `[wontfix]` (with reason).
   proposal. Likely surface: extend Authentik OIDC flow, add
   `members.linked_at`, write a conversion service that updates
   `applications.applicant_id` and migrates audit refs.
+- **Decomposition (per `.tmp/rca/discord-oauth-linking-FINDINGS.md`):**
+  Too large for one slice. Split into:
+  - **INIT-125A [done]** — `members.kind` schema column +
+    guard migration from prefix-check to kind-check. Verified
+    e2e=19/19 on humility-local; live SELECT shows
+    `public_intake` rows correctly classified.
+  - **BL-016** — INIT-125B Authentik Discord OAuth provider +
+    applicant OIDC client plumbing.
+  - **BL-017** — INIT-125C member link/conversion service +
+    application re-pointing.
+  - **BL-018** — INIT-125D historical cleanup / read-hardening
+    for roster/trust synthetic pollution.
 
 ### BL-009 [open] — INIT-122: Discord-visible side effects for public web submissions
 
@@ -316,6 +328,58 @@ SHA) or `[wontfix]` (with reason).
   changes.
 
 ### BL-015 [done] — Web `test-results/` Playwright artifacts cluttered the worktree
+
+- **Source:** Observed during INIT-120 commit; partial fix in
+  `services/web/.gitignore` shipped with INIT-120
+- **Description:** `services/web/test-results/` is a Playwright
+  artifact directory created during local test runs. INIT-120
+  added it to `services/web/.gitignore`. Verify other Playwright
+  artifact paths (e.g., `playwright-report/`) are also ignored.
+- **Plan:** Audit `services/web/.gitignore` against Playwright's
+  default artifact paths. Add anything missing.
+- **Outcome (closed):** `services/web/.gitignore` now also
+  excludes `playwright-report/`, `blob-report/`, and
+  `playwright/.cache/`.
+
+### BL-016 [open] — INIT-125B: Authentik Discord OAuth provider + applicant OIDC plumbing
+
+- **Source:** Decomposition of BL-008 per
+  `.tmp/rca/discord-oauth-linking-FINDINGS.md` §"Recommended fix shape"
+- **Description:** Add Discord OAuth Source + server-manager
+  applicant OIDC provider/app to Authentik. Add Infisical secret
+  plumbing for Discord OAuth client_id/secret. Add API/web
+  callback contract enough to verify a Discord snowflake claim.
+  Do NOT yet mutate existing applications — just establish the
+  identity verification surface.
+- **Plan:** Pick up after INIT-125A closes.
+- **Priority:** MEDIUM
+
+### BL-017 [open] — INIT-125C: Member link/conversion service + application re-pointing
+
+- **Source:** Decomposition of BL-008
+- **Description:** Add `member_links` (or equivalent supersession)
+  table + conversion service. On verified Discord OAuth handshake,
+  link synthetic→real member, re-point `applications.applicant_id`
+  with per-application audit/version updates, emit notification
+  event(s). Handle conflict cases for duplicate
+  `client_application_id` across synthetic and real submissions.
+- **Plan:** Pick up after BL-016 lands the OAuth surface.
+- **Priority:** MEDIUM
+
+### BL-018 [open] — INIT-125D: Historical cleanup + read-hardening for roster/trust synthetic pollution
+
+- **Source:** Decomposition of BL-008; also closes BL-005's
+  read-side residual.
+- **Description:** Explicit read filters for any roster/trust
+  surfaces that still need them post-INIT-124. One-shot cleanup
+  Job that scans `roster_entries`, `trust_profiles`, etc. for
+  synthetic refs and either removes or annotates them. In current
+  `humility-local` the job should report zero rows since INIT-124
+  guards landed before any synthetic pollution leaked.
+- **Plan:** Pick up after BL-017 (conversion service) so cleanup
+  has a "linked → keep, unlinked synthetic → drop" rule.
+- **Priority:** LOW (residual; no known leaked rows in
+  humility-local).
 
 - **Source:** Observed during INIT-120 commit; partial fix in
   `services/web/.gitignore` shipped with INIT-120

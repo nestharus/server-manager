@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Any
@@ -43,17 +44,14 @@ PUBLIC_INTAKE_MEMBER_ACTOR = ActorIdentity(
     actor_kind="service",
     actor_id="public-intake",
 )
-SYNTHETIC_MEMBER_PREFIX = "public:"
 
 
-def is_synthetic_member(member: object | str) -> bool:
-    if isinstance(member, str):
-        discord_user_id = member
+def is_synthetic_member(member: object) -> bool:
+    if isinstance(member, Mapping):
+        kind = member.get("kind")
     else:
-        discord_user_id = getattr(member, "discord_user_id", "")
-    return isinstance(discord_user_id, str) and discord_user_id.startswith(
-        SYNTHETIC_MEMBER_PREFIX
-    )
+        kind = getattr(member, "kind", None)
+    return kind == "public_intake"
 
 
 def _generated_audit_context() -> AuditContextRead:
@@ -88,6 +86,7 @@ def _member_from_row(row: dict[str, Any]) -> MemberRead:
     return MemberRead(
         id=row["id"],
         discord_user_id=row["discord_user_id"],
+        kind=row["kind"],
         joined_at=row["joined_at"],
         status=row["status"],
         created_at=row["created_at"],
@@ -184,26 +183,76 @@ async def resolve_or_create_public_intake_member(
     channel_salt: str,
 ) -> MemberRead:
     digest = hashlib.sha256(f"{public_submission_id}|{channel_salt}".encode()).hexdigest()
-    request = MemberCreate(
-        discord_user_id=f"public:{digest[:32]}",
-        joined_at=datetime.now(UTC),
-        originating_actor_kind="service",
-        originating_actor_id="public-intake",
-    )
+
+    def resolve_or_create() -> MemberRead:
+        discord_user_id = f"public:{digest[:32]}"
+        with db.connection() as connection:
+            existing = fetch_member_by_discord_id(connection, discord_user_id)
+        if existing is not None:
+            return _member_from_row(existing)
+
+        member_id = uuid4()
+        joined_at = datetime.now(UTC)
+
+        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+            _insert_member(
+                connection,
+                row={
+                    "id": member_id,
+                    "discord_user_id": discord_user_id,
+                    "joined_at": joined_at,
+                    "status": "active",
+                },
+                _kind="public_intake",
+            )
+            return StateChangeDraft(
+                change_type="member.created",
+                payload_json={
+                    "member_id": str(member_id),
+                    "discord_user_id": discord_user_id,
+                    "joined_at": joined_at.isoformat(),
+                    "status": "active",
+                    "originating_actor_kind": "service",
+                    "originating_actor_id": "public-intake",
+                },
+            )
+
+        action_payload = {
+            "discord_user_id": discord_user_id,
+            "joined_at": joined_at.isoformat(),
+            "originating_actor_kind": "service",
+            "originating_actor_id": "public-intake",
+        }
+        try:
+            mutate_entity(
+                db=db,
+                aggregate_type="member",
+                aggregate_id=str(member_id),
+                request=_make_request(
+                    expected_version=0,
+                    actor=PUBLIC_INTAKE_MEMBER_ACTOR,
+                    request_surface="api:/public/intake",
+                ),
+                action_type="member.create",
+                action_payload=action_payload,
+                payload_allowlist=set(action_payload.keys()),
+                mutate_projection=mutate_projection,
+                scope_kind="global",
+                scope_id=None,
+            )
+        except errors.UniqueViolation:
+            with db.connection() as connection:
+                existing = _fetch_member_row_by_discord_id(connection, discord_user_id)
+            return _member_from_row(existing)
+
+        with db.connection() as connection:
+            row = _fetch_member_row(connection, member_id)
+        return _member_from_row(row)
+
     if get_current_audit_context() is None:
         with use_audit_context(_generated_audit_context()):
-            member, _result, _created = create_or_get_member(
-                db,
-                request,
-                PUBLIC_INTAKE_MEMBER_ACTOR,
-            )
-    else:
-        member, _result, _created = create_or_get_member(
-            db,
-            request,
-            PUBLIC_INTAKE_MEMBER_ACTOR,
-        )
-    return member
+            return resolve_or_create()
+    return resolve_or_create()
 
 
 def get_member_by_id(
@@ -240,7 +289,7 @@ def patch_member_status(
         row = _fetch_member_by_id_for_update(connection, member_id)
         if row is None:
             raise MemberNotFoundError(member_id=member_id)
-        if is_synthetic_member(row["discord_user_id"]):
+        if is_synthetic_member(row):
             raise HTTPException(
                 status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
                 detail={
