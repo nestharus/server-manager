@@ -163,7 +163,7 @@ def _resolve_member_aliases(
         uuid_aliases.add(member_uuid)
         member_row = fetch_member_by_id(connection, member_uuid)
         if member_row is not None:
-            if is_synthetic_member(member_row["discord_user_id"]):
+            if is_synthetic_member(member_row):
                 if synthetic_policy == "omit":
                     return set(), set()
                 if synthetic_policy == "reject":

@@ -316,7 +316,7 @@ def create_trust_signal(
         member = fetch_member_by_id(connection, request.member_id)
         if member is None:
             raise MemberNotFoundError(member_id=request.member_id)
-        if is_synthetic_member(member["discord_user_id"]):
+        if is_synthetic_member(member):
             _raise_synthetic_trust_subject()
 
     created_row: dict[str, Any] | None = None
@@ -392,7 +392,7 @@ def compute_trust(
         member = fetch_member_by_id(connection, member_id)
         if member is None:
             raise MemberNotFoundError(member_id=member_id)
-        if is_synthetic_member(member["discord_user_id"]):
+        if is_synthetic_member(member):
             _raise_synthetic_trust_subject()
         existing = fetch_trust_profile_by_member_id(connection, member_id)
         if existing is not None:
@@ -482,7 +482,7 @@ def _recompute_once(
         member = fetch_member_by_id(connection, member_id)
         if member is None:
             raise MemberNotFoundError(member_id=member_id)
-        if is_synthetic_member(member["discord_user_id"]):
+        if is_synthetic_member(member):
             _raise_synthetic_trust_subject()
 
         existing = get_trust_profile_for_update(connection, member_id)

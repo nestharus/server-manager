@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -12,11 +13,13 @@ import pytest
 from httpx import AsyncClient
 from psycopg.rows import dict_row
 
+from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
-from app.contracts.members import MemberRead
+from app.contracts.members import MemberCreate, MemberRead
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from app.services.authority import grant_authority
+from app.services.members import create_or_get_member
 
 
 BASE_URL = "/api/v1/members"
@@ -90,6 +93,20 @@ def _fetch_member_count(database_url: str, discord_user_id: str) -> int:
     return int(row["count"])
 
 
+def _fetch_member_kind(database_url: str, member_id: str) -> str:
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT kind
+            FROM members
+            WHERE id = %s
+            """,
+            (member_id,),
+        ).fetchone()
+    assert row is not None
+    return str(row["kind"])
+
+
 def _fetch_latest_member_audit(database_url: str) -> dict[str, Any]:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         row = conn.execute(
@@ -143,8 +160,49 @@ async def test_create_member_returns_active_with_uuid_id(
     assert member.discord_user_id == discord_user_id
     assert member.joined_at == joined_at
     assert member.status == "active"
+    assert member.kind == "discord"
+    assert response.json()["kind"] == "discord"
     assert member.version == 1
     assert response.headers["etag"] == '"1"'
+
+
+def test_create_or_get_member_external_signature_does_not_accept_kind() -> None:
+    """Risk annotation: group=TG-4; named_risk=caller_supplied_kind_escape_hatch;
+    level=component; source=.tmp/init-125a/phase6/step6a-contract.md#Anti-scope and
+    proposals/06-members-kind.md#Q3.
+    """
+
+    parameters = inspect.signature(create_or_get_member).parameters
+
+    assert "kind" not in parameters
+    assert "_kind" not in parameters
+
+
+def test_create_or_get_member_sets_discord_kind(
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    """Risk annotation: group=TG-4; named_risk=normal_member_kind_stamping;
+    level=component; source=.tmp/init-125a/phase6/step6a-contract.md#C2 and
+    proposals/06-members-kind.md#Normal-creation.
+    """
+    discord_user_id = str(uuid4())
+    request = MemberCreate(
+        discord_user_id=discord_user_id,
+        joined_at=datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC),
+        originating_actor_id="operator",
+    )
+
+    with use_audit_context(_make_audit_context()):
+        member, _result, created = create_or_get_member(
+            governance_db,
+            request,
+            ActorIdentity(actor_kind="user", actor_id="operator"),
+        )
+
+    assert created is True
+    assert member.kind == "discord"
+    assert _fetch_member_kind(governance_dsn, str(member.id)) == "discord"
 
 
 @pytest.mark.asyncio
@@ -239,6 +297,8 @@ async def test_get_member_by_id_returns_current_state(
     assert response.status_code == HTTPStatus.OK, response.text
     current = MemberRead.model_validate(response.json())
     assert current == created
+    assert current.kind == "discord"
+    assert response.json()["kind"] == "discord"
     assert response.headers["etag"] == created_response.headers["etag"]
 
 
@@ -464,8 +524,8 @@ async def test_unique_discord_user_id_enforced(
         with psycopg.connect(governance_dsn, autocommit=True) as conn:
             conn.execute(
                 """
-                INSERT INTO members (id, discord_user_id, joined_at, status)
-                VALUES (%s, %s, %s, 'active')
+                INSERT INTO members (id, discord_user_id, joined_at, status, kind)
+                VALUES (%s, %s, %s, 'active', 'discord')
                 """,
                 (uuid4(), discord_user_id, joined_at),
             )

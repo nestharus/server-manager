@@ -75,8 +75,8 @@ def _seed_member(conn: psycopg.Connection[Any], *, discord_user_id: str) -> UUID
     member_id = uuid4()
     conn.execute(
         """
-        INSERT INTO members (id, discord_user_id, joined_at, status)
-        VALUES (%s, %s, %s, 'active')
+        INSERT INTO members (id, discord_user_id, joined_at, status, kind)
+        VALUES (%s, %s, %s, 'active', 'discord')
         """,
         (member_id, discord_user_id, datetime.now(tz=UTC)),
     )

@@ -212,8 +212,8 @@ def seed_member_form_application(
     with db.connection() as connection:
         connection.execute(
             """
-            INSERT INTO members (id, discord_user_id, joined_at, status)
-            VALUES (%s, %s, %s, 'active')
+            INSERT INTO members (id, discord_user_id, joined_at, status, kind)
+            VALUES (%s, %s, %s, 'active', 'discord')
             """,
             (member_id, f"discord-{member_id}", now),
         )

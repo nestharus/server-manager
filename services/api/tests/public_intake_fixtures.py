@@ -104,8 +104,8 @@ def create_real_member(db: PostgresDatabase, discord_user_id: str) -> UUID:
     with db.connection() as connection:
         connection.execute(
             """
-            INSERT INTO members (id, discord_user_id, joined_at, status)
-            VALUES (%s, %s, %s, 'active')
+            INSERT INTO members (id, discord_user_id, joined_at, status, kind)
+            VALUES (%s, %s, %s, 'active', 'discord')
             """,
             (member_id, discord_user_id, datetime.now(UTC)),
         )
@@ -152,7 +152,8 @@ def fetch_application_row(database_url: str, application_id: UUID) -> dict[str, 
                 a.state,
                 a.client_application_id,
                 h.current_seq AS version,
-                m.discord_user_id AS applicant_discord_user_id
+                m.discord_user_id AS applicant_discord_user_id,
+                m.kind AS applicant_kind
             FROM applications AS a
             JOIN members AS m ON m.id = a.applicant_id
             JOIN aggregate_heads AS h
@@ -164,6 +165,20 @@ def fetch_application_row(database_url: str, application_id: UUID) -> dict[str, 
         ).fetchone()
     assert row is not None, f"missing application row {application_id}"
     return dict(row)
+
+
+def fetch_member_kind(database_url: str, member_id: UUID) -> str:
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        row = connection.execute(
+            """
+            SELECT kind
+            FROM members
+            WHERE id = %s
+            """,
+            (member_id,),
+        ).fetchone()
+    assert row is not None, f"missing member row {member_id}"
+    return str(row["kind"])
 
 
 def fetch_route_reviews(database_url: str, application_id: UUID) -> list[dict[str, Any]]:

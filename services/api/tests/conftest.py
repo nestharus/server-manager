@@ -199,21 +199,22 @@ def test_harness() -> ApiTestHarnessRead:
 class SyntheticMemberGuardMember:
     id: UUID
     discord_user_id: str
+    kind: str
 
 
 class SyntheticMemberGuardMemberFactory:
     def __init__(self, db: PostgresDatabase) -> None:
         self._db = db
 
-    def create(self, *, discord_user_id: str) -> SyntheticMemberGuardMember:
+    def create(self, *, discord_user_id: str, kind: str) -> SyntheticMemberGuardMember:
         member_id = uuid4()
         with self._db.connection() as connection:
             connection.execute(
                 """
-                INSERT INTO members (id, discord_user_id, joined_at, status)
-                VALUES (%s, %s, %s, 'active')
+                INSERT INTO members (id, discord_user_id, joined_at, status, kind)
+                VALUES (%s, %s, %s, 'active', %s)
                 """,
-                (member_id, discord_user_id, datetime.now(UTC)),
+                (member_id, discord_user_id, datetime.now(UTC), kind),
             )
             connection.execute(
                 """
@@ -224,13 +225,23 @@ class SyntheticMemberGuardMemberFactory:
                 """,
                 (str(member_id),),
             )
-        return SyntheticMemberGuardMember(id=member_id, discord_user_id=discord_user_id)
+        return SyntheticMemberGuardMember(
+            id=member_id,
+            discord_user_id=discord_user_id,
+            kind=kind,
+        )
 
     def real(self) -> SyntheticMemberGuardMember:
-        return self.create(discord_user_id=str(10**17 + (uuid4().int % 10**17)))
+        return self.create(
+            discord_user_id=str(10**17 + (uuid4().int % 10**17)),
+            kind="discord",
+        )
 
     def synthetic(self) -> SyntheticMemberGuardMember:
-        return self.create(discord_user_id=f"public:{uuid4().hex[:32]}")
+        return self.create(
+            discord_user_id=f"public:{uuid4().hex[:32]}",
+            kind="public_intake",
+        )
 
 
 @pytest.fixture(scope="session")

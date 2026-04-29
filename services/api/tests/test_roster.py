@@ -167,8 +167,8 @@ def _seed_real_roster_member(db: PostgresDatabase) -> str:
     with db.connection() as conn:
         conn.execute(
             """
-            INSERT INTO members (id, discord_user_id, joined_at, status)
-            VALUES (%s, %s, %s, 'active')
+            INSERT INTO members (id, discord_user_id, joined_at, status, kind)
+            VALUES (%s, %s, %s, 'active', 'discord')
             """,
             (member_id, str(10**17 + (uuid4().int % 10**17)), datetime.now(UTC)),
         )

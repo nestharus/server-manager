@@ -126,7 +126,7 @@ def _validate_roster_member(connection: Connection[Any], member_id: str) -> None
     member = fetch_member_by_id(connection, parsed_member_id)
     if member is None:
         return
-    if is_synthetic_member(member["discord_user_id"]):
+    if is_synthetic_member(member):
         raise HTTPException(
             status_code=422,
             detail={
