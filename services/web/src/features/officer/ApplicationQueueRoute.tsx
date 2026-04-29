@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/solid-router";
 import { For, Show, createSignal, onMount } from "solid-js";
 
 import {
@@ -50,10 +51,14 @@ export function ApplicationQueueRoute() {
   const [notice, setNotice] = createSignal<string | null>(null);
   const [forbiddenClaimIds, setForbiddenClaimIds] = createSignal<Set<string>>(new Set());
 
-  async function loadQueue(mode: "replace" | "append", afterId?: string | null) {
+  async function loadQueue(
+    mode: "replace" | "append",
+    afterId?: string | null,
+    states: readonly ApplicationState[] = selectedStates(),
+  ) {
     try {
       const response = await fetchOfficerApplicationQueue({
-        states: selectedStates(),
+        states,
         afterId,
       });
       setItems((current) => (mode === "append" ? [...current, ...response.items] : response.items));
@@ -78,14 +83,14 @@ export function ApplicationQueueRoute() {
   }
 
   async function toggleState(state: ApplicationState) {
-    setSelectedStates((current) => {
-      const next = current.includes(state)
-        ? current.filter((candidate) => candidate !== state)
-        : [...current, state];
-      return next.length > 0 ? next : current;
-    });
+    const current = selectedStates();
+    const next = current.includes(state)
+      ? current.filter((candidate) => candidate !== state)
+      : [...current, state];
+    const effectiveStates = next.length > 0 ? next : current;
+    setSelectedStates(effectiveStates);
     setNotice(null);
-    await loadQueue("replace");
+    await loadQueue("replace", undefined, effectiveStates);
   }
 
   async function claim(application: ApplicationRead) {
@@ -189,7 +194,14 @@ export function ApplicationQueueRoute() {
                 <span>{new Date(application().submitted_at).toLocaleString()}</span>
                 <span>{application().version}</span>
                 <span>{shortId(application().owner_id)}</span>
-                <span>
+                <span class={styles.rowActions}>
+                  <Link
+                    class={styles.detailLink}
+                    to="/applications/$applicationId"
+                    params={{ applicationId: application().id }}
+                  >
+                    View
+                  </Link>
                   <Show
                     when={
                       application().state === "queued" && !forbiddenClaimIds().has(application().id)

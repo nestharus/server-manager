@@ -26,7 +26,12 @@ function kubectl(args, options = {}) {
 
 function sqlLiteral(value) {
   if (value === null) return "NULL";
-  return `'${String(value).replaceAll("'", "''")}'`;
+  // sqlLiteral uses E'' so backslashes round-trip even if standard_conforming_strings differs.
+  const escaped = String(value)
+    .replaceAll("\0", "")
+    .replaceAll("\\", "\\\\")
+    .replaceAll("'", "''");
+  return `E'${escaped}'`;
 }
 
 const primaryPod = kubectl([
@@ -84,7 +89,7 @@ inserted_grant AS (
   )
   SELECT
     ${sqlLiteral(grantId)}::uuid,
-    id::text,
+    cm.id::text,
     ${sqlLiteral(scopeKind)},
     ${sqlLiteral(scopeId)},
     ${sqlLiteral(permissions)}::jsonb,
@@ -93,12 +98,12 @@ inserted_grant AS (
     NULL,
     NULL,
     NULL
-  FROM checked_member
-  WHERE kind = 'discord'
+  FROM checked_member AS cm
+  WHERE cm.kind = 'discord'
     AND NOT EXISTS (
       SELECT 1
       FROM authority_grants existing
-      WHERE existing.grantee_id = checked_member.id::text
+      WHERE existing.grantee_id = cm.id::text
         AND existing.scope_kind = ${sqlLiteral(scopeKind)}
         AND existing.scope_id IS NOT DISTINCT FROM ${sqlLiteral(scopeId)}
         AND existing.permissions = ${sqlLiteral(permissions)}::jsonb
@@ -134,10 +139,22 @@ if (!output) {
   );
 }
 
+const resolvedMemberId = output
+  .split("\n")
+  .map((line) => line.trim())
+  .filter(Boolean)
+  .at(-1);
+
+if (!resolvedMemberId) {
+  throw new Error(
+    `failed to parse Discord officer member: discord_user_id=${discordUserId}, scope_kind=${scopeKind}, scope_id=${scopeId}, output=${JSON.stringify(output)}`,
+  );
+}
+
 console.log(
   JSON.stringify({
     discord_user_id: discordUserId,
-    member_id: output.split("\n").at(-1),
+    member_id: resolvedMemberId,
     scope_kind: scopeKind,
     scope_id: scopeId,
     permissions: ["application.claim", "application.review"],

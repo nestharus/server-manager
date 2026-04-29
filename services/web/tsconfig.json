@@ -19,7 +19,8 @@
     "noFallthroughCasesInSwitch": true,
     "ignoreDeprecations": "6.0",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "solid-js/web": ["./node_modules/@solidjs/web/types/index.d.ts"]
     }
   },
   "include": ["src", "tests", "vite.config.ts", "playwright.config.ts"]

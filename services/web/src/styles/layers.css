@@ -40,6 +40,7 @@
     --radius-panel: 8px;
     --content-max: 1180px;
     --shadow-overlay: 0 18px 50px rgb(8 15 30 / 0.22);
+    --backdrop-overlay: rgb(8 15 30 / 0.45);
   }
 }
 
@@ -281,11 +282,38 @@
   }
 
   .runtimeDialog {
+    position: fixed;
+    inset-block-start: 50%;
+    inset-inline-start: 50%;
+    z-index: 20;
+    inline-size: min(24rem, calc(100vw - 2rem));
+    max-block-size: calc(100vh - 2rem);
+    overflow: auto;
+    transform: translate(-50%, -50%);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-panel);
     background: var(--surface-overlay);
     box-shadow: var(--shadow-overlay);
     padding: 1rem;
+  }
+
+  .runtimeDialog:focus {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .runtimeDialogOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: var(--backdrop-overlay);
+  }
+
+  .runtimeDialogHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
   }
 
   .runtimeTable {

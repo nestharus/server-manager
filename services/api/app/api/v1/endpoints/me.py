@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -8,6 +9,7 @@ from app.contracts.web import CurrentPrincipalRead
 
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 
 
 def _header(request: Request, name: str) -> str | None:
@@ -27,6 +29,11 @@ def _parse_pomerium_groups(value: str | None) -> list[str]:
         try:
             decoded = json.loads(stripped)
         except json.JSONDecodeError:
+            logger.debug(
+                "Failed to parse Pomerium groups claim as JSON: %r",
+                stripped,
+                exc_info=True,
+            )
             return []
         if isinstance(decoded, list) and all(isinstance(item, str) for item in decoded):
             return [item.strip() for item in decoded if item.strip()]
@@ -50,7 +57,7 @@ def get_pomerium_principal(request: Request) -> CurrentPrincipalRead:
         subject=subject,
         email=_header(request, "x-pomerium-claim-email"),
         display_name=_header(request, "x-pomerium-claim-name"),
-        groups=_parse_pomerium_groups(request.headers.get("x-pomerium-claim-groups")),
+        groups=_parse_pomerium_groups(_header(request, "x-pomerium-claim-groups")),
         discord_user_id=_header(request, "x-pomerium-claim-discord-user-id"),
     )
 

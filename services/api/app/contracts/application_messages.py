@@ -57,9 +57,14 @@ class ApplicationMessageAppendForbiddenError(Exception):
         super().__init__(message)
 
 
+class ApplicationMessageForbiddenError(ApplicationMessageAppendForbiddenError):
+    pass
+
+
 __all__ = [
     "APPLICATION_MESSAGE_PERMISSION",
     "ApplicationMessageAppendForbiddenError",
+    "ApplicationMessageForbiddenError",
     "ApplicationMessageAppendRequest",
     "ApplicationMessageListRead",
     "ApplicationMessageRead",

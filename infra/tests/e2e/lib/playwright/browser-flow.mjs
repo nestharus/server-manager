@@ -157,7 +157,31 @@ const targets = {
           officer_discord_user_id: process.env.E2E_OFFICER_DISCORD_USER_ID || "210987654321098765",
         }, null, 2),
       );
-      await row.getByText("claimed").waitFor({ timeout: 30_000 });
+      const detailPath = webContract.routes.officer_detail.path.replace("{id}", claimBody.id);
+      await page.goto(`https://web.local.humility.local${detailPath}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 45_000,
+      });
+      const detailRoot = page.locator(`[data-application-id="${claimBody.id}"]`);
+      await detailRoot.waitFor({ timeout: 45_000 });
+      const detailState = (await page.getByTestId("application-detail-state").innerText({ timeout: 30_000 })).trim();
+      if (!detailState.includes("claimed")) {
+        throw new Error(`application detail state expected claimed, got ${detailState}`);
+      }
+      const claimTranscriptEntry = page
+        .getByTestId("application-transcript")
+        .locator('[data-entry-type="state_change"][data-to-state="claimed"]');
+      await claimTranscriptEntry.waitFor({ timeout: 30_000 });
+      await writeFile(
+        join(sessionDir, `${flow}-detail.json`),
+        JSON.stringify({
+          application_id: body.application_id,
+          claimed_application_id: claimBody.id,
+          detail_path: detailPath,
+          detail_state: detailState,
+          transcript_claimed_state_change: true,
+        }, null, 2),
+      );
     },
   },
 };

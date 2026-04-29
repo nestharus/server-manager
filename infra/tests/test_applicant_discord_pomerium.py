@@ -150,6 +150,7 @@ def test_identity_bearing_web_routes_precede_public_catch_all() -> None:
         {"prefix": "/api/web/officer/"},
         {"path": "/applications/queue"},
         {"prefix": "/applications/queue/"},
+        {"prefix": "/applications/"},
     ]
 
     for criteria in route_specs:
@@ -165,8 +166,33 @@ def test_pomerium_route_matching_avoids_api_and_queue_collisions() -> None:
     assert _first_web_route_for("/api/me").get("path") == "/api/me"
     assert _first_web_route_for("/applications/queue").get("path") == "/applications/queue"
     assert _first_web_route_for("/applications/queue/").get("prefix") == "/applications/queue/"
+    assert (
+        _first_web_route_for("/applications/11111111-1111-4111-8111-111111111111").get(
+            "prefix"
+        )
+        == "/applications/"
+    )
 
     assert _first_web_route_for("/api/me-foo").get("path") != "/api/me"
     assert _first_web_route_for("/api/members/abc").get("path") != "/api/me"
     assert _first_web_route_for("/applications/queue-foo").get("path") != "/applications/queue"
-    assert _first_web_route_for("/applications").get("path") != "/applications/queue"
+    bare_applications_route = _first_web_route_for("/applications")
+    assert bare_applications_route.get("path") != "/applications/queue"
+    assert bare_applications_route.get("prefix") != "/applications/"
+
+
+def test_applications_detail_route_is_after_queue_and_before_catch_all() -> None:
+    """Risk annotation: group=TG-3; named_risk=detail_route_order;
+    level=static-config; source=.tmp/init-133B-ii/phase6/step6a-contract.md#TG-3.
+    """
+    catch_all_index = _web_catch_all_index()
+    queue_path_index, queue_path_route = _find_web_route(path="/applications/queue")
+    queue_prefix_index, queue_prefix_route = _find_web_route(prefix="/applications/queue/")
+    detail_prefix_index, detail_prefix_route = _find_web_route(prefix="/applications/")
+
+    _assert_identity_web_route(queue_path_route)
+    _assert_identity_web_route(queue_prefix_route)
+    _assert_identity_web_route(detail_prefix_route)
+    assert queue_path_index < detail_prefix_index
+    assert queue_prefix_index < detail_prefix_index
+    assert detail_prefix_index < catch_all_index

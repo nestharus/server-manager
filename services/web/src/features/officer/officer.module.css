@@ -20,6 +20,28 @@
     font-size: 1.35rem;
   }
 
+  .headerActions,
+  .rowActions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .detailLink {
+    min-block-size: 2.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    padding: 0.45rem 0.75rem;
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    font-weight: 650;
+    text-decoration: none;
+  }
+
   .filters {
     display: flex;
     flex-wrap: wrap;
@@ -87,5 +109,133 @@
   .tableRow span {
     min-inline-size: 0;
     overflow-wrap: anywhere;
+  }
+
+  .detailLayout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.9fr);
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .detailColumn {
+    display: grid;
+    gap: 1rem;
+    min-inline-size: 0;
+  }
+
+  .detailCard {
+    display: grid;
+    gap: 0.75rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-raised);
+    padding: 1rem;
+    min-inline-size: 0;
+  }
+
+  .detailCard h3 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .detailCardHeader {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .detailCardHeader span {
+    color: var(--text-secondary);
+    font-weight: 700;
+  }
+
+  .metadataList,
+  .responseList {
+    display: grid;
+    gap: 0.65rem;
+    margin: 0;
+  }
+
+  .metadataList div,
+  .responseList div {
+    display: grid;
+    grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: baseline;
+  }
+
+  .metadataList dt,
+  .responseList dt {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    font-weight: 760;
+    text-transform: uppercase;
+  }
+
+  .metadataList dd,
+  .responseList dd {
+    margin: 0;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+  }
+
+  .transcriptList {
+    display: grid;
+    gap: 0.65rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .transcriptStateChange,
+  .transcriptMessage {
+    border-inline-start: 4px solid var(--accent-primary);
+    border-radius: var(--radius-control);
+    background: var(--surface-panel);
+    padding: 0.75rem;
+  }
+
+  .transcriptMessage {
+    border-inline-start-color: var(--border-strong);
+  }
+
+  .transcriptEntryBody {
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .transcriptMeta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  .transcriptTransition,
+  .transcriptMessageBody {
+    margin: 0;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  @media (max-width: 760px) {
+    .header {
+      display: grid;
+    }
+
+    .detailLayout {
+      grid-template-columns: 1fr;
+    }
+
+    .metadataList div,
+    .responseList div {
+      grid-template-columns: 1fr;
+      gap: 0.2rem;
+    }
   }
 }

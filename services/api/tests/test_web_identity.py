@@ -171,6 +171,31 @@ async def test_me_groups_absent(async_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_me_groups_whitespace_only(async_client: AsyncClient) -> None:
+    """
+    Risk annotation: group=TG-2;
+        named_risk=groups_parsing_empty;
+        level=api;
+        source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-2
+    """
+    contract = _contract()
+    headers = contract["pomerium_headers"]
+    identity = contract["oidc_identity"]
+
+    response = await async_client.get(
+        "/api/v1/me",
+        headers={
+            headers["subject"]: identity["subject"],
+            headers["email"]: identity["email"],
+            "x-pomerium-claim-groups": "   ",
+        },
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["groups"] == []
+
+
+@pytest.mark.asyncio
 async def test_me_discord_claim_present(async_client: AsyncClient) -> None:
     """
     Risk annotation: group=TG-2;

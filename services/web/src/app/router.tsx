@@ -5,6 +5,7 @@ import { Icon } from "@/components/icons/Icon";
 import { Button } from "@/components/primitives/Button";
 import { useTheme } from "./store";
 import { AdminChaptersRoute } from "@/features/admin/AdminChaptersRoute";
+import { ApplicationDetailRoute } from "@/features/officer/ApplicationDetailRoute";
 import { ApplicationQueueRoute } from "@/features/officer/ApplicationQueueRoute";
 import { ApplicationFormRoute } from "@/features/public/ApplicationFormRoute";
 import { HomeRoute } from "@/features/public/HomeRoute";
@@ -81,6 +82,15 @@ const applicationQueueRoute = createRoute({
   },
 });
 
+const applicationDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/applications/$applicationId",
+  component: ApplicationDetailRoute,
+  staticData: {
+    breadcrumb: "Application detail",
+  },
+});
+
 const adminChaptersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/chapters",
@@ -94,6 +104,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   applicationFormRoute,
   applicationQueueRoute,
+  applicationDetailRoute,
   adminChaptersRoute,
 ]);
 

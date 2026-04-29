@@ -108,6 +108,8 @@ function assert(condition, message) {
 assert(contract.routes.public.path === "/", "public route path")
 assert(contract.routes.officer_queue.path === "/applications/queue", "officer queue path")
 assert(contract.routes.officer_queue.requires_auth === true, "officer queue requires auth")
+assert(contract.routes.officer_detail.path === "/applications/{id}", "officer detail path")
+assert(contract.routes.officer_detail.requires_auth === true, "officer detail requires auth")
 assert(contract.routes.admin.requires_auth === true, "admin route requires auth")
 assert(contract.auth.unauthenticated_api_status === 401, "unauthenticated_api_status")
 assert(contract.auth.probe_endpoint === "/api/me", "principal probe endpoint")
@@ -124,6 +126,10 @@ assert(contract.applications.queue.endpoint === "/api/web/officer/applications",
 assert(contract.applications.queue.state_filter === "submitted,queued", "officer queue default state filter")
 assert(contract.applications.claim.endpoint === "/api/web/officer/applications/{id}/claim", "officer claim endpoint")
 assert(contract.applications.claim.if_match_header === true, "officer claim uses If-Match")
+assert(contract.applications.detail.endpoint === "/api/web/officer/applications/{id}", "officer detail endpoint")
+assert(contract.applications.detail.method === "GET", "officer detail method")
+assert(contract.applications.transcript.endpoint === "/api/web/officer/applications/{id}/transcript", "officer transcript endpoint")
+assert(contract.applications.transcript.method === "GET", "officer transcript method")
 ' "$CONTRACT_FIXTURE" || die "web UI contract fixture is valid"
   pass "web UI contract fixture is valid"
 }
@@ -153,6 +159,19 @@ assert_officer_queue_contract_spec() {
   pass "Playwright spec covers officer queue and claim"
 }
 
+assert_officer_detail_contract_spec() {
+  local spec="${REPO_ROOT}/services/web/tests/officer-detail.spec.ts"
+  [[ -f "$spec" ]] || die "missing Playwright officer detail spec"
+  rg -q 'contract\.json' "$spec" || die "officer detail spec reads fixture"
+  rg -q 'officer_detail' "$spec" || die "officer detail spec covers route fixture"
+  rg -q 'application-detail-state' "$spec" || die "officer detail spec covers state test id"
+  rg -q 'application-detail-version' "$spec" || die "officer detail spec covers version test id"
+  rg -q 'application-transcript' "$spec" || die "officer detail spec covers transcript test id"
+  rg -q 'body_markdown' "$spec" || die "officer detail spec covers actual transcript message field"
+  rg -q 'state_change' "$spec" || die "officer detail spec covers transcript state changes"
+  pass "Playwright spec covers officer detail and transcript"
+}
+
 assert_web_source_api_paths() {
   if grep -rE "[\"']/api/v1/" "${REPO_ROOT}/services/web/src/" >/tmp/web-api-v1-grep.log; then
     cat /tmp/web-api-v1-grep.log >&2
@@ -164,6 +183,8 @@ assert_web_source_api_paths() {
   rg -q '"/api/web/admin/chapters"' "$client" || die "client.ts calls /api/web/admin/chapters"
   rg -q '/api/web/officer/applications' "$client" || die "client.ts calls /api/web/officer/applications"
   rg -q '/api/web/officer/applications/\$\{input\.applicationId\}/claim' "$client" || die "client.ts calls officer claim endpoint"
+  rg -q '/api/web/officer/applications/\$\{applicationId\}`' "$client" || die "client.ts calls officer detail endpoint"
+  rg -q '/api/web/officer/applications/\$\{applicationId\}/transcript' "$client" || die "client.ts calls officer transcript endpoint"
   rg -q '"/auth/discord/me"' "$client" || die "client.ts calls /auth/discord/me"
   pass "web source uses browser-facing API path allowlist"
 }
@@ -251,6 +272,7 @@ main() {
   assert_contract_fixture
   assert_playwright_contract_spec
   assert_officer_queue_contract_spec
+  assert_officer_detail_contract_spec
   assert_web_source_api_paths
   assert_web_build
   assert_runtime
