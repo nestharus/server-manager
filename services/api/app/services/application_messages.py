@@ -8,6 +8,7 @@ from psycopg import Connection
 from app.contracts.application_messages import (
     APPLICATION_MESSAGE_PERMISSION,
     ApplicationMessageAppendForbiddenError,
+    ApplicationMessageForbiddenError,
     ApplicationMessageAppendRequest,
     ApplicationMessageRead,
     ApplicationMessageVisibilityError,
@@ -182,7 +183,7 @@ def read_application_messages(
             actor_id=viewer_actor_id,
         )
         if not is_applicant_viewer and not can_view_officer_only:
-            raise ApplicationMessageAppendForbiddenError(
+            raise ApplicationMessageForbiddenError(
                 "application.message authority denied"
             )
 

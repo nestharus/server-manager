@@ -21,6 +21,15 @@ const chapterListSchema = z.object({
   ),
 });
 
+const submissionResponseBodySchema = z.object({
+  code: z.string().optional(),
+  message: z.string().optional(),
+  application_id: z.string().optional(),
+  parse_error: z.boolean().optional(),
+  raw_text: z.string().optional(),
+  content_type: z.string().optional(),
+});
+
 export const applicationStateSchema = z.enum([
   "submitted",
   "queued",
@@ -42,10 +51,23 @@ export const applicationReadSchema = z
   .object({
     id: z.string(),
     applicant_id: z.string(),
+    form_definition_id: z.string().default(""),
+    form_version: z.number().default(1),
+    form_snapshot: z.record(z.string(), z.unknown()).default({}),
     target_scope: applicationScopeSchema,
+    responses: z.record(z.string(), z.unknown()).default({}),
     state: applicationStateSchema,
     owner_id: z.string().nullable(),
+    interview_thread_id: z.string().nullable().default(null),
+    decision_reason: z.string().nullable().default(null),
     submitted_at: z.string(),
+    queued_at: z.string().nullable().default(null),
+    claimed_at: z.string().nullable().default(null),
+    review_started_at: z.string().nullable().default(null),
+    decided_at: z.string().nullable().default(null),
+    withdrawn_at: z.string().nullable().default(null),
+    created_at: z.string().default(""),
+    updated_at: z.string().default(""),
     version: z.number(),
   })
   .passthrough();
@@ -61,11 +83,45 @@ export const applicationTransitionRequestSchema = z.object({
 
 export const applicationTransitionResponseSchema = applicationReadSchema;
 
+export const applicationStateChangeEntrySchema = z.object({
+  type: z.literal("state_change"),
+  occurred_at: z.string(),
+  change_type: z.string(),
+  from_state: applicationStateSchema.nullable(),
+  to_state: applicationStateSchema.nullable(),
+  actor_kind: z.string(),
+  actor_id: z.string(),
+  aggregate_seq: z.number(),
+});
+
+export const applicationMessageEntrySchema = z.object({
+  type: z.literal("message"),
+  occurred_at: z.string(),
+  message_seq: z.number(),
+  author_actor_kind: z.string(),
+  author_actor_id: z.string(),
+  visibility: z.enum(["applicant_visible", "officer_only"]),
+  body_markdown: z.string(),
+});
+
+export const applicationTranscriptEntrySchema = z.discriminatedUnion("type", [
+  applicationStateChangeEntrySchema,
+  applicationMessageEntrySchema,
+]);
+
+export const applicationTranscriptReadSchema = z.object({
+  application_id: z.string(),
+  entries: z.array(applicationTranscriptEntrySchema),
+});
+
 export type CurrentPrincipal = z.infer<typeof principalSchema>;
 export type AdminChapterSummary = z.infer<typeof chapterListSchema>["chapters"][number];
 export type ApplicationState = z.infer<typeof applicationStateSchema>;
 export type ApplicationRead = z.infer<typeof applicationReadSchema>;
 export type ApplicationListRead = z.infer<typeof applicationListReadSchema>;
+export type ApplicationTranscriptEntry = z.infer<typeof applicationTranscriptEntrySchema>;
+export type ApplicationTranscriptRead = z.infer<typeof applicationTranscriptReadSchema>;
+export type SubmissionResponseBody = z.infer<typeof submissionResponseBodySchema>;
 
 export class ApiError extends Error {
   readonly status: number;
@@ -87,7 +143,7 @@ async function readErrorPayload(response: Response): Promise<unknown> {
   const text = await response.text().catch(() => "");
   if (!text) return undefined;
   const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
+  if (isJsonContentType(contentType)) {
     try {
       return JSON.parse(text) as unknown;
     } catch {
@@ -95,6 +151,15 @@ async function readErrorPayload(response: Response): Promise<unknown> {
     }
   }
   return text;
+}
+
+function isJsonContentType(contentType: string) {
+  return /\bjson\b|\+json\b/i.test(contentType);
+}
+
+function responseTextExcerpt(rawText: string) {
+  const normalized = rawText.trim().replace(/\s+/g, " ");
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
 }
 
 async function getJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
@@ -115,6 +180,41 @@ async function getJson<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   return schema.parse(await response.json());
 }
 
+async function readSubmissionResponseBody(
+  path: string,
+  response: Response,
+): Promise<SubmissionResponseBody> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const fallbackMessage = response.ok
+    ? "Application response was not JSON."
+    : `${path} returned ${response.status}`;
+
+  if (!isJsonContentType(contentType)) {
+    const rawText = await response.text().catch(() => "");
+    return {
+      message: responseTextExcerpt(rawText) || fallbackMessage,
+      parse_error: true,
+      raw_text: rawText,
+      content_type: contentType || undefined,
+    };
+  }
+
+  const textFallbackResponse = response.clone();
+  try {
+    const rawBody = await response.json();
+    return submissionResponseBodySchema.parse(rawBody);
+  } catch (error) {
+    if (error instanceof z.ZodError) throw error;
+    const rawText = await textFallbackResponse.text().catch(() => "");
+    return {
+      message: responseTextExcerpt(rawText) || `${fallbackMessage}: invalid JSON response.`,
+      parse_error: true,
+      raw_text: rawText,
+      content_type: contentType || undefined,
+    };
+  }
+}
+
 export async function fetchCurrentPrincipal() {
   return await getJson("/api/me", principalSchema);
 }
@@ -133,6 +233,21 @@ export async function fetchApplicantDiscordIdentity() {
   );
 }
 
+export async function submitPublicApplication(payload: unknown) {
+  const path = "/api/public/applications";
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await readSubmissionResponseBody(path, response);
+  return {
+    status: response.status,
+    body,
+  };
+}
+
 export async function fetchOfficerApplicationQueue(input: {
   states: readonly ApplicationState[];
   limit?: number;
@@ -148,6 +263,20 @@ export async function fetchOfficerApplicationQueue(input: {
   return await getJson(`/api/web/officer/applications?${params.toString()}`, applicationListReadSchema);
 }
 
+export async function fetchOfficerApplication(applicationId: string) {
+  return await getJson(
+    `/api/web/officer/applications/${applicationId}`,
+    applicationReadSchema,
+  );
+}
+
+export async function fetchOfficerApplicationTranscript(applicationId: string) {
+  return await getJson(
+    `/api/web/officer/applications/${applicationId}/transcript`,
+    applicationTranscriptReadSchema,
+  );
+}
+
 export async function claimOfficerApplication(input: {
   applicationId: string;
   expectedVersion: number;
@@ -156,6 +285,7 @@ export async function claimOfficerApplication(input: {
   const response = await fetch(path, {
     method: "POST",
     credentials: "same-origin",
+    // No Content-Type is sent because this POST intentionally has no body.
     headers: {
       Accept: "application/json",
       "If-Match": `"${input.expectedVersion}"`,

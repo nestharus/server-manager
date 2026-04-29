@@ -17,6 +17,10 @@
       "link_name": "Officer queue",
       "requires_auth": true
     },
+    "officer_detail": {
+      "path": "/applications/{id}",
+      "requires_auth": true
+    },
     "admin": {
       "host": "web.local.humility.local",
       "path": "/admin/chapters",
@@ -59,6 +63,14 @@
       "method": "POST",
       "if_match_header": true,
       "success_status": 200
+    },
+    "detail": {
+      "endpoint": "/api/web/officer/applications/{id}",
+      "method": "GET"
+    },
+    "transcript": {
+      "endpoint": "/api/web/officer/applications/{id}/transcript",
+      "method": "GET"
     }
   },
   "form": {

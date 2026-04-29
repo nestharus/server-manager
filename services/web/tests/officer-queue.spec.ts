@@ -332,10 +332,9 @@ test("test_officer_queue_claim_forbidden", async ({ page }) => {
   //   level=component;
   //   source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-3
   await mockPrincipal(page, officerPrincipal());
-  const forbiddenRow = { ...queuedApplication, state: "queued" };
   await mockQueue(page, [
     { items: [queuedApplication], next_after_id: null },
-    { items: [forbiddenRow], next_after_id: null },
+    { items: [queuedApplication], next_after_id: null },
   ]);
   await page.route(
     `**${contract.applications.claim.endpoint.replace("{id}", queuedApplication.id)}`,

@@ -12,6 +12,7 @@ from app.api.v1.endpoints.applications._shared import (
 )
 from app.api.v1.endpoints.me import get_pomerium_principal
 from app.contracts.actor import ActorIdentity
+from app.contracts.application_messages import ApplicationMessageForbiddenError
 from app.contracts.applications import (
     ApplicationAlreadyClaimedError,
     ApplicationListForbiddenError,
@@ -25,11 +26,18 @@ from app.contracts.applications import (
     DuplicateApplicationCreateError,
     InvalidApplicationTransitionError,
 )
+from app.contracts.applications_transcript import ApplicationTranscriptRead
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
 from app.contracts.web import AdminChapterListRead, CurrentPrincipalRead
 from app.repositories.db import PostgresDatabase
 from app.services.applicant_discord_auth import DISCORD_SNOWFLAKE_RE
-from app.services.applications import list_applications, transition_application
+from app.services.application_transcript import read_application_transcript
+from app.services.applications import (
+    list_applications,
+    read_application,
+    require_application_read_authority,
+    transition_application,
+)
 from app.services.members import NonDiscordMemberError, resolve_or_create_real_discord_member
 from app.services.web import list_web_admin_chapters
 
@@ -64,7 +72,12 @@ def _parse_state_query(state: str | None) -> frozenset[str] | None:
     return frozenset(parsed)
 
 
-async def _build_officer_actor(request: Request, db: PostgresDatabase) -> ActorIdentity:
+async def _build_officer_actor(
+    request: Request,
+    db: PostgresDatabase,
+    *,
+    request_surface: str,
+) -> ActorIdentity:
     principal = get_pomerium_principal(request)
     if "officers" not in principal.groups:
         raise HTTPException(
@@ -102,7 +115,7 @@ async def _build_officer_actor(request: Request, db: PostgresDatabase) -> ActorI
                 actor_kind="service",
                 actor_id="web-officer-bridge",
             ),
-            request_surface="api:/api/v1/web/officer/applications",
+            request_surface=request_surface,
         )
     except NonDiscordMemberError as error:
         raise HTTPException(
@@ -116,9 +129,25 @@ async def _build_officer_actor(request: Request, db: PostgresDatabase) -> ActorI
     return ActorIdentity(actor_kind="user", actor_id=str(member.id))
 
 
+def get_officer_actor(request_surface: str):
+    async def dependency(
+        request: Request,
+        db: PostgresDatabase = Depends(_db),
+    ) -> ActorIdentity:
+        return await _build_officer_actor(
+            request,
+            db,
+            request_surface=request_surface.format(**request.path_params),
+        )
+
+    return dependency
+
+
 @router.get("/officer/applications", response_model=ApplicationListRead)
 async def officer_list_applications(
-    request: Request,
+    actor: ActorIdentity = Depends(
+        get_officer_actor("api:/api/v1/web/officer/applications")
+    ),
     db: PostgresDatabase = Depends(_db),
     state: str | None = Query(None),
     scope_kind: str | None = Query(None),
@@ -127,7 +156,6 @@ async def officer_list_applications(
     limit: int = Query(50, ge=1, le=200),
     after_id: UUID | None = Query(None),
 ) -> ApplicationListRead:
-    actor = await _build_officer_actor(request, db)
     try:
         states = _parse_state_query(state)
         return list_applications(
@@ -148,6 +176,22 @@ async def officer_list_applications(
         raise_known_application_error(error)
 
 
+@router.get("/officer/applications/{application_id}", response_model=ApplicationRead)
+async def officer_read_application(
+    application_id: UUID,
+    actor: ActorIdentity = Depends(
+        get_officer_actor("api:/api/v1/web/officer/applications/{application_id}")
+    ),
+    db: PostgresDatabase = Depends(_db),
+) -> ApplicationRead:
+    try:
+        read, _etag = read_application(db, application_id=application_id)
+        require_application_read_authority(db, actor=actor, application=read)
+        return read
+    except (ApplicationNotFoundError, ValueError, PermissionError) as error:
+        raise_known_application_error(error)
+
+
 @router.post(
     "/officer/applications/{application_id}/claim",
     response_model=ApplicationRead,
@@ -156,9 +200,11 @@ async def officer_claim_application(
     application_id: UUID,
     request: Request,
     response: Response,
+    actor: ActorIdentity = Depends(
+        get_officer_actor("api:/api/v1/web/officer/applications")
+    ),
     db: PostgresDatabase = Depends(_db),
 ) -> ApplicationRead:
-    actor = await _build_officer_actor(request, db)
     expected_version = parse_if_match_strong(request)
     transition_request = ApplicationTransitionRequest(
         action=ApplicationTransitionAction.claim,
@@ -207,3 +253,32 @@ async def officer_claim_application(
         raise_known_application_error(error)
     set_etag(response, result.etag)
     return read
+
+
+@router.get(
+    "/officer/applications/{application_id}/transcript",
+    response_model=ApplicationTranscriptRead,
+)
+async def officer_read_application_transcript(
+    application_id: UUID,
+    actor: ActorIdentity = Depends(
+        get_officer_actor(
+            "api:/api/v1/web/officer/applications/{application_id}/transcript"
+        )
+    ),
+    db: PostgresDatabase = Depends(_db),
+) -> ApplicationTranscriptRead:
+    try:
+        return read_application_transcript(
+            db,
+            application_id=application_id,
+            viewer_actor_kind=actor.actor_kind,
+            viewer_actor_id=actor.actor_id,
+        )
+    except (
+        ApplicationNotFoundError,
+        ApplicationMessageForbiddenError,
+        ValueError,
+        PermissionError,
+    ) as error:
+        raise_known_application_error(error)

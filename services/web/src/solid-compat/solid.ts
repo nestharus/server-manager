@@ -74,27 +74,23 @@ export function onMount(callback: () => void) {
 function createLegacyEffect<T>(effect: (previous?: T) => T | void, initial?: T) {
   let hasPrevious = arguments.length > 1;
   let previous = initial;
-  return solid.createEffect(
-    () => {
-      const result = effect(hasPrevious ? previous : undefined);
-      previous = result;
-      hasPrevious = true;
-      return result;
-    },
-    {
-      // Solid 2 expects an effect-handler-shaped option here; the no-op keeps
-      // legacy createEffect(fn, initialValue) side-effect free outside fn.
-      effect: () => undefined,
-    },
-  );
+  return solid.createEffect(() => {
+    const result = effect(hasPrevious ? previous : undefined);
+    previous = result;
+    hasPrevious = true;
+    return result;
+  });
 }
 
+// Legacy initial values that look exactly like Solid 2 effect handlers are
+// routed to the native path; callers should avoid effect/error function keys.
 function isNativeEffectHandler(value: unknown) {
   return (
     typeof value === "function" ||
     (value !== null &&
       typeof value === "object" &&
-      ("effect" in value || "error" in value))
+      (("effect" in value && typeof (value as { effect?: unknown }).effect === "function") ||
+        ("error" in value && typeof (value as { error?: unknown }).error === "function")))
   );
 }
 

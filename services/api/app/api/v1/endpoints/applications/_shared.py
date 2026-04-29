@@ -5,6 +5,10 @@ from typing import NoReturn
 
 from fastapi import HTTPException, Request, Response
 
+from app.contracts.application_messages import (
+    ApplicationMessageAppendForbiddenError,
+    ApplicationMessageForbiddenError,
+)
 from app.contracts.applications import (
     ApplicationAlreadyClaimedError,
     ApplicationDecisionReasonRequiredError,
@@ -163,6 +167,22 @@ def raise_known_application_error(error: Exception) -> NoReturn:
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
             detail={"code": "application_reactivate_owner_required", "message": str(error)},
+        ) from error
+    if isinstance(error, ApplicationMessageForbiddenError):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail={
+                "code": "application_transcript_forbidden",
+                "message": str(error),
+            },
+        ) from error
+    if isinstance(error, ApplicationMessageAppendForbiddenError):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail={
+                "code": "application_message_forbidden",
+                "message": str(error),
+            },
         ) from error
     if isinstance(error, InvalidApplicationResponseError):
         raise HTTPException(

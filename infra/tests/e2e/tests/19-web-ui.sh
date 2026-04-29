@@ -18,13 +18,15 @@ assert_public_submit_persisted() {
   local primary_pod url row state applicant_id member_kind discord_user_id
   primary_pod="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get pods -l 'cnpg.io/cluster=server-manager-postgres,role=primary' -o jsonpath='{.items[0].metadata.name}')"
   url="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-postgres-url -o jsonpath='{.data.url}' | base64 -d)"
-  # NOTE: psql does NOT expand `:'var'` / `:var` substitutions in `-c "..."`
-  # queries — only when reading SQL from a file or stdin. Use shell
-  # interpolation (`'${var}'`) inside the `-c` payload instead. Was a real
-  # bug in this very file pre-BL-007.
-  row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec "$primary_pod" -c postgres -- \
-    psql "$url" -v ON_ERROR_STOP=1 -At -F $'\t' -c \
-    "SELECT a.state, a.applicant_id, m.kind, m.discord_user_id FROM applications a JOIN members m ON m.id = a.applicant_id WHERE a.id = '${application_id}'::uuid AND m.kind = 'discord';" \
+  # psql variable substitutions are expanded when SQL is read from stdin.
+  row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
+SELECT a.state, a.applicant_id, m.kind, m.discord_user_id
+  FROM applications a
+  JOIN members m ON m.id = a.applicant_id
+ WHERE a.id = :'application_id'::uuid
+   AND m.kind = 'discord';
+SQL
   )"
   [[ -n "$row" ]] || e2e_fail "public submit application row not found: ${application_id}"
   IFS=$'\t' read -r state applicant_id member_kind discord_user_id <<<"$row"
@@ -49,9 +51,20 @@ assert_officer_claim_persisted() {
   local primary_pod url row state applicant_id owner_id applicant_kind applicant_discord_user_id owner_kind owner_discord_user_id
   primary_pod="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get pods -l 'cnpg.io/cluster=server-manager-postgres,role=primary' -o jsonpath='{.items[0].metadata.name}')"
   url="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-postgres-url -o jsonpath='{.data.url}' | base64 -d)"
-  row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec "$primary_pod" -c postgres -- \
-    psql "$url" -v ON_ERROR_STOP=1 -At -F $'\t' -c \
-    "SELECT a.state, a.applicant_id, a.owner_id, applicant.kind, applicant.discord_user_id, owner.kind, owner.discord_user_id FROM applications a JOIN members applicant ON applicant.id = a.applicant_id JOIN members owner ON owner.id = a.owner_id WHERE a.id = '${application_id}'::uuid;" \
+  row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
+SELECT a.state,
+       a.applicant_id,
+       a.owner_id,
+       applicant.kind,
+       applicant.discord_user_id,
+       owner.kind,
+       owner.discord_user_id
+  FROM applications a
+  JOIN members applicant ON applicant.id = a.applicant_id
+  JOIN members owner ON owner.id = a.owner_id
+ WHERE a.id = :'application_id'::uuid;
+SQL
   )"
   [[ -n "$row" ]] || e2e_fail "claimed application row not found: ${application_id}"
   IFS=$'\t' read -r state applicant_id owner_id applicant_kind applicant_discord_user_id owner_kind owner_discord_user_id <<<"$row"
@@ -62,7 +75,83 @@ assert_officer_claim_persisted() {
   [[ "$owner_kind" == "discord" ]] || e2e_fail "owner member kind expected discord, got ${owner_kind}"
   [[ "$applicant_discord_user_id" == "$E2E_APPLICANT_DISCORD_USER_ID" ]] || e2e_fail "applicant Discord user expected ${E2E_APPLICANT_DISCORD_USER_ID}, got ${applicant_discord_user_id}"
   [[ "$owner_discord_user_id" == "$expected_officer_discord_user_id" ]] || e2e_fail "owner Discord user expected ${expected_officer_discord_user_id}, got ${owner_discord_user_id}"
+
+  local audit_row
+  audit_row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
+SELECT request_surface
+  FROM activity_actions
+ WHERE aggregate_type = 'application'
+   AND aggregate_id = :'application_id'::uuid
+   AND action_type = 'application.claim'
+ ORDER BY recorded_at DESC
+ LIMIT 1;
+SQL
+  )"
+  [[ "$audit_row" == "api:/api/v1/web/officer/applications/${application_id}/claim" ]] || e2e_fail "officer claim audit request_surface mismatch: ${audit_row}"
   e2e_pass "officer queue claimed application ${application_id} as Discord member ${owner_id}"
+}
+
+grant_officer_message_authority() {
+  local seed_file="/tmp/seed-officer-authority.json"
+  [[ -f "$seed_file" ]] || e2e_fail "officer authority seed record missing: ${seed_file}"
+
+  local officer_member_id grant_id primary_pod url
+  officer_member_id="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).member_id)' "$seed_file")"
+  grant_id="$(node -e 'console.log(require("crypto").randomUUID())')"
+  [[ -n "$officer_member_id" ]] || e2e_fail "officer authority seed missing member_id"
+  primary_pod="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get pods -l 'cnpg.io/cluster=server-manager-postgres,role=primary' -o jsonpath='{.items[0].metadata.name}')"
+  url="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-postgres-url -o jsonpath='{.data.url}' | base64 -d)"
+
+  kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
+    psql "$url" -v ON_ERROR_STOP=1 -v grant_id="$grant_id" -v officer_member_id="$officer_member_id" -At <<'SQL' >/tmp/grant-officer-message-authority.out
+INSERT INTO authority_grants (
+  id,
+  grantee_id,
+  scope_kind,
+  scope_id,
+  permissions,
+  expires_at,
+  revoked_at,
+  revoked_by,
+  revocation_reason,
+  predecessor_grant_id
+)
+SELECT :'grant_id'::uuid,
+       :'officer_member_id',
+       'global',
+       NULL,
+       '["application.message"]'::jsonb,
+       NULL,
+       NULL,
+       NULL,
+       NULL,
+       NULL
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM authority_grants
+    WHERE grantee_id = :'officer_member_id'
+      AND scope_kind = 'global'
+      AND scope_id IS NULL
+      AND permissions = '["application.message"]'::jsonb
+      AND revoked_at IS NULL
+ );
+SQL
+  e2e_pass "seeded officer application.message authority"
+}
+
+assert_officer_detail_checked() {
+  local record_file="${REPO_ROOT}/infra/tests/e2e/playwright/sessions/web-ui-detail.json"
+  [[ -f "$record_file" ]] || e2e_fail "officer detail record missing: ${record_file}"
+
+  local application_id detail_state transcript_claimed
+  application_id="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).claimed_application_id)' "$record_file")"
+  detail_state="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).detail_state)' "$record_file")"
+  transcript_claimed="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).transcript_claimed_state_change)' "$record_file")"
+  [[ -n "$application_id" ]] || e2e_fail "officer detail application_id missing"
+  [[ "$detail_state" == *claimed* ]] || e2e_fail "officer detail state expected claimed, got ${detail_state}"
+  [[ "$transcript_claimed" == "true" ]] || e2e_fail "officer detail transcript claim state-change missing"
+  e2e_pass "officer detail rendered claimed state and transcript for ${application_id}"
 }
 
 export E2E_APPLICANT_RECEIPT_SIGNING_KEY="$(
@@ -74,19 +163,21 @@ export E2E_APPLICANT_DISCORD_USER_ID="$(
     -o jsonpath='{.data.applicant-discord-user-id}' | base64 -d
 )"
 export E2E_OFFICER_DISCORD_USER_ID="$(
-  node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).auth.identity.discord_user_id)' \
+  node -e 'const fs = require("fs"); const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).auth?.identity?.discord_user_id; if (value !== undefined && value !== null && String(value).trim() !== "") console.log(value);' \
     "${REPO_ROOT}/infra/tests/fixtures/web-ui/contract.json"
 )"
 [[ -n "$E2E_APPLICANT_RECEIPT_SIGNING_KEY" ]] || e2e_fail "server-manager-e2e-fixtures missing applicant-receipt-signing-key"
 [[ -n "$E2E_APPLICANT_DISCORD_USER_ID" ]] || e2e_fail "server-manager-e2e-fixtures missing applicant-discord-user-id"
-[[ -n "$E2E_OFFICER_DISCORD_USER_ID" ]] || e2e_fail "web UI contract fixture missing officer Discord user id"
+[[ -n "$E2E_OFFICER_DISCORD_USER_ID" && "$E2E_OFFICER_DISCORD_USER_ID" != "undefined" ]] || e2e_fail "web UI contract fixture missing officer Discord user id"
 
 run_validator validate-web-ui infra/tests/validate_web_ui_local.sh --kubeconfig "$KUBECONFIG_PATH" --tag init-118-local --skip-image-build
 KUBECONFIG_PATH="$KUBECONFIG_PATH" E2E_OFFICER_DISCORD_USER_ID="$E2E_OFFICER_DISCORD_USER_ID" \
   node "${REPO_ROOT}/infra/tests/e2e/lib/seed-authority-grants.mjs" >/tmp/seed-officer-authority.json
 e2e_pass "seeded officer application.review/application.claim authority"
+grant_officer_message_authority
 "${REPO_ROOT}/infra/tests/e2e/lib/playwright/run-browser-flow.sh" web-ui "$KUBECONFIG_PATH" "$(e2e_log_path playwright-web-ui)"
 assert_public_submit_persisted
 assert_officer_claim_persisted
+assert_officer_detail_checked
 e2e_pass "Playwright completed web UI OAuth and navigation flow"
 e2e_finish

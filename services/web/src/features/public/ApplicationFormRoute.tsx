@@ -1,6 +1,10 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 
-import { fetchApplicantDiscordIdentity } from "@/api/client";
+import {
+  ApiError,
+  fetchApplicantDiscordIdentity,
+  submitPublicApplication,
+} from "@/api/client";
 import { Button } from "@/components/primitives/Button";
 
 type FormPayload = {
@@ -15,19 +19,21 @@ type FormPayload = {
   client_application_id: string;
 };
 
-type SubmissionResponseBody = {
-  code?: string;
-  message?: string;
-  application_id?: string;
-};
-
 type ApplicantAuthState =
   | { status: "checking" }
   | { status: "anonymous" }
-  | { status: "verified"; discord_user_id: string; expires_at: number };
+  | { status: "verified"; discord_user_id: string };
 
 const CLIENT_APPLICATION_ID_KEY = "humility.publicApplication.clientApplicationId";
 const DRAFT_KEY = "humility.publicApplication.draft";
+const FOCUSABLE_DIALOG_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "textarea:not([disabled])",
+  "select:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
 
 function getClientApplicationId() {
   const existing = sessionStorage.getItem(CLIENT_APPLICATION_ID_KEY);
@@ -72,6 +78,9 @@ function restoreApplicationDraft(form: HTMLFormElement) {
 
 export function ApplicationFormRoute() {
   let formRef: HTMLFormElement | undefined;
+  let dialogRef: HTMLDivElement | undefined;
+  let previouslyFocusedElement: HTMLElement | undefined;
+  let dialogFocusFrame: number | undefined;
   let receiptTimer: number | undefined;
   let draftRestoreFrame: number | undefined;
   const [authState, setAuthState] = createSignal<ApplicantAuthState>({ status: "checking" });
@@ -85,15 +94,61 @@ export function ApplicationFormRoute() {
       setAuthState({
         status: "verified",
         discord_user_id: identity.discord_user_id,
-        expires_at: Date.now() + 9 * 60 * 1000,
       });
       if (receiptTimer !== undefined) window.clearTimeout(receiptTimer);
       receiptTimer = window.setTimeout(() => {
         setAuthState({ status: "checking" });
         void refreshApplicantDiscordState();
       }, 9 * 60 * 1000);
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setAuthState({ status: "anonymous" });
+        return;
+      }
+      console.error("[ApplicationFormRoute] Discord identity fetch failed", error);
       setAuthState({ status: "anonymous" });
+    }
+  }
+
+  function dialogFocusableElements() {
+    return Array.from(dialogRef?.querySelectorAll<HTMLElement>(FOCUSABLE_DIALOG_SELECTOR) ?? [])
+      .filter((element) => !element.hasAttribute("disabled") && element.tabIndex >= 0);
+  }
+
+  function focusFirstDialogElement() {
+    const [firstElement] = dialogFocusableElements();
+    (firstElement ?? dialogRef)?.focus();
+  }
+
+  function closeDialog() {
+    setDialogOpen(false);
+  }
+
+  function onDialogKeyDown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const focusableElements = dialogFocusableElements();
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      dialogRef?.focus();
+      return;
+    }
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+      return;
+    }
+    if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
     }
   }
 
@@ -126,26 +181,20 @@ export function ApplicationFormRoute() {
       },
       client_application_id: getClientApplicationId(),
     };
-    let response: Response;
-    let body: SubmissionResponseBody;
+    let submission: Awaited<ReturnType<typeof submitPublicApplication>>;
     try {
-      response = await fetch("/api/public/applications", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(payload),
-      });
-      body = (await response.json().catch(() => ({}))) as SubmissionResponseBody;
+      submission = await submitPublicApplication(payload);
     } catch {
       preserveApplicationDraft(formRef);
       setSubmitStatus("Network error. Please try again.");
       return;
     }
-    if (response.status === 401 && body.code === "applicant_receipt_required") {
+    if (submission.status === 401) {
       preserveApplicationDraft(formRef);
       redirectToDiscordAuth();
       return;
     }
-    setSubmitStatus(body.message ?? `Application returned ${response.status}`);
+    setSubmitStatus(submission.body.message ?? `Application returned ${submission.status}`);
   }
 
   onMount(() => {
@@ -155,6 +204,7 @@ export function ApplicationFormRoute() {
   onCleanup(() => {
     if (receiptTimer !== undefined) window.clearTimeout(receiptTimer);
     if (draftRestoreFrame !== undefined) window.cancelAnimationFrame(draftRestoreFrame);
+    if (dialogFocusFrame !== undefined) window.cancelAnimationFrame(dialogFocusFrame);
   });
 
   function scheduleDraftRestore(retries = 10) {
@@ -179,6 +229,26 @@ export function ApplicationFormRoute() {
       },
     ),
   );
+
+  createEffect(() => {
+    if (!dialogOpen()) {
+      if (dialogFocusFrame !== undefined) {
+        window.cancelAnimationFrame(dialogFocusFrame);
+        dialogFocusFrame = undefined;
+      }
+      previouslyFocusedElement?.focus();
+      previouslyFocusedElement = undefined;
+      return;
+    }
+
+    previouslyFocusedElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : undefined;
+    dialogFocusFrame = window.requestAnimationFrame(() => {
+      dialogFocusFrame = undefined;
+      focusFirstDialogElement();
+    });
+  });
 
   const loginState = () => {
     const state = authState();
@@ -267,8 +337,24 @@ export function ApplicationFormRoute() {
               Open details
             </Button>
             <Show when={dialogOpen()}>
-              <div role="dialog" aria-modal="true" class="runtimeDialog">
-                Application details
+              <div class="runtimeDialogOverlay" aria-hidden="true" onClick={closeDialog} />
+              <div
+                ref={(element) => {
+                  dialogRef = element;
+                }}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="application-details-dialog-title"
+                class="runtimeDialog"
+                tabindex={-1}
+                onKeyDown={onDialogKeyDown}
+              >
+                <div class="runtimeDialogHeader">
+                  <h3 id="application-details-dialog-title">Application details</h3>
+                  <Button type="button" variant="secondary" onClick={closeDialog}>
+                    Close
+                  </Button>
+                </div>
               </div>
             </Show>
           </div>
