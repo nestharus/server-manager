@@ -161,6 +161,8 @@ assert_static_files() {
   assert_file "gitops/channels/local/applications/server-manager/kustomization.yaml"
   assert_file "gitops/channels/local/applications/server-manager/postgres-cluster.yaml"
   assert_file "gitops/channels/local/applications/server-manager/alembic-migration-job.yaml"
+  # Risk annotation: group=TG-4; named_risk=validator_seed_resource_gap; level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+  assert_file "gitops/channels/local/applications/server-manager/seed-public-intake-form.yaml"
   assert_file "gitops/channels/local/applications/server-manager/api-deployment.yaml"
   assert_file "gitops/channels/local/applications/server-manager/discord-deployment.yaml"
   assert_file "gitops/channels/local/applications/server-manager/api-ingress.yaml"
@@ -192,6 +194,11 @@ assert_kustomize() {
 
   grep -q 'name: server-manager-postgres' "$app_render" || die "server-manager CNPG Cluster rendered"
   grep -q 'name: server-manager-alembic-migrate' "$app_render" || die "server-manager Alembic Job rendered"
+  # Risk annotation: group=TG-4; named_risk=validator_seed_render_gap; level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+  grep -q 'name: seed-public-intake-form-payload' "$app_render" || die "public intake form seed ConfigMap rendered"
+  grep -q 'name: seed-public-intake-form' "$app_render" || die "public intake form seed Job rendered"
+  grep -q 'name: server-manager-postgres-url' "$app_render" || die "public intake form seed DATABASE_URL secret rendered"
+  grep -q 'mountPath: /seed/seed.sql' "$app_render" || die "public intake form seed SQL mount rendered"
   grep -q "host: ${ingress_host}" "$app_render" || die "server-manager API ingress rendered"
   grep -q "$api_image" "$app_render" || die "server-manager API image rendered"
   grep -q "$discord_image" "$app_render" || die "server-manager Discord image rendered"
@@ -329,6 +336,15 @@ assert_runtime() {
 
   kubectl_cmd -n server-manager wait job/server-manager-alembic-migrate --for=condition=Complete --timeout=300s >/dev/null
   pass "Alembic migration Job complete"
+
+  # Risk annotation: group=TG-4; named_risk=validator_seed_completion_gap; level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+  kubectl_cmd -n server-manager get configmap seed-public-intake-form-payload >/dev/null
+  pass "public intake form seed ConfigMap exists"
+
+  kubectl_cmd -n server-manager wait job/seed-public-intake-form --for=condition=Complete --timeout=300s >/dev/null
+  [[ "$(kubectl_cmd -n server-manager get job seed-public-intake-form -o jsonpath='{.status.succeeded}')" == "1" ]] \
+    || die "public intake form seed Job succeeded exactly once"
+  pass "public intake form seed Job succeeded"
 
   kubectl_cmd -n server-manager rollout status deployment/server-manager-api --timeout=300s >/dev/null
   pass "API Deployment Available"

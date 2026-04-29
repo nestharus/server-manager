@@ -57,7 +57,7 @@ SHA) or `[wontfix]` (with reason).
   `proposals/03-cedar-policy-source.md`, and
   `.tmp/init-121/phase6/` for the trail.
 
-### BL-002 [open] — Public intake e2e requires a global-scope form_definitions row that no GitOps seed creates
+### BL-002 [done] — Public intake e2e requires a global-scope form_definitions row that no GitOps seed creates
 
 - **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R4; observed
   during INIT-120 e2e validation (2026-04-28)
@@ -74,6 +74,18 @@ SHA) or `[wontfix]` (with reason).
   `infra/tests/e2e/run-fullstack.sh`. Decide which based on
   whether the form should exist in production-like deployments
   (Job) vs only test environments (fixture loader).
+- **Outcome (closed in INIT-122, full pipeline; verified
+  e2e=19/19 on humility-local):** GitOps Job
+  `seed-public-intake-form` runs after the Alembic migration Job
+  in the local channel. The Job's `psql -f /seed/seed.sql` writes
+  both `form_definitions` and the `application_form|global|`
+  aggregate head + state-change rows in one transaction so the
+  application service's `get_current_form_for_scope` finds the
+  seeded form. Idempotency: deterministic UUID derived from
+  sha256, no-op on re-run, skip-with-NOTICE if an
+  officer-published current global form exists. See
+  `proposals/04-public-intake-form-seed.md`,
+  `.tmp/init-122/phase6/`.
 
 ### BL-003 [open] — `build-channel-image.sh` Docker layer cache serves stale `npm run build` output
 
