@@ -1,0 +1,347 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seed-public-intake-form-payload
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    app.kubernetes.io/component: migrations
+    platform.humility.gg/init: "122"
+data:
+  seed.sql: |
+    BEGIN;
+
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM aggregate_heads h
+        WHERE h.aggregate_type = 'application_form'
+          AND h.aggregate_id = 'application_form|global|'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM form_definitions f
+            WHERE f.scope_kind = 'global'
+              AND f.scope_id IS NULL
+              AND f.status = 'current'
+          )
+      ) THEN
+        RAISE EXCEPTION 'BL-002 fail-closed: aggregate head exists but no current form';
+      END IF;
+    END $$;
+
+    CREATE TEMP TABLE seed_public_intake_form_outcome ON COMMIT DROP AS
+    WITH seed AS (
+      SELECT
+        (substring(encode(digest('init-122:public-intake-global:v1', 'sha256'), 'hex'), 1, 32))::uuid AS form_id,
+        'application_form'::text AS aggregate_type,
+        'application_form|global|'::text AS aggregate_id,
+        'global'::text AS scope_kind,
+        NULL::text AS scope_id,
+        1::bigint AS form_version,
+        'Public application intake (global)'::text AS name,
+        'chapter_membership'::text AS target_type,
+        '[{"id":"character_name","label":"Character name","type":"short","required":true},{"id":"application_text","label":"Application text","type":"long","required":true}]'::jsonb AS fields,
+        '{}'::jsonb AS routing_rules,
+        'service'::text AS actor_kind,
+        'init-122-bootstrap'::text AS actor_id,
+        'kubernetes:job/seed-public-intake-form'::text AS request_surface,
+        gen_random_uuid() AS correlation_id,
+        CURRENT_TIMESTAMP AS published_at
+    ),
+    current_global AS (
+      SELECT f.id
+      FROM form_definitions f
+      WHERE f.scope_kind = 'global'
+        AND f.scope_id IS NULL
+        AND f.status = 'current'
+      FOR UPDATE
+    ),
+    existing_seed AS (
+      SELECT f.id
+      FROM form_definitions f
+      JOIN seed s ON f.id = s.form_id
+      FOR UPDATE
+    ),
+    inserted_form AS (
+      INSERT INTO form_definitions (
+        id,
+        scope_kind,
+        scope_id,
+        version,
+        name,
+        target_type,
+        fields,
+        routing_rules,
+        status,
+        published_by_kind,
+        published_by_id,
+        published_at
+      )
+      SELECT
+        s.form_id,
+        s.scope_kind,
+        s.scope_id,
+        s.form_version,
+        s.name,
+        s.target_type,
+        s.fields,
+        s.routing_rules,
+        'current',
+        s.actor_kind,
+        s.actor_id,
+        s.published_at
+      FROM seed s
+      WHERE NOT EXISTS (SELECT 1 FROM current_global)
+        AND NOT EXISTS (SELECT 1 FROM existing_seed)
+      RETURNING id
+    ),
+    inserted_action AS (
+      INSERT INTO activity_actions (
+        action_type,
+        aggregate_type,
+        aggregate_id,
+        actor_kind,
+        actor_id,
+        correlation_id,
+        causation_id,
+        scope_kind,
+        scope_id,
+        request_surface,
+        request_json,
+        status,
+        reason_text,
+        error_metadata
+      )
+      SELECT
+        'form.publish',
+        s.aggregate_type,
+        s.aggregate_id,
+        s.actor_kind,
+        s.actor_id,
+        s.correlation_id,
+        NULL,
+        s.scope_kind,
+        s.scope_id,
+        s.request_surface,
+        jsonb_build_object(
+          'name', s.name,
+          'target_type', s.target_type,
+          'scope_kind', s.scope_kind,
+          'scope_id', s.scope_id,
+          'fields', s.fields,
+          'routing_rules', s.routing_rules
+        ),
+        'accepted',
+        'init-122 public-intake form seed',
+        NULL
+      FROM seed s
+      WHERE EXISTS (SELECT 1 FROM inserted_form)
+      RETURNING id
+    ),
+    inserted_change AS (
+      INSERT INTO activity_state_changes (
+        action_id,
+        aggregate_type,
+        aggregate_id,
+        aggregate_seq,
+        change_type,
+        payload_json,
+        diff_json
+      )
+      SELECT
+        a.id,
+        s.aggregate_type,
+        s.aggregate_id,
+        1,
+        'form.published',
+        jsonb_build_object(
+          'form_definition_id', s.form_id::text,
+          'name', s.name,
+          'target_type', s.target_type,
+          'scope_kind', s.scope_kind,
+          'scope_id', s.scope_id,
+          'version', s.form_version,
+          'fields', s.fields,
+          'routing_rules', s.routing_rules,
+          'status', 'current'
+        ),
+        jsonb_build_object(
+          'version', jsonb_build_object('old', NULL, 'new', s.form_version),
+          'status', jsonb_build_object('old', NULL, 'new', 'current')
+        )
+      FROM seed s
+      CROSS JOIN inserted_action a
+      RETURNING id
+    ),
+    inserted_head AS (
+      INSERT INTO aggregate_heads (
+        aggregate_type,
+        aggregate_id,
+        current_seq,
+        latest_change_id
+      )
+      SELECT
+        s.aggregate_type,
+        s.aggregate_id,
+        1,
+        c.id
+      FROM seed s
+      CROSS JOIN inserted_change c
+      RETURNING aggregate_id
+    )
+    SELECT
+      CASE
+        WHEN EXISTS (SELECT 1 FROM inserted_head)
+          THEN 'inserted seed public-intake form'
+        WHEN EXISTS (
+          SELECT 1
+          FROM current_global cg
+          JOIN seed s ON cg.id = s.form_id
+        )
+          THEN 'seed public-intake form already present; no-op'
+        WHEN EXISTS (
+          SELECT 1
+          FROM current_global cg
+          JOIN seed s ON cg.id <> s.form_id
+        )
+          THEN 'officer-published form present; skipping seed'
+        WHEN EXISTS (SELECT 1 FROM existing_seed)
+          THEN 'seed public-intake form exists but is not current; no-op'
+        ELSE 'seed made no change'
+      END AS outcome;
+
+    DO $$
+    DECLARE
+      outcome_text text;
+    BEGIN
+      SELECT outcome INTO outcome_text FROM seed_public_intake_form_outcome;
+      RAISE NOTICE '%', outcome_text;
+    END $$;
+
+    SELECT outcome AS seed_outcome
+    FROM seed_public_intake_form_outcome;
+
+    COMMIT;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-public-intake-form
+  namespace: server-manager
+  labels:
+    app.kubernetes.io/name: server-manager-api
+    app.kubernetes.io/component: migrations
+    platform.humility.gg/init: "122"
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: server-manager-api
+        app.kubernetes.io/component: migrations
+        platform.humility.gg/init: "122"
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: seed-public-intake-form
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              ready=0
+              for i in $(seq 1 120); do
+                if pg_isready -d "$DATABASE_URL" >/dev/null 2>&1; then
+                  ready=1
+                  break
+                fi
+                sleep 1
+              done
+              test "$ready" = 1
+
+              migrated=0
+              for i in $(seq 1 120); do
+                if [ "$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "
+                  SELECT CASE
+                    WHEN (
+                      SELECT count(*)
+                      FROM information_schema.tables
+                      WHERE table_schema = 'public'
+                        AND table_name IN (
+                          'form_definitions',
+                          'activity_actions',
+                          'activity_state_changes',
+                          'aggregate_heads'
+                        )
+                    ) = 4
+                    AND EXISTS (
+                      SELECT 1
+                      FROM information_schema.columns
+                      WHERE table_schema = 'public'
+                        AND table_name = 'aggregate_heads'
+                        AND column_name = 'aggregate_id'
+                        AND data_type = 'text'
+                    )
+                    THEN 'ready'
+                    ELSE 'waiting'
+                  END
+                ")" = "ready" ]; then
+                  migrated=1
+                  break
+                fi
+                sleep 1
+              done
+              test "$migrated" = 1
+
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f /seed/seed.sql
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-postgres-url
+                  key: url
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: seed-sql
+              mountPath: /seed/seed.sql
+              subPath: seed.sql
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: seed-sql
+          configMap:
+            name: seed-public-intake-form-payload
+            items:
+              - key: seed.sql
+                path: seed.sql
+        - name: tmp
+          emptyDir: {}

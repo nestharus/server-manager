@@ -11,6 +11,7 @@ resources:
   - postgres-cluster.yaml
   - scheduled-backup.yaml
   - alembic-migration-job.yaml
+  - seed-public-intake-form.yaml
   - api-deployment.yaml
   - api-service.yaml
   - api-ingress.yaml
