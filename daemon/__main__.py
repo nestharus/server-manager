@@ -16,7 +16,6 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from daemon.applications import setup_applications
 from daemon.config import DaemonConfig, load_config
 from daemon.db import close_database, open_database
 
@@ -95,7 +94,10 @@ class HumilityBot(commands.Bot):
         async def ping(interaction: discord.Interaction) -> None:
             await interaction.response.send_message("daemon is alive", ephemeral=True)
 
-        await setup_applications(self)
+        # Legacy SQLite /apply flow (daemon/applications.py) was deleted in
+        # BL-011. The Postgres-via-API submission flow at
+        # services/discord/app/handlers/application_submission.py is the
+        # canonical path per INIT-120 product decision A4.
         await self.tree.sync(guild=guild)
 
 

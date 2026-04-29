@@ -261,7 +261,7 @@ SHA) or `[wontfix]` (with reason).
   SPA form renderer, `form_definitions.fields` shape, validator,
   and the e2e contract.
 
-### BL-011 [open] — Legacy SQLite `/apply` modernization or deletion
+### BL-011 [done] — Legacy SQLite `/apply` modernization or deletion
 
 - **Source:** `proposals/02-public-application-intake.md:443` (Out
   of scope for follow-up); originally referenced in
@@ -315,7 +315,7 @@ SHA) or `[wontfix]` (with reason).
   re-evaluate per-service binding if path-specific support
   changes.
 
-### BL-015 [open] — Web `test-results/` Playwright artifacts cluttered the worktree
+### BL-015 [done] — Web `test-results/` Playwright artifacts cluttered the worktree
 
 - **Source:** Observed during INIT-120 commit; partial fix in
   `services/web/.gitignore` shipped with INIT-120
