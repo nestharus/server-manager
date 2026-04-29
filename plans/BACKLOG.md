@@ -87,7 +87,7 @@ SHA) or `[wontfix]` (with reason).
   `proposals/04-public-intake-form-seed.md`,
   `.tmp/init-122/phase6/`.
 
-### BL-003 [open] — `build-channel-image.sh` Docker layer cache serves stale `npm run build` output
+### BL-003 [done] — `build-channel-image.sh` Docker layer cache serves stale `npm run build` output
 
 - **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R1; observed
   during INIT-120 web-image rebuild (2026-04-28)
@@ -105,8 +105,14 @@ SHA) or `[wontfix]` (with reason).
   invalidate cache via a `.dockerignore` strategy that always
   re-COPYs source. Or consider Kaniko/buildkit cache-from with
   better invalidation semantics.
+- **Outcome (closed; bundled with BL-004 as a tight script
+  change rather than full pipeline since this is a 5-line
+  script-flag addition with self-evident rationale):**
+  `build-channel-image.sh` now accepts `--no-cache` which passes
+  through to `docker build`. Verified by rebuild of
+  server-manager-api with `--no-cache --k3d-import humility-local`.
 
-### BL-004 [open] — k3d nodes cache same-tag images, defeating `imagePullPolicy: IfNotPresent` rolls
+### BL-004 [done] — k3d nodes cache same-tag images, defeating `imagePullPolicy: IfNotPresent` rolls
 
 - **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R2; observed
   during INIT-120 web/api rolls (2026-04-28)
@@ -124,6 +130,16 @@ SHA) or `[wontfix]` (with reason).
   the rendered GitOps, or (b) append a build-id/timestamp tag
   suffix and update the kustomization to reference it. (a) is the
   more durable answer.
+- **Outcome (closed; bundled with BL-003):** Picked the
+  pragmatic third option: `build-channel-image.sh --k3d-import
+  <cluster>` re-tags the just-pushed image as the cluster-internal
+  pull URL and runs `k3d image import` to load it into every
+  node's containerd by tag, bypassing the registry pull cache.
+  Verified: server-manager-api rebuild lands new digest under the
+  same tag on both `k3d-humility-local-agent-0` and `-server-0`,
+  old digest moved to `<none>` tag. Digest-pinning (option a) is
+  deferred — the import path is sufficient for local dev/test
+  reliability and doesn't require gitops kustomization churn.
 
 ### BL-005 [open] — Synthetic public-intake members pollute roster queries
 
