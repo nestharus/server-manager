@@ -400,16 +400,36 @@ SHA) or `[wontfix]` (with reason).
   only (least privilege). 16/16 unit + 6/6 infra + 6/6 web
   + 19/19 e2e all green.
 
-### BL-017 [open] — INIT-125C: Member link/conversion service + application re-pointing
+### BL-017 [done] — INIT-128: Receipt-required public submit (supersedes member-link/conversion)
 
-- **Source:** Decomposition of BL-008
-- **Description:** Add `member_links` (or equivalent supersession)
-  table + conversion service. On verified Discord OAuth handshake,
-  link synthetic→real member, re-point `applications.applicant_id`
-  with per-application audit/version updates, emit notification
-  event(s). Handle conflict cases for duplicate
-  `client_application_id` across synthetic and real submissions.
-- **Plan:** Pick up after BL-016 lands the OAuth surface.
+- **Source:** Decomposition of BL-008; supersedes the original
+  INIT-125C "member_links + conversion service" framing.
+- **Description:** Locked design: anonymous public submit is
+  removed. `POST /api/v1/public/applications` requires a valid
+  HMAC-signed `applicant_receipt` cookie (issued by the
+  `/auth/discord/*` flow from BL-016). The submit path resolves
+  or creates a real `kind='discord'` member from the receipt's
+  snowflake and writes `applications.applicant_id` against that
+  real member directly. Emits `application.public_submitted`
+  notification event. No synthetic→real linking needed because
+  no synthetic members are ever created on this path.
+- **Outcome (closed in INIT-128, full pipeline; verified
+  e2e=19/19 on humility-local):** Cookie path widened from
+  `/applications` to `/`. New FastAPI dep
+  `verify_applicant_receipt` returns the verified
+  `DiscordIdentity`. Public submit endpoint refactored: no
+  anonymous happy path remains; rejects missing/tampered/expired
+  receipts with 401 `applicant_receipt_required`. New service
+  `submit_public_application_with_receipt` writes the application
+  with `actor_kind='user'`, `actor_id=<member.id>`, and request
+  surface attribution. New helper
+  `resolve_or_create_real_discord_member` is idempotent on
+  snowflake. SPA gates the form on `/auth/discord/me`. e2e
+  fixture secret `server-manager-e2e-fixtures` issued via
+  Infisical so the test signing key matches the API. Live DB
+  post-e2e: `discord=1, public_intake=18` (the `1` is the
+  receipt-backed e2e submission; the `18` are pre-INIT-128
+  historical synthetic rows — BL-018's territory).
 - **Priority:** MEDIUM
 
 ### BL-018 [open] — INIT-125D: Historical cleanup + read-hardening for roster/trust synthetic pollution

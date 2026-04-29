@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - runtime-infisicalsecret.yaml
+  - e2e-fixtures-infisicalsecret.yaml
   - database-credentials-infisicalsecret.yaml
   - database-url-infisicalsecret.yaml
   - backup-credentials-infisicalsecret.yaml

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
@@ -18,6 +19,53 @@ const repoRoot = resolve(moduleDir, "../../../../..");
 const webContract = JSON.parse(
   readFileSync(resolve(repoRoot, "infra/tests/fixtures/web-ui/contract.json"), "utf8"),
 );
+const applicantDiscordUserId = process.env.E2E_APPLICANT_DISCORD_USER_ID || "123456789012345678";
+
+function base64url(input) {
+  return Buffer.from(input)
+    .toString("base64")
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+}
+
+function signApplicantReceipt({ discordUserId, signingKey }) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = base64url(
+    JSON.stringify({
+      discord_user_id: discordUserId,
+      iat: now,
+      exp: now + 600,
+    }),
+  );
+  const unsigned = `${header}.${payload}`;
+  const signature = createHmac("sha256", signingKey).update(unsigned).digest("base64url");
+  return { token: `${unsigned}.${signature}`, expires: now + 600 };
+}
+
+async function injectApplicantReceipt(context) {
+  const signingKey = process.env.E2E_APPLICANT_RECEIPT_SIGNING_KEY;
+  if (!signingKey) {
+    throw new Error("E2E_APPLICANT_RECEIPT_SIGNING_KEY is required for the web-ui receipt flow");
+  }
+  const receipt = signApplicantReceipt({
+    discordUserId: applicantDiscordUserId,
+    signingKey,
+  });
+  await context.addCookies([
+    {
+      name: webContract.auth.applicant.receipt_cookie,
+      value: receipt.token,
+      domain: "web.local.humility.local",
+      path: "/",
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax",
+      expires: receipt.expires,
+    },
+  ]);
+}
 
 const targets = {
   "auth-stack": {
@@ -35,11 +83,13 @@ const targets = {
     assert: async (page) => {
       await page.getByRole("heading", { name: "Chapter administration" }).waitFor({ timeout: 30_000 });
       await page.getByTestId("chapter-table").waitFor({ timeout: 30_000 });
+      await injectApplicantReceipt(page.context());
       await page.goto(`https://web.local.humility.local${webContract.form.route}`, {
         waitUntil: "domcontentloaded",
         timeout: 45_000,
       });
       await page.getByRole("heading", { name: "Humility applications" }).waitFor({ timeout: 30_000 });
+      await page.getByText(`${webContract.auth.applicant.identity_indicator_prefix}${applicantDiscordUserId}`).waitFor({ timeout: 30_000 });
       for (const field of webContract.form.fields) {
         await page.getByLabel(field.label).fill(field.value);
       }
@@ -70,7 +120,11 @@ const targets = {
       }
       await writeFile(
         join(sessionDir, `${flow}-public-submit.json`),
-        JSON.stringify({ application_id: body.application_id, correlation_id: correlationId }, null, 2),
+        JSON.stringify({
+          application_id: body.application_id,
+          correlation_id: correlationId,
+          applicant_discord_user_id: applicantDiscordUserId,
+        }, null, 2),
       );
       await page.locator("#submit-status").getByText(webContract.form.submit.success_message).waitFor({ timeout: 30_000 });
     },

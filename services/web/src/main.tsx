@@ -1,10 +1,12 @@
 import "./styles/layers.css";
 
-const root = document.querySelector<HTMLElement>("#root");
+const rootElement = document.querySelector<HTMLElement>("#root");
 
-if (!root) {
+if (!rootElement) {
   throw new Error("missing #root");
 }
+
+const root: HTMLElement = rootElement;
 
 type FormPayload = {
   scope: {
@@ -21,6 +23,14 @@ type FormPayload = {
 type ApplicantDiscordMe = {
   discord_user_id: string;
 };
+
+type ApplicantAuthState =
+  | { status: "checking" }
+  | { status: "anonymous" }
+  | { status: "verified"; discord_user_id: string; expires_at: number };
+
+let applicantAuthState: ApplicantAuthState = { status: "checking" };
+let applicantReceiptExpiryTimer: number | undefined;
 
 const isApplications = () => window.location.pathname === "/applications";
 const isAdmin = () => window.location.pathname.startsWith("/admin");
@@ -67,15 +77,15 @@ function publicRoute() {
 }
 
 function applicationRoute() {
-  return shell(`
-    <div class="runtimeGrid">
-      <section class="runtimePanel">
-        <p class="eyebrow">Application intake</p>
-        <h2>Humility applications</h2>
-        <div role="tablist" class="runtimeTabs">
-          <button id="tab-overview" role="tab" aria-selected="true" type="button">Overview</button>
-          <button id="tab-details" role="tab" aria-selected="false" type="button">Details</button>
-        </div>
+  const verified = applicantAuthState.status === "verified";
+  let loginState = "Not logged in with Discord.";
+  if (applicantAuthState.status === "checking") {
+    loginState = "Checking Discord login...";
+  } else if (applicantAuthState.status === "verified") {
+    loginState = `Logged in as Discord ${applicantAuthState.discord_user_id}`;
+  }
+  const formMarkup = verified
+    ? `
         <form id="application-form" class="runtimeStack" aria-label="Application form">
           <label class="runtimeField">
             <span>Character name</span>
@@ -90,10 +100,23 @@ function applicationRoute() {
             Submit application
           </button>
         </form>
+      `
+    : `
         <div class="runtimeStack" aria-live="polite">
-          <button id="discord-login" class="button secondary" type="button">Login with Discord</button>
-          <p id="discord-login-state" class="runtimeCopy">Not logged in with Discord.</p>
+          <button id="discord-login" class="button primary" type="button">Login with Discord</button>
         </div>
+      `;
+  return shell(`
+    <div class="runtimeGrid">
+      <section class="runtimePanel">
+        <p class="eyebrow">Application intake</p>
+        <h2>Humility applications</h2>
+        <div role="tablist" class="runtimeTabs">
+          <button id="tab-overview" role="tab" aria-selected="true" type="button">Overview</button>
+          <button id="tab-details" role="tab" aria-selected="false" type="button">Details</button>
+        </div>
+        ${formMarkup}
+        <p id="discord-login-state" class="runtimeCopy" aria-live="polite">${loginState}</p>
         <div id="details-panel" class="runtimeStack" hidden>
           <span data-testid="application-status-icon" aria-hidden="true">i</span>
           <button id="open-details" class="button secondary" type="button">Open details</button>
@@ -138,7 +161,6 @@ function bindApplicationRoute() {
   const form = document.querySelector<HTMLFormElement>("#application-form");
   const status = document.querySelector<HTMLElement>("#submit-status");
   const discordLogin = document.querySelector<HTMLButtonElement>("#discord-login");
-  const discordLoginState = document.querySelector<HTMLElement>("#discord-login-state");
   const overviewTab = document.querySelector<HTMLButtonElement>("#tab-overview");
   const detailsTab = document.querySelector<HTMLButtonElement>("#tab-details");
   const detailsPanel = document.querySelector<HTMLElement>("#details-panel");
@@ -151,12 +173,18 @@ function bindApplicationRoute() {
     window.location.assign("/auth/discord/start?return_to=/applications");
   });
 
-  if (discordLoginState) {
-    refreshApplicantDiscordState(discordLoginState);
+  if (isApplications() && shouldProbeApplicantReceipt()) {
+    void refreshApplicantDiscordState();
   }
 
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const identity = await fetchApplicantDiscordIdentity();
+    if (!identity) {
+      preserveApplicationDraft(form);
+      redirectToDiscordAuth();
+      return;
+    }
     const formData = new FormData(form);
     const payload: FormPayload = {
       scope: {
@@ -174,9 +202,22 @@ function bindApplicationRoute() {
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(payload),
     });
-    const body = (await response.json()) as { message?: string; application_id?: string };
+    const body = (await response.json().catch(() => ({}))) as {
+      code?: string;
+      message?: string;
+      application_id?: string;
+    };
+    if (response.status === 401 && body.code === "applicant_receipt_required") {
+      preserveApplicationDraft(form);
+      redirectToDiscordAuth();
+      return;
+    }
     if (status) status.textContent = body.message ?? `Application returned ${response.status}`;
   });
+
+  if (form) {
+    restoreApplicationDraft(form);
+  }
 
   detailsTab?.addEventListener("click", () => {
     overviewTab?.setAttribute("aria-selected", "false");
@@ -194,18 +235,78 @@ function bindApplicationRoute() {
   });
 }
 
-async function refreshApplicantDiscordState(target: HTMLElement) {
+function shouldProbeApplicantReceipt() {
+  return (
+    applicantAuthState.status === "checking" ||
+    (applicantAuthState.status === "verified" && Date.now() >= applicantAuthState.expires_at)
+  );
+}
+
+async function fetchApplicantDiscordIdentity(): Promise<ApplicantDiscordMe | null> {
   try {
     const response = await fetch("/auth/discord/me", {
       headers: { Accept: "application/json" },
     });
-    if (!response.ok) return;
+    if (!response.ok) return null;
     const body = (await response.json()) as ApplicantDiscordMe;
-    if (body.discord_user_id) {
-      target.textContent = `Logged in as Discord user ${body.discord_user_id}`;
+    return body.discord_user_id ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshApplicantDiscordState() {
+  const identity = await fetchApplicantDiscordIdentity();
+  if (!identity) {
+    applicantAuthState = { status: "anonymous" };
+    render();
+    return;
+  }
+  applicantAuthState = {
+    status: "verified",
+    discord_user_id: identity.discord_user_id,
+    expires_at: Date.now() + 9 * 60 * 1000,
+  };
+  if (applicantReceiptExpiryTimer !== undefined) {
+    window.clearTimeout(applicantReceiptExpiryTimer);
+  }
+  applicantReceiptExpiryTimer = window.setTimeout(() => {
+    applicantAuthState = { status: "checking" };
+    render();
+  }, 9 * 60 * 1000);
+  render();
+}
+
+function redirectToDiscordAuth() {
+  window.location.assign("/auth/discord/start?return_to=/applications");
+}
+
+function preserveApplicationDraft(form: HTMLFormElement) {
+  const formData = new FormData(form);
+  sessionStorage.setItem(
+    "humility.publicApplication.draft",
+    JSON.stringify({
+      character_name: String(formData.get("character_name") ?? ""),
+      application_text: String(formData.get("application_text") ?? ""),
+    }),
+  );
+}
+
+function restoreApplicationDraft(form: HTMLFormElement) {
+  const raw = sessionStorage.getItem("humility.publicApplication.draft");
+  if (!raw) return;
+  try {
+    const draft = JSON.parse(raw) as Partial<FormPayload["responses"]>;
+    const characterName = form.elements.namedItem("character_name");
+    const applicationText = form.elements.namedItem("application_text");
+    if (characterName instanceof HTMLInputElement && draft.character_name) {
+      characterName.value = draft.character_name;
+    }
+    if (applicationText instanceof HTMLTextAreaElement && draft.application_text) {
+      applicationText.value = draft.application_text;
     }
   } catch {
-    return;
+    sessionStorage.removeItem("humility.publicApplication.draft");
   }
 }
 

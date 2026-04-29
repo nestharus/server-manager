@@ -31,7 +31,15 @@
       "x-pomerium-claim-groups": "officers"
     },
     "probe_endpoint": "/api/me",
-    "unauthenticated_api_status": 401
+    "unauthenticated_api_status": 401,
+    "applicant": {
+      "me_endpoint": "/auth/discord/me",
+      "start_endpoint": "/auth/discord/start?return_to=/applications",
+      "receipt_cookie": "applicant_receipt",
+      "login_button_name": "Login with Discord",
+      "identity_indicator_prefix": "Logged in as Discord ",
+      "receipt_required_error_code": "applicant_receipt_required"
+    }
   },
   "form": {
     "route": "/applications",

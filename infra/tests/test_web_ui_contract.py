@@ -20,14 +20,22 @@ def _text(path: Path) -> str:
 
 
 def test_web_ui_fixture_defines_behavior_contract_not_package_pins() -> None:
-    """TG-8 risk annotation: spa_submit_contract_drift; level=component;
-    source=proposals/02-public-application-intake.md#§8 AS-1 AS-3.
+    """TG-7 risk annotation: spa_receipt_gate_contract_drift; level=component;
+    source=.tmp/init-128/phase6/step6a-contract.md#C7-C8.
     """
     contract = _json(FIXTURE)
 
     assert contract["routes"]["public"]["path"] == "/"
     assert contract["routes"]["admin"]["requires_auth"] is True
     assert contract["auth"]["unauthenticated_api_status"] == 401
+    assert contract["auth"]["applicant"] == {
+        "me_endpoint": "/auth/discord/me",
+        "start_endpoint": "/auth/discord/start?return_to=/applications",
+        "receipt_cookie": "applicant_receipt",
+        "login_button_name": "Login with Discord",
+        "identity_indicator_prefix": "Logged in as Discord ",
+        "receipt_required_error_code": "applicant_receipt_required",
+    }
     assert contract["form"]["submit"]["endpoint"] == "/api/public/applications"
     assert contract["form"]["submit"]["method"] == "POST"
     assert contract["form"]["submit"]["success_status"] == 201
@@ -48,17 +56,23 @@ def test_web_ui_fixture_defines_behavior_contract_not_package_pins() -> None:
 
 
 def test_playwright_spec_covers_route_auth_submit_and_ui_libraries() -> None:
-    """TG-8 risk annotation: spa_submit_contract_drift; level=component;
-    source=proposals/02-public-application-intake.md#§8 AS-1 AS-3.
+    """TG-7 risk annotation: spa_receipt_gate_contract_drift; level=component;
+    source=.tmp/init-128/phase6/step6a-contract.md#C7-C8.
     """
     spec = _text(PLAYWRIGHT_SPEC)
 
     for required in [
         "web UI routes public and auth-gated surfaces",
-        "web UI submits the application form through the API contract",
+        "applications page without receipt shows only Discord login",
+        "applications page with valid receipt shows form and Discord identity",
+        "application form submits with a valid receipt and shows success",
+        "application submit with expired receipt redirects to Discord auth start",
         "web UI keeps Ark FontAwesome and TanStack controls integrated",
         "contract.json",
         "page.route",
+        "applicant_receipt",
+        "applicant_receipt_required",
+        "Logged in as Discord 123456789012345678",
         "unauthenticated_api_status",
         "success_status",
         "client_application_id_pattern",
@@ -93,12 +107,15 @@ def test_shell_validator_keeps_runtime_ingress_reachability_strict() -> None:
 
 
 def test_e2e_wrapper_does_not_turn_missing_browser_flow_into_success() -> None:
-    """TG-9 risk annotation: e2e_fixture_false_green; level=end-to-end;
-    source=proposals/02-public-application-intake.md#§9 AS-1 AS-3 AS-4 AS-5.
+    """TG-8 risk annotation: e2e_receipt_required_submit_false_green;
+    level=end-to-end; source=.tmp/init-128/phase6/step6a-contract.md#C9.
     """
     wrapper = _text(E2E_WRAPPER)
 
     assert "run-browser-flow.sh" in wrapper
     assert "assert_public_submit_persisted" in wrapper
+    assert "server-manager-e2e-fixtures" in wrapper
+    assert "E2E_APPLICANT_RECEIPT_SIGNING_KEY" in wrapper
+    assert "m.kind = 'discord'" in wrapper
     assert "e2e_skip_flow" not in wrapper
     assert "Playwright completed web UI OAuth and navigation flow" in wrapper
