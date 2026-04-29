@@ -16,6 +16,10 @@ assert_public_submit_persisted() {
   local primary_pod url row state discord_user_id
   primary_pod="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get pods -l 'cnpg.io/cluster=server-manager-postgres,role=primary' -o jsonpath='{.items[0].metadata.name}')"
   url="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-postgres-url -o jsonpath='{.data.url}' | base64 -d)"
+  # NOTE: psql does NOT expand `:'var'` / `:var` substitutions in `-c "..."`
+  # queries — only when reading SQL from a file or stdin. Use shell
+  # interpolation (`'${var}'`) inside the `-c` payload instead. Was a real
+  # bug in this very file pre-BL-007.
   row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec "$primary_pod" -c postgres -- \
     psql "$url" -v ON_ERROR_STOP=1 -At -F $'\t' -c \
     "SELECT a.state, m.discord_user_id FROM applications a JOIN members m ON m.id = a.applicant_id WHERE a.id = '${application_id}'::uuid;" \
