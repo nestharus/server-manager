@@ -7,7 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.contracts.actor import ActorIdentity, ActorIdentityMissingError
 from app.contracts.applications import (
+    ApplicationListForbiddenError,
+    ApplicationListRead,
     ApplicationRead,
+    ApplicationState,
     ApplicationSubmission,
     ApplicationTransitionRequest,
 )
@@ -15,6 +18,7 @@ from app.core.dependencies import get_current_actor
 from app.core.context import get_current_actor as get_context_actor
 from app.repositories.db import PostgresDatabase
 from app.services.applications import (
+    list_applications,
     read_application,
     require_application_read_authority,
     submit_application,
@@ -55,6 +59,60 @@ def submit_application_endpoint(
         raise_known_application_error(error)
     set_etag(response, result.etag)
     return read
+
+
+def _parse_application_states(state: str | None) -> frozenset[str] | None:
+    if state is None:
+        return None
+    parsed: set[str] = set()
+    valid_states = {item.value for item in ApplicationState}
+    for raw_state in state.split(","):
+        value = raw_state.strip()
+        if value not in valid_states:
+            raise HTTPException(
+                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_application_state",
+                    "message": f"invalid application state: {value}",
+                },
+            )
+        parsed.add(value)
+    return frozenset(parsed)
+
+
+@router.get("", response_model=ApplicationListRead)
+def list_applications_endpoint(
+    state: str | None = None,
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
+    owner_id: UUID | None = None,
+    limit: int = 50,
+    after_id: UUID | None = None,
+    db: PostgresDatabase = Depends(get_db),
+    actor: ActorIdentity = Depends(get_current_actor),
+) -> ApplicationListRead:
+    states = _parse_application_states(state)
+    try:
+        return list_applications(
+            db,
+            actor=actor,
+            states=states,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            owner_id=owner_id,
+            limit=limit,
+            after_id=after_id,
+        )
+    except ApplicationListForbiddenError as error:
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail={"code": "application_list_forbidden", "message": str(error)},
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={"code": "validation_error", "message": str(error)},
+        ) from error
 
 
 @router.get("/{application_id}", response_model=ApplicationRead)

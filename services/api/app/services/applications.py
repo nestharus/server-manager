@@ -20,6 +20,8 @@ from app.contracts.applications import (
     ApplicationFormField,
     ApplicationInterviewRequest,
     ApplicationInterviewThreadMismatchError,
+    ApplicationListForbiddenError,
+    ApplicationListRead,
     ApplicationNotFoundError,
     ApplicationNotOwnerError,
     ApplicationRead,
@@ -45,6 +47,7 @@ from app.repositories.applications import (
     get_application_for_update,
     insert_application,
     insert_review_row,
+    list_applications as list_application_rows,
     update_application,
 )
 from app.repositories.db import PostgresDatabase
@@ -152,6 +155,17 @@ APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST = {
     "responses",
     "client_application_id",
 }
+
+APPLICATION_READ_PERMISSIONS = (
+    "application.claim",
+    "application.review",
+    "application.request_interview",
+    "application.waitlist",
+    "application.reactivate",
+    "application.approve",
+    "application.deny",
+    "application.withdraw",
+)
 
 AUTHENTICATED_SUBMIT_SURFACE = "api:/api/v1/applications"
 PUBLIC_SUBMIT_SURFACE = "api:/api/v1/public/applications"
@@ -361,16 +375,7 @@ def require_application_read_authority(
         return
     target_scope = application.form_snapshot["target_scope"]
     grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
-    for permission in (
-        "application.claim",
-        "application.review",
-        "application.request_interview",
-        "application.waitlist",
-        "application.reactivate",
-        "application.approve",
-        "application.deny",
-        "application.withdraw",
-    ):
+    for permission in APPLICATION_READ_PERMISSIONS:
         decision = evaluate(
             requirement=AuthorityRequirement(
                 scope_kind=str(target_scope["scope_kind"]),  # type: ignore[arg-type]
@@ -383,6 +388,79 @@ def require_application_read_authority(
         if decision.allowed:
             return
     raise PermissionError("authority requirement denied")
+
+
+def _has_application_list_authority(
+    db: PostgresDatabase,
+    *,
+    actor: ActorIdentity,
+    scope_kind: str,
+    scope_id: str | None,
+) -> bool:
+    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
+    candidate_scopes = [(scope_kind, scope_id)]
+    if scope_kind != "global":
+        candidate_scopes.append(("global", None))
+    for candidate_scope_kind, candidate_scope_id in candidate_scopes:
+        for permission in APPLICATION_READ_PERMISSIONS:
+            decision = evaluate(
+                requirement=AuthorityRequirement(
+                    scope_kind=candidate_scope_kind,  # type: ignore[arg-type]
+                    scope_id=candidate_scope_id,
+                    permission=permission,
+                ),
+                grants=grants,
+                at=current_time(),
+            )
+            if decision.allowed:
+                return True
+    return False
+
+
+def list_applications(
+    db: PostgresDatabase,
+    *,
+    actor: ActorIdentity,
+    states: frozenset[str] | None = None,
+    scope_kind: str | None = None,
+    scope_id: str | None = None,
+    owner_id: UUID | None = None,
+    limit: int = 50,
+    after_id: UUID | None = None,
+) -> ApplicationListRead:
+    if not 1 <= limit <= 200:
+        raise ValueError("limit must be between 1 and 200")
+    if scope_kind == "chapter" and scope_id is None:
+        raise ValueError("scope_id is required when scope_kind is chapter")
+    if scope_kind == "global" and scope_id is not None:
+        raise ValueError("scope_id must be omitted when scope_kind is global")
+
+    auth_scope_kind = scope_kind or "global"
+    auth_scope_id = scope_id if scope_kind is not None else None
+    if not _has_application_list_authority(
+        db,
+        actor=actor,
+        scope_kind=auth_scope_kind,
+        scope_id=auth_scope_id,
+    ):
+        raise ApplicationListForbiddenError()
+
+    with db.connection() as connection:
+        rows = list_application_rows(
+            connection,
+            states=states,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            owner_id=owner_id,
+            limit=limit,
+            after_id=after_id,
+        )
+    page_rows = rows[:limit]
+    next_after_id = page_rows[-1]["id"] if len(rows) > limit and page_rows else None
+    return ApplicationListRead(
+        items=[_row_to_read(row) for row in page_rows],
+        next_after_id=next_after_id,
+    )
 
 
 def build_form_snapshot(form_row: dict[str, Any]) -> dict[str, Any]:

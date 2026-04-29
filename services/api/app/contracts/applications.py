@@ -372,6 +372,11 @@ class ApplicationRead(_ApplicationModel):
     version: int = Field(ge=1)
 
 
+class ApplicationListRead(_ApplicationModel):
+    items: list[ApplicationRead]
+    next_after_id: UUID | None = None
+
+
 class FormDefinitionNotFoundError(Exception):
     def __init__(self, scope: ApplicationScope | None = None, form_definition_id: UUID | None = None) -> None:
         self.scope = scope
@@ -455,6 +460,11 @@ class InvalidApplicationResponseError(ValueError):
     pass
 
 
+class ApplicationListForbiddenError(Exception):
+    def __init__(self) -> None:
+        super().__init__("application list authority requirement denied")
+
+
 __all__ = [
     "APPLICATION_REASSIGN_ACTION_TYPE",
     "APPLICATION_REASSIGN_CHANGE_TYPE",
@@ -465,6 +475,8 @@ __all__ = [
     "ApplicationFormField",
     "ApplicationInterviewRequest",
     "ApplicationInterviewThreadMismatchError",
+    "ApplicationListForbiddenError",
+    "ApplicationListRead",
     "ApplicationNotFoundError",
     "ApplicationNotOwnerError",
     "ApplicationRead",

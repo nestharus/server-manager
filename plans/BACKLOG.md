@@ -511,9 +511,15 @@ SHA) or `[wontfix]` (with reason).
     (delegated to read_application_messages). 8 unit/component
     tests, full API suite 721 passed (1 known pre-existing
     fail), e2e 19/19 on humility-local.
-  - **BL-019D [open] — INIT-133** — SPA officer review surface
-    (queue, claim, message thread, decision panel). Consumes
-    019B + 019C.
+  - **BL-019D — split into:**
+    - **BL-019D-α [open] — INIT-133A** — Backend list-applications
+      endpoint `GET /api/v1/applications` with `state`,
+      `scope_kind`, `scope_id` filters + authority check. Required
+      because the SPA queue page needs to enumerate applications;
+      no list endpoint exists today.
+    - **BL-019D-β [open] — INIT-133B** — SPA officer review
+      surface (queue page, detail page, claim/transition/message
+      actions). Consumes 019B + 019C + 019D-α.
 - **Dependency graph:** 019B → 019C → 019D. 019B and 019C can
   also be split if needed.
 - **Priority:** MEDIUM (blocks BL-009 Discord-side rollout +
