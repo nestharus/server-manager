@@ -220,7 +220,7 @@ SHA) or `[wontfix]` (with reason).
   doc needed since there are no other instances and the comment
   is at the exact place future authors will copy from.
 
-### BL-008 [in-progress, sub-slice A done] — Discord OAuth linking + synthetic→real member conversion
+### BL-008 [done — superseded by receipt-required design] — Discord OAuth linking + synthetic→real member conversion
 
 - **Source:** `proposals/02-public-application-intake.md:441` (Out
   of scope for follow-up); deferred from INIT-120
@@ -241,10 +241,21 @@ SHA) or `[wontfix]` (with reason).
     `public_intake` rows correctly classified.
   - **BL-016** — INIT-125B Authentik Discord OAuth provider +
     applicant OIDC client plumbing.
-  - **BL-017** — INIT-125C member link/conversion service +
-    application re-pointing.
-  - **BL-018** — INIT-125D historical cleanup / read-hardening
-    for roster/trust synthetic pollution.
+  - **BL-016 [done]** — INIT-127 Authentik Discord OAuth provider +
+    applicant OIDC client plumbing.
+  - **BL-017 [done]** — INIT-128 receipt-required public submit
+    (supersedes the original "member_links + conversion service"
+    design — receipt-backed submits create real Discord members
+    directly, eliminating the need for synthetic→real linking).
+  - **BL-018 [done]** — INIT-129 dead synthetic-creation path
+    removed; defense-in-depth `is_synthetic_member()` guards kept.
+- **Outcome:** BL-008's original goal (real Discord identity for
+  public applicants) is achieved. The implementation diverged from
+  the original "link & convert synthetics" plan: instead, receipt-
+  required submit means no synthetic is ever created on the request
+  path, so there's nothing to convert. Historical synthetics from
+  pre-INIT-128 e2e runs remain in humility-local as inert data,
+  filtered by read-side guards.
 
 ### BL-009 [paused — blocked on BL-016 + BL-019] — INIT-126: Discord-visible side effects for public web submissions
 
