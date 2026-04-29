@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     platform_tenant: str = "platform"
     debug: bool = False
     api_prefix: str = "/api/v1"
-    public_intake_member_salt: str = "local-public-intake-salt"
 
     discord_bot_token: str = Field(..., repr=False)
     discord_guild_id: int

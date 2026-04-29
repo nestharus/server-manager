@@ -18,9 +18,6 @@ from app.services.authority import grant_authority
 
 PUBLIC_SUBMIT_SURFACE = "api:/api/v1/public/applications"
 AUTHENTICATED_SUBMIT_SURFACE = "api:/api/v1/applications"
-PUBLIC_INTAKE_ACTOR_KIND = "service"
-PUBLIC_INTAKE_ACTOR_ID = "public-intake"
-PUBLIC_MEMBER_SALT = "local-public-intake-salt"
 APPLICANT_RECEIPT_SIGNING_KEY = "local-applicant-receipt-signing-key-change-me"
 APPLICANT_DISCORD_USER_ID = "123456789012345678"
 

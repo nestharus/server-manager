@@ -432,20 +432,40 @@ SHA) or `[wontfix]` (with reason).
   historical synthetic rows — BL-018's territory).
 - **Priority:** MEDIUM
 
-### BL-018 [open] — INIT-125D: Historical cleanup + read-hardening for roster/trust synthetic pollution
+### BL-018 [done] — INIT-129: Remove dead synthetic-creation path; close BL-005 read-side residual
 
 - **Source:** Decomposition of BL-008; also closes BL-005's
   read-side residual.
-- **Description:** Explicit read filters for any roster/trust
-  surfaces that still need them post-INIT-124. One-shot cleanup
-  Job that scans `roster_entries`, `trust_profiles`, etc. for
-  synthetic refs and either removes or annotates them. In current
-  `humility-local` the job should report zero rows since INIT-124
-  guards landed before any synthetic pollution leaked.
-- **Plan:** Pick up after BL-017 (conversion service) so cleanup
-  has a "linked → keep, unlinked synthetic → drop" rule.
-- **Priority:** LOW (residual; no known leaked rows in
-  humility-local).
+- **Description (revised post-INIT-128):** The original "linked →
+  keep, unlinked synthetic → drop" cleanup-Job design was
+  load-bearing only under the abandoned member_links/conversion
+  framing of BL-017. Post-INIT-128 there is no synthetic-creation
+  code path on the request side, so:
+  - Read-side hardening: `is_synthetic_member()` + `members.kind`
+    discriminator already cover every read surface that fetches
+    member rows by id (verified: only `repositories/members.py`
+    reads from the table, all single-row fetches funneling
+    through service-layer guards).
+  - Historical-row cleanup: not needed. The 18 humility-local
+    `kind='public_intake'` rows are e2e fixture artifacts;
+    production has not shipped. No cleanup Job.
+- **Outcome (closed in INIT-129; verified e2e=19/19 on
+  humility-local):** Pure dead-code removal. Deleted
+  `submit_public_application` (legacy anonymous service entry),
+  `_SubmissionAuthority` enum + parameter,
+  `resolve_or_create_public_intake_member` helper,
+  `PUBLIC_INTAKE_*` constants, `public_intake_member_salt`
+  setting, `tests/test_public_intake_synthetic_member.py`.
+  `_insert_member`/`_insert_member_on_discord_conflict_do_nothing`
+  hardcode `kind='discord'` (no callers ever passed anything else
+  post-INIT-128). Kept `is_synthetic_member()` + every caller in
+  applications/trust/roster/authority/members as defense-in-depth
+  for the historical 18 rows + any hypothetical pre-INIT-128
+  backup-restore. `MemberKind` literal still accepts
+  `"public_intake"` so the type-checker accepts historical rows.
+  Net diff: −341 lines. Full API suite: 692 passed (1 unrelated
+  pre-existing fail).
+- **Priority:** LOW (residual cleanup).
 
 ### BL-019 [open] — In-product application review surface (chapter roles + assignment + private channels + transcripts)
 
