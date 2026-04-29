@@ -504,9 +504,13 @@ SHA) or `[wontfix]` (with reason).
     `officer_only`. Idempotent on `client_message_id`. Schema
     is purely additive; no edits to existing application
     service code beyond the router include.
-  - **BL-019C [open] — INIT-132** — Transcript read endpoint
-    that joins `activity_state_changes` + `application_messages`
-    chronologically with visibility filtering.
+  - **BL-019C [done] — INIT-132** — Transcript endpoint landed
+    at 3bdbab1: GET /api/v1/applications/{id}/transcript joins
+    activity_state_changes + application_messages
+    chronologically with viewer-aware visibility filtering
+    (delegated to read_application_messages). 8 unit/component
+    tests, full API suite 721 passed (1 known pre-existing
+    fail), e2e 19/19 on humility-local.
   - **BL-019D [open] — INIT-133** — SPA officer review surface
     (queue, claim, message thread, decision panel). Consumes
     019B + 019C.
