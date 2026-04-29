@@ -276,7 +276,7 @@ SHA) or `[wontfix]` (with reason).
   it has. Verify nothing else in `daemon/` depends on its stubs.
   Consolidate any tests under `services/discord/tests/`.
 
-### BL-012 [open] — Cedar `Public::` entity-type assumption — monitor for OPAL/Cedar schema enforcement
+### BL-012 [deferred] — Cedar `Public::` entity-type assumption — monitor for OPAL/Cedar schema enforcement
 
 - **Source:** `proposals/02-public-application-intake.md:327-339` (AS-4)
 - **Description:** INIT-120 introduces `Public::"web-intake.<channel>"`
@@ -292,7 +292,7 @@ SHA) or `[wontfix]` (with reason).
 
 ## Priority: LOW
 
-### BL-013 [open] — INIT-124: Public intake remote channel apply
+### BL-013 [deferred] — INIT-124: Public intake remote channel apply
 
 - **Source:** `proposals/02-public-application-intake.md:447` (Out
   of scope for follow-up)
@@ -305,7 +305,7 @@ SHA) or `[wontfix]` (with reason).
   channel-template port: same logical resources, channel-derived
   hosts.
 
-### BL-014 [open] — Kong rate-limit binding feasibility — version-pin watch
+### BL-014 [deferred] — Kong rate-limit binding feasibility — version-pin watch
 
 - **Source:** `proposals/02-public-application-intake.md:327-339` (AS-5)
 - **Description:** INIT-120's path-specific KongPlugin binding
