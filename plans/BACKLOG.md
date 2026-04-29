@@ -179,7 +179,7 @@ SHA) or `[wontfix]` (with reason).
 
 ## Priority: MEDIUM
 
-### BL-006 [open] — Public submit response shape — verify final envelope is what we want long-term
+### BL-006 [deferred] — Public submit response shape — verify final envelope is what we want long-term
 
 - **Source:** `proposals/02-public-application-intake.md` Implementation
   decision B1
@@ -189,8 +189,14 @@ SHA) or `[wontfix]` (with reason).
   confirm support/debug needs are met.
 - **Plan:** Lightweight review; bump priority if reports show
   confusion. Otherwise leave open as low-cost ongoing.
+- **Deferred reason (2026-04-29):** No actionable signal yet — the
+  public surface has not been deployed to humans, so there's no
+  support/debug feedback to act on. Re-open and bump to medium
+  priority when (a) the surface ships to a real channel, or (b)
+  any operator reports a debug need that the current envelope
+  cannot satisfy.
 
-### BL-007 [open] — psql `:'name'` substitution in `kubectl exec ... -- psql -c` does not expand
+### BL-007 [done] — psql `:'name'` substitution in `kubectl exec ... -- psql -c` does not expand
 
 - **Source:** `.tmp/init-120/phase6/STEP6C_DONE.md` R5; fixed inline
   in `infra/tests/e2e/tests/19-web-ui.sh` during INIT-120
@@ -205,6 +211,14 @@ SHA) or `[wontfix]` (with reason).
   `infra/tests/README.md` snippet. Audit existing test scripts
   with `grep -rn "psql.*:'.*'" infra/tests` to confirm no other
   files share the bug.
+- **Outcome (closed):** Sweep `grep -rn "psql.*:'.*'" infra/
+  services/` returned zero matches (the original bug was already
+  fixed inline in `infra/tests/e2e/tests/19-web-ui.sh` during
+  INIT-120). Added a load-bearing comment at the fixed call site
+  warning future test authors that psql does NOT expand `:'var'`
+  in `-c` queries — use shell interpolation. No central conventions
+  doc needed since there are no other instances and the comment
+  is at the exact place future authors will copy from.
 
 ### BL-008 [open] — INIT-121: Discord OAuth linking + synthetic→real member conversion
 
