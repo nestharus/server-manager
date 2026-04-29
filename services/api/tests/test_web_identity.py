@@ -39,6 +39,8 @@ async def test_me_reads_pomerium_identity_headers(async_client: AsyncClient) -> 
         "email": identity["email"],
         "display_name": identity["display_name"],
         "provider": "pomerium",
+        "groups": [],
+        "discord_user_id": None,
     }
 
 
@@ -67,3 +69,151 @@ async def test_web_admin_chapters_requires_identity(
     )
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {"chapters": []}
+
+
+@pytest.mark.asyncio
+async def test_me_groups_comma_separated(async_client: AsyncClient) -> None:
+    """
+    Risk annotation: group=TG-2;
+        named_risk=groups_parsing_comma;
+        level=api;
+        source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-2
+    """
+    contract = _contract()
+    headers = contract["pomerium_headers"]
+    identity = contract["oidc_identity"]
+
+    response = await async_client.get(
+        "/api/v1/me",
+        headers={
+            headers["subject"]: identity["subject"],
+            headers["email"]: identity["email"],
+            "x-pomerium-claim-groups": "officers, admins",
+        },
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["groups"] == ["officers", "admins"]
+
+
+@pytest.mark.asyncio
+async def test_me_groups_json(async_client: AsyncClient) -> None:
+    """
+    Risk annotation: group=TG-2;
+        named_risk=groups_parsing_json;
+        level=api;
+        source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-2
+    """
+    contract = _contract()
+    headers = contract["pomerium_headers"]
+    identity = contract["oidc_identity"]
+
+    response = await async_client.get(
+        "/api/v1/me",
+        headers={
+            headers["subject"]: identity["subject"],
+            headers["email"]: identity["email"],
+            "x-pomerium-claim-groups": '["officers", "admins"]',
+        },
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["groups"] == ["officers", "admins"]
+
+
+@pytest.mark.asyncio
+async def test_me_groups_empty(async_client: AsyncClient) -> None:
+    """
+    Risk annotation: group=TG-2;
+        named_risk=groups_parsing_empty;
+        level=api;
+        source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-2
+    """
+    contract = _contract()
+    headers = contract["pomerium_headers"]
+    identity = contract["oidc_identity"]
+
+    response = await async_client.get(
+        "/api/v1/me",
+        headers={
+            headers["subject"]: identity["subject"],
+            headers["email"]: identity["email"],
+            "x-pomerium-claim-groups": "",
+        },
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["groups"] == []
+
+
+@pytest.mark.asyncio
+async def test_me_groups_absent(async_client: AsyncClient) -> None:
+    """
+    Risk annotation: group=TG-2;
+        named_risk=groups_parsing_empty;
+        level=api;
+        source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-2
+    """
+    contract = _contract()
+    headers = contract["pomerium_headers"]
+    identity = contract["oidc_identity"]
+
+    response = await async_client.get(
+        "/api/v1/me",
+        headers={
+            headers["subject"]: identity["subject"],
+            headers["email"]: identity["email"],
+        },
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["groups"] == []
+
+
+@pytest.mark.asyncio
+async def test_me_discord_claim_present(async_client: AsyncClient) -> None:
+    """
+    Risk annotation: group=TG-2;
+        named_risk=discord_claim_pass_through;
+        level=api;
+        source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-2
+    """
+    contract = _contract()
+    headers = contract["pomerium_headers"]
+    identity = contract["oidc_identity"]
+
+    response = await async_client.get(
+        "/api/v1/me",
+        headers={
+            headers["subject"]: identity["subject"],
+            headers["email"]: identity["email"],
+            "x-pomerium-claim-discord-user-id": "210987654321098765",
+        },
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["discord_user_id"] == "210987654321098765"
+
+
+@pytest.mark.asyncio
+async def test_me_discord_claim_absent(async_client: AsyncClient) -> None:
+    """
+    Risk annotation: group=TG-2;
+        named_risk=discord_claim_pass_through;
+        level=api;
+        source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-2
+    """
+    contract = _contract()
+    headers = contract["pomerium_headers"]
+    identity = contract["oidc_identity"]
+
+    response = await async_client.get(
+        "/api/v1/me",
+        headers={
+            headers["subject"]: identity["subject"],
+            headers["email"]: identity["email"],
+        },
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["discord_user_id"] is None

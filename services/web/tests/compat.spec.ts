@@ -6,9 +6,12 @@ type Contract = {
   routes: {
     public: { path: string; heading: string };
     application_form: { path: string; link_name: string };
+    officer_queue?: { path: string; link_name: string; requires_auth: boolean };
     admin: { path: string; requires_auth: boolean };
   };
   auth: {
+    identity?: { groups: string[]; discord_user_id: string | null };
+    headers?: Record<string, string>;
     probe_endpoint: string;
     unauthenticated_api_status: number;
   };
@@ -213,6 +216,20 @@ applicantDiscordTest("applications page without receipt shows only Discord login
   await expect(page).toHaveURL(/\/auth\/discord\/start\?return_to=\/applications$/);
 });
 
+applicantDiscordTest("test_anonymous_state_dom_tightening", async ({ page }) => {
+  // Risk annotation: group=TG-5;
+  //   named_risk=dom_tightening;
+  //   level=component;
+  //   source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-5
+  await page.goto(contract.form.route);
+
+  await expect(page.locator("#discord-login")).toBeVisible();
+  await expect(page.locator("#discord-login-state")).toHaveText("Not logged in with Discord.");
+  await expect(page.locator("#tab-overview")).toHaveCount(0);
+  await expect(page.locator("#tab-details")).toHaveCount(0);
+  await expect(page.locator("#details-panel")).toHaveCount(0);
+});
+
 loggedInApplicantTest(
   "applications page with valid receipt shows form and Discord identity",
   async ({ page }) => {
@@ -224,6 +241,19 @@ loggedInApplicantTest(
     await expect(page.getByText("Logged in as Discord 123456789012345678")).toBeVisible();
   },
 );
+
+loggedInApplicantTest("test_verified_state_details_panel_hidden_initially", async ({ page }) => {
+  // Risk annotation: group=TG-5;
+  //   named_risk=hidden_toggle;
+  //   level=component;
+  //   source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-5
+  await page.goto(contract.form.route);
+
+  await expect(page.locator("#details-panel")).toHaveCount(1);
+  await expect(page.locator("#details-panel")).toHaveAttribute("hidden", "");
+  await page.getByRole("tab", { name: "Details" }).click();
+  await expect(page.locator("#details-panel")).not.toHaveAttribute("hidden", "");
+});
 
 loggedInApplicantTest("web UI keeps Ark FontAwesome and TanStack controls integrated", async ({ page }) => {
   await page.goto(contract.routes.public.path);

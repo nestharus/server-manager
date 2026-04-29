@@ -5,6 +5,7 @@ import { TanStackRouterDevtools } from "@tanstack/solid-router-devtools";
 import type { ParentProps } from "solid-js";
 
 import { useTheme } from "./store";
+import type { router as appRouter } from "./router";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,7 +22,7 @@ function ThemeRuntime(props: ParentProps) {
   return <>{props.children}</>;
 }
 
-export function AppProviders(props: { router: any }) {
+export function AppProviders(props: { router: typeof appRouter }) {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeRuntime>

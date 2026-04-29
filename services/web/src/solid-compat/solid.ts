@@ -66,23 +66,68 @@ export function Index<T>(props: {
 }
 
 export function onMount(callback: () => void) {
-  return createEffect(callback);
+  return createEffect(() => {
+    callback();
+  });
 }
 
-export function createEffect<T>(effect: (previous?: T) => T | void, initial?: T) {
+function createLegacyEffect<T>(effect: (previous?: T) => T | void, initial?: T) {
+  let hasPrevious = arguments.length > 1;
+  let previous = initial;
   return solid.createEffect(
-    () => initial,
-    (value) => effect(value),
+    () => {
+      const result = effect(hasPrevious ? previous : undefined);
+      previous = result;
+      hasPrevious = true;
+      return result;
+    },
+    {
+      // Solid 2 expects an effect-handler-shaped option here; the no-op keeps
+      // legacy createEffect(fn, initialValue) side-effect free outside fn.
+      effect: () => undefined,
+    },
   );
+}
+
+function isNativeEffectHandler(value: unknown) {
+  return (
+    typeof value === "function" ||
+    (value !== null &&
+      typeof value === "object" &&
+      ("effect" in value || "error" in value))
+  );
+}
+
+// Dispatches legacy createEffect(fn, initialValue) through createLegacyEffect
+// while preserving native Solid 2 createEffect(fn, effectHandler, options).
+export function createEffect<T>(
+  effect: (previous?: T) => T | void,
+  initialOrEffect?: T | ((value: T, previous?: T) => void),
+  options?: unknown,
+) {
+  if (arguments.length === 1) {
+    return createLegacyEffect(effect);
+  }
+  if (!isNativeEffectHandler(initialOrEffect)) {
+    return createLegacyEffect(effect, initialOrEffect as T);
+  }
+  return solid.createEffect(effect, initialOrEffect, options);
 }
 
 export const createComputed = createEffect;
 
-export function createRenderEffect<T>(effect: (previous?: T) => T | void, initial?: T) {
-  return solid.createRenderEffect(
-    () => initial,
-    (value) => effect(value),
-  );
+export function createRenderEffect<T>(
+  effect: (previous?: T) => T | void,
+  initialOrEffect?: T | ((value: T, previous?: T) => void),
+  options?: unknown,
+) {
+  if (arguments.length === 1) {
+    return createLegacyEffect(effect);
+  }
+  if (!isNativeEffectHandler(initialOrEffect)) {
+    return createLegacyEffect(effect, initialOrEffect as T);
+  }
+  return solid.createRenderEffect(effect, initialOrEffect, options);
 }
 
 export function on<T>(

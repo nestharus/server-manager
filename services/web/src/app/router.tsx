@@ -5,6 +5,8 @@ import { Icon } from "@/components/icons/Icon";
 import { Button } from "@/components/primitives/Button";
 import { useTheme } from "./store";
 import { AdminChaptersRoute } from "@/features/admin/AdminChaptersRoute";
+import { ApplicationQueueRoute } from "@/features/officer/ApplicationQueueRoute";
+import { ApplicationFormRoute } from "@/features/public/ApplicationFormRoute";
 import { HomeRoute } from "@/features/public/HomeRoute";
 
 function RootShell() {
@@ -23,6 +25,9 @@ function RootShell() {
         <nav class="topNav" aria-label="Primary">
           <Link to="/" activeProps={{ "aria-current": "page" }}>
             Public
+          </Link>
+          <Link to="/applications" activeProps={{ "aria-current": "page" }}>
+            Application form
           </Link>
           <Link to="/admin/chapters" activeProps={{ "aria-current": "page" }}>
             Admin
@@ -58,6 +63,24 @@ const indexRoute = createRoute({
   },
 });
 
+const applicationFormRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/applications",
+  component: ApplicationFormRoute,
+  staticData: {
+    breadcrumb: "Application form",
+  },
+});
+
+const applicationQueueRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/applications/queue",
+  component: ApplicationQueueRoute,
+  staticData: {
+    breadcrumb: "Officer queue",
+  },
+});
+
 const adminChaptersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/chapters",
@@ -67,7 +90,12 @@ const adminChaptersRoute = createRoute({
   },
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, adminChaptersRoute]);
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  applicationFormRoute,
+  applicationQueueRoute,
+  adminChaptersRoute,
+]);
 
 export const router = createRouter({
   routeTree,

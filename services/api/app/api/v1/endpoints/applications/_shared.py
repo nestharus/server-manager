@@ -9,6 +9,7 @@ from app.contracts.applications import (
     ApplicationAlreadyClaimedError,
     ApplicationDecisionReasonRequiredError,
     ApplicationInterviewThreadMismatchError,
+    ApplicationListForbiddenError,
     ApplicationNotFoundError,
     ApplicationNotOwnerError,
     ApplicationReactivateOwnerRequiredError,
@@ -61,6 +62,11 @@ def set_etag(response: Response, etag: str) -> None:
 
 
 def raise_known_application_error(error: Exception) -> NoReturn:
+    if isinstance(error, ApplicationListForbiddenError):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail={"code": "application_list_forbidden", "message": str(error)},
+        ) from error
     if isinstance(error, (FormDefinitionNotFoundError, ApplicationNotFoundError, MissingAggregateError)):
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,

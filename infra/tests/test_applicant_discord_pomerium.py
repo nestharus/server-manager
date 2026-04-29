@@ -51,8 +51,38 @@ def _web_catch_all_index() -> int:
         index
         for index, route in enumerate(_web_routes())
         if "prefix" not in route
+        and "path" not in route
         and route.get("to") == "http://server-manager-web.web.svc.cluster.local:8080"
     )
+
+
+def _find_web_route(**criteria: str) -> tuple[int, dict[str, Any]]:
+    matches = [
+        (index, route)
+        for index, route in enumerate(_web_routes())
+        if all(route.get(key) == value for key, value in criteria.items())
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _matches(route: dict[str, Any], request_path: str) -> bool:
+    if "path" in route:
+        return route["path"] == request_path
+    if "prefix" in route:
+        return request_path.startswith(route["prefix"])
+    return True
+
+
+def _first_web_route_for(request_path: str) -> dict[str, Any]:
+    return next(route for route in _web_routes() if _matches(route, request_path))
+
+
+def _assert_identity_web_route(route: dict[str, Any]) -> None:
+    assert route["to"] == "http://server-manager-web.web.svc.cluster.local:8080"
+    assert route["preserve_host_header"] is True
+    assert route["pass_identity_headers"] is True
+    assert route["allow_any_authenticated_user"] is True
 
 
 def test_applicant_discord_route_targets_api_and_is_public() -> None:
@@ -78,3 +108,65 @@ def test_applicant_discord_route_precedes_web_host_catch_all() -> None:
 
     assert len(applicant_indexes) == 1
     assert applicant_indexes[0] < _web_catch_all_index()
+
+
+def test_pomerium_idp_scopes_include_discord_user_id_exactly() -> None:
+    """Risk annotation: group=TG-4; named_risk=idp_scope_missing;
+    level=static-config; source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-4.
+    """
+    config = _managed_pomerium_config()
+
+    assert set(config["idp_scopes"].split()) == {
+        "openid",
+        "email",
+        "profile",
+        "discord_user_id",
+    }
+
+
+def test_pomerium_jwt_claims_headers_include_exact_identity_claims() -> None:
+    """Risk annotation: group=TG-4; named_risk=jwt_claim_headers_drift;
+    level=static-config; source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-4.
+    """
+    headers = _managed_pomerium_config()["jwt_claims_headers"]
+
+    assert headers == {
+        "x-pomerium-claim-email": "email",
+        "x-pomerium-claim-sub": "sub",
+        "x-pomerium-claim-groups": "groups",
+        "x-pomerium-claim-name": "name",
+        "x-pomerium-claim-discord-user-id": "discord_user_id",
+    }
+
+
+def test_identity_bearing_web_routes_precede_public_catch_all() -> None:
+    """Risk annotation: group=TG-4; named_risk=identity_route_order;
+    level=static-config; source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-4.
+    """
+    catch_all_index = _web_catch_all_index()
+    route_specs = [
+        {"path": "/api/me"},
+        {"prefix": "/api/web/admin/"},
+        {"prefix": "/api/web/officer/"},
+        {"path": "/applications/queue"},
+        {"prefix": "/applications/queue/"},
+    ]
+
+    for criteria in route_specs:
+        index, route = _find_web_route(**criteria)
+        _assert_identity_web_route(route)
+        assert index < catch_all_index
+
+
+def test_pomerium_route_matching_avoids_api_and_queue_collisions() -> None:
+    """Risk annotation: group=TG-4; named_risk=route_collision;
+    level=static-config; source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-4.
+    """
+    assert _first_web_route_for("/api/me").get("path") == "/api/me"
+    assert _first_web_route_for("/applications/queue").get("path") == "/applications/queue"
+    assert _first_web_route_for("/applications/queue/").get("prefix") == "/applications/queue/"
+
+    assert _first_web_route_for("/api/me-foo").get("path") != "/api/me"
+    assert _first_web_route_for("/api/members/abc").get("path") != "/api/me"
+    assert _first_web_route_for("/applications/queue-foo").get("path") != "/applications/queue"
+    assert _first_web_route_for("/applications").get("path") != "/applications/queue"

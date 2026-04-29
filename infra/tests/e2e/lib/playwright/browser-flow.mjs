@@ -127,6 +127,37 @@ const targets = {
         }, null, 2),
       );
       await page.locator("#submit-status").getByText(webContract.form.submit.success_message).waitFor({ timeout: 30_000 });
+      await page.goto(`https://web.local.humility.local${webContract.routes.officer_queue.path}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 45_000,
+      });
+      const row = page.locator(`[data-application-id="${body.application_id}"]`);
+      await row.waitFor({ timeout: 45_000 });
+      const claimResponsePromise = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.hostname === "web.local.humility.local" &&
+          url.pathname === webContract.applications.claim.endpoint.replace("{id}", body.application_id) &&
+          response.request().method() === webContract.applications.claim.method
+        );
+      }, { timeout: 45_000 });
+      await row.getByRole("button", { name: /claim/i }).click();
+      const claimResponse = await claimResponsePromise;
+      if (claimResponse.status() !== webContract.applications.claim.success_status) {
+        const claimBody = await claimResponse.text().catch(() => "<unreadable>");
+        throw new Error(`officer claim returned ${claimResponse.status()}: ${claimBody.slice(0, 500)}`);
+      }
+      const claimBody = await claimResponse.json();
+      await writeFile(
+        join(sessionDir, `${flow}-queue-claim.json`),
+        JSON.stringify({
+          application_id: body.application_id,
+          claimed_application_id: claimBody.id,
+          owner_id: claimBody.owner_id,
+          officer_discord_user_id: process.env.E2E_OFFICER_DISCORD_USER_ID || "210987654321098765",
+        }, null, 2),
+      );
+      await row.getByText("claimed").waitFor({ timeout: 30_000 });
     },
   },
 };

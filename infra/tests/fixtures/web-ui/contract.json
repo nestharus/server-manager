@@ -12,6 +12,11 @@
       "path": "/applications",
       "link_name": "Application form"
     },
+    "officer_queue": {
+      "path": "/applications/queue",
+      "link_name": "Officer queue",
+      "requires_auth": true
+    },
     "admin": {
       "host": "web.local.humility.local",
       "path": "/admin/chapters",
@@ -23,12 +28,14 @@
     "identity": {
       "email": "officer@humility.local",
       "subject": "humility-officer-1",
-      "groups": ["officers"]
+      "groups": ["officers"],
+      "discord_user_id": "210987654321098765"
     },
     "headers": {
       "x-pomerium-claim-email": "officer@humility.local",
       "x-pomerium-claim-sub": "humility-officer-1",
-      "x-pomerium-claim-groups": "officers"
+      "x-pomerium-claim-groups": "officers",
+      "x-pomerium-claim-discord-user-id": "210987654321098765"
     },
     "probe_endpoint": "/api/me",
     "unauthenticated_api_status": 401,
@@ -39,6 +46,19 @@
       "login_button_name": "Login with Discord",
       "identity_indicator_prefix": "Logged in as Discord ",
       "receipt_required_error_code": "applicant_receipt_required"
+    }
+  },
+  "applications": {
+    "queue": {
+      "endpoint": "/api/web/officer/applications",
+      "state_filter": "submitted,queued",
+      "default_states_visible": ["submitted", "queued"]
+    },
+    "claim": {
+      "endpoint": "/api/web/officer/applications/{id}/claim",
+      "method": "POST",
+      "if_match_header": true,
+      "success_status": 200
     }
   },
   "form": {
