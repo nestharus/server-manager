@@ -15,6 +15,8 @@ class CurrentPrincipalRead(_WebModel):
     email: str | None = None
     display_name: str | None = None
     provider: Literal["pomerium"] = "pomerium"
+    groups: list[str] = []
+    discord_user_id: str | None = None
 
 
 class AdminChapterSummaryRead(_WebModel):

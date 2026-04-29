@@ -106,8 +106,13 @@ function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
 assert(contract.routes.public.path === "/", "public route path")
+assert(contract.routes.officer_queue.path === "/applications/queue", "officer queue path")
+assert(contract.routes.officer_queue.requires_auth === true, "officer queue requires auth")
 assert(contract.routes.admin.requires_auth === true, "admin route requires auth")
 assert(contract.auth.unauthenticated_api_status === 401, "unauthenticated_api_status")
+assert(contract.auth.probe_endpoint === "/api/me", "principal probe endpoint")
+assert(contract.auth.identity.groups.includes("officers"), "officer group fixture")
+assert(contract.auth.identity.discord_user_id === "210987654321098765", "officer Discord claim fixture")
 assert(contract.form.submit.method === "POST", "form submit method")
 assert(contract.form.submit.endpoint === "/api/public/applications", "public form submit endpoint")
 assert(contract.form.submit.success_status === 201, "form success status")
@@ -115,6 +120,10 @@ assert(contract.form.fields.map((field) => field.name).sort().join(",") === "app
 assert(contract.form.submit.payload_fields.map((field) => field.name).sort().join(",") === "responses.application_text,responses.character_name,scope.scope_id,scope.scope_kind", "public submit payload fields")
 assert(contract.form.submit.client_application_id_pattern.includes("-4"), "client_application_id UUIDv4 pattern")
 assert(Object.keys(contract.ui_libraries).sort().join(",") === "ark,fontawesome,tanstack", "UI library coverage")
+assert(contract.applications.queue.endpoint === "/api/web/officer/applications", "officer queue endpoint")
+assert(contract.applications.queue.state_filter === "submitted,queued", "officer queue default state filter")
+assert(contract.applications.claim.endpoint === "/api/web/officer/applications/{id}/claim", "officer claim endpoint")
+assert(contract.applications.claim.if_match_header === true, "officer claim uses If-Match")
 ' "$CONTRACT_FIXTURE" || die "web UI contract fixture is valid"
   pass "web UI contract fixture is valid"
 }
@@ -133,6 +142,30 @@ assert_playwright_contract_spec() {
     die "Playwright spec must not assert captured demo text or package versions"
   fi
   pass "Playwright spec covers route, auth, submit, and UI libraries"
+}
+
+assert_officer_queue_contract_spec() {
+  local spec="${REPO_ROOT}/services/web/tests/officer-queue.spec.ts"
+  [[ -f "$spec" ]] || die "missing Playwright officer queue spec"
+  rg -q 'contract\.json' "$spec" || die "officer queue spec reads fixture"
+  rg -q 'state_filter' "$spec" || die "officer queue spec covers default state filter"
+  rg -q 'if-match' "$spec" || die "officer queue spec covers If-Match claim"
+  pass "Playwright spec covers officer queue and claim"
+}
+
+assert_web_source_api_paths() {
+  if grep -rE "[\"']/api/v1/" "${REPO_ROOT}/services/web/src/" >/tmp/web-api-v1-grep.log; then
+    cat /tmp/web-api-v1-grep.log >&2
+    die "web source must use browser-facing /api paths, not /api/v1 literals"
+  fi
+
+  local client="${REPO_ROOT}/services/web/src/api/client.ts"
+  rg -q '"/api/me"' "$client" || die "client.ts calls /api/me"
+  rg -q '"/api/web/admin/chapters"' "$client" || die "client.ts calls /api/web/admin/chapters"
+  rg -q '/api/web/officer/applications' "$client" || die "client.ts calls /api/web/officer/applications"
+  rg -q '/api/web/officer/applications/\$\{input\.applicationId\}/claim' "$client" || die "client.ts calls officer claim endpoint"
+  rg -q '"/auth/discord/me"' "$client" || die "client.ts calls /auth/discord/me"
+  pass "web source uses browser-facing API path allowlist"
 }
 
 assert_web_build() {
@@ -203,6 +236,12 @@ const code = Number(process.argv[2])
 if (!allowed.includes(code)) process.exit(1)
 ' "$allowed" "$admin_code" || die "admin route requires auth; got ${admin_code}"
   pass "admin route requires authentication"
+
+  # /api/me identity-header round-trip is exercised by the Playwright
+  # e2e through a real Pomerium-authenticated session in 19-web-ui;
+  # static curl with simulated headers does not work because Pomerium
+  # strips/overrides client-supplied x-pomerium-claim-* headers as a
+  # security boundary.
 }
 
 main() {
@@ -211,6 +250,8 @@ main() {
   command -v node >/dev/null 2>&1 || die "node is required"
   assert_contract_fixture
   assert_playwright_contract_spec
+  assert_officer_queue_contract_spec
+  assert_web_source_api_paths
   assert_web_build
   assert_runtime
   finish

@@ -1,0 +1,91 @@
+@layer components {
+  .queuePanel {
+    display: grid;
+    gap: 1rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-panel);
+    background: var(--surface-panel);
+    padding: 1rem;
+  }
+
+  .header {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .header h2 {
+    margin: 0;
+    font-size: 1.35rem;
+  }
+
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .filter,
+  .selectedFilter {
+    min-block-size: 2.25rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    padding: 0.4rem 0.65rem;
+    color: var(--text-secondary);
+    background: var(--surface-raised);
+    font-weight: 650;
+  }
+
+  .selectedFilter {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+    background: var(--surface-selected);
+  }
+
+  .notice {
+    margin: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-control);
+    background: var(--surface-raised);
+    padding: 0.75rem;
+    color: var(--text-primary);
+  }
+
+  .queueTable {
+    display: grid;
+    overflow-x: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-raised);
+  }
+
+  .tableHeader,
+  .tableRow {
+    display: grid;
+    grid-template-columns:
+      minmax(7rem, 1fr) minmax(6rem, 0.75fr) minmax(12rem, 1.3fr)
+      minmax(5rem, 0.5fr) minmax(7rem, 1fr) minmax(7rem, 0.7fr);
+    gap: 0.75rem;
+    min-inline-size: 56rem;
+    align-items: center;
+    padding: 0.7rem 0.85rem;
+  }
+
+  .tableHeader {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    font-weight: 760;
+    text-transform: uppercase;
+  }
+
+  .tableRow {
+    border-block-start: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+  }
+
+  .tableRow span {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+}

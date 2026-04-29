@@ -51,6 +51,10 @@ class DiscordMemberRaceLost(Exception):
     pass
 
 
+class NonDiscordMemberError(ValueError):
+    pass
+
+
 def is_synthetic_member(member: object) -> bool:
     if isinstance(member, Mapping):
         kind = member.get("kind")
@@ -183,7 +187,7 @@ def create_or_get_member(
 
 def _require_real_discord_member(row: dict[str, Any]) -> MemberRead:
     if row["kind"] != "discord":
-        raise ValueError(
+        raise NonDiscordMemberError(
             "discord_user_id is already bound to a non-discord member row",
         )
     return _member_from_row(row)
@@ -193,9 +197,13 @@ async def resolve_or_create_real_discord_member(
     db: PostgresDatabase,
     *,
     discord_user_id: str,
+    originating_actor: ActorIdentity | None = None,
+    request_surface: str | None = None,
 ) -> MemberRead:
     if not DISCORD_SNOWFLAKE_RE.match(discord_user_id):
         raise ValueError("invalid Discord snowflake")
+    resolved_actor = originating_actor or APPLICANT_RECEIPT_MEMBER_ACTOR
+    resolved_surface = request_surface or "api:/api/v1/public/applications"
 
     def resolve_or_create() -> MemberRead:
         with db.connection() as connection:
@@ -208,8 +216,8 @@ async def resolve_or_create_real_discord_member(
         action_payload = {
             "discord_user_id": discord_user_id,
             "joined_at": joined_at.isoformat(),
-            "originating_actor_kind": "service",
-            "originating_actor_id": "applicant-receipt",
+            "originating_actor_kind": resolved_actor.actor_kind,
+            "originating_actor_id": resolved_actor.actor_id,
         }
 
         def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
@@ -231,8 +239,8 @@ async def resolve_or_create_real_discord_member(
                     "discord_user_id": discord_user_id,
                     "joined_at": joined_at.isoformat(),
                     "status": "active",
-                    "originating_actor_kind": "service",
-                    "originating_actor_id": "applicant-receipt",
+                    "originating_actor_kind": resolved_actor.actor_kind,
+                    "originating_actor_id": resolved_actor.actor_id,
                 },
             )
 
@@ -243,8 +251,8 @@ async def resolve_or_create_real_discord_member(
                 aggregate_id=str(member_id),
                 request=_make_request(
                     expected_version=0,
-                    actor=APPLICANT_RECEIPT_MEMBER_ACTOR,
-                    request_surface="api:/api/v1/public/applications",
+                    actor=resolved_actor,
+                    request_surface=resolved_surface,
                 ),
                 action_type="member.create",
                 action_payload=action_payload,
@@ -362,5 +370,6 @@ __all__ = [
     "get_member_by_discord_id",
     "get_member_by_id",
     "is_synthetic_member",
+    "NonDiscordMemberError",
     "patch_member_status",
 ]

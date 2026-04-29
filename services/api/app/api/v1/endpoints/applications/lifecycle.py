@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.contracts.actor import ActorIdentity, ActorIdentityMissingError
 from app.contracts.applications import (
-    ApplicationListForbiddenError,
     ApplicationListRead,
     ApplicationRead,
     ApplicationState,
@@ -103,16 +102,8 @@ def list_applications_endpoint(
             limit=limit,
             after_id=after_id,
         )
-    except ApplicationListForbiddenError as error:
-        raise HTTPException(
-            status_code=HTTPStatus.FORBIDDEN,
-            detail={"code": "application_list_forbidden", "message": str(error)},
-        ) from error
-    except ValueError as error:
-        raise HTTPException(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            detail={"code": "validation_error", "message": str(error)},
-        ) from error
+    except Exception as error:
+        raise_known_application_error(error)
 
 
 @router.get("/{application_id}", response_model=ApplicationRead)

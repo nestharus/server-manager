@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Request
 
 from app.contracts.web import CurrentPrincipalRead
@@ -15,11 +17,26 @@ def _header(request: Request, name: str) -> str | None:
     return value.strip()
 
 
+def _parse_pomerium_groups(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    stripped = value.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("["):
+        try:
+            decoded = json.loads(stripped)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(decoded, list) and all(isinstance(item, str) for item in decoded):
+            return [item.strip() for item in decoded if item.strip()]
+        return []
+    return [part.strip() for part in stripped.split(",") if part.strip()]
+
+
 def get_pomerium_principal(request: Request) -> CurrentPrincipalRead:
-    subject = (
-        _header(request, "x-pomerium-claim-sub")
-        or _header(request, "x-pomerium-claim-email")
-        or _header(request, "x-forwarded-email")
+    subject = _header(request, "x-pomerium-claim-sub") or _header(
+        request, "x-pomerium-claim-email"
     )
     if subject is None:
         raise HTTPException(
@@ -31,8 +48,10 @@ def get_pomerium_principal(request: Request) -> CurrentPrincipalRead:
         )
     return CurrentPrincipalRead(
         subject=subject,
-        email=_header(request, "x-pomerium-claim-email") or _header(request, "x-forwarded-email"),
+        email=_header(request, "x-pomerium-claim-email"),
         display_name=_header(request, "x-pomerium-claim-name"),
+        groups=_parse_pomerium_groups(request.headers.get("x-pomerium-claim-groups")),
+        discord_user_id=_header(request, "x-pomerium-claim-discord-user-id"),
     )
 
 

@@ -152,3 +152,98 @@ def test_discord_snowflake_property_mapping_is_present_without_forbidden_scopes(
     assert "email" not in combined_mapping_text
     assert "guilds" not in combined_mapping_text
     assert "guilds.members.read" not in combined_mapping_text
+
+
+def test_officer_group_and_sample_user_membership_are_declared() -> None:
+    """Risk annotation: group=TG-4; named_risk=officer_group_missing;
+    level=static-config; source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-4.
+    """
+    groups = [
+        entry
+        for entry in _entries_for_model("authentik_core.group")
+        if entry.get("identifiers", {}).get("name") == "officers"
+        or entry.get("attrs", {}).get("name") == "officers"
+    ]
+    assert len(groups) == 1
+
+    sample_users = [
+        entry
+        for entry in _entries_for_model("authentik_core.user")
+        if entry.get("identifiers", {}).get("username") == "sample"
+        or entry.get("attrs", {}).get("username") == "sample"
+    ]
+    assert len(sample_users) == 1
+    sample_text = _entry_text(sample_users[0])
+    assert "officers" in sample_text
+    assert "Humility Local Users" in sample_text
+    assert "discord_user_id" in sample_text
+    assert "210987654321098765" in sample_text
+
+
+def test_officer_discord_pomerium_source_is_distinct_and_identify_only() -> None:
+    """Risk annotation: group=TG-4; named_risk=discord_pomerium_source_missing;
+    level=static-config; source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-4.
+    """
+    sources = [
+        entry
+        for entry in _entries_for_model("authentik_sources_oauth.oauthsource")
+        if _entry_has_value(entry, "discord-pomerium")
+    ]
+
+    assert len(sources) == 1
+    source = sources[0]
+    attrs = source.get("attrs", {})
+    source_text = _entry_text(source)
+
+    assert source.get("identifiers", {}).get("slug") == "discord-pomerium" or attrs.get("slug") == "discord-pomerium"
+    assert attrs.get("provider_type") == "discord"
+    assert _entry_has_value(source, "identify")
+    assert "DISCORD_OFFICER_OAUTH_CLIENT_ID" in source_text
+    assert "DISCORD_OFFICER_OAUTH_CLIENT_SECRET" in source_text
+    assert "DISCORD_APPLICANT_OAUTH_CLIENT_ID" not in source_text
+    assert "DISCORD_APPLICANT_OAUTH_CLIENT_SECRET" not in source_text
+    assert " email" not in source_text
+    assert "guilds" not in source_text
+    assert "guilds.members.read" not in source_text
+
+
+def test_officer_discord_user_id_scope_mapping_emits_user_attribute() -> None:
+    """Risk annotation: group=TG-4; named_risk=discord_user_id_scope_mapping_missing;
+    level=static-config; source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-4.
+    """
+    mappings = [
+        entry
+        for entry in _entries_for_model("authentik_providers_oauth2.scopemapping")
+        if _entry_has_value(entry, "server-manager-pomerium-discord_user_id")
+        or _entry_has_value(entry, "discord_user_id")
+    ]
+    mapping_text = "\n".join(_entry_text(entry) for entry in mappings)
+
+    assert "server-manager-pomerium-discord_user_id" in mapping_text
+    assert "scope_name" in mapping_text
+    assert "discord_user_id" in mapping_text
+    assert 'request.user.attributes.get("discord_user_id")' in mapping_text or "request.user.attributes.get('discord_user_id')" in mapping_text
+
+
+def test_pomerium_authentik_application_wires_discord_source_and_scope() -> None:
+    """Risk annotation: group=TG-4; named_risk=pomerium_application_unwired;
+    level=static-config; source=.tmp/init-133B-i/phase6/step6a-contract.md#TG-4.
+    """
+    providers = [
+        entry
+        for entry in _entries_for_model("authentik_providers_oauth2.oauth2provider")
+        if _entry_has_value(entry, "pomerium")
+    ]
+    applications = [
+        entry
+        for entry in _entries_for_model("authentik_core.application")
+        if _entry_has_value(entry, "pomerium")
+    ]
+
+    assert len(providers) == 1
+    assert len(applications) == 1
+    provider_text = _entry_text(providers[0])
+    application_text = _entry_text(applications[0])
+    assert "discord_user_id" in provider_text
+    assert "discord-pomerium" in application_text
+    assert "server-manager-pomerium-discord_user_id" in application_text
