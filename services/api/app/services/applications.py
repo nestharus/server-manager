@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import StrEnum
 from http import HTTPStatus
 from typing import Any
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from psycopg import Connection, errors
@@ -54,7 +53,6 @@ from app.repositories.members import fetch_member_by_id
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
 from app.services.members import (
     is_synthetic_member,
-    resolve_or_create_public_intake_member,
     resolve_or_create_real_discord_member,
 )
 from app.services.mutations import mutate_entity
@@ -157,14 +155,6 @@ APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST = {
 
 AUTHENTICATED_SUBMIT_SURFACE = "api:/api/v1/applications"
 PUBLIC_SUBMIT_SURFACE = "api:/api/v1/public/applications"
-PUBLIC_INTAKE_ACTOR = ActorIdentity(actor_kind="service", actor_id="public-intake")
-PUBLIC_INTAKE_MEMBER_SALT = "local-public-intake-salt"
-PUBLIC_INTAKE_NAMESPACE = UUID("0a5f3229-6145-4ce9-8b5f-8a8cd7b04c6c")
-
-
-class _SubmissionAuthority(StrEnum):
-    USER = "user"
-    PUBLIC_INTAKE = "public_intake"
 
 
 class _SubmitApplicationResult(tuple[ApplicationRead, MutationResult]):
@@ -604,7 +594,6 @@ def _submit_application_internal(
     actor: ActorIdentity,
     *,
     request_surface: str,
-    submission_authority: _SubmissionAuthority,
 ) -> _SubmitApplicationResult:
     if get_current_audit_context() is None:
         with use_audit_context(_generated_audit_context()):
@@ -613,7 +602,6 @@ def _submit_application_internal(
                 request,
                 actor,
                 request_surface=request_surface,
-                submission_authority=submission_authority,
             )
 
     validated = ApplicationSubmission.model_validate(request)
@@ -624,15 +612,11 @@ def _submit_application_internal(
         applicant = fetch_member_by_id(connection, validated.applicant_id)
         if applicant is None:
             raise ValueError(f"member {validated.applicant_id} was not found")
-        if (
-            submission_authority != _SubmissionAuthority.PUBLIC_INTAKE
-            and is_synthetic_member(applicant)
-        ):
+        if is_synthetic_member(applicant):
             _raise_synthetic_application_error(
                 code="applicant_synthetic_not_allowed",
                 message=(
-                    "Synthetic public-intake members cannot submit through the "
-                    "authenticated path."
+                    "Synthetic public-intake members cannot submit applications."
                 ),
             )
 
@@ -653,14 +637,13 @@ def _submit_application_internal(
             if existing is not None:
                 raise DuplicateApplicationCreateError(_row_to_read(existing))
 
-        if submission_authority == _SubmissionAuthority.USER:
-            _require_submit_authority(
-                db,
-                actor=actor,
-                applicant_id=validated.applicant_id,
-                scope_kind=form_row["scope_kind"],
-                scope_id=form_row["scope_id"],
-            )
+        _require_submit_authority(
+            db,
+            actor=actor,
+            applicant_id=validated.applicant_id,
+            scope_kind=form_row["scope_kind"],
+            scope_id=form_row["scope_id"],
+        )
 
         snapshot = build_form_snapshot(form_row)
         validate_application_responses(snapshot["fields"], validated.responses)
@@ -771,7 +754,6 @@ def submit_application(
         request,
         actor,
         request_surface=AUTHENTICATED_SUBMIT_SURFACE,
-        submission_authority=_SubmissionAuthority.USER,
     )
 
 
@@ -811,7 +793,6 @@ async def submit_public_application_with_receipt(
         internal_submission,
         actor,
         request_surface=PUBLIC_SUBMIT_SURFACE,
-        submission_authority=_SubmissionAuthority.USER,
     )
     emit_application_public_submitted_event(
         db,
@@ -821,41 +802,6 @@ async def submit_public_application_with_receipt(
         scope_kind=created.read.target_scope.scope_kind,
         scope_id=created.read.target_scope.scope_id,
         actor=actor,
-    )
-    return created.read.id
-
-
-async def submit_public_application(
-    db: PostgresDatabase,
-    public_submission: PublicApplicationSubmission,
-) -> UUID:
-    validated = PublicApplicationSubmission.model_validate(public_submission)
-    if validated.client_application_id is None:
-        public_submission_id = uuid4()
-        client_application_id = f"public:{public_submission_id}"
-    else:
-        client_application_id = validated.client_application_id
-        public_submission_id = uuid5(
-            PUBLIC_INTAKE_NAMESPACE,
-            f"{client_application_id}|{PUBLIC_INTAKE_MEMBER_SALT}",
-        )
-    member = await resolve_or_create_public_intake_member(
-        db,
-        public_submission_id=public_submission_id,
-        channel_salt=PUBLIC_INTAKE_MEMBER_SALT,
-    )
-    internal_submission = ApplicationSubmission(
-        applicant_id=member.id,
-        scope=validated.scope,
-        responses=validated.responses,
-        client_application_id=client_application_id,
-    )
-    created = _submit_application_internal(
-        db,
-        internal_submission,
-        PUBLIC_INTAKE_ACTOR,
-        request_surface=PUBLIC_SUBMIT_SURFACE,
-        submission_authority=_SubmissionAuthority.PUBLIC_INTAKE,
     )
     return created.read.id
 

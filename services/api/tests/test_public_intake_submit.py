@@ -39,25 +39,13 @@ def public_form(governance_db: PostgresDatabase) -> None:
 
 
 @pytest.fixture()
-def public_intake_member_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fail_public_intake_resolution(*_args, **_kwargs):
-        raise AssertionError("receipt submit must not call public-intake member resolver")
-
-    monkeypatch.setattr(
-        "app.services.applications.resolve_or_create_public_intake_member",
-        fail_public_intake_resolution,
-        raising=False,
-    )
-
-
-@pytest.fixture()
 def receipt_submit_service():
     import importlib
 
     return importlib.import_module("app.services.applications").submit_public_application_with_receipt
 
 
-@pytest.mark.usefixtures("public_form", "public_intake_member_guard")
+@pytest.mark.usefixtures("public_form")
 async def test_public_submit_with_receipt_creates_queued_application_for_real_discord_member(
     governance_db: PostgresDatabase,
     governance_dsn: str,
@@ -100,7 +88,7 @@ async def test_public_submit_with_receipt_creates_queued_application_for_real_di
     ]
 
 
-@pytest.mark.usefixtures("public_form", "public_intake_member_guard")
+@pytest.mark.usefixtures("public_form")
 async def test_public_submit_with_receipt_stamps_user_audit_and_notification_event(
     governance_db: PostgresDatabase,
     governance_dsn: str,
@@ -150,7 +138,7 @@ async def test_public_submit_with_receipt_stamps_user_audit_and_notification_eve
     assert fetch_notification_materialize_effects(governance_dsn)
 
 
-@pytest.mark.usefixtures("public_form", "public_intake_member_guard")
+@pytest.mark.usefixtures("public_form")
 async def test_public_submit_notification_event_targets_receipt_discord_user(
     governance_db: PostgresDatabase,
     governance_dsn: str,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -42,10 +41,6 @@ VALID_TRANSITIONS = {
     ("departed", "active"),
 }
 
-PUBLIC_INTAKE_MEMBER_ACTOR = ActorIdentity(
-    actor_kind="service",
-    actor_id="public-intake",
-)
 APPLICANT_RECEIPT_MEMBER_ACTOR = ActorIdentity(
     actor_kind="service",
     actor_id="applicant-receipt",
@@ -266,85 +261,6 @@ async def resolve_or_create_real_discord_member(
         with db.connection() as connection:
             row = _fetch_member_row(connection, member_id)
         return _require_real_discord_member(row)
-
-    if get_current_audit_context() is None:
-        with use_audit_context(_generated_audit_context()):
-            return resolve_or_create()
-    return resolve_or_create()
-
-
-async def resolve_or_create_public_intake_member(
-    db: PostgresDatabase,
-    *,
-    public_submission_id: UUID,
-    channel_salt: str,
-) -> MemberRead:
-    digest = hashlib.sha256(f"{public_submission_id}|{channel_salt}".encode()).hexdigest()
-
-    def resolve_or_create() -> MemberRead:
-        discord_user_id = f"public:{digest[:32]}"
-        with db.connection() as connection:
-            existing = fetch_member_by_discord_id(connection, discord_user_id)
-        if existing is not None:
-            return _member_from_row(existing)
-
-        member_id = uuid4()
-        joined_at = datetime.now(UTC)
-
-        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-            _insert_member(
-                connection,
-                row={
-                    "id": member_id,
-                    "discord_user_id": discord_user_id,
-                    "joined_at": joined_at,
-                    "status": "active",
-                },
-                _kind="public_intake",
-            )
-            return StateChangeDraft(
-                change_type="member.created",
-                payload_json={
-                    "member_id": str(member_id),
-                    "discord_user_id": discord_user_id,
-                    "joined_at": joined_at.isoformat(),
-                    "status": "active",
-                    "originating_actor_kind": "service",
-                    "originating_actor_id": "public-intake",
-                },
-            )
-
-        action_payload = {
-            "discord_user_id": discord_user_id,
-            "joined_at": joined_at.isoformat(),
-            "originating_actor_kind": "service",
-            "originating_actor_id": "public-intake",
-        }
-        try:
-            mutate_entity(
-                db=db,
-                aggregate_type="member",
-                aggregate_id=str(member_id),
-                request=_make_request(
-                    expected_version=0,
-                    actor=PUBLIC_INTAKE_MEMBER_ACTOR,
-                    request_surface="api:/public/intake",
-                ),
-                action_type="member.create",
-                action_payload=action_payload,
-                payload_allowlist=set(action_payload.keys()),
-                mutate_projection=mutate_projection,
-                scope_kind="global",
-                scope_id=None,
-            )
-        except errors.UniqueViolation:
-            with db.connection() as connection:
-                existing = _fetch_member_row_by_discord_id(connection, discord_user_id)
-            return _member_from_row(existing)
-
-        with db.connection() as connection:
-            row = _fetch_member_row(connection, member_id)
-        return _member_from_row(row)
 
     if get_current_audit_context() is None:
         with use_audit_context(_generated_audit_context()):

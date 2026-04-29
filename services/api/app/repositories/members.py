@@ -60,7 +60,6 @@ def _insert_member(
     connection: Connection[Any],
     *,
     row: dict[str, Any],
-    _kind: str = "discord",
 ) -> None:
     connection.execute(
         """
@@ -71,12 +70,11 @@ def _insert_member(
             joined_at,
             status
         )
-        VALUES (%s, %s, %s, %s, %s)
+        VALUES (%s, %s, 'discord', %s, %s)
         """,
         (
             row["id"],
             row["discord_user_id"],
-            _kind,
             row["joined_at"],
             row["status"],
         ),
@@ -87,7 +85,6 @@ def _insert_member_on_discord_conflict_do_nothing(
     connection: Connection[Any],
     *,
     row: dict[str, Any],
-    _kind: str = "discord",
 ) -> bool:
     inserted = connection.execute(
         """
@@ -98,14 +95,13 @@ def _insert_member_on_discord_conflict_do_nothing(
             joined_at,
             status
         )
-        VALUES (%s, %s, %s, %s, %s)
+        VALUES (%s, %s, 'discord', %s, %s)
         ON CONFLICT (discord_user_id) DO NOTHING
         RETURNING id
         """,
         (
             row["id"],
             row["discord_user_id"],
-            _kind,
             row["joined_at"],
             row["status"],
         ),
