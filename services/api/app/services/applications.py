@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
+from fastapi import HTTPException
 from psycopg import Connection, errors
 from psycopg.rows import dict_row
 
@@ -50,7 +52,7 @@ from app.repositories.db import PostgresDatabase
 from app.repositories.forms import get_current_form_for_scope
 from app.repositories.members import fetch_member_by_id
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
-from app.services.members import resolve_or_create_public_intake_member
+from app.services.members import is_synthetic_member, resolve_or_create_public_intake_member
 from app.services.mutations import mutate_entity
 
 
@@ -310,6 +312,28 @@ def _require_submit_authority(
         scope_kind=scope_kind,
         scope_id=scope_id,
     )
+
+
+def _raise_synthetic_application_error(*, code: str, message: str) -> None:
+    raise HTTPException(
+        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+        detail={"code": code, "message": message},
+    )
+
+
+def _require_non_synthetic_application_member(
+    connection: Connection[Any],
+    member_id: UUID,
+    *,
+    code: str,
+    message: str,
+) -> dict[str, Any]:
+    member = fetch_member_by_id(connection, member_id)
+    if member is None:
+        raise ValueError(f"member {member_id} was not found")
+    if is_synthetic_member(member["discord_user_id"]):
+        _raise_synthetic_application_error(code=code, message=message)
+    return member
 
 
 def require_transition_authority(
@@ -592,8 +616,20 @@ def _submit_application_internal(
     submitted_at = datetime.now(UTC)
 
     with db.transaction() as connection:
-        if fetch_member_by_id(connection, validated.applicant_id) is None:
+        applicant = fetch_member_by_id(connection, validated.applicant_id)
+        if applicant is None:
             raise ValueError(f"member {validated.applicant_id} was not found")
+        if (
+            submission_authority != _SubmissionAuthority.PUBLIC_INTAKE
+            and is_synthetic_member(applicant["discord_user_id"])
+        ):
+            _raise_synthetic_application_error(
+                code="applicant_synthetic_not_allowed",
+                message=(
+                    "Synthetic public-intake members cannot submit through the "
+                    "authenticated path."
+                ),
+            )
 
         form_row = _get_current_form_for_submit(
             connection,
@@ -829,6 +865,13 @@ def _transition_application_locked(
         if action == "route":
             updated["queued_at"] = now
         elif action == "claim":
+            if reviewer_id is not None:
+                _require_non_synthetic_application_member(
+                    active_connection,
+                    reviewer_id,
+                    code="owner_synthetic_not_allowed",
+                    message="Synthetic public-intake members cannot own applications.",
+                )
             updated["owner_id"] = reviewer_id
             updated["claimed_at"] = now
         elif action == "review":
@@ -844,15 +887,23 @@ def _transition_application_locked(
         elif action == "reassign":
             if request.new_owner_id is None:
                 raise ValueError("new_owner_id is required for reassign")
-            if fetch_member_by_id(active_connection, request.new_owner_id) is None:
-                raise ValueError(f"member {request.new_owner_id} was not found")
+            _require_non_synthetic_application_member(
+                active_connection,
+                request.new_owner_id,
+                code="owner_synthetic_not_allowed",
+                message="Synthetic public-intake members cannot own applications.",
+            )
             updated["owner_id"] = request.new_owner_id
         elif action == "reactivate":
             next_owner_id = request.new_owner_id or current["owner_id"]
             if next_owner_id is None:
                 raise ApplicationReactivateOwnerRequiredError()
-            if fetch_member_by_id(active_connection, next_owner_id) is None:
-                raise ValueError(f"member {next_owner_id} was not found")
+            _require_non_synthetic_application_member(
+                active_connection,
+                next_owner_id,
+                code="owner_synthetic_not_allowed",
+                message="Synthetic public-intake members cannot own applications.",
+            )
             updated["owner_id"] = next_owner_id
             updated["claimed_at"] = now
         elif action in {"approve", "deny"}:

@@ -83,7 +83,10 @@ async def test_recompute_pins_current_policy_version(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    """AC trust recompute; D5 pins the current policy version in the profile."""
+    """AC trust recompute; D5 pins the current policy version in the profile.
+    Risk annotation: group=TG-4; named_risk=trust_recompute_real_member_regression;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C4.
+    """
     actor_id = "recompute-policy"
     seed_trust_policy_version(governance_dsn, version_number=1)
     latest_policy_id = seed_trust_policy_version(governance_dsn, version_number=2)
@@ -100,6 +103,36 @@ async def test_recompute_pins_current_policy_version(
     assert profile.policy_version_id == latest_policy_id
     assert profile.config_version == 2
     assert response.headers["etag"] == '"1"'
+
+
+@pytest.mark.asyncio
+async def test_recompute_rejects_synthetic_member_subject(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-4; named_risk=trust_recompute_synthetic_subject;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C4.
+    """
+    actor_id = "synthetic-recompute-operator"
+    seed_trust_policy_version(governance_dsn, version_number=1)
+    synthetic = synthetic_member_guard_member_factory.synthetic()
+    grant_permissions(
+        governance_db,
+        actor_id=actor_id,
+        permissions=frozenset({"trust.recompute"}),
+        scope_kind="member",
+        scope_id=str(synthetic.id),
+    )
+
+    response = await migrated_async_client.post(
+        TRUST_RECOMPUTE_URL.format(member_id=synthetic.id),
+        headers=actor_headers(actor_id=actor_id),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "trust_subject_synthetic_not_allowed"
 
 
 @pytest.mark.asyncio

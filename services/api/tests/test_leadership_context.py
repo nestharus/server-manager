@@ -77,6 +77,60 @@ async def test_leadership_context_returns_empty_but_non_null_shape_for_member_wi
 
 
 @pytest.mark.asyncio
+async def test_leadership_context_rejects_synthetic_member_alias_expansion(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-5; named_risk=leadership_alias_synthetic_member;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C5.
+    """
+    synthetic = synthetic_member_guard_member_factory.synthetic()
+    grant_permission(
+        governance_db,
+        actor_id="operator",
+        permission="leadership_context.read",
+        scope_kind="global",
+        scope_id=None,
+    )
+
+    response = await migrated_async_client.get(
+        f"/api/v1/members/{synthetic.id}/leadership-context",
+        headers=actor_headers(actor_id="operator"),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
+    assert response.json()["code"] == "leadership_alias_synthetic_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_leadership_context_accepts_real_member_alias_expansion(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    synthetic_member_guard_member_factory,
+) -> None:
+    """Risk annotation: group=TG-5; named_risk=leadership_alias_real_member_regression;
+    level=component; source=.tmp/init-124/phase6/step6a-contract.md#C5.
+    """
+    real = synthetic_member_guard_member_factory.real()
+    grant_permission(
+        governance_db,
+        actor_id="operator",
+        permission="leadership_context.read",
+        scope_kind="global",
+        scope_id=None,
+    )
+
+    response = await migrated_async_client.get(
+        f"/api/v1/members/{real.id}/leadership-context",
+        headers=actor_headers(actor_id="operator"),
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["member_id"] == str(real.id)
+
+
+@pytest.mark.asyncio
 async def test_leadership_context_reports_stale_handoff_for_predecessor_owned_work(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,

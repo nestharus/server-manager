@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from psycopg import Connection, errors
 
 from app.contracts.actor import ActorIdentity
@@ -22,6 +23,7 @@ from app.contracts.scheduler import DeferredEffectCreate
 from app.core.context import get_current_audit_context
 from app.repositories.db import PostgresDatabase
 from app.repositories.deferred_effects import enqueue_effect
+from app.repositories.members import fetch_member_by_id
 from app.repositories.roster import (
     _fetch_chapter_role_for_update_or_validate,
     _fetch_roster_entry,
@@ -31,6 +33,7 @@ from app.repositories.roster import (
     _touch_roster_entry,
     _update_roster_entry,
 )
+from app.services.members import is_synthetic_member
 from app.services.mutations import mutate_entity
 from app.services.scheduler import DEFAULT_MAX_ATTEMPTS
 
@@ -114,6 +117,25 @@ def _is_current_entry_unique_violation(error: errors.UniqueViolation) -> bool:
     return constraint == "uq_roster__chapter_member_active"
 
 
+def _validate_roster_member(connection: Connection[Any], member_id: str) -> None:
+    try:
+        parsed_member_id = UUID(member_id)
+    except ValueError:
+        return
+
+    member = fetch_member_by_id(connection, parsed_member_id)
+    if member is None:
+        return
+    if is_synthetic_member(member["discord_user_id"]):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "roster_member_synthetic_not_allowed",
+                "message": "Synthetic public-intake members cannot be added to rosters.",
+            },
+        )
+
+
 def create_roster_entry(
     db: PostgresDatabase,
     request: RosterEntryCreate,
@@ -123,6 +145,7 @@ def create_roster_entry(
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
         _validate_role(connection, chapter_id=request.chapter_id, role_id=request.role_id)
+        _validate_roster_member(connection, request.member_id)
         _insert_roster_entry(
             connection,
             row={
