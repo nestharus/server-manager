@@ -495,12 +495,15 @@ SHA) or `[wontfix]` (with reason).
   - **BL-019A (folded into 019B)** — Officer permission bundle
     constant + chapter-scope isolation test. Trivial; folded
     into 019B's authorization wiring.
-  - **BL-019B [open] — INIT-131** — `application_messages`
-    substrate: schema migration, service, endpoints, authorization
-    (visibility=`applicant_visible`/`officer_only`). Mirrors the
-    `ticket_messages` pattern but as a separate substrate to
-    avoid conflating ticket lifecycle (SLA, categorization) with
-    application review.
+  - **BL-019B [done] — INIT-131** — `application_messages`
+    substrate landed at 4b210f6: schema (wu-044), contracts,
+    repository, service, POST + GET endpoints, authorization
+    via new `application.message` permission (chapter-scope
+    aware). 21 unit/component/migration tests + 19/19 e2e on
+    humility-local. Visibility split: `applicant_visible` /
+    `officer_only`. Idempotent on `client_message_id`. Schema
+    is purely additive; no edits to existing application
+    service code beyond the router include.
   - **BL-019C [open] — INIT-132** — Transcript read endpoint
     that joins `activity_state_changes` + `application_messages`
     chronologically with visibility filtering.
