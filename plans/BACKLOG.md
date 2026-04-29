@@ -246,7 +246,7 @@ SHA) or `[wontfix]` (with reason).
   - **BL-018** — INIT-125D historical cleanup / read-hardening
     for roster/trust synthetic pollution.
 
-### BL-009 [open] — INIT-122: Discord-visible side effects for public web submissions
+### BL-009 [paused — blocked on BL-016 + BL-019] — INIT-126: Discord-visible side effects for public web submissions
 
 - **Source:** `proposals/02-public-application-intake.md:444-446` (Out
   of scope for follow-up — Tier 3 approval)
@@ -259,6 +259,40 @@ SHA) or `[wontfix]` (with reason).
   `~/ai/workflows/tiered-approval.md`. RCA establishes existing
   Discord side-effect surface; proposal designs queue/thread/
   notification fan-out.
+- **User-confirmed product direction (2026-04-29):**
+  - Discord embed in `#applications-review` channel that routes
+    back to the in-product application page; officers can claim/
+    assign + open private interview channels in the product.
+  - Embed format A: app_id, support_id, scope, submitted time,
+    form version, truncated response preview. Hide synthetic ids.
+  - **Applicants must Discord-OAuth before submitting.** No
+    anonymous public-intake. Real `discord_id` available at
+    submit time — synthetic-member apparatus becomes legacy. This
+    is a redirect of INIT-120's anonymous-public-form
+    foundation; the public submit path must be retrofitted (or
+    re-thought) to require Discord auth before the form
+    materializes responses.
+  - No private Discord thread per application. Reviews + private
+    reviewer↔applicant channels happen IN-PRODUCT. Transcripts
+    saved to product. Discord is the entry/notification surface
+    only.
+  - On submit: applicant receives an immediate Discord DM with a
+    link to the primary guild channel.
+  - Officer notification @-mentions a chapter-specific role for
+    application managers (chapter-role assignments managed in
+    the product).
+  - PII level A: minimal preview in embed; full content stays in
+    the API.
+- **Blockers:**
+  - **BL-016** (Discord OAuth provider in Authentik) — required
+    for applicants to authenticate before submitting and for the
+    embed/DM to address a real Discord identity.
+  - **BL-019** (new — in-product application review surface
+    with chapter-scoped officer roles, assignment, private
+    reviewer↔applicant channels, transcript persistence) —
+    required for the "routes back to application" embed link
+    to land somewhere meaningful and for the "private interview
+    channel" workflow.
 
 ### BL-010 [open] — INIT-123: Web form richer inputs (chapter selector, multi-page, file upload)
 
@@ -381,14 +415,29 @@ SHA) or `[wontfix]` (with reason).
 - **Priority:** LOW (residual; no known leaked rows in
   humility-local).
 
-- **Source:** Observed during INIT-120 commit; partial fix in
-  `services/web/.gitignore` shipped with INIT-120
-- **Description:** `services/web/test-results/` is a Playwright
-  artifact directory created during local test runs. INIT-120
-  added it to `services/web/.gitignore`. Verify other Playwright
-  artifact paths (e.g., `playwright-report/`) are also ignored.
-- **Plan:** Audit `services/web/.gitignore` against Playwright's
-  default artifact paths. Add anything missing.
+### BL-019 [open] — In-product application review surface (chapter roles + assignment + private channels + transcripts)
+
+- **Source:** Surfaced in BL-009 product-direction discussion
+  with user (2026-04-29).
+- **Description:** The user-confirmed BL-009 design depends on
+  an in-product (NOT Discord-mediated) application review
+  surface that doesn't yet exist. Required capabilities:
+  - Chapter-scoped officer roles for "application managers"
+    (assigned + managed from the product, not Discord roles).
+  - Application assignment / claim flow (an officer claims an
+    application from the queue).
+  - Private reviewer↔applicant channels per application
+    (in-product chat/messaging — Discord is not the surface).
+  - Transcript persistence for those private channels.
+  - The "routes back to application" link in the BL-009 Discord
+    embed lands here.
+- **Plan:** Substantial new initiative. Likely decomposes into:
+  - role/permission model for chapter-scoped officers
+  - application claim/assign flow
+  - in-product messaging substrate (or reuse of existing
+    notification/event substrate)
+  - transcript schema + retention policy
+- **Priority:** MEDIUM (blocks BL-009 Discord-side rollout).
 
 ---
 
