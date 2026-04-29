@@ -512,11 +512,13 @@ SHA) or `[wontfix]` (with reason).
     tests, full API suite 721 passed (1 known pre-existing
     fail), e2e 19/19 on humility-local.
   - **BL-019D — split into:**
-    - **BL-019D-α [open] — INIT-133A** — Backend list-applications
-      endpoint `GET /api/v1/applications` with `state`,
-      `scope_kind`, `scope_id` filters + authority check. Required
-      because the SPA queue page needs to enumerate applications;
-      no list endpoint exists today.
+    - **BL-019D-α [done] — INIT-133A** — list-applications
+      endpoint landed at bb5fbc7. `GET /api/v1/applications`
+      with state/scope/owner filters + keyset pagination
+      (limit, after_id). Authorization reuses the canonical
+      application-review permission set. 6 unit/integration
+      tests, full API suite 727 passed (1 known pre-existing
+      fail), e2e 19/19 on humility-local.
     - **BL-019D-β [open] — INIT-133B** — SPA officer review
       surface (queue page, detail page, claim/transition/message
       actions). Consumes 019B + 019C + 019D-α.
