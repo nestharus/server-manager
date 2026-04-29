@@ -9,10 +9,12 @@ IMAGE_TAG=""
 CONTEXT_DIR=""
 CONTAINERFILE=""
 PRINT_ONLY=0
+NO_CACHE=0
+K3D_CLUSTER=""
 
 usage() {
   cat <<'EOF'
-Usage: build-channel-image.sh --channel local --app registry-smoke --tag init-108 --context PATH --file PATH [--print-only]
+Usage: build-channel-image.sh --channel local --app registry-smoke --tag init-108 --context PATH --file PATH [options]
 
 Builds a local container image with docker build, tags it for the channel image
 registry, and pushes it to the channel push endpoint.
@@ -21,13 +23,23 @@ Image names follow:
   <registry>/<channel>/<app>:<tag>
 
 Options:
-  --channel <id>    Channel id to resolve (default: local)
-  --app <name>      Application/image name
-  --tag <tag>       Image tag
-  --context <path>  Docker build context
-  --file <path>     Containerfile/Dockerfile path
-  --print-only      Print PUSH_IMAGE and PULL_IMAGE without building
-  -h, --help        Show this help
+  --channel <id>      Channel id to resolve (default: local)
+  --app <name>        Application/image name
+  --tag <tag>         Image tag
+  --context <path>    Docker build context
+  --file <path>       Containerfile/Dockerfile path
+  --print-only        Print PUSH_IMAGE and PULL_IMAGE without building
+  --no-cache          Pass --no-cache to docker build (closes BL-003;
+                      defeats stale npm/Vite layer caching when source
+                      under services/web/src changes but COPY layer
+                      hash matches)
+  --k3d-import <name> After push, also `k3d image import` the freshly
+                      pushed PULL_IMAGE into the named cluster's
+                      containerd cache (closes BL-004; defeats
+                      same-tag IfNotPresent reuse on k3d nodes when
+                      the registry got a new digest under the same
+                      tag).
+  -h, --help          Show this help
 EOF
 }
 
@@ -76,6 +88,14 @@ parse_args() {
         ;;
       --print-only)
         PRINT_ONLY=1
+        ;;
+      --no-cache)
+        NO_CACHE=1
+        ;;
+      --k3d-import)
+        [[ $# -ge 2 ]] || die "--k3d-import requires a cluster name"
+        K3D_CLUSTER="$2"
+        shift
         ;;
       -h|--help)
         usage
@@ -147,8 +167,23 @@ main() {
     return 0
   fi
 
-  docker build -f "$CONTAINERFILE" -t "$push_image" "$CONTEXT_DIR"
+  local build_args=(-f "$CONTAINERFILE" -t "$push_image")
+  [[ "$NO_CACHE" -eq 1 ]] && build_args+=(--no-cache)
+  build_args+=("$CONTEXT_DIR")
+  docker build "${build_args[@]}"
   docker push "$push_image"
+
+  if [[ -n "$K3D_CLUSTER" ]]; then
+    command -v k3d >/dev/null 2>&1 || die "k3d is required for --k3d-import"
+    # Re-tag the local docker image as the cluster-internal pull URL so
+    # k3d image import (which loads from the local docker daemon) loads
+    # an image whose name matches what the deployment manifests reference.
+    # Without this, the import would either miss (cluster pull URL not in
+    # local docker) or load under the push URL and leave the old digest
+    # cached under the pull URL on each node.
+    docker tag "$push_image" "$pull_image"
+    k3d image import "$pull_image" --cluster "$K3D_CLUSTER" --keep-tools
+  fi
 }
 
 main "$@"
