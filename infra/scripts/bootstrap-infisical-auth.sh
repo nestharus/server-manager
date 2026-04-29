@@ -475,6 +475,11 @@ set_secret_if_absent "$AUTHENTIK_PATH" "AUTHENTIK_BOOTSTRAP_PASSWORD" "$(generat
 set_secret_if_absent "$AUTHENTIK_PATH" "AUTHENTIK_BOOTSTRAP_TOKEN" "$(generate_secret)"
 set_secret_if_absent "$AUTHENTIK_PATH" "SAMPLE_USER_EMAIL" "$SAMPLE_USER_EMAIL"
 set_secret_if_absent "$AUTHENTIK_PATH" "SAMPLE_USER_PASSWORD" "$(generate_secret)"
+set_secret_if_absent "$AUTHENTIK_PATH" "DISCORD_APPLICANT_OAUTH_CLIENT_ID" "${DISCORD_APPLICANT_OAUTH_CLIENT_ID:-local-discord-applicant-client-id}"
+set_secret_if_absent "$AUTHENTIK_PATH" "DISCORD_APPLICANT_OAUTH_CLIENT_SECRET" "${DISCORD_APPLICANT_OAUTH_CLIENT_SECRET:-local-discord-applicant-client-secret}"
+set_secret_if_absent "$AUTHENTIK_PATH" "APPLICANT_OIDC_CLIENT_ID" "${APPLICANT_OIDC_CLIENT_ID:-humility-local-server-manager-applicant}"
+set_secret_if_absent "$AUTHENTIK_PATH" "APPLICANT_OIDC_CLIENT_SECRET" "${APPLICANT_OIDC_CLIENT_SECRET:-$(generate_secret)}"
+set_secret_if_absent "$AUTHENTIK_PATH" "APPLICANT_RECEIPT_SIGNING_KEY" "${APPLICANT_RECEIPT_SIGNING_KEY:-$(generate_secret 48)}"
 
 set_secret_if_absent "$POMERIUM_PATH" "OIDC_CLIENT_ID" "humility-local-pomerium"
 set_secret_if_absent "$POMERIUM_PATH" "OIDC_CLIENT_SECRET" "$(generate_secret)"

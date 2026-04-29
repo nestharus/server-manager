@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     applications,
     audit,
+    auth_discord,
     authority,
     chapter_templates,
     chapters,
@@ -35,6 +36,7 @@ from app.api.v1.endpoints import (
 router = APIRouter()
 router.include_router(applications.router)
 router.include_router(audit.router, tags=["audit"])
+router.include_router(auth_discord.router)
 router.include_router(authority.router, tags=["authority"])
 router.include_router(chapter_templates.router, tags=["chapter-templates"])
 router.include_router(chapters.router, tags=["chapters"])

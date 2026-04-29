@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import Field, ValidationError
+from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings
 
 from app.contracts.runtime_settings import (
@@ -33,6 +33,28 @@ class Settings(BaseSettings):
     cedar_authorization_url: str = (
         "http://opal-client.auth-system.svc.cluster.local:8180"
     )
+    applicant_oidc_client_id: str = "humility-local-server-manager-applicant"
+    applicant_oidc_client_secret: SecretStr = Field(
+        default=SecretStr("local-applicant-oidc-client-secret"), repr=False
+    )
+    authentik_jwks_url: str = (
+        "https://auth.local.humility.local/application/o/server-manager-applicant/jwks/"
+    )
+    authentik_token_url: str = "https://auth.local.humility.local/application/o/token/"
+    authentik_authorize_url: str = (
+        "https://auth.local.humility.local/application/o/authorize/"
+    )
+    authentik_issuer_url: str = (
+        "https://auth.local.humility.local/application/o/server-manager-applicant/"
+    )
+    applicant_discord_redirect_uri: str = (
+        "https://web.local.humility.local/auth/discord/callback"
+    )
+    applicant_receipt_signing_key: SecretStr = Field(
+        default=SecretStr("local-applicant-receipt-signing-key-change-me"),
+        repr=False,
+    )
+    applicant_receipt_ttl_seconds: int = 600
 
     def to_read(self) -> ApiSettingsRead:
         return ApiSettingsRead(

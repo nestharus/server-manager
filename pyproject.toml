@@ -7,6 +7,8 @@ dependencies = [
     "discord.py>=2.3",
     "python-dotenv",
     "aiohttp",
+    "httpx",
+    "pytest-asyncio",
     "PyYAML",
 ]
 

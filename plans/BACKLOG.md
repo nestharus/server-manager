@@ -375,7 +375,7 @@ SHA) or `[wontfix]` (with reason).
   excludes `playwright-report/`, `blob-report/`, and
   `playwright/.cache/`.
 
-### BL-016 [open] — INIT-125B: Authentik Discord OAuth provider + applicant OIDC plumbing
+### BL-016 [done] — INIT-127: Authentik Discord OAuth provider + applicant OIDC plumbing
 
 - **Source:** Decomposition of BL-008 per
   `.tmp/rca/discord-oauth-linking-FINDINGS.md` §"Recommended fix shape"
@@ -387,6 +387,18 @@ SHA) or `[wontfix]` (with reason).
   identity verification surface.
 - **Plan:** Pick up after INIT-125A closes.
 - **Priority:** MEDIUM
+- **Outcome (closed in INIT-127, full pipeline; verified
+  e2e=19/19 on humility-local):** Authentik Discord Source +
+  applicant OIDC Provider/App declared in blueprints. Pomerium
+  prefix route `/auth/discord/*` forwards to API.
+  `/auth/discord/start` builds Authentik authorize URL with PKCE
+  + state. `/auth/discord/callback` exchanges code server-side,
+  validates JWT against Authentik JWKS, issues HMAC-signed
+  receipt cookie (HttpOnly, 10-min TTL). `/auth/discord/me`
+  reads receipt + returns the verified `discord_user_id`. SPA
+  has Login button on `/applications`. Discord scope: `identify`
+  only (least privilege). 16/16 unit + 6/6 infra + 6/6 web
+  + 19/19 e2e all green.
 
 ### BL-017 [open] — INIT-125C: Member link/conversion service + application re-pointing
 
