@@ -541,44 +541,84 @@ SHA) or `[wontfix]` (with reason).
         (`init-127-applicant-discord-oauth.yaml`), not the
         Pomerium officer app. A trustworthy officer-actor binding
         is missing from the chain.
-      - **Decomposition (proposed):**
-        - **BL-019D-β-0a [open]** — Solid Router migration only.
-          Replace the live vanilla `services/web/src/main.tsx`
-          with the already-scaffolded TanStack Solid Router
-          (`services/web/src/app/{router,providers,store}.tsx`,
-          `RuntimeApp.tsx`,
-          `features/{public,admin,forms}/*Route.tsx`). 1:1
-          behavioral mirror of `/`, `/applications`,
-          `/admin/chapters`. No new routes. No backend changes.
-          No Pomerium changes. Resolves the parallel-systems
-          anti-pattern AGENTS.md prohibits and unblocks β-i
-          without touching auth.
-        - **BL-019D-β-0b [open]** — Officer Discord identity
-          binding. Establish the trusted chain:
-          Authentik officer Discord OAuth blueprint → Pomerium
-          forwards `x-pomerium-claim-discord-user-id` → API
-          `me.py` exposes it → web-officer bridge derives
-          `ActorIdentity.actor_id` from a Pomerium-asserted
-          Discord user id resolved against `members.kind='discord'`,
-          NOT from the applicant_receipt cookie. The applicant
-          receipt remains scoped to applicant routes only.
-          Mechanism choice (extend Authentik claims vs add a
-          `member_links` table vs other) is a product/positioning
-          call for the user.
-        - **BL-019D-β-i [open]** — Officer queue page + claim.
-          Consumes β-0a (Solid Router) + β-0b (officer Discord
-          identity). Adds `/applications/queue` route, web-officer
-          API bridge for list+claim, Pomerium protection for the
-          new prefixes.
+      - **Decomposition (revised — bundled β-0a+β-0b+β-i):**
+        After Phase 2 binding research at
+        `research/20-init-133B-officer-identity-binding.md`,
+        the bundled M1 approach (Authentik+Pomerium Discord
+        claim chain) was chosen. Phase 3 proposal at
+        `proposals/13-init-133B-i-officer-queue.md` cleared all
+        four risk gates LOW (after 11 revision rounds). Phase
+        5 hookpoints at `research/21-init-133B-i-hookpoints.md`.
+        Phase 6a contract at
+        `.tmp/init-133B-i/phase6/step6a-contract.md`.
+        - **BL-019D-β-0a + β-0b + β-i [done]** — INIT-133B-i
+          landed bundled; closing commit on
+          `recovery/test-first-audit` branch. Includes:
+          - TanStack Solid Router as the live SPA entry;
+            vanilla `main.tsx` retired. `RuntimeApp.tsx` +
+            `DarkNemesisForm` deleted as parallel scaffolding.
+          - Authentik officer-Discord OAuth blueprint
+            (`discord-pomerium` source, `pomerium` provider +
+            app, `officers` group, sample user membership +
+            `attributes.discord_user_id`).
+          - Pomerium config: `idp_scopes` extends with
+            `discord_user_id`, `jwt_claims_headers` adds
+            `x-pomerium-claim-discord-user-id`. New
+            `path:/api/me`, `prefix:/api/web/admin/`,
+            `prefix:/api/web/officer/`,
+            `path:/applications/queue`,
+            `prefix:/applications/queue/` routes ahead of
+            public catch-all.
+          - Web-officer API bridge under
+            `/api/v1/web/officer/*` derives `ActorIdentity`
+            from Pomerium-asserted `discord_user_id` claim
+            (server-side, never from cookies/headers).
+          - `applicationListForbiddenError` mapping migrated
+            into the shared `raise_known_application_error`.
+          - `resolve_or_create_real_discord_member` accepts
+            optional `originating_actor` + `request_surface`,
+            threaded through all three audit-attribution
+            sites.
+          - Tests passing: 31/31 API bridge + identity, 14/14
+            static infra (Authentik + Pomerium), web
+            typecheck + build, 18 Playwright tests collect,
+            `validate_web_ui_local.sh` 8/8 (with 1 skip).
+        - **Residuals folded forward:**
+          - **e2e Playwright admin step**: test 19-web-ui
+            Playwright fails waiting for "Chapter
+            administration" heading on the deployed cluster.
+            Code is correct (typecheck/build/unit/static all
+            green); appears to be a live-integration boundary
+            issue (cluster fixture drift after manual
+            applies, or OAuth flow timing). Needs separate
+            session.
+          - **CodeRabbit For-accessor false positives**:
+            CodeRabbit r2-r5 keep flagging `state()`,
+            `application()` as "wrong" but they ARE accessors
+            in Solid 2 beta (`solid-js@2.0.0-beta.8`). Verified
+            in
+            `services/web/node_modules/solid-js/types/client/flow.d.ts`.
+            Documented and skipped by every fix-agent round.
+          - **Manual `ApplicationAlreadyClaimedError`
+            wrapping in bridge claim**: bridge translates
+            already-claimed-with-version-mismatch into
+            `StaleMutationError` manually rather than letting
+            `raise_known_application_error` handle it. Could
+            be folded back later.
+          - **Five accumulated minor nitpicks** from CodeRabbit
+            r5 (Pomerium group restriction at edge, SQL CTE
+            ordering, blueprint description text, JSON parse
+            robustness, test helper error clarity). All
+            non-blocking.
         - **BL-019D-β-ii [open]** — Application detail page +
           transcript view (read-only). Consumes β-i routing.
         - **BL-019D-β-iii [open]** — Message thread + non-claim
           transitions (review/approve/deny/waitlist/interview/
           reactivate/withdraw/reassign).
-- **Dependency graph:** 019B → 019C → 019D-α (done) → β-0a + β-0b
-  (parallel) → β-i → β-ii → β-iii.
-- **Priority:** MEDIUM (blocks BL-009 Discord-side rollout +
-  BL-020 DM materialization).
+- **Dependency graph:** 019B → 019C → 019D-α (done) → β-0a +
+  β-0b + β-i (done bundled) → β-ii → β-iii.
+- **Priority:** MEDIUM (β-ii + β-iii still block BL-009
+  Discord-side rollout + BL-020 DM materialization).
 
 ---
 
