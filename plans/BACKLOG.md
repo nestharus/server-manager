@@ -478,29 +478,39 @@ SHA) or `[wontfix]` (with reason).
   pre-existing fail).
 - **Priority:** LOW (residual cleanup).
 
-### BL-019 [open] — In-product application review surface (chapter roles + assignment + private channels + transcripts)
+### BL-019 [in-progress, decomposed] — In-product application review surface (chapter roles + assignment + private channels + transcripts)
 
 - **Source:** Surfaced in BL-009 product-direction discussion
   with user (2026-04-29).
-- **Description:** The user-confirmed BL-009 design depends on
-  an in-product (NOT Discord-mediated) application review
-  surface that doesn't yet exist. Required capabilities:
-  - Chapter-scoped officer roles for "application managers"
-    (assigned + managed from the product, not Discord roles).
-  - Application assignment / claim flow (an officer claims an
-    application from the queue).
-  - Private reviewer↔applicant channels per application
-    (in-product chat/messaging — Discord is not the surface).
-  - Transcript persistence for those private channels.
-  - The "routes back to application" link in the BL-009 Discord
-    embed lands here.
-- **Plan:** Substantial new initiative. Likely decomposes into:
-  - role/permission model for chapter-scoped officers
-  - application claim/assign flow
-  - in-product messaging substrate (or reuse of existing
-    notification/event substrate)
-  - transcript schema + retention policy
-- **Priority:** MEDIUM (blocks BL-009 Discord-side rollout).
+- **Substrate audit:** `research/18-bl-019-substrate-audit.md`.
+  Found that the application lifecycle (claim/assign/transitions),
+  chapter-scoped authority grants, and the ticket_messages
+  pattern (visibility-scoped staff/reporter messaging) ALREADY
+  exist. The remaining gap is per-application messaging +
+  transcript + SPA surface. The originally-planned
+  "role/permission model" reduces to a constant + integration
+  test because the authority infrastructure is already
+  chapter-scope-aware.
+- **Decomposition:**
+  - **BL-019A (folded into 019B)** — Officer permission bundle
+    constant + chapter-scope isolation test. Trivial; folded
+    into 019B's authorization wiring.
+  - **BL-019B [open] — INIT-131** — `application_messages`
+    substrate: schema migration, service, endpoints, authorization
+    (visibility=`applicant_visible`/`officer_only`). Mirrors the
+    `ticket_messages` pattern but as a separate substrate to
+    avoid conflating ticket lifecycle (SLA, categorization) with
+    application review.
+  - **BL-019C [open] — INIT-132** — Transcript read endpoint
+    that joins `activity_state_changes` + `application_messages`
+    chronologically with visibility filtering.
+  - **BL-019D [open] — INIT-133** — SPA officer review surface
+    (queue, claim, message thread, decision panel). Consumes
+    019B + 019C.
+- **Dependency graph:** 019B → 019C → 019D. 019B and 019C can
+  also be split if needed.
+- **Priority:** MEDIUM (blocks BL-009 Discord-side rollout +
+  BL-020 DM materialization).
 
 ---
 
