@@ -610,8 +610,34 @@ SHA) or `[wontfix]` (with reason).
             ordering, blueprint description text, JSON parse
             robustness, test helper error clarity). All
             non-blocking.
-        - **BL-019D-β-ii [open]** — Application detail page +
+        - **BL-019D-β-ii [done]** — Application detail page +
           transcript view (read-only). Consumes β-i routing.
+          Closing commit on `recovery/test-first-audit` branch.
+          Adds:
+          - TanStack route `/applications/$applicationId` →
+            `ApplicationDetailRoute` (read-only).
+          - Two web-officer bridge GET endpoints (detail +
+            transcript) reusing `_build_officer_actor` and
+            `raise_known_application_error`.
+          - `ApplicationMessageAppendForbiddenError` mapping
+            migrated into the shared mapper.
+          - Pomerium `prefix: /applications/` after queue
+            routes, before public catch-all.
+          - Queue row navigation Link to detail.
+          - E2e extended: post-claim navigates to detail, asserts
+            state=claimed and transcript state_change entry.
+          Tests passing locally:
+          - 45/45 API + identity tests.
+          - 15/15 static infra + Authentik blueprint tests.
+          - 27 Playwright tests collect (compat + queue + detail).
+          - validate_web_ui_local.sh: pass=9 fail=0 skip=1.
+          - All four Phase 4 risk gates LOW on r1 (no revisions
+            needed, vs β-i which took 11).
+          Residuals:
+          - E2e test 19 Playwright admin route step times out
+            (β-i pre-existing carryover; cluster-side).
+          - CodeRabbit Solid-2-beta For-accessor false positives
+            recurred across r1-r5 as expected.
         - **BL-019D-β-iii [open]** — Message thread + non-claim
           transitions (review/approve/deny/waitlist/interview/
           reactivate/withdraw/reassign).
