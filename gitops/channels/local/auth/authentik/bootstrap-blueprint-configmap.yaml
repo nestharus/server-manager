@@ -34,3 +34,81 @@ data:
           is_active: true
           groups:
             - !Find [authentik_core.group, [name, Humility Local Users]]
+  init-127-applicant-discord-oauth.yaml: |
+    version: 1
+    metadata:
+      name: init-127-applicant-discord-oauth
+      labels:
+        blueprints.goauthentik.io/instantiate: "true"
+        blueprints.goauthentik.io/description: "INIT-127 applicant Discord OAuth"
+    entries:
+      - model: authentik_sources_oauth.sourcepropertymapping
+        state: present
+        identifiers:
+          name: discord-applicant-snowflake
+        attrs:
+          name: discord-applicant-snowflake
+          expression: |
+            return {
+                "attributes": {
+                    "discord_user_id": info.get("id"),
+                }
+            }
+      - model: authentik_providers_oauth2.scopemapping
+        state: present
+        identifiers:
+          name: server-manager-applicant-discord_user_id
+        attrs:
+          name: server-manager-applicant-discord_user_id
+          scope_name: discord_user_id
+          description: Discord snowflake for applicant identity receipt
+          expression: |
+            return {
+                "discord_user_id": request.user.attributes.get("discord_user_id"),
+            }
+      - model: authentik_sources_oauth.oauthsource
+        state: present
+        identifiers:
+          slug: discord-applicant
+        attrs:
+          name: Discord Applicant
+          slug: discord-applicant
+          provider_type: discord
+          consumer_key: !Env [DISCORD_APPLICANT_OAUTH_CLIENT_ID, ""]
+          consumer_secret: !Env [DISCORD_APPLICANT_OAUTH_CLIENT_SECRET, ""]
+          access_token_url: ""
+          authorization_url: ""
+          profile_url: ""
+          oidc_jwks_url: ""
+          oidc_well_known_url: ""
+          request_token_url: ""
+          scope: identify
+          property_mappings:
+            - !Find [authentik_sources_oauth.sourcepropertymapping, [name, discord-applicant-snowflake]]
+      - model: authentik_providers_oauth2.oauth2provider
+        state: present
+        identifiers:
+          name: server-manager-applicant
+        attrs:
+          name: server-manager-applicant
+          client_id: !Env [APPLICANT_OIDC_CLIENT_ID, humility-local-server-manager-applicant]
+          client_secret: !Env [APPLICANT_OIDC_CLIENT_SECRET, ""]
+          client_type: confidential
+          issuer_mode: per_provider
+          include_claims_in_id_token: true
+          redirect_uris:
+            - matching_mode: strict
+              url: https://web.local.humility.local/auth/discord/callback
+          property_mappings:
+            - !Find [authentik_providers_oauth2.scopemapping, [name, server-manager-applicant-discord_user_id]]
+      - model: authentik_core.application
+        state: present
+        identifiers:
+          slug: server-manager-applicant
+        attrs:
+          name: Server Manager Applicant
+          slug: server-manager-applicant
+          provider: !Find [authentik_providers_oauth2.oauth2provider, [name, server-manager-applicant]]
+          launch_url: https://web.local.humility.local/applications
+          sources:
+            - !Find [authentik_sources_oauth.oauthsource, [slug, discord-applicant]]

@@ -145,3 +145,114 @@ test("web UI keeps Ark FontAwesome and TanStack controls integrated", async ({ p
   await page.getByRole("button", { name: contract.ui_libraries.ark.dialog_button_name }).click();
   await expect(page.getByRole("dialog")).toContainText(contract.ui_libraries.ark.dialog_text);
 });
+
+const applicantDiscordTest = test.extend<{ applicantAuthApi: void; publicSubmitApi: void }>({
+  applicantAuthApi: [
+    async ({ page }, use) => {
+      await page.route("**/auth/discord/me", async (route) => {
+        const cookie = route.request().headers()["cookie"] ?? "";
+        if (!cookie.includes("applicant_receipt=")) {
+          await route.fulfill({
+            status: 401,
+            contentType: "application/json",
+            body: JSON.stringify({ detail: "authentication required" }),
+          });
+          return;
+        }
+
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ discord_user_id: "123456789012345678" }),
+        });
+      });
+      await use();
+    },
+    { auto: true },
+  ],
+  publicSubmitApi: [
+    async ({ page }, use) => {
+      await page.route(`**${contract.form.submit.endpoint}`, async (route) => {
+        const request = route.request();
+        expect(request.method()).toBe(contract.form.submit.method);
+        const payload = request.postDataJSON() as Record<string, unknown>;
+        for (const field of contract.form.submit.payload_fields) {
+          const expected =
+            "source_field" in field && field.source_field
+              ? fieldValue(field.source_field)
+              : field.value;
+          expect(payloadValue(payload, field.name)).toBe(expected);
+        }
+        await route.fulfill({
+          status: contract.form.submit.success_status,
+          contentType: "application/json",
+          body: JSON.stringify({
+            message: contract.form.submit.success_message,
+            application_id: contract.form.submit.success_application_id,
+          }),
+        });
+      });
+      await use();
+    },
+    { auto: true },
+  ],
+});
+
+const loggedInApplicantTest = applicantDiscordTest.extend<{ applicantReceiptCookie: void }>({
+  applicantReceiptCookie: [
+    async ({ context, baseURL }, use) => {
+      await context.addCookies([
+        {
+          name: "applicant_receipt",
+          value: "fixture-applicant-receipt",
+          url: baseURL ?? "http://127.0.0.1:4173",
+          httpOnly: true,
+          secure: false,
+          sameSite: "Lax",
+        },
+      ]);
+      await use();
+    },
+    { auto: true },
+  ],
+});
+
+applicantDiscordTest("applications page exposes Discord login start", async ({ page }) => {
+  // Risk annotation: group=TG-6; named_risk=spa_login_redirect_missing;
+  // level=component; source=INIT-127 C6 A3.
+  await page.goto(contract.form.route);
+
+  const loginButton = page.getByRole("button", { name: "Login with Discord" });
+  await expect(loginButton).toBeVisible();
+  await loginButton.click();
+
+  await expect(page).toHaveURL(/\/auth\/discord\/start\?return_to=\/applications$/);
+});
+
+loggedInApplicantTest(
+  "applications page displays Discord identity from receipt cookie",
+  async ({ page }) => {
+    // Risk annotation: group=TG-6; named_risk=spa_receipt_state_not_verified;
+    // level=component; source=INIT-127 C6 A3.
+    await page.goto(contract.form.route);
+
+    await expect(page.getByText("Logged in as Discord user 123456789012345678")).toBeVisible();
+  },
+);
+
+applicantDiscordTest(
+  "application form still submits through the anonymous INIT-120 path",
+  async ({ page }) => {
+    // Risk annotation: group=TG-6/TG-7; named_risk=init_120_anon_submit_regression;
+    // level=component; source=INIT-127 C6 plus INIT-120 compatibility.
+    await page.goto(contract.form.route);
+    await expect(page.getByRole("button", { name: "Login with Discord" })).toBeVisible();
+
+    for (const field of contract.form.fields) {
+      await page.getByLabel(field.label).fill(field.value);
+    }
+    await page.getByRole("button", { name: contract.form.submit.button_name }).click();
+
+    await expect(page.locator("#submit-status")).toContainText(contract.form.submit.success_message);
+  },
+);

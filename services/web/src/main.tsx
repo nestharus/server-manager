@@ -1,6 +1,6 @@
 import "./styles/layers.css";
 
-const root = document.querySelector("#root");
+const root = document.querySelector<HTMLElement>("#root");
 
 if (!root) {
   throw new Error("missing #root");
@@ -16,6 +16,10 @@ type FormPayload = {
     application_text: string;
   };
   client_application_id: string;
+};
+
+type ApplicantDiscordMe = {
+  discord_user_id: string;
 };
 
 const isApplications = () => window.location.pathname === "/applications";
@@ -86,6 +90,10 @@ function applicationRoute() {
             Submit application
           </button>
         </form>
+        <div class="runtimeStack" aria-live="polite">
+          <button id="discord-login" class="button secondary" type="button">Login with Discord</button>
+          <p id="discord-login-state" class="runtimeCopy">Not logged in with Discord.</p>
+        </div>
         <div id="details-panel" class="runtimeStack" hidden>
           <span data-testid="application-status-icon" aria-hidden="true">i</span>
           <button id="open-details" class="button secondary" type="button">Open details</button>
@@ -129,6 +137,8 @@ function getClientApplicationId() {
 function bindApplicationRoute() {
   const form = document.querySelector<HTMLFormElement>("#application-form");
   const status = document.querySelector<HTMLElement>("#submit-status");
+  const discordLogin = document.querySelector<HTMLButtonElement>("#discord-login");
+  const discordLoginState = document.querySelector<HTMLElement>("#discord-login-state");
   const overviewTab = document.querySelector<HTMLButtonElement>("#tab-overview");
   const detailsTab = document.querySelector<HTMLButtonElement>("#tab-details");
   const detailsPanel = document.querySelector<HTMLElement>("#details-panel");
@@ -136,6 +146,14 @@ function bindApplicationRoute() {
   document.querySelector("#start-application")?.addEventListener("click", () => {
     window.location.assign("/applications");
   });
+
+  discordLogin?.addEventListener("click", () => {
+    window.location.assign("/auth/discord/start?return_to=/applications");
+  });
+
+  if (discordLoginState) {
+    refreshApplicantDiscordState(discordLoginState);
+  }
 
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -174,6 +192,21 @@ function bindApplicationRoute() {
     dialog.textContent = "Application details";
     detailsPanel?.append(dialog);
   });
+}
+
+async function refreshApplicantDiscordState(target: HTMLElement) {
+  try {
+    const response = await fetch("/auth/discord/me", {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return;
+    const body = (await response.json()) as ApplicantDiscordMe;
+    if (body.discord_user_id) {
+      target.textContent = `Logged in as Discord user ${body.discord_user_id}`;
+    }
+  } catch {
+    return;
+  }
 }
 
 render();

@@ -104,6 +104,10 @@ need_command() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+generate_secret() {
+  python3 -c 'import secrets, sys; print(secrets.token_urlsafe(int(sys.argv[1]) if len(sys.argv) > 1 else 32))' "$@"
+}
+
 kubectl_cmd() {
   if [[ ${#KUBECONFIG_ARG[@]} -gt 0 ]]; then
     kubectl "${KUBECONFIG_ARG[@]}" "$@"
@@ -424,6 +428,15 @@ prepare_project_path "server-manager" "$ENVIRONMENT_SLUG" "/runtime/local"
 set_secret_if_absent "DISCORD_BOT_TOKEN" "${DISCORD_BOT_TOKEN:-e2e.synthetic.discord.token}"
 set_secret_if_absent "DISCORD_GUILD_ID" "${DISCORD_GUILD_ID:-900000000000000001}"
 set_secret_if_absent "SUPABASE_SERVICE_KEY" "${SUPABASE_SERVICE_KEY:-e2e-local-supabase-service-key}"
+set_secret_if_absent "APPLICANT_OIDC_CLIENT_ID" "${APPLICANT_OIDC_CLIENT_ID:-humility-local-server-manager-applicant}"
+set_secret_if_absent "APPLICANT_OIDC_CLIENT_SECRET" "${APPLICANT_OIDC_CLIENT_SECRET:-$(generate_secret)}"
+set_secret_if_absent "AUTHENTIK_AUTHORIZE_URL" "${AUTHENTIK_AUTHORIZE_URL:-https://auth.local.humility.local/application/o/authorize/}"
+set_secret_if_absent "AUTHENTIK_TOKEN_URL" "${AUTHENTIK_TOKEN_URL:-https://auth.local.humility.local/application/o/token/}"
+set_secret_if_absent "AUTHENTIK_JWKS_URL" "${AUTHENTIK_JWKS_URL:-https://auth.local.humility.local/application/o/server-manager-applicant/jwks/}"
+set_secret_if_absent "AUTHENTIK_ISSUER_URL" "${AUTHENTIK_ISSUER_URL:-https://auth.local.humility.local/application/o/server-manager-applicant/}"
+set_secret_if_absent "APPLICANT_DISCORD_REDIRECT_URI" "${APPLICANT_DISCORD_REDIRECT_URI:-https://web.local.humility.local/auth/discord/callback}"
+set_secret_if_absent "APPLICANT_RECEIPT_SIGNING_KEY" "${APPLICANT_RECEIPT_SIGNING_KEY:-$(generate_secret 48)}"
+set_secret_if_absent "APPLICANT_RECEIPT_TTL_SECONDS" "${APPLICANT_RECEIPT_TTL_SECONDS:-600}"
 
 if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
   log "Infisical project server-manager path /runtime/local is bootstrapped with operator-supplied Discord token"

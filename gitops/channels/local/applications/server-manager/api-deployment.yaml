@@ -58,6 +58,51 @@ spec:
                 secretKeyRef:
                   name: server-manager-runtime
                   key: DISCORD_GUILD_ID
+            - name: APPLICANT_OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: APPLICANT_OIDC_CLIENT_ID
+            - name: APPLICANT_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: APPLICANT_OIDC_CLIENT_SECRET
+            - name: AUTHENTIK_AUTHORIZE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: AUTHENTIK_AUTHORIZE_URL
+            - name: AUTHENTIK_TOKEN_URL
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: AUTHENTIK_TOKEN_URL
+            - name: AUTHENTIK_JWKS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: AUTHENTIK_JWKS_URL
+            - name: AUTHENTIK_ISSUER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: AUTHENTIK_ISSUER_URL
+            - name: APPLICANT_DISCORD_REDIRECT_URI
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: APPLICANT_DISCORD_REDIRECT_URI
+            - name: APPLICANT_RECEIPT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: APPLICANT_RECEIPT_SIGNING_KEY
+            - name: APPLICANT_RECEIPT_TTL_SECONDS
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-runtime
+                  key: APPLICANT_RECEIPT_TTL_SECONDS
             - name: S3_ENDPOINT
               value: http://minio.minio-system.svc.cluster.local:9000
             - name: S3_REGION
