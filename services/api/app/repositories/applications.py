@@ -130,6 +130,65 @@ def get_application_by_client_application_id(
         ).fetchone()
 
 
+def list_applications(
+    connection: Connection[Any],
+    *,
+    states: frozenset[str] | None,
+    scope_kind: str | None,
+    scope_id: str | None,
+    owner_id: UUID | None,
+    limit: int,
+    after_id: UUID | None,
+) -> list[dict[str, Any]]:
+    predicates: list[str] = []
+    params: list[Any] = []
+    if states is not None:
+        predicates.append("a.state = ANY(%s)")
+        params.append(sorted(states))
+    if scope_kind is not None:
+        predicates.append("a.target_scope_kind = %s")
+        params.append(scope_kind)
+    if scope_id is not None:
+        predicates.append("a.target_scope_id = %s")
+        params.append(scope_id)
+    if owner_id is not None:
+        predicates.append("a.owner_id = %s")
+        params.append(owner_id)
+    if after_id is not None:
+        predicates.append(
+            """
+            (
+                a.submitted_at < (
+                    SELECT cursor_app.submitted_at
+                    FROM applications AS cursor_app
+                    WHERE cursor_app.id = %s
+                )
+                OR (
+                    a.submitted_at = (
+                        SELECT cursor_app.submitted_at
+                        FROM applications AS cursor_app
+                        WHERE cursor_app.id = %s
+                    )
+                    AND a.id > %s
+                )
+            )
+            """
+        )
+        params.extend([after_id, after_id, after_id])
+
+    where_clause = "" if not predicates else f" WHERE {' AND '.join(predicates)}"
+    params.append(limit + 1)
+    with connection.cursor(row_factory=dict_row) as cursor:
+        return list(
+            cursor.execute(
+                _APPLICATION_SELECT
+                + where_clause
+                + " ORDER BY a.submitted_at DESC, a.id ASC LIMIT %s",
+                params,
+            ).fetchall()
+        )
+
+
 def update_application(
     connection: Connection[Any],
     *,
