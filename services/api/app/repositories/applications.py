@@ -204,6 +204,33 @@ def insert_review_row(connection: Connection[Any], *, row: dict[str, Any]) -> di
         ).fetchone()
 
 
+def list_application_state_changes(
+    connection: Connection[Any],
+    *,
+    application_id: UUID,
+) -> list[dict[str, Any]]:
+    with connection.cursor(row_factory=dict_row) as cursor:
+        rows = cursor.execute(
+            """
+            SELECT sc.aggregate_seq,
+                   sc.change_type,
+                   sc.payload_json,
+                   sc.diff_json,
+                   sc.recorded_at,
+                   aa.actor_kind,
+                   aa.actor_id
+            FROM activity_state_changes AS sc
+            JOIN activity_actions AS aa
+              ON aa.id = sc.action_id
+            WHERE sc.aggregate_type = 'application'
+              AND sc.aggregate_id = %s
+            ORDER BY sc.aggregate_seq ASC
+            """,
+            (str(application_id),),
+        ).fetchall()
+    return list(rows)
+
+
 def list_open_applications_for_owner_ids(
     connection: Connection[Any],
     *,
