@@ -30,23 +30,27 @@ SQL
   )"
   [[ -n "$row" ]] || e2e_fail "public submit application row not found: ${application_id}"
   IFS=$'\t' read -r state applicant_id member_kind discord_user_id <<<"$row"
-  [[ "$state" == "queued" ]] || e2e_fail "public submit application state expected queued, got ${state}"
+  [[ "$state" == "approved" ]] || e2e_fail "application state expected approved after officer flow, got ${state}"
   [[ -n "$applicant_id" ]] || e2e_fail "public submit applicant_id missing"
   [[ "$member_kind" == "discord" ]] || e2e_fail "public submit applicant member kind expected discord, got ${member_kind}"
   [[ "$discord_user_id" == "$expected_discord_user_id" ]] || e2e_fail "public submit Discord user expected ${expected_discord_user_id}, got ${discord_user_id}"
   [[ "$discord_user_id" != public:* ]] || e2e_fail "public submit applicant member must not be synthetic: ${discord_user_id}"
-  e2e_pass "public submit persisted queued application with real Discord member ${applicant_id}"
+  e2e_pass "public submit persisted real Discord applicant ${applicant_id}"
 }
 
-assert_officer_claim_persisted() {
+assert_officer_review_persisted() {
   local record_file="${REPO_ROOT}/infra/tests/e2e/playwright/sessions/web-ui-queue-claim.json"
   [[ -f "$record_file" ]] || e2e_fail "officer claim record missing: ${record_file}"
+  local detail_record="${REPO_ROOT}/infra/tests/e2e/playwright/sessions/web-ui-detail.json"
+  [[ -f "$detail_record" ]] || e2e_fail "officer detail record missing: ${detail_record}"
 
-  local application_id expected_officer_discord_user_id
+  local application_id expected_officer_discord_user_id officer_message
   application_id="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).claimed_application_id)' "$record_file")"
   expected_officer_discord_user_id="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).officer_discord_user_id)' "$record_file")"
+  officer_message="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).officer_message)' "$detail_record")"
   [[ -n "$application_id" ]] || e2e_fail "officer claim application_id missing"
   [[ -n "$expected_officer_discord_user_id" ]] || e2e_fail "officer Discord user id missing"
+  [[ -n "$officer_message" ]] || e2e_fail "officer message missing from detail record"
 
   local primary_pod url row state applicant_id owner_id applicant_kind applicant_discord_user_id owner_kind owner_discord_user_id
   primary_pod="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get pods -l 'cnpg.io/cluster=server-manager-postgres,role=primary' -o jsonpath='{.items[0].metadata.name}')"
@@ -68,7 +72,7 @@ SQL
   )"
   [[ -n "$row" ]] || e2e_fail "claimed application row not found: ${application_id}"
   IFS=$'\t' read -r state applicant_id owner_id applicant_kind applicant_discord_user_id owner_kind owner_discord_user_id <<<"$row"
-  [[ "$state" == "claimed" ]] || e2e_fail "officer claim state expected claimed, got ${state}"
+  [[ "$state" == "approved" ]] || e2e_fail "officer flow state expected approved, got ${state}"
   [[ -n "$owner_id" ]] || e2e_fail "officer claim owner_id missing"
   [[ "$applicant_id" != "$owner_id" ]] || e2e_fail "officer claim owner_id must differ from applicant_id"
   [[ "$applicant_kind" == "discord" ]] || e2e_fail "applicant member kind expected discord, got ${applicant_kind}"
@@ -89,7 +93,37 @@ SELECT request_surface
 SQL
   )"
   [[ "$audit_row" == "api:/api/v1/web/officer/applications/${application_id}/claim" ]] || e2e_fail "officer claim audit request_surface mismatch: ${audit_row}"
-  e2e_pass "officer queue claimed application ${application_id} as Discord member ${owner_id}"
+  local review_audit_row
+  review_audit_row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
+SELECT request_surface
+  FROM activity_actions
+ WHERE aggregate_type = 'application'
+   AND aggregate_id = :'application_id'::uuid
+   AND action_type = 'application.review'
+ ORDER BY recorded_at DESC
+ LIMIT 1;
+SQL
+  )"
+  [[ "$review_audit_row" == "api:/api/v1/web/officer/applications/${application_id}/transitions" ]] || e2e_fail "officer review audit request_surface mismatch: ${review_audit_row}"
+
+  local message_row
+  message_row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -v body_markdown="$officer_message" -At -F $'\t' <<'SQL'
+SELECT visibility, body_markdown
+  FROM application_messages
+ WHERE application_id = :'application_id'::uuid
+   AND body_markdown = :'body_markdown'
+ ORDER BY message_seq DESC
+ LIMIT 1;
+SQL
+  )"
+  [[ -n "$message_row" ]] || e2e_fail "officer message row not found for ${application_id}"
+  local message_visibility message_body
+  IFS=$'\t' read -r message_visibility message_body <<<"$message_row"
+  [[ "$message_visibility" == "officer_only" ]] || e2e_fail "officer message visibility expected officer_only, got ${message_visibility}"
+  [[ "$message_body" == "$officer_message" ]] || e2e_fail "officer message body mismatch: ${message_body}"
+  e2e_pass "officer reviewed and approved application ${application_id} as Discord member ${owner_id}"
 }
 
 grant_officer_message_authority() {
@@ -149,9 +183,14 @@ assert_officer_detail_checked() {
   detail_state="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).detail_state)' "$record_file")"
   transcript_claimed="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).transcript_claimed_state_change)' "$record_file")"
   [[ -n "$application_id" ]] || e2e_fail "officer detail application_id missing"
-  [[ "$detail_state" == *claimed* ]] || e2e_fail "officer detail state expected claimed, got ${detail_state}"
+  [[ "$detail_state" == *approved* ]] || e2e_fail "officer detail state expected approved, got ${detail_state}"
   [[ "$transcript_claimed" == "true" ]] || e2e_fail "officer detail transcript claim state-change missing"
-  e2e_pass "officer detail rendered claimed state and transcript for ${application_id}"
+  local transcript_reviewed transcript_approved
+  transcript_reviewed="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).transcript_review_state_change)' "$record_file")"
+  transcript_approved="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).transcript_approved_state_change)' "$record_file")"
+  [[ "$transcript_reviewed" == "true" ]] || e2e_fail "officer detail transcript review state-change missing"
+  [[ "$transcript_approved" == "true" ]] || e2e_fail "officer detail transcript approved state-change missing"
+  e2e_pass "officer detail rendered approved state and transcript for ${application_id}"
 }
 
 export E2E_APPLICANT_RECEIPT_SIGNING_KEY="$(
@@ -173,11 +212,11 @@ export E2E_OFFICER_DISCORD_USER_ID="$(
 run_validator validate-web-ui infra/tests/validate_web_ui_local.sh --kubeconfig "$KUBECONFIG_PATH" --tag init-118-local --skip-image-build
 KUBECONFIG_PATH="$KUBECONFIG_PATH" E2E_OFFICER_DISCORD_USER_ID="$E2E_OFFICER_DISCORD_USER_ID" \
   node "${REPO_ROOT}/infra/tests/e2e/lib/seed-authority-grants.mjs" >/tmp/seed-officer-authority.json
-e2e_pass "seeded officer application.review/application.claim authority"
+e2e_pass "seeded officer application.claim/application.review/application.approve/application.message authority"
 grant_officer_message_authority
 "${REPO_ROOT}/infra/tests/e2e/lib/playwright/run-browser-flow.sh" web-ui "$KUBECONFIG_PATH" "$(e2e_log_path playwright-web-ui)"
 assert_public_submit_persisted
-assert_officer_claim_persisted
+assert_officer_review_persisted
 assert_officer_detail_checked
 e2e_pass "Playwright completed web UI OAuth and navigation flow"
 e2e_finish

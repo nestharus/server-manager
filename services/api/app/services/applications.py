@@ -115,6 +115,7 @@ AUDIT_CHANGE_TYPE = {
 }
 
 TRANSITION_PAYLOAD_ALLOWLIST = {
+    "route": {"action"},
     "claim": {"action", "reviewer_id"},
     "review": {"action", "reviewer_id", "notes"},
     "request_interview": {
@@ -1064,9 +1065,10 @@ def transition_application(
     actor: ActorIdentity,
     request_surface: str | None = None,
     skip_authority_check: bool = False,
+    allow_route_transition: bool = False,
 ) -> tuple[ApplicationRead, MutationResult]:
     action = request.action.value
-    if action == "route":
+    if action == "route" and not allow_route_transition:
         raise InvalidApplicationTransitionError(
             application_id=application_id,
             from_state="public",

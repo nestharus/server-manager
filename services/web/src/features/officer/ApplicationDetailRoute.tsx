@@ -6,6 +6,7 @@ import {
   fetchCurrentPrincipal,
   fetchOfficerApplication,
   fetchOfficerApplicationTranscript,
+  type ApplicationMessageRead,
   type ApplicationRead,
   type ApplicationTranscriptEntry,
   type ApplicationTranscriptRead,
@@ -13,6 +14,8 @@ import {
 } from "@/api/client";
 import { Button } from "@/components/primitives/Button";
 
+import { ApplicationMessageComposer } from "./ApplicationMessageComposer";
+import { ApplicationTransitionActions } from "./ApplicationTransitionActions";
 import styles from "./officer.module.css";
 
 export type ApplicationMetadataPanelProps = {
@@ -196,9 +199,9 @@ export function ApplicationDetailRoute(): JSX.Element {
     return params().applicationId;
   };
 
-  async function loadDetail(id: string) {
+  async function loadDetail(id: string, options: { readonly preserveNotice?: boolean } = {}) {
     setLoading(true);
-    setNotice(null);
+    if (!options.preserveNotice) setNotice(null);
     try {
       const [nextApplication, nextTranscript] = await Promise.all([
         fetchOfficerApplication(id),
@@ -212,6 +215,32 @@ export function ApplicationDetailRoute(): JSX.Element {
       setNotice(detailNotice(error));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadTranscript(id: string) {
+    try {
+      setTranscript(await fetchOfficerApplicationTranscript(id));
+    } catch (error) {
+      setNotice(detailNotice(error));
+    }
+  }
+
+  async function handleMessageAppended(_message: ApplicationMessageRead) {
+    setNotice(null);
+    await loadTranscript(applicationId());
+  }
+
+  async function handleTransitioned(nextApplication: ApplicationRead) {
+    setApplication(nextApplication);
+    setNotice(null);
+    await loadTranscript(applicationId());
+  }
+
+  async function handleActionError(message: string, status?: number) {
+    setNotice(message);
+    if (status === 409 || status === 412 || status === 428) {
+      await loadDetail(applicationId(), { preserveNotice: true });
     }
   }
 
@@ -305,6 +334,18 @@ export function ApplicationDetailRoute(): JSX.Element {
               <div class={styles.detailColumn}>
                 <ApplicationMetadataPanel application={read} />
                 <ApplicationResponsesPanel application={read} />
+                <ApplicationMessageComposer
+                  applicationId={read.id}
+                  disabled={loading()}
+                  onMessageAppended={handleMessageAppended}
+                  onError={handleActionError}
+                />
+                <ApplicationTransitionActions
+                  application={read}
+                  disabled={loading()}
+                  onTransitioned={handleTransitioned}
+                  onError={handleActionError}
+                />
               </div>
               <ApplicationTranscriptList entries={readTranscript.entries} />
             </div>

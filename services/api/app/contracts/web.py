@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.contracts.application_messages import ApplicationMessageVisibility
 
 
 class _WebModel(BaseModel):
@@ -17,6 +19,21 @@ class CurrentPrincipalRead(_WebModel):
     provider: Literal["pomerium"] = "pomerium"
     groups: list[str] = []
     discord_user_id: str | None = None
+
+
+class OfficerApplicationMessageAppendRequest(_WebModel):
+    model_config = ConfigDict(extra="ignore")
+
+    body_markdown: str = Field(min_length=1)
+    visibility: ApplicationMessageVisibility
+    client_message_id: str | None = None
+
+    @field_validator("body_markdown")
+    @classmethod
+    def body_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("body_markdown must not be blank")
+        return value
 
 
 class AdminChapterSummaryRead(_WebModel):

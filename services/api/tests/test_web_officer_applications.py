@@ -84,6 +84,69 @@ async def _claim_via_officer_bridge(
     )
 
 
+async def _append_message_via_officer_bridge(
+    client: AsyncClient,
+    *,
+    application_id: str,
+    body_markdown: str = "Officer bridge note",
+    visibility: str = "applicant_visible",
+    client_message_id: str | None = None,
+    headers: dict[str, str] | None = None,
+    extra_json: dict[str, Any] | None = None,
+    cookies: dict[str, str] | None = None,
+) -> Any:
+    payload = {
+        "body_markdown": body_markdown,
+        "visibility": visibility,
+        "client_message_id": client_message_id or f"web-message-{uuid4().hex}",
+    }
+    if extra_json:
+        payload.update(extra_json)
+    return await client.post(
+        f"{OFFICER_APPLICATIONS_URL}/{application_id}/messages",
+        json=payload,
+        headers=headers if headers is not None else _pomerium_headers(),
+        cookies=cookies,
+    )
+
+
+async def _transition_via_officer_bridge(
+    client: AsyncClient,
+    *,
+    application_id: str,
+    etag: str | None,
+    action: str,
+    headers: dict[str, str] | None = None,
+    **payload: Any,
+) -> Any:
+    request_headers = dict(headers if headers is not None else _pomerium_headers())
+    if etag is not None:
+        request_headers["If-Match"] = etag
+    return await client.post(
+        f"{OFFICER_APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": action, **payload},
+        headers=request_headers,
+    )
+
+
+async def _transition_via_api(
+    client: AsyncClient,
+    *,
+    application_id: str,
+    actor_id: str,
+    etag: str,
+    action: str,
+    **payload: Any,
+) -> tuple[dict[str, Any], str]:
+    response = await client.post(
+        f"{APPLICATIONS_URL}/{application_id}/transitions",
+        json={"action": action, **payload},
+        headers=_actor_headers(actor_id, **{"If-Match": etag}),
+    )
+    assert response.status_code == HTTPStatus.OK, response.text
+    return response.json(), response.headers["etag"]
+
+
 def _actor_headers(actor_id: str, **extra: str) -> dict[str, str]:
     return {"X-Actor-Kind": "user", "X-Actor-Id": actor_id, **extra}
 
@@ -164,6 +227,37 @@ def _latest_activity_action(
         "actor_id": row[1],
         "action_type": row[2],
         "request_surface": row[3],
+    }
+
+
+def _latest_application_message(
+    governance_dsn: str,
+    *,
+    application_id: str,
+) -> dict[str, Any] | None:
+    with psycopg.connect(governance_dsn) as connection:
+        row = connection.execute(
+            """
+            SELECT author_actor_kind,
+                   author_actor_id,
+                   visibility,
+                   body_markdown,
+                   client_message_id
+              FROM application_messages
+             WHERE application_id = %s
+             ORDER BY message_seq DESC
+             LIMIT 1
+            """,
+            (UUID(application_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "author_actor_kind": row[0],
+        "author_actor_id": row[1],
+        "visibility": row[2],
+        "body_markdown": row[3],
+        "client_message_id": row[4],
     }
 
 
@@ -1107,12 +1201,876 @@ async def test_officer_read_transcript_not_found(
     assert _error_code(response) == "application_not_found"
 
 
+@pytest.mark.asyncio
+async def test_officer_append_message_requires_pomerium_identity(
+    migrated_async_client: AsyncClient,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=message_actor_binding;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    response = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=str(uuid4()),
+        headers={},
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert _error_code(response) == "identity_missing"
+
+
+@pytest.mark.asyncio
+async def test_officer_append_message_requires_officers_group(
+    migrated_async_client: AsyncClient,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=message_actor_binding;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    response = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=str(uuid4()),
+        headers=_pomerium_headers(groups="applicants"),
+    )
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert _error_code(response) == "officer_required"
+
+
+@pytest.mark.asyncio
+async def test_officer_append_message_requires_discord_claim(
+    migrated_async_client: AsyncClient,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=message_actor_binding;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    response = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=str(uuid4()),
+        headers=_pomerium_headers(discord_user_id=None),
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert _error_code(response) == "officer_discord_identity_missing"
+
+
+@pytest.mark.asyncio
+async def test_officer_append_message_returns_created(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=message_idempotency;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.message"}),
+    )
+    application, _etag = await _create_application(migrated_async_client, governance_db)
+
+    response = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        body_markdown="Applicant-visible officer note",
+        visibility="applicant_visible",
+    )
+
+    assert response.status_code == HTTPStatus.CREATED, response.text
+    body = response.json()
+    assert body["application_id"] == application["id"]
+    assert body["author_actor_kind"] == "user"
+    assert body["author_actor_id"] == officer_id
+    assert body["visibility"] == "applicant_visible"
+    assert body["body_markdown"] == "Applicant-visible officer note"
+
+
+@pytest.mark.asyncio
+async def test_officer_append_message_officer_only_visibility(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=officer_only_message_visibility;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.message"}),
+    )
+    application, _etag = await _create_application(migrated_async_client, governance_db)
+
+    response = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        body_markdown="Officer-only officer note",
+        visibility="officer_only",
+    )
+
+    assert response.status_code == HTTPStatus.CREATED, response.text
+    assert response.json()["visibility"] == "officer_only"
+
+    transcript = await migrated_async_client.get(
+        f"{OFFICER_APPLICATIONS_URL}/{application['id']}/transcript",
+        headers=_pomerium_headers(),
+    )
+    assert transcript.status_code == HTTPStatus.OK, transcript.text
+    message_entries = [
+        entry for entry in transcript.json()["entries"] if entry["type"] == "message"
+    ]
+    assert message_entries[-1]["body_markdown"] == "Officer-only officer note"
+    assert message_entries[-1]["visibility"] == "officer_only"
+    assert message_entries[-1]["author_actor_id"] == officer_id
+
+
+@pytest.mark.asyncio
+async def test_officer_append_message_idempotency(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=message_idempotency;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.message"}),
+    )
+    application, _etag = await _create_application(migrated_async_client, governance_db)
+    client_message_id = f"bridge-idempotent-{uuid4().hex}"
+
+    created = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        client_message_id=client_message_id,
+    )
+    duplicate = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        client_message_id=client_message_id,
+    )
+
+    assert created.status_code == HTTPStatus.CREATED, created.text
+    assert duplicate.status_code == HTTPStatus.OK, duplicate.text
+    assert duplicate.json()["id"] == created.json()["id"]
+    assert duplicate.json()["client_message_id"] == client_message_id
+
+
+@pytest.mark.asyncio
+async def test_officer_append_message_authority_denied(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=message_authority_denied;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.review"}),
+    )
+    application, _etag = await _create_application(migrated_async_client, governance_db)
+
+    response = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+    )
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert _error_code(response) == "application_message_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_officer_append_message_not_found(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=message_not_found;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.message"}),
+        scope_kind="global",
+        scope_id=None,
+    )
+
+    response = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=str(uuid4()),
+    )
+
+    assert response.status_code == HTTPStatus.NOT_FOUND
+    assert _error_code(response) == "application_not_found"
+
+
+@pytest.mark.asyncio
+async def test_officer_append_message_ignores_browser_author_fields(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=message_actor_spoofing;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.message"}),
+    )
+    attacker_id = _create_member(governance_db, "210987654321098770")
+    _grant(
+        governance_db,
+        actor_id=attacker_id,
+        permissions=frozenset({"application.message"}),
+    )
+    application, _etag = await _create_application(migrated_async_client, governance_db)
+
+    response = await _append_message_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        body_markdown="Browser spoof attempt",
+        extra_json={
+            "author_actor_kind": "user",
+            "author_actor_id": attacker_id,
+        },
+        headers=_pomerium_headers(
+            **{
+                "X-Actor-Kind": "user",
+                "X-Actor-Id": attacker_id,
+            }
+        ),
+        cookies={"applicant_receipt": applicant_receipt_token()},
+    )
+
+    assert response.status_code == HTTPStatus.CREATED, response.text
+    assert response.json()["author_actor_kind"] == "user"
+    assert response.json()["author_actor_id"] == officer_id
+    assert response.json()["author_actor_id"] != attacker_id
+    latest = _latest_application_message(governance_dsn, application_id=application["id"])
+    assert latest is not None
+    assert latest["author_actor_id"] == officer_id
+    assert latest["author_actor_id"] != attacker_id
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_requires_pomerium_identity(
+    migrated_async_client: AsyncClient,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_actor_binding;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=str(uuid4()),
+        etag='"1"',
+        action="review",
+        headers={},
+        notes="start review",
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert _error_code(response) == "identity_missing"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_requires_officers_group(
+    migrated_async_client: AsyncClient,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_actor_binding;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=str(uuid4()),
+        etag='"1"',
+        action="review",
+        headers=_pomerium_headers(groups="applicants"),
+        notes="start review",
+    )
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert _error_code(response) == "officer_required"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_requires_discord_claim(
+    migrated_async_client: AsyncClient,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_actor_binding;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=str(uuid4()),
+        etag='"1"',
+        action="review",
+        headers=_pomerium_headers(discord_user_id=None),
+        notes="start review",
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert _error_code(response) == "officer_discord_identity_missing"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_rejects_claim_action(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=claim_endpoint_separation;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    _officer_member_with_grants(governance_db)
+    application, etag = await _create_application(migrated_async_client, governance_db)
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=etag,
+        action="claim",
+    )
+
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert _error_code(response) == "claim_action_uses_dedicated_endpoint"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_review_happy_path(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_optimistic_locking;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.claim", "application.review"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=claimed_etag,
+        action="review",
+        notes="Ready for review",
+    )
+
+    assert claimed["state"] == "claimed"
+    assert response.status_code == HTTPStatus.OK, response.text
+    body = response.json()
+    assert body["state"] == "in_review"
+    assert body["version"] == claimed["version"] + 1
+    assert response.headers["etag"] == f'"{body["version"]}"'
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_approve_happy_path(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_approve;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.claim", "application.review", "application.approve"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+    reviewed, reviewed_etag = await _transition_via_api(
+        migrated_async_client,
+        application_id=application["id"],
+        actor_id=officer_id,
+        etag=claimed_etag,
+        action="review",
+        notes="Owner review",
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=reviewed_etag,
+        action="approve",
+        decision_reason="Accepted",
+    )
+
+    assert reviewed["state"] == "in_review"
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["state"] == "approved"
+    assert response.json()["decision_reason"] == "Accepted"
+    assert response.headers["etag"] == f'"{response.json()["version"]}"'
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_deny_happy_path(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_deny;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.claim", "application.review", "application.deny"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+    _reviewed, reviewed_etag = await _transition_via_api(
+        migrated_async_client,
+        application_id=application["id"],
+        actor_id=officer_id,
+        etag=claimed_etag,
+        action="review",
+        notes="Owner review",
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=reviewed_etag,
+        action="deny",
+        decision_reason="Not a fit",
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["state"] == "denied"
+    assert response.json()["decision_reason"] == "Not a fit"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_waitlist_happy_path(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_waitlist;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.claim", "application.review", "application.waitlist"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+    _reviewed, reviewed_etag = await _transition_via_api(
+        migrated_async_client,
+        application_id=application["id"],
+        actor_id=officer_id,
+        etag=claimed_etag,
+        action="review",
+        notes="Owner review",
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=reviewed_etag,
+        action="waitlist",
+        reason="Roster capacity",
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["state"] == "waitlisted"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_request_interview_happy_path(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_request_interview;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset(
+            {"application.claim", "application.review", "application.request_interview"}
+        ),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+    _reviewed, reviewed_etag = await _transition_via_api(
+        migrated_async_client,
+        application_id=application["id"],
+        actor_id=officer_id,
+        etag=claimed_etag,
+        action="review",
+        notes="Owner review",
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=reviewed_etag,
+        action="request_interview",
+        thread_id="112233445566778899",
+        reason="Needs interview",
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["state"] == "interview"
+    assert response.json()["interview_thread_id"] == "112233445566778899"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_reactivate_happy_path(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_reactivate;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset(
+            {
+                "application.claim",
+                "application.review",
+                "application.waitlist",
+                "application.reactivate",
+            }
+        ),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+    _reviewed, reviewed_etag = await _transition_via_api(
+        migrated_async_client,
+        application_id=application["id"],
+        actor_id=officer_id,
+        etag=claimed_etag,
+        action="review",
+        notes="Owner review",
+    )
+    _waitlisted, waitlisted_etag = await _transition_via_api(
+        migrated_async_client,
+        application_id=application["id"],
+        actor_id=officer_id,
+        etag=reviewed_etag,
+        action="waitlist",
+        reason="Roster capacity",
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=waitlisted_etag,
+        action="reactivate",
+        reason="Capacity opened",
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["state"] == "claimed"
+    assert response.json()["owner_id"] == officer_id
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_withdraw_happy_path(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_withdraw;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.claim", "application.withdraw"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=claimed_etag,
+        action="withdraw",
+        notes="Applicant withdrew",
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["state"] == "withdrawn"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_route_happy_path(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_route_contract_conflict;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.route"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _set_application_state(governance_db, application_id=application["id"], state="submitted")
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=etag,
+        action="route",
+    )
+
+    assert response.status_code == HTTPStatus.OK, response.text
+    assert response.json()["state"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_invalid_action_for_state(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_state_machine;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.approve"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _set_application_state(governance_db, application_id=application["id"], state="submitted")
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=etag,
+        action="approve",
+        decision_reason="Too early",
+    )
+
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert _error_code(response) == "invalid_application_transition"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_stale_version(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_optimistic_locking;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.claim", "application.review"}),
+    )
+    application, stale_etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, _claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=stale_etag,
+        owner_id=officer_id,
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=stale_etag,
+        action="review",
+        notes="Stale review",
+    )
+
+    assert response.status_code == HTTPStatus.PRECONDITION_FAILED
+    assert _error_code(response) == "stale_application_version"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_authority_denied(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_authority_denied;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.claim"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=claimed_etag,
+        action="review",
+        notes="No review grant",
+    )
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert _error_code(response) == "authority_decision_denied"
+
+
+@pytest.mark.asyncio
+async def test_officer_transition_audit_request_surface(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    governance_dsn: str,
+) -> None:
+    """
+    Risk annotation: group=TG-1;
+        named_risk=transition_audit_surface;
+        level=api;
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
+    """
+    officer_id = _officer_member_with_grants(
+        governance_db,
+        permissions=frozenset({"application.claim", "application.review"}),
+    )
+    application, etag = await _create_application(migrated_async_client, governance_db)
+    _claimed, claimed_etag = await _claim_application(
+        migrated_async_client,
+        governance_db,
+        application=application,
+        etag=etag,
+        owner_id=officer_id,
+    )
+
+    response = await _transition_via_officer_bridge(
+        migrated_async_client,
+        application_id=application["id"],
+        etag=claimed_etag,
+        action="review",
+        notes="Audit review",
+    )
+    assert response.status_code == HTTPStatus.OK, response.text
+
+    action = _latest_activity_action(
+        governance_dsn,
+        aggregate_type="application",
+        aggregate_id=application["id"],
+        action_type="application.review",
+    )
+    assert action is not None
+    assert (
+        action["request_surface"]
+        == f"api:/api/v1/web/officer/applications/{application['id']}/transitions"
+    )
+
+
 def test_officer_endpoints_have_locked_actor_construction(app: FastAPI) -> None:
     """
     Risk annotation: group=TG-1;
         named_risk=dep_tree_lock;
         level=api;
-        source=.tmp/init-133B-ii/phase6/step6a-contract.md#TG-1
+        source=.tmp/init-133B-iii/phase6/step6a-contract.md#TG-1
     """
     officer_routes = [
         route
@@ -1125,7 +2083,9 @@ def test_officer_endpoints_have_locked_actor_construction(app: FastAPI) -> None:
         "/api/v1/web/officer/applications",
         "/api/v1/web/officer/applications/{application_id}",
         "/api/v1/web/officer/applications/{application_id}/claim",
+        "/api/v1/web/officer/applications/{application_id}/messages",
         "/api/v1/web/officer/applications/{application_id}/transcript",
+        "/api/v1/web/officer/applications/{application_id}/transitions",
     }
 
     forbidden_callables = {

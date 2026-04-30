@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from typing import NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -12,7 +13,13 @@ from app.api.v1.endpoints.applications._shared import (
 )
 from app.api.v1.endpoints.me import get_pomerium_principal
 from app.contracts.actor import ActorIdentity
-from app.contracts.application_messages import ApplicationMessageForbiddenError
+from app.contracts.application_messages import (
+    ApplicationMessageAppendForbiddenError,
+    ApplicationMessageAppendRequest,
+    ApplicationMessageForbiddenError,
+    ApplicationMessageRead,
+    ApplicationMessageVisibilityError,
+)
 from app.contracts.applications import (
     ApplicationAlreadyClaimedError,
     ApplicationListForbiddenError,
@@ -28,9 +35,14 @@ from app.contracts.applications import (
 )
 from app.contracts.applications_transcript import ApplicationTranscriptRead
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
-from app.contracts.web import AdminChapterListRead, CurrentPrincipalRead
+from app.contracts.web import (
+    AdminChapterListRead,
+    CurrentPrincipalRead,
+    OfficerApplicationMessageAppendRequest,
+)
 from app.repositories.db import PostgresDatabase
 from app.services.applicant_discord_auth import DISCORD_SNOWFLAKE_RE
+from app.services.application_messages import append_application_message
 from app.services.application_transcript import read_application_transcript
 from app.services.applications import (
     list_applications,
@@ -141,6 +153,20 @@ def get_officer_actor(request_surface: str):
         )
 
     return dependency
+
+
+def _raise_officer_application_message_error(error: Exception) -> NoReturn:
+    if isinstance(error, ApplicationMessageVisibilityError):
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={"code": "applicant_visibility_required", "message": str(error)},
+        ) from error
+    if isinstance(error, ApplicationMessageAppendForbiddenError):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail={"code": "application_message_forbidden", "message": str(error)},
+        ) from error
+    raise_known_application_error(error)
 
 
 @router.get("/officer/applications", response_model=ApplicationListRead)
@@ -255,6 +281,47 @@ async def officer_claim_application(
     return read
 
 
+@router.post(
+    "/officer/applications/{application_id}/messages",
+    response_model=ApplicationMessageRead,
+    status_code=HTTPStatus.CREATED,
+)
+async def officer_append_application_message(
+    application_id: UUID,
+    response: Response,
+    body: OfficerApplicationMessageAppendRequest,
+    actor: ActorIdentity = Depends(
+        get_officer_actor(
+            "api:/api/v1/web/officer/applications/{application_id}/messages"
+        )
+    ),
+    db: PostgresDatabase = Depends(_db),
+) -> ApplicationMessageRead:
+    service_request = ApplicationMessageAppendRequest(
+        body_markdown=body.body_markdown,
+        visibility=body.visibility,
+        client_message_id=body.client_message_id,
+        author_actor_kind=actor.actor_kind,
+        author_actor_id=actor.actor_id,
+    )
+    try:
+        read, created = append_application_message(
+            db,
+            application_id=application_id,
+            request=service_request,
+        )
+    except (
+        ApplicationNotFoundError,
+        ApplicationMessageAppendForbiddenError,
+        ApplicationMessageVisibilityError,
+        ValueError,
+        PermissionError,
+    ) as error:
+        _raise_officer_application_message_error(error)
+    response.status_code = HTTPStatus.CREATED if created else HTTPStatus.OK
+    return read
+
+
 @router.get(
     "/officer/applications/{application_id}/transcript",
     response_model=ApplicationTranscriptRead,
@@ -282,3 +349,60 @@ async def officer_read_application_transcript(
         PermissionError,
     ) as error:
         raise_known_application_error(error)
+
+
+@router.post(
+    "/officer/applications/{application_id}/transitions",
+    response_model=ApplicationRead,
+)
+async def officer_transition_application(
+    application_id: UUID,
+    request: Request,
+    response: Response,
+    body: ApplicationTransitionRequest,
+    actor: ActorIdentity = Depends(
+        get_officer_actor(
+            "api:/api/v1/web/officer/applications/{application_id}/transitions"
+        )
+    ),
+    db: PostgresDatabase = Depends(_db),
+) -> ApplicationRead:
+    if body.action == ApplicationTransitionAction.claim:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail={
+                "code": "claim_action_uses_dedicated_endpoint",
+                "message": (
+                    "Use POST /officer/applications/{id}/claim "
+                    "for claim transitions."
+                ),
+            },
+        )
+    expected_version = parse_if_match_strong(request)
+    try:
+        read, result = transition_application(
+            db,
+            actor=actor,
+            application_id=application_id,
+            expected_version=expected_version,
+            request=body,
+            request_surface=(
+                f"api:/api/v1/web/officer/applications/"
+                f"{application_id}/transitions"
+            ),
+            allow_route_transition=True,
+        )
+    except (
+        ApplicationNotFoundError,
+        StaleMutationError,
+        ApplicationAlreadyClaimedError,
+        ApplicationNotOwnerError,
+        InvalidApplicationTransitionError,
+        MissingAggregateError,
+        DuplicateApplicationCreateError,
+        ValueError,
+        PermissionError,
+    ) as error:
+        raise_known_application_error(error)
+    set_etag(response, result.etag)
+    return read
