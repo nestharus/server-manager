@@ -130,6 +130,17 @@ assert(contract.applications.detail.endpoint === "/api/web/officer/applications/
 assert(contract.applications.detail.method === "GET", "officer detail method")
 assert(contract.applications.transcript.endpoint === "/api/web/officer/applications/{id}/transcript", "officer transcript endpoint")
 assert(contract.applications.transcript.method === "GET", "officer transcript method")
+assert(contract.applications.message.endpoint === "/api/web/officer/applications/{id}/messages", "officer message endpoint")
+assert(contract.applications.message.method === "POST", "officer message method")
+assert(contract.applications.message.success_statuses.join(",") === "201,200", "officer message success statuses")
+assert(contract.applications.message.visibility_values.join(",") === "applicant_visible,officer_only", "officer message visibility values")
+assert(contract.applications.transition.endpoint === "/api/web/officer/applications/{id}/transitions", "officer transition endpoint")
+assert(contract.applications.transition.method === "POST", "officer transition method")
+assert(contract.applications.transition.if_match_header === true, "officer transition uses If-Match")
+assert(contract.applications.transition.success_status === 200, "officer transition success status")
+assert(contract.applications.transition.actions.includes("review"), "officer transition includes review")
+assert(contract.applications.transition.actions.includes("approve"), "officer transition includes approve")
+assert(contract.applications.transition.rejected_actions.includes("claim"), "officer transition rejects claim")
 ' "$CONTRACT_FIXTURE" || die "web UI contract fixture is valid"
   pass "web UI contract fixture is valid"
 }
@@ -172,6 +183,18 @@ assert_officer_detail_contract_spec() {
   pass "Playwright spec covers officer detail and transcript"
 }
 
+assert_officer_actions_contract_spec() {
+  local spec="${REPO_ROOT}/services/web/tests/officer-actions.spec.ts"
+  [[ -f "$spec" ]] || die "missing Playwright officer actions spec"
+  rg -q 'contract\.json' "$spec" || die "officer actions spec reads fixture"
+  rg -q 'application-message-composer' "$spec" || die "officer actions spec covers message composer test id"
+  rg -q 'application-transition-action-' "$spec" || die "officer actions spec covers transition action test ids"
+  rg -q 'client_message_id' "$spec" || die "officer actions spec covers message idempotency token"
+  rg -q 'if-match' "$spec" || die "officer actions spec covers transition If-Match"
+  rg -q 'author_actor_id.*toBeUndefined' "$spec" || die "officer actions spec blocks browser author fields"
+  pass "Playwright spec covers officer message and transition actions"
+}
+
 assert_web_source_api_paths() {
   if grep -rE "[\"']/api/v1/" "${REPO_ROOT}/services/web/src/" >/tmp/web-api-v1-grep.log; then
     cat /tmp/web-api-v1-grep.log >&2
@@ -185,6 +208,8 @@ assert_web_source_api_paths() {
   rg -q '/api/web/officer/applications/\$\{input\.applicationId\}/claim' "$client" || die "client.ts calls officer claim endpoint"
   rg -q '/api/web/officer/applications/\$\{applicationId\}`' "$client" || die "client.ts calls officer detail endpoint"
   rg -q '/api/web/officer/applications/\$\{applicationId\}/transcript' "$client" || die "client.ts calls officer transcript endpoint"
+  rg -q '/api/web/officer/applications/\$\{input\.applicationId\}/messages' "$client" || die "client.ts calls officer message endpoint"
+  rg -q '/api/web/officer/applications/\$\{input\.applicationId\}/transitions' "$client" || die "client.ts calls officer transition endpoint"
   rg -q '"/auth/discord/me"' "$client" || die "client.ts calls /auth/discord/me"
   pass "web source uses browser-facing API path allowlist"
 }
@@ -273,6 +298,7 @@ main() {
   assert_playwright_contract_spec
   assert_officer_queue_contract_spec
   assert_officer_detail_contract_spec
+  assert_officer_actions_contract_spec
   assert_web_source_api_paths
   assert_web_build
   assert_runtime

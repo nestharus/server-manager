@@ -71,6 +71,29 @@
     "transcript": {
       "endpoint": "/api/web/officer/applications/{id}/transcript",
       "method": "GET"
+    },
+    "message": {
+      "endpoint": "/api/web/officer/applications/{id}/messages",
+      "method": "POST",
+      "success_statuses": [201, 200],
+      "visibility_values": ["applicant_visible", "officer_only"]
+    },
+    "transition": {
+      "endpoint": "/api/web/officer/applications/{id}/transitions",
+      "method": "POST",
+      "if_match_header": true,
+      "success_status": 200,
+      "actions": [
+        "route",
+        "review",
+        "request_interview",
+        "waitlist",
+        "approve",
+        "deny",
+        "reactivate",
+        "withdraw"
+      ],
+      "rejected_actions": ["claim"]
     }
   },
   "form": {

@@ -77,8 +77,45 @@ export const applicationListReadSchema = z.object({
   next_after_id: z.string().nullable(),
 });
 
+export const applicationMessageVisibilitySchema = z.enum([
+  "applicant_visible",
+  "officer_only",
+]);
+
+export const applicationMessageReadSchema = z.object({
+  id: z.string(),
+  application_id: z.string(),
+  message_seq: z.number(),
+  author_actor_kind: z.string(),
+  author_actor_id: z.string(),
+  visibility: applicationMessageVisibilitySchema,
+  body_markdown: z.string(),
+  client_message_id: z.string().nullable(),
+  correlation_id: z.string(),
+  causation_id: z.string().nullable(),
+  created_at: z.string(),
+});
+
+export const applicationTransitionActionSchema = z.enum([
+  "route",
+  "claim",
+  "review",
+  "request_interview",
+  "waitlist",
+  "reassign",
+  "reactivate",
+  "approve",
+  "deny",
+  "withdraw",
+]);
+
 export const applicationTransitionRequestSchema = z.object({
-  action: z.literal("claim"),
+  action: applicationTransitionActionSchema,
+  notes: z.string().optional(),
+  decision_reason: z.string().optional(),
+  thread_id: z.string().optional(),
+  reason: z.string().optional(),
+  new_owner_id: z.string().optional(),
 });
 
 export const applicationTransitionResponseSchema = applicationReadSchema;
@@ -119,6 +156,10 @@ export type AdminChapterSummary = z.infer<typeof chapterListSchema>["chapters"][
 export type ApplicationState = z.infer<typeof applicationStateSchema>;
 export type ApplicationRead = z.infer<typeof applicationReadSchema>;
 export type ApplicationListRead = z.infer<typeof applicationListReadSchema>;
+export type ApplicationMessageVisibility = z.infer<typeof applicationMessageVisibilitySchema>;
+export type ApplicationMessageRead = z.infer<typeof applicationMessageReadSchema>;
+export type ApplicationTransitionAction = z.infer<typeof applicationTransitionActionSchema>;
+export type ApplicationTransitionRequest = z.infer<typeof applicationTransitionRequestSchema>;
 export type ApplicationTranscriptEntry = z.infer<typeof applicationTranscriptEntrySchema>;
 export type ApplicationTranscriptRead = z.infer<typeof applicationTranscriptReadSchema>;
 export type SubmissionResponseBody = z.infer<typeof submissionResponseBodySchema>;
@@ -290,6 +331,64 @@ export async function claimOfficerApplication(input: {
       Accept: "application/json",
       "If-Match": `"${input.expectedVersion}"`,
     },
+  });
+  if (!response.ok) {
+    throw new ApiError({
+      status: response.status,
+      path,
+      statusText: response.statusText,
+      payload: await readErrorPayload(response),
+    });
+  }
+  return applicationTransitionResponseSchema.parse(await response.json());
+}
+
+export async function appendOfficerApplicationMessage(input: {
+  applicationId: string;
+  bodyMarkdown: string;
+  visibility: ApplicationMessageVisibility;
+  clientMessageId: string;
+}) {
+  const path = `/api/web/officer/applications/${input.applicationId}/messages`;
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      body_markdown: input.bodyMarkdown,
+      visibility: input.visibility,
+      client_message_id: input.clientMessageId,
+    }),
+  });
+  if (!response.ok) {
+    throw new ApiError({
+      status: response.status,
+      path,
+      statusText: response.statusText,
+      payload: await readErrorPayload(response),
+    });
+  }
+  return applicationMessageReadSchema.parse(await response.json());
+}
+
+export async function transitionOfficerApplication(input: {
+  applicationId: string;
+  expectedVersion: number;
+  request: ApplicationTransitionRequest;
+}) {
+  const path = `/api/web/officer/applications/${input.applicationId}/transitions`;
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "If-Match": `"${input.expectedVersion}"`,
+    },
+    body: JSON.stringify(input.request),
   });
   if (!response.ok) {
     throw new ApiError({

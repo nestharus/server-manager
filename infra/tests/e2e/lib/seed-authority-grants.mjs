@@ -59,7 +59,13 @@ const postgresUrl = Buffer.from(
 
 const memberId = randomUUID();
 const grantId = randomUUID();
-const permissions = JSON.stringify(["application.claim", "application.review"]);
+const seededPermissions = [
+  "application.claim",
+  "application.review",
+  "application.approve",
+  "application.message",
+];
+const permissions = JSON.stringify(seededPermissions);
 const sql = `
 WITH resolved_member AS (
   INSERT INTO members (id, discord_user_id, joined_at, status, kind)
@@ -157,6 +163,6 @@ console.log(
     member_id: resolvedMemberId,
     scope_kind: scopeKind,
     scope_id: scopeId,
-    permissions: ["application.claim", "application.review"],
+    permissions: seededPermissions,
   }),
 );

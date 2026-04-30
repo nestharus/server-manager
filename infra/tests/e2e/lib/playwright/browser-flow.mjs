@@ -172,14 +172,89 @@ const targets = {
         .getByTestId("application-transcript")
         .locator('[data-entry-type="state_change"][data-to-state="claimed"]');
       await claimTranscriptEntry.waitFor({ timeout: 30_000 });
+      const messageResponsePromise = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.hostname === "web.local.humility.local" &&
+          url.pathname === webContract.applications.message.endpoint.replace("{id}", claimBody.id) &&
+          response.request().method() === webContract.applications.message.method
+        );
+      }, { timeout: 45_000 });
+      const officerMessage = "E2E officer beta-iii note";
+      await page.getByLabel("Append message").fill(officerMessage);
+      await page.getByRole("radio", { name: /officer.*only/i }).check();
+      await page.getByRole("button", { name: /send/i }).click();
+      const messageResponse = await messageResponsePromise;
+      if (!webContract.applications.message.success_statuses.includes(messageResponse.status())) {
+        const messageBody = await messageResponse.text().catch(() => "<unreadable>");
+        throw new Error(`officer message append returned ${messageResponse.status()}: ${messageBody.slice(0, 500)}`);
+      }
+      await page.getByTestId("application-transcript").getByText(officerMessage).waitFor({ timeout: 30_000 });
+
+      const reviewResponsePromise = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.hostname === "web.local.humility.local" &&
+          url.pathname === webContract.applications.transition.endpoint.replace("{id}", claimBody.id) &&
+          response.request().method() === webContract.applications.transition.method
+        );
+      }, { timeout: 45_000 });
+      await page.getByTestId("application-transition-action-review").click();
+      await page.getByRole("textbox", { name: /notes/i }).fill("E2E ready for review");
+      await page.getByRole("button", { name: /confirm/i }).click();
+      const reviewResponse = await reviewResponsePromise;
+      if (reviewResponse.status() !== webContract.applications.transition.success_status) {
+        const reviewBody = await reviewResponse.text().catch(() => "<unreadable>");
+        throw new Error(`officer review transition returned ${reviewResponse.status()}: ${reviewBody.slice(0, 500)}`);
+      }
+      const reviewBody = await reviewResponse.json();
+      if (reviewBody.state !== "in_review") {
+        throw new Error(`officer review transition expected in_review, got ${reviewBody.state}`);
+      }
+      await page
+        .getByTestId("application-transcript")
+        .locator('[data-entry-type="state_change"][data-to-state="in_review"]')
+        .waitFor({ timeout: 30_000 });
+
+      const approveResponsePromise = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.hostname === "web.local.humility.local" &&
+          url.pathname === webContract.applications.transition.endpoint.replace("{id}", claimBody.id) &&
+          response.request().method() === webContract.applications.transition.method
+        );
+      }, { timeout: 45_000 });
+      await page.getByTestId("application-transition-action-approve").click();
+      await page.getByRole("textbox", { name: /decision reason/i }).fill("E2E accepted");
+      await page.getByRole("button", { name: /confirm/i }).click();
+      const approveResponse = await approveResponsePromise;
+      if (approveResponse.status() !== webContract.applications.transition.success_status) {
+        const approveBody = await approveResponse.text().catch(() => "<unreadable>");
+        throw new Error(`officer approve transition returned ${approveResponse.status()}: ${approveBody.slice(0, 500)}`);
+      }
+      const approveBody = await approveResponse.json();
+      if (approveBody.state !== "approved") {
+        throw new Error(`officer approve transition expected approved, got ${approveBody.state}`);
+      }
+      await page
+        .getByTestId("application-transcript")
+        .locator('[data-entry-type="state_change"][data-to-state="approved"]')
+        .waitFor({ timeout: 30_000 });
+      const finalDetailState = (await page.getByTestId("application-detail-state").innerText({ timeout: 30_000 })).trim();
+      if (finalDetailState !== "approved") {
+        throw new Error(`officer approve UI state expected approved, got ${finalDetailState}`);
+      }
       await writeFile(
         join(sessionDir, `${flow}-detail.json`),
         JSON.stringify({
           application_id: body.application_id,
           claimed_application_id: claimBody.id,
           detail_path: detailPath,
-          detail_state: detailState,
+          detail_state: finalDetailState,
           transcript_claimed_state_change: true,
+          transcript_review_state_change: true,
+          transcript_approved_state_change: true,
+          officer_message,
         }, null, 2),
       );
     },
