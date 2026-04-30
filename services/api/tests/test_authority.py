@@ -14,7 +14,7 @@ exercised end-to-end.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4

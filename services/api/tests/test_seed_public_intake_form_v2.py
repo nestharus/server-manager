@@ -79,6 +79,7 @@ def _assert_tg4_annotation() -> None:
 
 
 def test_seed_v2_empty_db_inserts_v2_at_version_1(
+    governance_db: PostgresDatabase,
     governance_dsn: str,
     repo_root: Path,
 ) -> None:
@@ -91,16 +92,16 @@ def test_seed_v2_empty_db_inserts_v2_at_version_1(
     outcome = _run_seed_sql(governance_dsn, repo_root)
 
     assert outcome == "inserted seed v2"
-    forms = fetch_global_forms(governance_dsn)
+    forms = fetch_global_forms(governance_db)
     assert [(form["id"], form["version"], form["status"]) for form in forms] == [
         (V2_SEED_ID, 1, "current")
     ]
-    head = fetch_form_aggregate_head(governance_dsn)
+    head = fetch_form_aggregate_head(governance_db)
     assert head is not None
     assert head["current_seq"] == 1
     assert head["latest_change_id"] is not None
-    actions = fetch_form_actions(governance_dsn)
-    changes = fetch_form_state_changes(governance_dsn)
+    actions = fetch_form_actions(governance_db)
+    changes = fetch_form_state_changes(governance_db)
     assert [action["action_type"] for action in actions] == ["form.publish"]
     assert actions[0]["request_json"]["version"] == 1
     assert [change["change_type"] for change in changes] == ["form.published"]
@@ -124,18 +125,18 @@ def test_seed_v2_advances_v1_current_to_v2_at_version_2(
     outcome = _run_seed_sql(governance_dsn, repo_root)
 
     assert outcome == "advanced v1 to v2"
-    forms = fetch_global_forms(governance_dsn)
+    forms = fetch_global_forms(governance_db)
     assert [(form["id"], form["version"], form["status"]) for form in forms] == [
         (V1_SEED_ID, 1, "archived"),
         (V2_SEED_ID, 2, "current"),
     ]
     assert forms[0]["archived_at"] is not None
-    head = fetch_form_aggregate_head(governance_dsn)
+    head = fetch_form_aggregate_head(governance_db)
     assert head is not None
     assert head["current_seq"] == 2
     assert head["latest_change_id"] is not None
-    actions = fetch_form_actions(governance_dsn)
-    changes = fetch_form_state_changes(governance_dsn)
+    actions = fetch_form_actions(governance_db)
+    changes = fetch_form_state_changes(governance_db)
     assert [action["action_type"] for action in actions] == ["form.publish"]
     assert actions[0]["request_json"]["version"] == 2
     assert [change["change_type"] for change in changes] == ["form.published"]
@@ -166,15 +167,15 @@ def test_seed_v2_no_op_when_officer_published_current(
     outcome = _run_seed_sql(governance_dsn, repo_root)
 
     assert outcome == "officer-published form present; skipping seed"
-    forms = fetch_global_forms(governance_dsn)
+    forms = fetch_global_forms(governance_db)
     assert [(form["id"], form["version"], form["status"]) for form in forms] == [
         (officer_form_id, 7, "current")
     ]
-    head = fetch_form_aggregate_head(governance_dsn)
+    head = fetch_form_aggregate_head(governance_db)
     assert head is not None
     assert head["current_seq"] == 7
-    assert fetch_form_actions(governance_dsn) == []
-    assert fetch_form_state_changes(governance_dsn) == []
+    assert fetch_form_actions(governance_db) == []
+    assert fetch_form_state_changes(governance_db) == []
 
 
 def test_seed_v2_no_op_when_v2_already_current(
@@ -193,15 +194,15 @@ def test_seed_v2_no_op_when_v2_already_current(
     outcome = _run_seed_sql(governance_dsn, repo_root)
 
     assert outcome == "seed v2 already current; no-op"
-    forms = fetch_global_forms(governance_dsn)
+    forms = fetch_global_forms(governance_db)
     assert [(form["id"], form["version"], form["status"]) for form in forms] == [
         (V2_SEED_ID, 2, "current")
     ]
-    head = fetch_form_aggregate_head(governance_dsn)
+    head = fetch_form_aggregate_head(governance_db)
     assert head is not None
     assert head["current_seq"] == 2
-    assert fetch_form_actions(governance_dsn) == []
-    assert fetch_form_state_changes(governance_dsn) == []
+    assert fetch_form_actions(governance_db) == []
+    assert fetch_form_state_changes(governance_db) == []
 
 
 def test_seed_v2_preserves_bl002_fail_closed_guard(
@@ -219,8 +220,8 @@ def test_seed_v2_preserves_bl002_fail_closed_guard(
     with pytest.raises(psycopg.Error, match="BL-002 fail-closed"):
         _run_seed_sql(governance_dsn, repo_root)
 
-    assert fetch_global_forms(governance_dsn) == []
-    head = fetch_form_aggregate_head(governance_dsn)
+    assert fetch_global_forms(governance_db) == []
+    head = fetch_form_aggregate_head(governance_db)
     assert head is not None
     assert head["current_seq"] == 1
     assert head["latest_change_id"] is None
