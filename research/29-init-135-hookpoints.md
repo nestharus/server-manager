@@ -10,7 +10,7 @@ map: `research/28-bl-010-problem-map.md`.
 ## Summary
 
 INIT-135 ships one new public read surface
-(`GET /api/public/chapters`), one new form-field variant
+(`GET /api/v1/public/chapters`), one new form-field variant
 (`chapter_select`), one new public-submit branch (form-
 lookup override + chapter-target persistence), one
 data-driven SPA renderer change, one seed v1→v2 advance,
@@ -246,7 +246,7 @@ PR).
   `publicChapterListSchema = z.object({ chapters:
   z.array(z.object({id: z.string(), name: z.string()}))
   })`, `fetchPublicChapters()` (calls
-  `getJson("/api/public/chapters",
+  `getJson("/api/v1/public/chapters",
   publicChapterListSchema)`),
   `publicFormFieldSchema` (discriminated union over
   `type`), `publicFormDefinitionSchema`, and
@@ -299,7 +299,7 @@ PR).
   current, v2 already current (TG-3 integration; F3).
 - `services/web/tests/compat.spec.ts` — chapter-selector
   render, required validation, mocked
-  `/api/public/chapters` route, payload assertions
+  `/api/v1/public/chapters` route, payload assertions
   (TG-4). Extends existing `loggedInApplicantTest`
   variants.
 
@@ -461,7 +461,7 @@ PR).
   public-intake-rate-limit` from the ingress
   annotation.
 - `gitops/channels/local/auth/pomerium/public-intake-rate-limit.yaml:21-30`
-  — add a second path entry for `/api/public/chapters`
+  — add a second path entry for `/api/v1/public/chapters`
   next to `/api/public/applications`, routed through
   `pomerium-proxy:80`. No Pomerium-config route is
   added; the catch-all `/` SPA route handles
@@ -516,7 +516,7 @@ PR).
     chapter id>"}`;
   - add a top-level
     `public_chapters: {"endpoint":
-    "/api/public/chapters", "method": "GET",
+    "/api/v1/public/chapters", "method": "GET",
     "active_chapter": {"id": "<fixture id>",
     "name": "<fixture name>"}}` block;
   - extend `submit.payload_fields` so
@@ -532,11 +532,11 @@ PR).
   `responses.chapter` and the chapter-scoped
   `scope.scope_id`. Add an assertion that
   `contract.public_chapters.endpoint ===
-  "/api/public/chapters"`.
+  "/api/v1/public/chapters"`.
 - `services/web/tests/compat.spec.ts:18-30,
   115-140, 278-299` — add a
   `publicChaptersApi` route stub at
-  `**/api/public/chapters` returning
+  `**/api/v1/public/chapters` returning
   `{chapters: [contract.public_chapters.active_chapter]}`,
   and update the submit-payload assertion to expect
   `scope.scope_kind === "chapter"` and
@@ -836,4 +836,4 @@ PR).
   `infra/tests/fixtures/web-ui/contract.json` outside
   the fixture's `public_chapters.active_chapter`
   block — the SPA reads them from
-  `/api/public/chapters` at render time.
+  `/api/v1/public/chapters` at render time.

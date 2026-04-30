@@ -40,4 +40,8 @@ def fetch_active_public_chapter(
         ).fetchone()
 
 
-__all__ = ["fetch_active_public_chapter", "list_public_active_chapters"]
+__all__ = [
+    "PUBLIC_CHAPTERS_LIMIT",
+    "fetch_active_public_chapter",
+    "list_public_active_chapters",
+]
