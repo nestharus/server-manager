@@ -195,7 +195,13 @@ function renderFormField(
     return (
       <label class="runtimeField">
         <span>{field.label}</span>
-        <input name={field.id} aria-label={field.label} type="checkbox" />
+        <input
+          name={field.id}
+          aria-label={field.label}
+          aria-required={field.required ? "true" : undefined}
+          required={field.required}
+          type="checkbox"
+        />
       </label>
     );
   }
