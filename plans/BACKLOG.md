@@ -638,9 +638,51 @@ SHA) or `[wontfix]` (with reason).
             (β-i pre-existing carryover; cluster-side).
           - CodeRabbit Solid-2-beta For-accessor false positives
             recurred across r1-r5 as expected.
-        - **BL-019D-β-iii [open]** — Message thread + non-claim
-          transitions (review/approve/deny/waitlist/interview/
-          reactivate/withdraw/reassign).
+        - **BL-019D-β-iii [done]** — Message thread + non-claim
+          transitions. Closing commit on
+          `recovery/test-first-audit` branch. Closes BL-019D-β.
+          Adds:
+          - `POST /api/v1/web/officer/applications/{id}/messages`
+            bridge. Browser does NOT supply author fields;
+            bridge fills from resolved officer actor. 201 on
+            create, 200 on idempotent replay.
+          - `POST /api/v1/web/officer/applications/{id}/transitions`
+            bridge. Single endpoint covers 7 actions
+            (review, request_interview, waitlist, approve,
+            deny, reactivate, withdraw, route). Rejects
+            `claim` with 400 — β-i has dedicated endpoint.
+          - `ApplicationMessageComposer` Solid component
+            (textarea + visibility toggle + idempotency
+            token rotation).
+          - `ApplicationTransitionActions` Solid component
+            (state machine-driven button visibility +
+            inline required fields).
+          - `applicationStateMachine.ts` mirrors
+            `VALID_TRANSITIONS` (excluding claim, reassign).
+          - E2e extended through review → approve via detail
+            route; asserts `state=approved` + audit
+            `request_surface` in Postgres.
+          Tests passing locally:
+          - 70/70 API + identity tests.
+          - 15/15 static infra + Authentik blueprint tests.
+          - 40 Playwright tests collect (compat + queue +
+            detail + actions).
+          - validate_web_ui_local.sh: pass=10 fail=0 skip=1.
+          - All four Phase 4 risk gates LOW on r1.
+          Residuals carried forward (β-i originals):
+          - E2e test 19 Playwright admin route step
+            timeout (cluster-side, not code).
+          - CodeRabbit Solid-2-beta For-accessor false
+            positives recurred across r1-r3 as expected.
+          - Local Docker `credsStore: desktop.exe` failed
+            mid-build; worked around by temporarily
+            removing the credsStore line. Worth a separate
+            INIT to harden the build pipeline.
+          - The `route` transition required adding an
+            `allow_route_transition=True` flag on
+            `transition_application` per 6b test
+            expectations. Implementation choice; can be
+            revisited.
 - **Dependency graph:** 019B → 019C → 019D-α (done) → β-0a +
   β-0b + β-i (done bundled) → β-ii → β-iii.
 - **Priority:** MEDIUM (β-ii + β-iii still block BL-009
