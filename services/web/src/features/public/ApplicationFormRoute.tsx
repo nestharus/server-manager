@@ -214,7 +214,6 @@ function renderFormField(
           name={field.id}
           aria-label={field.label}
           required
-          value=""
         >
           <option value="" disabled>
             {field.placeholder ?? "Choose a chapter"}
