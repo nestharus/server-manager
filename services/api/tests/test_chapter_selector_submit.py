@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 
 from app.contracts.authz import CedarAuthorizationDecision
 from app.infrastructure.authz import CedarAuthorizationRequest
@@ -56,7 +56,7 @@ async def _post_public_application(
     client: AsyncClient,
     *,
     payload: dict[str, Any],
-):
+) -> Response:
     return await client.post(
         PUBLIC_SUBMIT_URL,
         json=payload,

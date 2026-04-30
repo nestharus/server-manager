@@ -374,16 +374,33 @@ def test_validate_application_responses_uses_typeadapter_for_union() -> None:
         },
     ]
     reparsed_fields = deepcopy(fields)
+    responses = {
+        "short_answer": "Kalec",
+        "long_answer": "I want to join scheduled guild activities.",
+        "raid_count": 3,
+        "class": "mage",
+        "roles": ["damage"],
+        "rules": True,
+        "chapter": "chapter-1",
+    }
 
-    validate_application_responses(
-        reparsed_fields,
-        {
-            "short_answer": "Kalec",
-            "long_answer": "I want to join scheduled guild activities.",
-            "raid_count": 3,
-            "class": "mage",
-            "roles": ["damage"],
-            "rules": True,
-            "chapter": "chapter-1",
-        },
-    )
+    validate_application_responses(reparsed_fields, responses)
+
+    assert responses == {
+        "short_answer": "Kalec",
+        "long_answer": "I want to join scheduled guild activities.",
+        "raid_count": 3,
+        "class": "mage",
+        "roles": ["damage"],
+        "rules": True,
+        "chapter": "chapter-1",
+    }
+    assert isinstance(responses["chapter"], str)
+    assert isinstance(responses["short_answer"], str)
+    assert isinstance(responses["long_answer"], str)
+    assert isinstance(responses["raid_count"], int | float)
+    assert not isinstance(responses["raid_count"], bool)
+    assert isinstance(responses["rules"], bool)
+    assert isinstance(responses["class"], str)
+    assert responses["roles"] == ["damage"]
+    assert all(isinstance(role, str) for role in responses["roles"])
