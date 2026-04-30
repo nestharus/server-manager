@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from http import HTTPStatus
+import logging
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -59,8 +60,13 @@ from app.services.members import (
     resolve_or_create_real_discord_member,
 )
 from app.services.mutations import mutate_entity
-from app.services.notifications import emit_application_public_submitted_event
+from app.services.notifications import (
+    NotificationEmitError,
+    emit_application_public_submitted_event,
+)
 
+
+logger = logging.getLogger(__name__)
 
 VALID_TRANSITIONS = {
     ("submitted", "route"): "queued",
@@ -867,21 +873,26 @@ async def submit_public_application_with_receipt(
         client_application_id=client_application_id,
     )
     actor = ActorIdentity(actor_kind="user", actor_id=str(member.id))
-    created = _submit_application_internal(
-        db,
-        internal_submission,
-        actor,
-        request_surface=PUBLIC_SUBMIT_SURFACE,
-    )
-    emit_application_public_submitted_event(
-        db,
-        application_id=created.read.id,
-        applicant_member_id=member.id,
-        discord_user_id=discord_user_id,
-        scope_kind=created.read.target_scope.scope_kind,
-        scope_id=created.read.target_scope.scope_id,
-        actor=actor,
-    )
+    try:
+        created = _submit_application_internal(
+            db,
+            internal_submission,
+            actor,
+            request_surface=PUBLIC_SUBMIT_SURFACE,
+        )
+    except DuplicateApplicationCreateError as error:
+        return error.application.id
+    try:
+        emit_application_public_submitted_event(
+            db,
+            application=created.read,
+            discord_user_id=discord_user_id,
+        )
+    except (NotificationEmitError, RuntimeError):
+        logger.exception(
+            "notification emit failed for application %s; submit row remains durably committed",
+            created.read.id,
+        )
     return created.read.id
 
 

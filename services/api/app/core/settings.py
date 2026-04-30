@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     discord_bot_token: str = Field(..., repr=False)
     discord_guild_id: int
     discord_staging_guild_id: int | None = None
+    web_public_base_url: str = Field(...)
+    global_applications_review_channel_id: str | None = None
+    global_application_managers_role_id: str | None = None
+    global_primary_guild_channel_url: str | None = None
 
     supabase_db_url: str = Field(..., repr=False)
     supabase_service_key: str = Field(..., repr=False)

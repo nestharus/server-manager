@@ -37,6 +37,7 @@ class NotificationEnvelopeRead(_NotificationModel):
     template_snapshot_json: dict[str, Any]
     rendered_title: str
     rendered_body: str
+    rendered_embed_json: dict[str, Any] | None = None
     actionable: bool
     delivery_status: NotificationDeliveryStatus
     claimed_by: str | None = None

@@ -47,6 +47,7 @@ _ENVELOPE_SELECT = """
            template_snapshot_json,
            rendered_title,
            rendered_body,
+           rendered_embed_json,
            actionable,
            delivery_status,
            claimed_by,
@@ -231,6 +232,7 @@ def insert_notification_envelope_on_conflict_do_nothing(
                 template_snapshot_json,
                 rendered_title,
                 rendered_body,
+                rendered_embed_json,
                 actionable,
                 delivery_status,
                 claimed_by,
@@ -246,7 +248,7 @@ def insert_notification_envelope_on_conflict_do_nothing(
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT DO NOTHING
             RETURNING id,
@@ -264,6 +266,7 @@ def insert_notification_envelope_on_conflict_do_nothing(
                       template_snapshot_json,
                       rendered_title,
                       rendered_body,
+                      rendered_embed_json,
                       actionable,
                       delivery_status,
                       claimed_by,
@@ -293,6 +296,9 @@ def insert_notification_envelope_on_conflict_do_nothing(
                 Jsonb(row["template_snapshot_json"]),
                 row["rendered_title"],
                 row["rendered_body"],
+                None
+                if row.get("rendered_embed_json") is None
+                else Jsonb(row["rendered_embed_json"]),
                 row["actionable"],
                 row["delivery_status"],
                 row.get("claimed_by"),

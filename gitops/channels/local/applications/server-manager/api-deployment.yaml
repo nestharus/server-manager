@@ -58,6 +58,23 @@ spec:
                 secretKeyRef:
                   name: server-manager-runtime
                   key: DISCORD_GUILD_ID
+            - name: WEB_PUBLIC_BASE_URL
+              value: https://web.local.humility.local
+            - name: GLOBAL_APPLICATIONS_REVIEW_CHANNEL_ID
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-e2e-fixtures
+                  key: applications-review-channel-id
+            - name: GLOBAL_APPLICATION_MANAGERS_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-e2e-fixtures
+                  key: application-managers-role-id
+            - name: GLOBAL_PRIMARY_GUILD_CHANNEL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: server-manager-e2e-fixtures
+                  key: primary-guild-channel-url
             - name: APPLICANT_OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:

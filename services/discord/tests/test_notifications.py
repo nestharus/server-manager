@@ -33,6 +33,7 @@ def _command(
         id=envelope_id,
         rendered_title="Title",
         rendered_body="Body",
+        rendered_embed_json=None,
         recipient_discord_id=recipient_discord_id,
         recipient_display="1001",
         channel=channel,

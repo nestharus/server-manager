@@ -74,9 +74,60 @@ def _recipient_selector_key(recipients_json: dict[str, Any]) -> str:
     return f"unresolved:{digest}"
 
 
-def _resolve_recipients(rule: NotificationRuleRead) -> list[dict[str, Any]]:
+def _payload_value(event: NotificationEventRead, key: str | None) -> str | None:
+    if key is None:
+        return None
+    value = event.payload.get(key)
+    if value is None:
+        return None
+    stripped = str(value).strip()
+    return stripped or None
+
+
+def _resolve_recipients(
+    rule: NotificationRuleRead,
+    event: NotificationEventRead,
+) -> list[dict[str, Any]]:
     recipients = rule.recipients_json
     kind = recipients.get("kind")
+    if kind == "event_payload_discord_user":
+        user_id = _payload_value(event, recipients.get("user_id_payload_key"))
+        if not user_id:
+            return [
+                {
+                    "recipient_key": _recipient_selector_key(recipients),
+                    "recipient_discord_id": None,
+                    "recipient_display": "unresolved recipient",
+                    "reason": "recipient_unresolved",
+                }
+            ]
+        return [
+            {
+                "recipient_key": f"discord_user:{user_id}",
+                "recipient_discord_id": user_id,
+                "recipient_display": user_id,
+                "reason": None,
+            }
+        ]
+    if kind == "event_payload_designated_channel":
+        role_id = _payload_value(event, recipients.get("role_id_payload_key"))
+        if not role_id:
+            return [
+                {
+                    "recipient_key": _recipient_selector_key(recipients),
+                    "recipient_discord_id": None,
+                    "recipient_display": "unresolved recipient",
+                    "reason": "recipient_unresolved",
+                }
+            ]
+        return [
+            {
+                "recipient_key": f"discord_role:{role_id}",
+                "recipient_discord_id": None,
+                "recipient_display": role_id,
+                "reason": None,
+            }
+        ]
     if kind == "discord_user":
         user_id = str(recipients.get("user_id", "")).strip()
         if not user_id:
@@ -122,11 +173,20 @@ def _resolve_recipients(rule: NotificationRuleRead) -> list[dict[str, Any]]:
     ]
 
 
-def _resolve_destination(rule: NotificationRuleRead) -> tuple[str | None, str | None]:
+def _resolve_destination(
+    rule: NotificationRuleRead,
+    event: NotificationEventRead,
+) -> tuple[str | None, str | None]:
     if rule.channel == "dm":
         return None, None
     if rule.channel == "designated_channel":
-        destination = str(rule.recipients_json.get("designated_channel_id", "")).strip()
+        if rule.recipients_json.get("kind") == "event_payload_designated_channel":
+            destination = _payload_value(
+                event,
+                rule.recipients_json.get("channel_id_payload_key"),
+            )
+        else:
+            destination = str(rule.recipients_json.get("designated_channel_id", "")).strip()
         if not destination:
             return None, "destination_missing"
         return destination, None
@@ -148,14 +208,83 @@ def _template_context(event: NotificationEventRead, rule: NotificationRuleRead) 
     return context
 
 
-def _render_template(rule: NotificationRuleRead, event: NotificationEventRead) -> tuple[str, str]:
+def _substitute_string(value: str, context: dict[str, str]) -> str:
+    try:
+        return Template(value).substitute(context)
+    except KeyError as error:
+        raise TemplateRenderError(str(error.args[0])) from error
+
+
+def _render_embed_value(value: Any, context: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return _substitute_string(value, context)
+    return value
+
+
+def _render_embed(
+    template_embed: Any,
+    context: dict[str, str],
+) -> dict[str, Any] | None:
+    if template_embed is None:
+        return None
+    if not isinstance(template_embed, dict):
+        return None
+
+    rendered: dict[str, Any] = {}
+    for key in ("title", "description", "url"):
+        if key in template_embed:
+            rendered[key] = _render_embed_value(template_embed[key], context)
+    if "color" in template_embed:
+        rendered["color"] = template_embed["color"]
+
+    fields = template_embed.get("fields", [])
+    if isinstance(fields, list):
+        rendered_fields: list[dict[str, Any]] = []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            rendered_field = dict(field)
+            if "name" in rendered_field:
+                rendered_field["name"] = _render_embed_value(
+                    rendered_field["name"],
+                    context,
+                )
+            if "value" in rendered_field:
+                rendered_field["value"] = _render_embed_value(
+                    rendered_field["value"],
+                    context,
+                )
+            rendered_fields.append(rendered_field)
+        rendered["fields"] = rendered_fields
+
+    return rendered
+
+
+def _render_template(
+    rule: NotificationRuleRead,
+    event: NotificationEventRead,
+) -> tuple[str, str, dict[str, Any] | None]:
     context = _template_context(event, rule)
     title_template = str(rule.template_json.get("title", ""))
     body_template = str(rule.template_json.get("body", ""))
-    try:
-        return Template(title_template).substitute(context), Template(body_template).substitute(context)
-    except KeyError as error:
-        raise TemplateRenderError(str(error.args[0])) from error
+    return (
+        _substitute_string(title_template, context),
+        _substitute_string(body_template, context),
+        _render_embed(rule.template_json.get("embed"), context),
+    )
+
+
+def _payload_requirement_error(
+    rule: NotificationRuleRead,
+    event: NotificationEventRead,
+) -> str | None:
+    if (
+        rule.channel == "dm"
+        and rule.recipients_json.get("kind") == "event_payload_discord_user"
+        and _payload_value(event, "primary_guild_channel_url") is None
+    ):
+        return "primary_guild_channel_url_missing"
+    return None
 
 
 def _envelope_from_row(row: dict[str, Any]) -> NotificationEnvelopeRead:
@@ -187,14 +316,24 @@ def materialize_event(
                 continue
             rendered_title = ""
             rendered_body = ""
+            rendered_embed_json: dict[str, Any] | None = None
             render_error: str | None = None
             try:
-                rendered_title, rendered_body = _render_template(rule, event)
+                rendered_title, rendered_body, rendered_embed_json = _render_template(
+                    rule,
+                    event,
+                )
             except TemplateRenderError:
                 render_error = "template_missing_key"
-            destination_channel_id, destination_error = _resolve_destination(rule)
-            for recipient in _resolve_recipients(rule):
-                reason = recipient["reason"] or destination_error or render_error
+            destination_channel_id, destination_error = _resolve_destination(rule, event)
+            payload_requirement_error = _payload_requirement_error(rule, event)
+            for recipient in _resolve_recipients(rule, event):
+                reason = (
+                    recipient["reason"]
+                    or destination_error
+                    or payload_requirement_error
+                    or render_error
+                )
                 status = "skipped" if reason is not None else "pending"
                 now = datetime.now(UTC)
                 inserted = insert_notification_envelope_on_conflict_do_nothing(
@@ -215,6 +354,7 @@ def materialize_event(
                         "template_snapshot_json": deepcopy(rule.template_json),
                         "rendered_title": rendered_title,
                         "rendered_body": rendered_body,
+                        "rendered_embed_json": rendered_embed_json,
                         "actionable": rule.actionable,
                         "delivery_status": status,
                         "claimed_by": None,

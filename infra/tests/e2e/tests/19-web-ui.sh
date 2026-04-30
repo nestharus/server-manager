@@ -35,6 +35,48 @@ SQL
   [[ "$member_kind" == "discord" ]] || e2e_fail "public submit applicant member kind expected discord, got ${member_kind}"
   [[ "$discord_user_id" == "$expected_discord_user_id" ]] || e2e_fail "public submit Discord user expected ${expected_discord_user_id}, got ${discord_user_id}"
   [[ "$discord_user_id" != public:* ]] || e2e_fail "public submit applicant member must not be synthetic: ${discord_user_id}"
+
+  local notification_row event_count officer_envelopes applicant_envelopes delivery_effects
+  notification_row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
+    psql "$url" \
+      -v ON_ERROR_STOP=1 \
+      -v application_id="$application_id" \
+      -v expected_discord_user_id="$expected_discord_user_id" \
+      -v applications_review_channel_id="$E2E_APPLICATIONS_REVIEW_CHANNEL_ID" \
+      -At -F $'\t' <<'SQL'
+WITH matching_events AS (
+  SELECT id
+    FROM notification_events
+   WHERE event_type = 'application.public_submitted'
+     AND payload_json->>'application_id' = :'application_id'
+),
+matching_envelopes AS (
+  SELECT ne.*
+    FROM notification_envelopes ne
+    JOIN matching_events me ON me.id = ne.source_event_id
+)
+SELECT
+  (SELECT count(*) FROM matching_events),
+  (SELECT count(*)
+     FROM matching_envelopes
+    WHERE channel = 'designated_channel'
+      AND destination_channel_id = :'applications_review_channel_id'
+      AND rendered_embed_json IS NOT NULL),
+  (SELECT count(*)
+     FROM matching_envelopes
+    WHERE channel = 'dm'
+      AND recipient_discord_id = :'expected_discord_user_id'),
+  (SELECT count(*)
+     FROM deferred_effects de
+     JOIN matching_envelopes me ON de.payload_json->>'envelope_id' = me.id::text
+    WHERE de.effect_type = 'notifications_deliver');
+SQL
+  )"
+  IFS=$'\t' read -r event_count officer_envelopes applicant_envelopes delivery_effects <<<"$notification_row"
+  [[ "$event_count" == "1" ]] || e2e_fail "expected one application.public_submitted event for ${application_id}, got ${event_count}"
+  [[ "$officer_envelopes" == "1" ]] || e2e_fail "expected one officer designated-channel notification envelope for ${application_id}, got ${officer_envelopes}"
+  [[ "$applicant_envelopes" == "1" ]] || e2e_fail "expected one applicant DM notification envelope for ${application_id}, got ${applicant_envelopes}"
+  [[ "$delivery_effects" == "2" ]] || e2e_fail "expected two queued notification delivery effects for ${application_id}, got ${delivery_effects}"
   e2e_pass "public submit persisted real Discord applicant ${applicant_id}"
 }
 
@@ -201,12 +243,17 @@ export E2E_APPLICANT_DISCORD_USER_ID="$(
   kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-e2e-fixtures \
     -o jsonpath='{.data.applicant-discord-user-id}' | base64 -d
 )"
+export E2E_APPLICATIONS_REVIEW_CHANNEL_ID="$(
+  kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-e2e-fixtures \
+    -o jsonpath='{.data.applications-review-channel-id}' | base64 -d
+)"
 export E2E_OFFICER_DISCORD_USER_ID="$(
   node -e 'const fs = require("fs"); const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).auth?.identity?.discord_user_id; if (value !== undefined && value !== null && String(value).trim() !== "") console.log(value);' \
     "${REPO_ROOT}/infra/tests/fixtures/web-ui/contract.json"
 )"
 [[ -n "$E2E_APPLICANT_RECEIPT_SIGNING_KEY" ]] || e2e_fail "server-manager-e2e-fixtures missing applicant-receipt-signing-key"
 [[ -n "$E2E_APPLICANT_DISCORD_USER_ID" ]] || e2e_fail "server-manager-e2e-fixtures missing applicant-discord-user-id"
+[[ -n "$E2E_APPLICATIONS_REVIEW_CHANNEL_ID" ]] || e2e_fail "server-manager-e2e-fixtures missing applications-review-channel-id"
 [[ -n "$E2E_OFFICER_DISCORD_USER_ID" && "$E2E_OFFICER_DISCORD_USER_ID" != "undefined" ]] || e2e_fail "web UI contract fixture missing officer Discord user id"
 
 run_validator validate-web-ui infra/tests/validate_web_ui_local.sh --kubeconfig "$KUBECONFIG_PATH" --tag init-118-local --skip-image-build
