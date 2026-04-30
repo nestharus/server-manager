@@ -63,10 +63,11 @@ only submit at global today).
 
 ### Q2. Chapter list public endpoint
 
-New `GET /api/v1/public/chapters?state=active` API route
-— exposed to the SPA as `/api/public/chapters` — returns
-`[{id, name}]`. Public (Pomerium catch-all), receipt-not-
-required (it's just a list of chapters — no PII).
+New `GET /api/v1/public/chapters` API route — exposed to
+the SPA as `/api/public/chapters` — always returns active
+chapters as `[{id, name}]` with no query parameter required.
+Public (Pomerium catch-all), receipt-not-required (it's just
+a list of chapters — no PII).
 
 ### Q3. New field type: `chapter_select`
 
