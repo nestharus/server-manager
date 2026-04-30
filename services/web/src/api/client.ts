@@ -21,6 +21,68 @@ const chapterListSchema = z.object({
   ),
 });
 
+const publicChapterSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export const publicChapterListSchema = z.object({
+  chapters: z.array(publicChapterSummarySchema),
+});
+
+const basePublicFormFieldSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  required: z.boolean().default(false),
+});
+
+export const publicFormFieldSchema = z.discriminatedUnion("type", [
+  basePublicFormFieldSchema.extend({
+    type: z.literal("short"),
+    max_length: z.number().nullable().optional(),
+  }),
+  basePublicFormFieldSchema.extend({
+    type: z.literal("long"),
+    max_length: z.number().nullable().optional(),
+  }),
+  basePublicFormFieldSchema.extend({
+    type: z.literal("number"),
+  }),
+  basePublicFormFieldSchema.extend({
+    type: z.literal("select"),
+    options: z.array(z.string()),
+  }),
+  basePublicFormFieldSchema.extend({
+    type: z.literal("multi_select"),
+    options: z.array(z.string()),
+  }),
+  basePublicFormFieldSchema.extend({
+    type: z.literal("boolean"),
+  }),
+  basePublicFormFieldSchema.extend({
+    type: z.literal("chapter_select"),
+    required: z.literal(true),
+    placeholder: z.string().nullable().optional(),
+  }),
+]);
+
+export const publicFormDefinitionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  target_type: z.string(),
+  scope: z.object({
+    scope_kind: z.string(),
+    scope_id: z.string().nullable(),
+  }),
+  fields: z.array(publicFormFieldSchema),
+  routing_rules: z.record(z.string(), z.unknown()).default({}),
+  version: z.number(),
+  status: z.string(),
+  published_at: z.string(),
+  archived_at: z.string().nullable().optional(),
+  created_at: z.string(),
+});
+
 const submissionResponseBodySchema = z.object({
   code: z.string().optional(),
   message: z.string().optional(),
@@ -153,6 +215,9 @@ export const applicationTranscriptReadSchema = z.object({
 
 export type CurrentPrincipal = z.infer<typeof principalSchema>;
 export type AdminChapterSummary = z.infer<typeof chapterListSchema>["chapters"][number];
+export type PublicChapterSummary = z.infer<typeof publicChapterSummarySchema>;
+export type PublicFormDefinition = z.infer<typeof publicFormDefinitionSchema>;
+export type PublicFormField = z.infer<typeof publicFormFieldSchema>;
 export type ApplicationState = z.infer<typeof applicationStateSchema>;
 export type ApplicationRead = z.infer<typeof applicationReadSchema>;
 export type ApplicationListRead = z.infer<typeof applicationListReadSchema>;
@@ -263,6 +328,15 @@ export async function fetchCurrentPrincipal() {
 export async function fetchAdminChapters() {
   const payload = await getJson("/api/web/admin/chapters", chapterListSchema);
   return payload.chapters;
+}
+
+export async function fetchPublicChapters() {
+  const payload = await getJson("/api/public/chapters", publicChapterListSchema);
+  return payload.chapters;
+}
+
+export async function fetchPublicApplicationForm() {
+  return await getJson("/api/public/application-forms/current", publicFormDefinitionSchema);
 }
 
 export async function fetchApplicantDiscordIdentity() {

@@ -90,8 +90,21 @@ const targets = {
       });
       await page.getByRole("heading", { name: "Humility applications" }).waitFor({ timeout: 30_000 });
       await page.getByText(`${webContract.auth.applicant.identity_indicator_prefix}${applicantDiscordUserId}`).waitFor({ timeout: 30_000 });
+      let selectedChapterId = null;
       for (const field of webContract.form.fields) {
-        await page.getByLabel(field.label).fill(field.value);
+        const control = page.getByLabel(field.label);
+        if (field.type === "chapter_select" || field.type === "select") {
+          await control.selectOption(field.value);
+          if (field.type === "chapter_select") selectedChapterId = field.value;
+        } else if (field.type === "multi_select") {
+          await control.selectOption(Array.isArray(field.value) ? field.value : [field.value]);
+        } else if (field.type === "boolean") {
+          if (field.value === true || field.value === "true") {
+            await control.check();
+          }
+        } else {
+          await control.fill(field.value);
+        }
       }
       const submitResponsePromise = page.waitForResponse((response) => {
         const url = new URL(response.url());
@@ -124,6 +137,7 @@ const targets = {
           application_id: body.application_id,
           correlation_id: correlationId,
           applicant_discord_user_id: applicantDiscordUserId,
+          selected_chapter_id: selectedChapterId,
         }, null, 2),
       );
       await page.locator("#submit-status").getByText(webContract.form.submit.success_message).waitFor({ timeout: 30_000 });

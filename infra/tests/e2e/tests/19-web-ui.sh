@@ -9,19 +9,30 @@ assert_public_submit_persisted() {
   local record_file="${REPO_ROOT}/infra/tests/e2e/playwright/sessions/web-ui-public-submit.json"
   [[ -f "$record_file" ]] || e2e_fail "public submit record missing: ${record_file}"
 
-  local application_id expected_discord_user_id
+  local application_id expected_discord_user_id selected_chapter_id
   application_id="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).application_id)' "$record_file")"
   expected_discord_user_id="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).applicant_discord_user_id)' "$record_file")"
+  selected_chapter_id="$(node -e 'const fs = require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).selected_chapter_id || "")' "$record_file")"
   [[ -n "$application_id" ]] || e2e_fail "public submit application_id missing"
   [[ -n "$expected_discord_user_id" ]] || e2e_fail "public submit applicant_discord_user_id missing"
+  [[ -n "$selected_chapter_id" ]] || e2e_fail "public submit selected_chapter_id missing"
 
-  local primary_pod url row state applicant_id member_kind discord_user_id
+  local primary_pod url row state applicant_id member_kind discord_user_id target_scope_kind target_scope_id snapshot_scope_kind snapshot_scope_id snapshot_target_scope_kind snapshot_target_scope_id
   primary_pod="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get pods -l 'cnpg.io/cluster=server-manager-postgres,role=primary' -o jsonpath='{.items[0].metadata.name}')"
   url="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-postgres-url -o jsonpath='{.data.url}' | base64 -d)"
   # psql variable substitutions are expanded when SQL is read from stdin.
   row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
     psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
-SELECT a.state, a.applicant_id, m.kind, m.discord_user_id
+SELECT a.state,
+       a.applicant_id,
+       m.kind,
+       m.discord_user_id,
+       a.target_scope_kind,
+       COALESCE(a.target_scope_id, ''),
+       a.form_snapshot->>'scope_kind',
+       COALESCE(a.form_snapshot->>'scope_id', ''),
+       a.form_snapshot->'target_scope'->>'scope_kind',
+       COALESCE(a.form_snapshot->'target_scope'->>'scope_id', '')
   FROM applications a
   JOIN members m ON m.id = a.applicant_id
  WHERE a.id = :'application_id'::uuid
@@ -29,12 +40,18 @@ SELECT a.state, a.applicant_id, m.kind, m.discord_user_id
 SQL
   )"
   [[ -n "$row" ]] || e2e_fail "public submit application row not found: ${application_id}"
-  IFS=$'\t' read -r state applicant_id member_kind discord_user_id <<<"$row"
+  IFS=$'\t' read -r state applicant_id member_kind discord_user_id target_scope_kind target_scope_id snapshot_scope_kind snapshot_scope_id snapshot_target_scope_kind snapshot_target_scope_id <<<"$row"
   [[ "$state" == "approved" ]] || e2e_fail "application state expected approved after officer flow, got ${state}"
   [[ -n "$applicant_id" ]] || e2e_fail "public submit applicant_id missing"
   [[ "$member_kind" == "discord" ]] || e2e_fail "public submit applicant member kind expected discord, got ${member_kind}"
   [[ "$discord_user_id" == "$expected_discord_user_id" ]] || e2e_fail "public submit Discord user expected ${expected_discord_user_id}, got ${discord_user_id}"
   [[ "$discord_user_id" != public:* ]] || e2e_fail "public submit applicant member must not be synthetic: ${discord_user_id}"
+  [[ "$target_scope_kind" == "chapter" ]] || e2e_fail "public submit target_scope_kind expected chapter, got ${target_scope_kind}"
+  [[ "$target_scope_id" == "$selected_chapter_id" ]] || e2e_fail "public submit target_scope_id expected ${selected_chapter_id}, got ${target_scope_id}"
+  [[ "$snapshot_scope_kind" == "global" ]] || e2e_fail "public submit form_snapshot scope_kind expected global, got ${snapshot_scope_kind}"
+  [[ -z "$snapshot_scope_id" ]] || e2e_fail "public submit form_snapshot scope_id expected empty, got ${snapshot_scope_id}"
+  [[ "$snapshot_target_scope_kind" == "chapter" ]] || e2e_fail "public submit form_snapshot target_scope kind expected chapter, got ${snapshot_target_scope_kind}"
+  [[ "$snapshot_target_scope_id" == "$selected_chapter_id" ]] || e2e_fail "public submit form_snapshot target_scope id expected ${selected_chapter_id}, got ${snapshot_target_scope_id}"
 
   local notification_row event_count officer_envelopes applicant_envelopes delivery_effects
   notification_row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \

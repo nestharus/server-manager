@@ -41,3 +41,10 @@ spec:
                 name: server-manager-api
                 port:
                   number: 8000
+          - path: /api/v1/public/chapters
+            pathType: Prefix
+            backend:
+              service:
+                name: server-manager-api
+                port:
+                  number: 8000

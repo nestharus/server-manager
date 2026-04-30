@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from psycopg import Connection, errors
 from psycopg.rows import dict_row
 
@@ -54,6 +55,7 @@ from app.repositories.applications import (
 from app.repositories.db import PostgresDatabase
 from app.repositories.forms import get_current_form_for_scope
 from app.repositories.members import fetch_member_by_id
+from app.repositories.public_chapters import fetch_active_public_chapter
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
 from app.services.members import (
     is_synthetic_member,
@@ -176,6 +178,7 @@ APPLICATION_READ_PERMISSIONS = (
 
 AUTHENTICATED_SUBMIT_SURFACE = "api:/api/v1/applications"
 PUBLIC_SUBMIT_SURFACE = "api:/api/v1/public/applications"
+_APPLICATION_FORM_FIELD_ADAPTER = TypeAdapter(ApplicationFormField)
 
 
 class _SubmitApplicationResult(tuple[ApplicationRead, MutationResult]):
@@ -493,10 +496,15 @@ def build_form_snapshot(form_row: dict[str, Any]) -> dict[str, Any]:
 def validate_application_responses(
     fields: list[dict[str, Any]],
     responses: dict[str, Any],
+    *,
+    connection: Connection[Any] | None = None,
+    submitted_scope: dict[str, Any] | None = None,
 ) -> None:
     field_map = {
         field.id: field
-        for field in (ApplicationFormField.model_validate(raw) for raw in fields)
+        for field in (
+            _APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw) for raw in fields
+        )
     }
     response_keys = set(responses)
     unknown = response_keys - set(field_map)
@@ -546,6 +554,68 @@ def validate_application_responses(
                 raise InvalidApplicationResponseError(f"{field_id} must contain configured options")
         elif field.type == "boolean" and not isinstance(value, bool):
             raise InvalidApplicationResponseError(f"{field_id} must be a boolean")
+        elif field.type == "chapter_select":
+            if not isinstance(value, str):
+                raise InvalidApplicationResponseError(f"{field_id} must be a chapter id")
+            chapter_id = value.strip()
+            if not chapter_id:
+                raise InvalidApplicationResponseError(f"{field_id} is required")
+            if (
+                submitted_scope is not None
+                and submitted_scope.get("scope_kind") == "chapter"
+                and chapter_id != submitted_scope.get("scope_id")
+            ):
+                raise InvalidApplicationResponseError(
+                    f"{field_id} must match submitted chapter scope"
+                )
+            if connection is not None and fetch_active_public_chapter(connection, chapter_id) is None:
+                raise InvalidApplicationResponseError(f"{field_id} must be an active chapter")
+
+
+def _chapter_select_field_ids(form_row: dict[str, Any]) -> list[str]:
+    field_ids: list[str] = []
+    for raw in form_row["fields"]:
+        field = _APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw)
+        if field.type == "chapter_select" and field.required:
+            field_ids.append(field.id)
+    return field_ids
+
+
+def _chapter_selector_override(
+    connection: Connection[Any],
+    *,
+    submitted_scope: dict[str, Any],
+    responses: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, str | None] | None]:
+    current_global = _get_current_form_for_submit(
+        connection,
+        scope_kind="global",
+        scope_id=None,
+    )
+    if current_global is None:
+        return None, None
+    chapter_field_ids = _chapter_select_field_ids(current_global)
+    if len(chapter_field_ids) != 1:
+        return None, None
+
+    chapter_field_id = chapter_field_ids[0]
+    if submitted_scope["scope_kind"] == "global":
+        raise InvalidApplicationResponseError(
+            "chapter_select forms require a submitted chapter scope"
+        )
+    if submitted_scope["scope_kind"] != "chapter":
+        return None, None
+
+    selected_chapter_id = submitted_scope.get("scope_id")
+    response_chapter_id = responses.get(chapter_field_id)
+    if not isinstance(response_chapter_id, str) or response_chapter_id.strip() != selected_chapter_id:
+        raise InvalidApplicationResponseError(
+            "chapter_select response must match submitted chapter scope"
+        )
+    return current_global, {
+        "scope_kind": "chapter",
+        "scope_id": selected_chapter_id,
+    }
 
 
 def _get_current_form_for_submit(
@@ -705,11 +775,18 @@ def _submit_application_internal(
                 ),
             )
 
-        form_row = _get_current_form_for_submit(
+        submitted_scope = validated.scope.as_persisted()
+        form_row, target_scope_override = _chapter_selector_override(
             connection,
-            scope_kind=validated.scope.scope_kind,
-            scope_id=validated.scope.scope_id,
+            submitted_scope=submitted_scope,
+            responses=validated.responses,
         )
+        if form_row is None:
+            form_row = _get_current_form_for_submit(
+                connection,
+                scope_kind=validated.scope.scope_kind,
+                scope_id=validated.scope.scope_id,
+            )
         if form_row is None:
             raise FormDefinitionNotFoundError(validated.scope)
 
@@ -731,7 +808,14 @@ def _submit_application_internal(
         )
 
         snapshot = build_form_snapshot(form_row)
-        validate_application_responses(snapshot["fields"], validated.responses)
+        if target_scope_override is not None:
+            snapshot["target_scope"] = target_scope_override
+        validate_application_responses(
+            snapshot["fields"],
+            validated.responses,
+            connection=connection,
+            submitted_scope=submitted_scope,
+        )
         target_scope = snapshot["target_scope"]
         persisted = {
             "id": application_id,

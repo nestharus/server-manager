@@ -11,57 +11,74 @@ data:
   seed.sql: |
     BEGIN;
 
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1
-        FROM aggregate_heads h
-        WHERE h.aggregate_type = 'application_form'
-          AND h.aggregate_id = 'application_form|global|'
-          AND NOT EXISTS (
-            SELECT 1
-            FROM form_definitions f
-            WHERE f.scope_kind = 'global'
-              AND f.scope_id IS NULL
-              AND f.status = 'current'
-          )
-      ) THEN
-        RAISE EXCEPTION 'BL-002 fail-closed: aggregate head exists but no current form';
-      END IF;
-    END $$;
-
-    CREATE TEMP TABLE seed_public_intake_form_outcome ON COMMIT DROP AS
-    WITH seed AS (
+    WITH fail_closed_guard AS (
       SELECT
-        (substring(encode(digest('init-122:public-intake-global:v1', 'sha256'), 'hex'), 1, 32))::uuid AS form_id,
+        CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM aggregate_heads h
+            WHERE h.aggregate_type = 'application_form'
+              AND h.aggregate_id = 'application_form|global|'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM form_definitions f
+                WHERE f.scope_kind = 'global'
+                  AND f.scope_id IS NULL
+                  AND f.status = 'current'
+              )
+          )
+            THEN format(
+              'BL-002 fail-closed: %s',
+              'aggregate head exists but no current form'
+            )::integer
+          ELSE 0
+        END AS guard_result
+    ),
+    seed AS (
+      SELECT
+        (substring(encode(digest('init-135:public-intake-global:v2', 'sha256'), 'hex'), 1, 32))::uuid AS form_id,
         'application_form'::text AS aggregate_type,
         'application_form|global|'::text AS aggregate_id,
         'global'::text AS scope_kind,
         NULL::text AS scope_id,
-        1::bigint AS form_version,
         'Public application intake (global)'::text AS name,
         'chapter_membership'::text AS target_type,
-        '[{"id":"character_name","label":"Character name","type":"short","required":true},{"id":"application_text","label":"Application text","type":"long","required":true}]'::jsonb AS fields,
-        '{}'::jsonb AS routing_rules,
+        '[{"id":"chapter","type":"chapter_select","label":"Chapter","required":true,"placeholder":"Choose a chapter"},{"id":"character_name","label":"Character name","type":"short","required":true,"max_length":64},{"id":"application_text","label":"Application text","type":"long","required":true,"max_length":4000}]'::jsonb AS fields,
+        '{"schema_version":1,"queue":"chapter_officers","review_scope":null}'::jsonb AS routing_rules,
         'service'::text AS actor_kind,
-        'init-122-bootstrap'::text AS actor_id,
+        'init-135-bootstrap'::text AS actor_id,
         'kubernetes:job/seed-public-intake-form'::text AS request_surface,
         gen_random_uuid() AS correlation_id,
         CURRENT_TIMESTAMP AS published_at
+      FROM fail_closed_guard g
+      WHERE g.guard_result = 0
+    ),
+    prior_seed AS (
+      SELECT
+        (substring(encode(digest('init-122:public-intake-global:v1', 'sha256'), 'hex'), 1, 32))::uuid AS form_id
     ),
     current_global AS (
-      SELECT f.id
+      SELECT f.id, f.version
       FROM form_definitions f
       WHERE f.scope_kind = 'global'
         AND f.scope_id IS NULL
         AND f.status = 'current'
       FOR UPDATE
     ),
-    existing_seed AS (
+    existing_v2 AS (
       SELECT f.id
       FROM form_definitions f
       JOIN seed s ON f.id = s.form_id
       FOR UPDATE
+    ),
+    archived_prior AS (
+      UPDATE form_definitions f
+      SET status = 'archived',
+          archived_at = CURRENT_TIMESTAMP
+      FROM current_global cg
+      JOIN prior_seed p ON cg.id = p.form_id
+      WHERE f.id = cg.id
+      RETURNING f.id
     ),
     inserted_form AS (
       INSERT INTO form_definitions (
@@ -82,7 +99,7 @@ data:
         s.form_id,
         s.scope_kind,
         s.scope_id,
-        s.form_version,
+        CASE WHEN EXISTS (SELECT 1 FROM archived_prior) THEN 2 ELSE 1 END,
         s.name,
         s.target_type,
         s.fields,
@@ -92,9 +109,12 @@ data:
         s.actor_id,
         s.published_at
       FROM seed s
-      WHERE NOT EXISTS (SELECT 1 FROM current_global)
-        AND NOT EXISTS (SELECT 1 FROM existing_seed)
-      RETURNING id
+      WHERE (
+          NOT EXISTS (SELECT 1 FROM current_global)
+          OR EXISTS (SELECT 1 FROM archived_prior)
+        )
+        AND NOT EXISTS (SELECT 1 FROM existing_v2)
+      RETURNING id, version
     ),
     inserted_action AS (
       INSERT INTO activity_actions (
@@ -129,14 +149,15 @@ data:
           'target_type', s.target_type,
           'scope_kind', s.scope_kind,
           'scope_id', s.scope_id,
+          'version', f.version,
           'fields', s.fields,
           'routing_rules', s.routing_rules
         ),
         'accepted',
-        'init-122 public-intake form seed',
+        'init-135 public-intake form seed',
         NULL
       FROM seed s
-      WHERE EXISTS (SELECT 1 FROM inserted_form)
+      CROSS JOIN inserted_form f
       RETURNING id
     ),
     inserted_change AS (
@@ -153,7 +174,7 @@ data:
         a.id,
         s.aggregate_type,
         s.aggregate_id,
-        1,
+        f.version,
         'form.published',
         jsonb_build_object(
           'form_definition_id', s.form_id::text,
@@ -161,18 +182,22 @@ data:
           'target_type', s.target_type,
           'scope_kind', s.scope_kind,
           'scope_id', s.scope_id,
-          'version', s.form_version,
+          'version', f.version,
           'fields', s.fields,
           'routing_rules', s.routing_rules,
           'status', 'current'
         ),
         jsonb_build_object(
-          'version', jsonb_build_object('old', NULL, 'new', s.form_version),
+          'version', jsonb_build_object(
+            'old', CASE WHEN f.version = 2 THEN 1 ELSE NULL END,
+            'new', f.version
+          ),
           'status', jsonb_build_object('old', NULL, 'new', 'current')
         )
       FROM seed s
+      CROSS JOIN inserted_form f
       CROSS JOIN inserted_action a
-      RETURNING id
+      RETURNING id, aggregate_seq
     ),
     inserted_head AS (
       INSERT INTO aggregate_heads (
@@ -184,43 +209,45 @@ data:
       SELECT
         s.aggregate_type,
         s.aggregate_id,
-        1,
+        c.aggregate_seq,
         c.id
       FROM seed s
       CROSS JOIN inserted_change c
+      ON CONFLICT (aggregate_type, aggregate_id)
+      DO UPDATE SET
+        current_seq = EXCLUDED.current_seq,
+        latest_change_id = EXCLUDED.latest_change_id
       RETURNING aggregate_id
     )
     SELECT
       CASE
         WHEN EXISTS (SELECT 1 FROM inserted_head)
-          THEN 'inserted seed public-intake form'
+          AND EXISTS (SELECT 1 FROM archived_prior)
+          THEN 'advanced v1 to v2'
+        WHEN EXISTS (SELECT 1 FROM inserted_head)
+          THEN 'inserted seed v2'
         WHEN EXISTS (
           SELECT 1
           FROM current_global cg
           JOIN seed s ON cg.id = s.form_id
         )
-          THEN 'seed public-intake form already present; no-op'
+          THEN 'seed v2 already current; no-op'
+        WHEN EXISTS (
+          SELECT 1
+          FROM current_global cg
+          JOIN prior_seed p ON cg.id = p.form_id
+        )
+          THEN 'seed v1 current but v2 insert skipped; no-op'
         WHEN EXISTS (
           SELECT 1
           FROM current_global cg
           JOIN seed s ON cg.id <> s.form_id
         )
           THEN 'officer-published form present; skipping seed'
-        WHEN EXISTS (SELECT 1 FROM existing_seed)
-          THEN 'seed public-intake form exists but is not current; no-op'
+        WHEN EXISTS (SELECT 1 FROM existing_v2)
+          THEN 'seed v2 exists but is not current; no-op'
         ELSE 'seed made no change'
-      END AS outcome;
-
-    DO $$
-    DECLARE
-      outcome_text text;
-    BEGIN
-      SELECT outcome INTO outcome_text FROM seed_public_intake_form_outcome;
-      RAISE NOTICE '%', outcome_text;
-    END $$;
-
-    SELECT outcome AS seed_outcome
-    FROM seed_public_intake_form_outcome;
+      END AS seed_outcome;
 
     COMMIT;
 ---

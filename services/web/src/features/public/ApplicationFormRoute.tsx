@@ -3,19 +3,21 @@ import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-
 import {
   ApiError,
   fetchApplicantDiscordIdentity,
+  fetchPublicApplicationForm,
+  fetchPublicChapters,
+  type PublicChapterSummary,
+  type PublicFormDefinition,
+  type PublicFormField,
   submitPublicApplication,
 } from "@/api/client";
 import { Button } from "@/components/primitives/Button";
 
 type FormPayload = {
   scope: {
-    scope_kind: "global";
-    scope_id: null;
+    scope_kind: "global" | "chapter";
+    scope_id: string | null;
   };
-  responses: {
-    character_name: string;
-    application_text: string;
-  };
+  responses: Record<string, unknown>;
   client_application_id: string;
 };
 
@@ -26,6 +28,34 @@ type ApplicantAuthState =
 
 const CLIENT_APPLICATION_ID_KEY = "humility.publicApplication.clientApplicationId";
 const DRAFT_KEY = "humility.publicApplication.draft";
+const FALLBACK_FORM: PublicFormDefinition = {
+  id: "fallback-public-application",
+  name: "Public Application",
+  target_type: "chapter_membership",
+  scope: { scope_kind: "global", scope_id: null },
+  fields: [
+    {
+      id: "character_name",
+      type: "short",
+      label: "Character name",
+      required: true,
+      max_length: 64,
+    },
+    {
+      id: "application_text",
+      type: "long",
+      label: "Application text",
+      required: true,
+      max_length: 4000,
+    },
+  ],
+  routing_rules: {},
+  version: 1,
+  status: "current",
+  published_at: new Date(0).toISOString(),
+  archived_at: null,
+  created_at: new Date(0).toISOString(),
+};
 const FOCUSABLE_DIALOG_SELECTOR = [
   "a[href]",
   "button:not([disabled])",
@@ -49,31 +79,147 @@ function redirectToDiscordAuth() {
 
 function preserveApplicationDraft(form: HTMLFormElement) {
   const formData = new FormData(form);
-  sessionStorage.setItem(
-    DRAFT_KEY,
-    JSON.stringify({
-      character_name: String(formData.get("character_name") ?? ""),
-      application_text: String(formData.get("application_text") ?? ""),
-    }),
-  );
+  const draft: Record<string, FormDataEntryValue | FormDataEntryValue[]> = {};
+  for (const [key, value] of formData.entries()) {
+    if (key in draft) {
+      const existing = draft[key];
+      draft[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
+    } else {
+      draft[key] = value;
+    }
+  }
+  sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
 }
 
 function restoreApplicationDraft(form: HTMLFormElement) {
   const raw = sessionStorage.getItem(DRAFT_KEY);
   if (!raw) return;
   try {
-    const draft = JSON.parse(raw) as Partial<FormPayload["responses"]>;
-    const characterName = form.elements.namedItem("character_name");
-    const applicationText = form.elements.namedItem("application_text");
-    if (characterName instanceof HTMLInputElement && draft.character_name) {
-      characterName.value = draft.character_name;
-    }
-    if (applicationText instanceof HTMLTextAreaElement && draft.application_text) {
-      applicationText.value = draft.application_text;
+    const draft = JSON.parse(raw) as Record<string, string | string[]>;
+    for (const [key, value] of Object.entries(draft)) {
+      const element = form.elements.namedItem(key);
+      if (
+        element instanceof HTMLInputElement ||
+        element instanceof HTMLTextAreaElement ||
+        element instanceof HTMLSelectElement
+      ) {
+        element.value = Array.isArray(value) ? String(value[0] ?? "") : String(value);
+      }
     }
   } catch {
     sessionStorage.removeItem(DRAFT_KEY);
   }
+}
+
+function chapterSelectField(form: PublicFormDefinition): PublicFormField | undefined {
+  return form.fields.find((field) => field.type === "chapter_select");
+}
+
+function responseValue(field: PublicFormField, formData: FormData): unknown {
+  if (field.type === "number") {
+    const raw = String(formData.get(field.id) ?? "");
+    return raw === "" ? null : Number(raw);
+  }
+  if (field.type === "multi_select") {
+    return formData.getAll(field.id).map((value) => String(value));
+  }
+  if (field.type === "boolean") {
+    return formData.get(field.id) === "on";
+  }
+  return String(formData.get(field.id) ?? "");
+}
+
+function renderFormField(
+  field: PublicFormField,
+  chapters: readonly PublicChapterSummary[],
+) {
+  if (field.type === "long") {
+    return (
+      <label class="runtimeField">
+        <span>{field.label}</span>
+        <textarea
+          class="input"
+          name={field.id}
+          aria-label={field.label}
+          required={field.required}
+          maxlength={field.max_length ?? undefined}
+        />
+      </label>
+    );
+  }
+  if (field.type === "number") {
+    return (
+      <label class="runtimeField">
+        <span>{field.label}</span>
+        <input
+          class="input"
+          name={field.id}
+          aria-label={field.label}
+          required={field.required}
+          type="number"
+        />
+      </label>
+    );
+  }
+  if (field.type === "select" || field.type === "multi_select") {
+    return (
+      <label class="runtimeField">
+        <span>{field.label}</span>
+        <select
+          class="input"
+          name={field.id}
+          aria-label={field.label}
+          required={field.required}
+          multiple={field.type === "multi_select"}
+        >
+          {field.options.map((option) => (
+            <option value={option}>{option}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  if (field.type === "boolean") {
+    return (
+      <label class="runtimeField">
+        <span>{field.label}</span>
+        <input name={field.id} aria-label={field.label} type="checkbox" />
+      </label>
+    );
+  }
+  if (field.type === "chapter_select") {
+    return (
+      <label class="runtimeField">
+        <span>{field.label}</span>
+        <select
+          class="input"
+          name={field.id}
+          aria-label={field.label}
+          required
+          value=""
+        >
+          <option value="" disabled>
+            {field.placeholder ?? "Choose a chapter"}
+          </option>
+          {chapters.map((chapter) => (
+            <option value={chapter.id}>{chapter.name}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  return (
+    <label class="runtimeField">
+      <span>{field.label}</span>
+      <input
+        class="input"
+        name={field.id}
+        aria-label={field.label}
+        required={field.required}
+        maxlength={field.max_length ?? undefined}
+      />
+    </label>
+  );
 }
 
 export function ApplicationFormRoute() {
@@ -87,6 +233,29 @@ export function ApplicationFormRoute() {
   const [activeTab, setActiveTab] = createSignal<"overview" | "details">("overview");
   const [dialogOpen, setDialogOpen] = createSignal(false);
   const [submitStatus, setSubmitStatus] = createSignal("No application submitted yet.");
+  const [formDefinition, setFormDefinition] = createSignal<PublicFormDefinition>(FALLBACK_FORM);
+  const [publicChapters, setPublicChapters] = createSignal<readonly PublicChapterSummary[]>([]);
+
+  async function refreshPublicFormDefinition() {
+    let loadedForm: PublicFormDefinition;
+    try {
+      loadedForm = await fetchPublicApplicationForm();
+    } catch (error) {
+      console.error("[ApplicationFormRoute] Public form fetch failed", error);
+      loadedForm = FALLBACK_FORM;
+    }
+    setFormDefinition(loadedForm);
+    if (!chapterSelectField(loadedForm)) {
+      setPublicChapters([]);
+      return;
+    }
+    try {
+      setPublicChapters(await fetchPublicChapters());
+    } catch (error) {
+      console.error("[ApplicationFormRoute] Public chapters fetch failed", error);
+      setPublicChapters([]);
+    }
+  }
 
   async function refreshApplicantDiscordState() {
     try {
@@ -169,16 +338,21 @@ export function ApplicationFormRoute() {
       return;
     }
 
+    const form = formDefinition();
     const formData = new FormData(formRef);
+    const responses = Object.fromEntries(
+      form.fields.map((field) => [field.id, responseValue(field, formData)]),
+    );
+    const chapterField = chapterSelectField(form);
+    const selectedChapterId = chapterField
+      ? String(responses[chapterField.id] ?? "")
+      : "";
     const payload: FormPayload = {
       scope: {
-        scope_kind: "global",
-        scope_id: null,
+        scope_kind: chapterField ? "chapter" : "global",
+        scope_id: chapterField ? selectedChapterId : null,
       },
-      responses: {
-        character_name: String(formData.get("character_name") ?? ""),
-        application_text: String(formData.get("application_text") ?? ""),
-      },
+      responses,
       client_application_id: getClientApplicationId(),
     };
     let submission: Awaited<ReturnType<typeof submitPublicApplication>>;
@@ -199,6 +373,7 @@ export function ApplicationFormRoute() {
 
   onMount(() => {
     void refreshApplicantDiscordState();
+    void refreshPublicFormDefinition();
   });
 
   onCleanup(() => {
@@ -306,19 +481,7 @@ export function ApplicationFormRoute() {
             aria-label="Application form"
             onSubmit={onSubmit}
           >
-            <label class="runtimeField">
-              <span>Character name</span>
-              <input class="input" name="character_name" aria-label="Character name" required />
-            </label>
-            <label class="runtimeField">
-              <span>Application text</span>
-              <textarea
-                class="input"
-                name="application_text"
-                aria-label="Application text"
-                required
-              />
-            </label>
+            {formDefinition().fields.map((field) => renderFormField(field, publicChapters()))}
             <Button type="submit">
               <span data-testid="application-submit-icon" aria-hidden="true">
                 +
