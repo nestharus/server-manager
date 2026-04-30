@@ -257,7 +257,22 @@ SHA) or `[wontfix]` (with reason).
   pre-INIT-128 e2e runs remain in humility-local as inert data,
   filtered by read-side guards.
 
-### BL-009 [paused — blocked on BL-016 + BL-019] — INIT-126: Discord-visible side effects for public web submissions
+### BL-009 [done] — INIT-134: Discord-visible side effects for public web submissions
+
+Closing commit on `recovery/test-first-audit` branch (bundled
+with BL-020 as INIT-134). Adds officer embed in
+`#applications-review`-style designated channel + applicant DM
+with link to primary guild channel, both fired off the
+public-submit hookpoint via the existing notification_events
+substrate. Migration `wu-045` adds nullable
+`rendered_embed_json` to `notification_envelopes` and seeds the
+two notification rules. PII level A truncation locked. Tests
+passing locally: 29 INIT-134 tests + 70/70 prior-slice
+regression. Risk gates LOW after r2. CodeRabbit converged
+through r3 with only 6b-test-file nitpicks remaining. See full
+proposal at `proposals/16-init-134-discord-notifications.md`.
+
+### BL-009 [done — historical] — INIT-126: Discord-visible side effects for public web submissions
 
 - **Source:** `proposals/02-public-application-intake.md:444-446` (Out
   of scope for follow-up — Tier 3 approval)
