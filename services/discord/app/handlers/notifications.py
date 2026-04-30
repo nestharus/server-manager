@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+import discord
+
 from app.contracts.notifications import (
     NotificationDeliveryCommand,
     NotificationDeliveryError,
@@ -25,12 +27,40 @@ def _message_content(command: NotificationDeliveryCommand) -> str:
     return title or body
 
 
-async def _send_message(target: Any, *, content: str, nonce: str) -> Any:
-    return await target.send(
-        content=content,
-        nonce=nonce,
-        enforce_nonce=True,
-    )
+def _embed_from_json(rendered_embed_json: Any) -> discord.Embed | None:
+    if rendered_embed_json is None:
+        return None
+    if hasattr(rendered_embed_json, "model_dump"):
+        rendered_embed_json = rendered_embed_json.model_dump(mode="json")
+    if not isinstance(rendered_embed_json, dict):
+        raise NotificationDeliveryError(
+            "rendered_embed_json must be an object",
+            definitive_failure=True,
+        )
+    try:
+        return discord.Embed.from_dict(rendered_embed_json)
+    except Exception as error:
+        raise NotificationDeliveryError(
+            "rendered_embed_json is not a valid Discord embed",
+            definitive_failure=True,
+        ) from error
+
+
+async def _send_message(
+    target: Any,
+    *,
+    content: str,
+    nonce: str,
+    embed: discord.Embed | None = None,
+) -> Any:
+    kwargs: dict[str, Any] = {
+        "content": content,
+        "nonce": nonce,
+        "enforce_nonce": True,
+    }
+    if embed is not None:
+        kwargs["embed"] = embed
+    return await target.send(**kwargs)
 
 
 async def deliver_notification(
@@ -42,6 +72,7 @@ async def deliver_notification(
     nonce = envelope_nonce(envelope.id)
     content = _message_content(command)
     try:
+        embed = _embed_from_json(envelope.rendered_embed_json)
         if envelope.channel == "dm":
             if envelope.recipient_discord_id is None:
                 raise NotificationDeliveryError(
@@ -59,7 +90,12 @@ async def deliver_notification(
             dm_channel = getattr(user, "dm_channel", None)
             if dm_channel is None:
                 dm_channel = await user.create_dm()
-            message = await _send_message(dm_channel, content=content, nonce=nonce)
+            message = await _send_message(
+                dm_channel,
+                content=content,
+                nonce=nonce,
+                embed=embed,
+            )
         elif envelope.channel == "designated_channel":
             if not envelope.destination_channel_id:
                 raise NotificationDeliveryError(
@@ -74,7 +110,12 @@ async def deliver_notification(
                     definitive_failure=True,
                 ) from error
             channel = await bot.fetch_channel(destination_channel_id)
-            message = await _send_message(channel, content=content, nonce=nonce)
+            message = await _send_message(
+                channel,
+                content=content,
+                nonce=nonce,
+                embed=embed,
+            )
         else:
             raise NotificationDeliveryError(
                 "thread delivery is out of scope for SLICE-015",

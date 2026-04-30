@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 from uuid import UUID, uuid4
 
-from psycopg import Connection
+from psycopg import Connection, Error as PsycopgError
 
 from app.contracts.actor import ActorIdentity
+from app.contracts.applications import ApplicationRead
 from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
 from app.contracts.notifications import (
     NotificationEventDraft,
@@ -15,6 +17,8 @@ from app.contracts.notifications import (
     NotificationRulePatch,
     NotificationRuleRead,
 )
+from app.core.settings import Settings
+from app.repositories.chapters import fetch_chapter
 from app.repositories.db import PostgresDatabase
 from app.repositories.notifications import (
     fetch_notification_rule,
@@ -22,6 +26,9 @@ from app.repositories.notifications import (
     insert_notification_rule,
     list_notification_rules as list_notification_rule_rows,
     update_notification_rule,
+)
+from app.services.application_public_submit_notifications import (
+    build_application_public_submit_payload,
 )
 from app.services import notification_events
 from app.services.mutations import mutate_entity
@@ -40,11 +47,27 @@ RULE_PAYLOAD_FIELDS = {
 APPLICATION_PUBLIC_SUBMITTED_PAYLOAD_ALLOWLIST = frozenset(
     {
         "application_id",
-        "applicant_member_id",
-        "discord_user_id",
+        "support_id",
         "recipient_discord_user_id",
+        "scope_kind",
+        "scope_id",
+        "scope_label",
+        "submitted_unix_ts",
+        "submitted_iso",
+        "form_version",
+        "character_name",
+        "response_preview",
+        "application_url",
+        "officer_review_channel_id",
+        "application_managers_role_id",
+        "application_managers_role_mention",
+        "primary_guild_channel_url",
     }
 )
+
+
+class NotificationEmitError(Exception):
+    pass
 
 
 def _make_request(
@@ -83,31 +106,55 @@ def _rule_from_row(row: dict[str, Any]) -> NotificationRuleRead:
 def emit_application_public_submitted_event(
     db: PostgresDatabase,
     *,
-    application_id: UUID,
-    applicant_member_id: UUID,
+    application: ApplicationRead,
     discord_user_id: str,
-    scope_kind: str | None,
-    scope_id: str | None,
-    actor: ActorIdentity,
     connection: Connection[Any] | None = None,
+    settings: Settings | None = None,
 ) -> None:
-    notification_events.emit(
-        db,
-        event=NotificationEventDraft(
-            event_type="application.public_submitted",
-            scope_kind=scope_kind,
-            scope_id=scope_id,
-            payload_json={
-                "application_id": str(application_id),
-                "applicant_member_id": str(applicant_member_id),
-                "discord_user_id": discord_user_id,
-                "recipient_discord_user_id": discord_user_id,
-            },
-        ),
-        actor=actor,
-        connection=connection,
-        payload_allowlist=APPLICATION_PUBLIC_SUBMITTED_PAYLOAD_ALLOWLIST,
-    )
+    if settings is None:
+        settings = Settings()
+    chapter_discord_resources: dict[str, Any] | None = None
+    scope_kind = application.target_scope.scope_kind
+    scope_id = application.target_scope.scope_id
+
+    try:
+        if scope_kind == "chapter" and scope_id is not None:
+            connection_context = (
+                nullcontext(connection) if connection is not None else db.connection()
+            )
+            with connection_context as active_connection:
+                chapter = fetch_chapter(active_connection, scope_id)
+            if chapter is not None:
+                chapter_discord_resources = chapter["discord_resources"]
+
+        payload = build_application_public_submit_payload(
+            application=application,
+            recipient_discord_user_id=discord_user_id,
+            web_public_base_url=settings.web_public_base_url,
+            global_applications_review_channel_id=settings.global_applications_review_channel_id,
+            global_application_managers_role_id=settings.global_application_managers_role_id,
+            global_primary_guild_channel_url=settings.global_primary_guild_channel_url,
+            chapter_discord_resources=chapter_discord_resources,
+        )
+        if payload is None:
+            return
+
+        notification_events.emit(
+            db,
+            event=NotificationEventDraft(
+                event_type="application.public_submitted",
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+                payload_json=payload,
+            ),
+            actor=ActorIdentity(actor_kind="service", actor_id="notifications"),
+            connection=connection,
+            payload_allowlist=APPLICATION_PUBLIC_SUBMITTED_PAYLOAD_ALLOWLIST,
+        )
+    except PsycopgError as error:
+        raise NotificationEmitError(
+            "application public-submit notification emit failed"
+        ) from error
 
 
 def _fetch_rule_row(connection: Connection[Any], rule_id: UUID) -> dict[str, Any]:

@@ -36,6 +36,7 @@ API_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
             "DISCORD_GUILD_ID",
             "SUPABASE_DB_URL",
             "SUPABASE_SERVICE_KEY",
+            "WEB_PUBLIC_BASE_URL",
         }
     ),
     optional_env_vars=frozenset(
@@ -47,6 +48,9 @@ API_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
             "DEBUG",
             "API_PREFIX",
             "DISCORD_STAGING_GUILD_ID",
+            "GLOBAL_APPLICATIONS_REVIEW_CHANNEL_ID",
+            "GLOBAL_APPLICATION_MANAGERS_ROLE_ID",
+            "GLOBAL_PRIMARY_GUILD_CHANNEL_URL",
             "GOOGLE_CLOUD_VISION_KEY",
             "GEMINI_API_KEY",
             "Z_AI_API_KEY",

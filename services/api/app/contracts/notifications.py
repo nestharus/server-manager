@@ -100,6 +100,40 @@ class NotificationRuleListRead(_NotificationModel):
     items: list[NotificationRuleRead]
 
 
+class NotificationTemplateEmbedField(_NotificationModel):
+    name: str
+    value: str
+    inline: bool = False
+
+
+class NotificationTemplateEmbed(_NotificationModel):
+    title: str | None = None
+    description: str | None = None
+    url: str | None = None
+    color: int | None = None
+    fields: list[NotificationTemplateEmbedField] = Field(default_factory=list)
+
+
+class NotificationTemplate(_NotificationModel):
+    title: str = ""
+    body: str = ""
+    embed: NotificationTemplateEmbed | None = None
+
+
+class DiscordEmbedFieldRead(_NotificationModel):
+    name: str
+    value: str
+    inline: bool = False
+
+
+class DiscordEmbedRead(_NotificationModel):
+    title: str | None = None
+    description: str | None = None
+    url: str | None = None
+    color: int | None = None
+    fields: list[DiscordEmbedFieldRead] = Field(default_factory=list)
+
+
 class NotificationEventDraft(_NotificationModel):
     event_type: str = Field(min_length=1)
     scope_kind: ScopeKind | None = None
@@ -134,6 +168,7 @@ class NotificationEnvelopeRead(_NotificationModel):
     template_snapshot_json: dict[str, Any]
     rendered_title: str
     rendered_body: str
+    rendered_embed_json: DiscordEmbedRead | None = None
     actionable: bool
     delivery_status: NotificationDeliveryStatus
     claimed_by: str | None = None
@@ -217,6 +252,8 @@ class AmbiguousNotificationDeliveryError(NotificationDeliveryError):
 
 __all__ = [
     "AmbiguousNotificationDeliveryError",
+    "DiscordEmbedFieldRead",
+    "DiscordEmbedRead",
     "NotificationChannel",
     "NotificationDeliveryCommand",
     "NotificationDeliveryError",
@@ -227,6 +264,9 @@ __all__ = [
     "NotificationEventRead",
     "NotificationGrouping",
     "NotificationMaterializationResult",
+    "NotificationTemplate",
+    "NotificationTemplateEmbed",
+    "NotificationTemplateEmbedField",
     "NotificationRuleCreate",
     "NotificationRuleListRead",
     "NotificationRuleNotFoundError",
