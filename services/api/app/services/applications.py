@@ -604,6 +604,7 @@ def _chapter_selector_override(
             "chapter_select forms require a submitted chapter scope"
         )
     if submitted_scope["scope_kind"] != "chapter":
+        # Future non-chapter scope types use their own current-form lookup path.
         return None, None
 
     selected_chapter_id = submitted_scope.get("scope_id")

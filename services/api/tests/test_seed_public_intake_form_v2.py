@@ -52,7 +52,7 @@ def _run_seed_sql(database_url: str, repo_root: Path) -> str:
     with psycopg.connect(database_url) as connection:
         cursor = connection.execute(_seed_sql(repo_root))
         row = cursor.fetchone()
-        assert row is not None
+        assert row is not None, "seed SQL must return an outcome row"
         connection.commit()
     return str(row[0])
 
