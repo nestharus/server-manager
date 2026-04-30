@@ -180,7 +180,7 @@ function renderFormField(
           multiple={field.type === "multi_select"}
         >
           {field.required && field.type === "select" && (
-            <option value="" disabled>
+            <option value="" disabled selected>
               Select an option
             </option>
           )}
@@ -215,7 +215,7 @@ function renderFormField(
           aria-label={field.label}
           required
         >
-          <option value="" disabled>
+          <option value="" disabled selected>
             {field.placeholder ?? "Choose a chapter"}
           </option>
           {chapters.map((chapter) => (
