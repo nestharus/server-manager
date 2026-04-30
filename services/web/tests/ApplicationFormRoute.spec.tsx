@@ -58,6 +58,21 @@ const textOnlyForm = {
   version: 1,
 };
 
+const multiSelectForm = {
+  ...textOnlyForm,
+  id: "form-multi-select",
+  fields: [
+    ...textOnlyForm.fields,
+    {
+      id: "activity_preferences",
+      type: "multi_select",
+      label: "Activity preferences",
+      required: false,
+      options: ["Raids", "Dungeons", "PvP"],
+    },
+  ],
+};
+
 async function mockVerifiedApplicant(page: Page) {
   await page.route("**/auth/discord/me", async (route) => {
     await route.fulfill({
@@ -140,6 +155,7 @@ test("test_required_chapter_select_blocks_submit_when_empty", async ({ page }) =
   await page.goto(FORM_ROUTE);
   await page.getByLabel("Character name").fill("Kalec");
   await page.getByLabel("Application text").fill("I want to join scheduled guild activities.");
+  await expect(page.getByLabel("Chapter")).toHaveValue("");
   await page.getByRole("button", { name: "Submit application" }).click();
 
   await expect.poll(() => payloads.length).toBe(0);
@@ -212,4 +228,25 @@ test("test_existing_two_text_field_path_remains_functional", async ({ page }) =>
     application_text: "I want to join scheduled guild activities.",
   });
   expect(chapterListCalled).toBe(false);
+});
+
+test("test_draft_restore_preserves_multi_select_values", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem(
+      "humility.publicApplication.draft",
+      JSON.stringify({ activity_preferences: ["Raids", "Dungeons"] }),
+    );
+  });
+  await mockVerifiedApplicant(page);
+  await mockPublicForm(page, multiSelectForm);
+  const payloads = await mockPublicSubmit(page);
+
+  await page.goto(FORM_ROUTE);
+  await expect(page.getByLabel("Activity preferences")).toHaveValues(["Raids", "Dungeons"]);
+  await page.getByLabel("Character name").fill("Kalec");
+  await page.getByLabel("Application text").fill("I want to join scheduled guild activities.");
+  await page.getByRole("button", { name: "Submit application" }).click();
+
+  await expect.poll(() => payloads.length).toBe(1);
+  expect(payloads[0].responses?.activity_preferences).toEqual(["Raids", "Dungeons"]);
 });
