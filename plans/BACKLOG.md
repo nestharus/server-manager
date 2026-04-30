@@ -354,10 +354,20 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
     Solid 2 beta compat shim "Cannot read properties of undefined
     (reading 'effect')" affects ALL specs in this worktree, not
     introduced by INIT-135.
-  - Pre-existing residual: cluster e2e validation blocked — Infisical
-    operator down, e2e-fixtures secret stale (carryover from prior
-    INIT-134 cluster state); cluster reconciliation is a separate
-    operational concern, not INIT-135 scope.
+  - Cluster restored 2026-04-30: agent node `Ready` after `docker
+    restart k3d-humility-local-agent-0`; Redis + Infisical back up;
+    `server-manager-e2e-fixtures` resynced with all 5 INIT-134 keys;
+    api/discord pods running 1/1 with INIT-113/INIT-118 images.
+    Flux Kustomization `humility-local` left **suspended** because
+    its tracked git revision (`5d872983`) predates INIT-134 and would
+    revert the new InfisicalSecret + api-deployment env vars.
+  - e2e residual: test 19's Playwright admin step still times out
+    waiting for "Chapter administration" heading on `/admin/chapters`
+    (cluster OAuth boundary). Same carrier failure from β-i through
+    INIT-134; not introduced by INIT-135 and INIT-135's public submit
+    + chapter selector flow only runs AFTER the admin step in the
+    Playwright sequence. INIT-135 functional validation rests on
+    41 unit tests + risk gates + 8 rounds CodeRabbit instead.
 - **β-2 (multi-page + conditional fields) and β-3 (file upload):**
   open. New initiatives when product priority surfaces. Touch:
   SPA form renderer state machine, `form_definitions.fields` shape
