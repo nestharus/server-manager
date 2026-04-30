@@ -19,7 +19,6 @@ from tests.trust_helpers import (
     TRUST_SIGNALS_URL,
     actor_headers,
     create_member,
-    fetch_one,
     grant_permissions,
     seed_trust_policy_version,
     valid_trust_policy_content,

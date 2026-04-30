@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from app.contracts.actor import ActorIdentity
@@ -38,16 +38,6 @@ MIN_AGE_SECONDS = 5
 STALE_EVENT_THRESHOLD = 100
 STALE_TIME_THRESHOLD = timedelta(minutes=5)
 
-OPEN_APPLICATION_STATES: frozenset[str] = frozenset(
-    {
-        "submitted",
-        "queued",
-        "claimed",
-        "in_review",
-        "interview",
-        "waitlisted",
-    }
-)
 PENDING_DEFERRED_EFFECT_STATUSES: frozenset[str] = frozenset(
     {"queued", "claimed", "failed"}
 )

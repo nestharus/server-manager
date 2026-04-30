@@ -10,7 +10,6 @@ from starlette.requests import Request
 
 from .public_intake_fixtures import (
     APPLICANT_DISCORD_USER_ID,
-    APPLICANT_RECEIPT_SIGNING_KEY,
     assert_risk_annotation,
     applicant_receipt_token,
     tamper_receipt_token,

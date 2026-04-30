@@ -102,6 +102,7 @@ class _BaseFormField(_ApplicationModel):
 
 class _NoOptionsMixin(_BaseFormField):
     options: None = None
+    type: str
 
     @model_validator(mode="after")
     def validate_no_options(self) -> "_NoOptionsMixin":
@@ -164,7 +165,7 @@ class _OptionsField(_BaseFormField):
                 raise ValueError("select options must be unique")
             seen.add(stripped)
             normalized.append(stripped)
-        self.options = normalized
+        object.__setattr__(self, "options", normalized)
         return self
 
 

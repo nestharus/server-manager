@@ -17,7 +17,7 @@ from app.contracts.compliance import (
 )
 from app.contracts.compliance_corrections import CorrectionNotPermittedStatusError
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
-from app.infrastructure.ocr import OcrProvider, OcrProviderNotConfiguredError, StubOcrProvider
+from app.infrastructure.ocr import OcrProvider, OcrProviderNotConfiguredError
 from app.repositories.db import PostgresDatabase
 
 

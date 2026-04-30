@@ -12,7 +12,7 @@ Lock this INIT to the chapter selector and chapter-scoped submit path. BL-010 co
 
 ### Q2. Public chapter list endpoint: wrapper response, active chapters only
 
-Add a public `GET /api/public/chapters` surface that returns active chapters only as `{"chapters": [{"id": "...", "name": "..."}]}`. The problem map suggested a raw list (`research/28-bl-010-problem-map.md:64-68`), but the existing admin chapter endpoint already uses a wrapped `chapters` collection (`services/api/app/contracts/web.py:39-48`) and the SPA client already has a matching `chapterListSchema` wrapper (`services/web/src/api/client.ts:12-22`). The public response intentionally omits `state`, `version`, `created_at`, templates, configuration, and Discord resources; those remain admin-only (`services/api/app/api/v1/endpoints/web.py:64-69`, `services/api/app/repositories/web.py:9-21`).
+Add a public chapter list surface that mounts in FastAPI as `GET /api/v1/public/chapters` and is exposed to the SPA as `GET /api/public/chapters`, returning active chapters only as `{"chapters": [{"id": "...", "name": "..."}]}`. The problem map suggested a raw list (`research/28-bl-010-problem-map.md:64-68`), but the existing admin chapter endpoint already uses a wrapped `chapters` collection (`services/api/app/contracts/web.py:39-48`) and the SPA client already has a matching `chapterListSchema` wrapper (`services/web/src/api/client.ts:12-22`). The public response intentionally omits `state`, `version`, `created_at`, templates, configuration, and Discord resources; those remain admin-only (`services/api/app/api/v1/endpoints/web.py:64-69`, `services/api/app/repositories/web.py:9-21`).
 
 ### Q3. New field type: `chapter_select`
 
@@ -92,9 +92,9 @@ Seed v2 uses a new deterministic UUID, for example `digest('init-135:public-inta
 
 ## 4. API Surface
 
-### `GET /api/public/chapters`
+### `GET /api/v1/public/chapters`
 
-Public, unauthenticated, active-only. Internally this should mount under the v1 API router consistently with existing API paths, then be exposed at the web/public path in local ingress the same way `/api/public/applications` maps to the existing `/api/v1/public/applications` route (`services/api/app/api/v1/endpoints/applications/public.py:22-47`, `services/web/src/api/client.ts:277-290`, `gitops/channels/local/applications/server-manager/public-intake-rate-limit.yaml:37-43`, `gitops/channels/local/auth/pomerium/public-intake-rate-limit.yaml:24-30`).
+Public, unauthenticated, active-only. This mounts under the v1 API router consistently with existing API paths, then is exposed at the web/public path as `/api/public/chapters` in local ingress the same way `/api/public/applications` maps to the existing `/api/v1/public/applications` route (`services/api/app/api/v1/endpoints/applications/public.py:22-47`, `services/web/src/api/client.ts:277-290`, `gitops/channels/local/applications/server-manager/public-intake-rate-limit.yaml:37-43`, `gitops/channels/local/auth/pomerium/public-intake-rate-limit.yaml:24-30`).
 
 Response:
 
@@ -193,7 +193,7 @@ No pagination is needed for beta-1; use a fixed cap of 200 to match the admin li
 
 ## 6. Authorization Model
 
-`GET /api/public/chapters` is public and requires no Pomerium principal, officer authority, applicant receipt, or Discord identity. Its FastAPI route must not depend on `get_pomerium_principal`, `verify_applicant_receipt`, or any identity dependency, and the endpoint docstring must document that it is public/no-auth by design. It returns only active chapter ids and names, which are non-PII and already visible in officer/admin surfaces with additional metadata (`services/api/app/api/v1/endpoints/web.py:64-69`, `services/api/app/contracts/web.py:39-48`).
+`GET /api/v1/public/chapters` is public and requires no Pomerium principal, officer authority, applicant receipt, or Discord identity. Its FastAPI route must not depend on `get_pomerium_principal`, `verify_applicant_receipt`, or any identity dependency, and the endpoint docstring must document that it is public/no-auth by design. It returns only active chapter ids and names, which are non-PII and already visible in officer/admin surfaces with additional metadata (`services/api/app/api/v1/endpoints/web.py:64-69`, `services/api/app/contracts/web.py:39-48`).
 
 The audit gate noted that the current ingress posture is implicitly public via the catch-all route rather than an explicit `/api/public/` Pomerium route. Record that as a follow-up observation only; it does not block beta-1 as long as the FastAPI endpoint remains identity-free and the public ingress/rate-limit entries are added alongside the existing public submit path.
 

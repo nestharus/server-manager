@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -12,7 +11,13 @@ from app.repositories.db import PostgresDatabase
 
 
 CHAPTER_SELECTOR_FIELD_ID = "chapter"
-_DEFAULT_SCOPE_ID = object()
+
+
+class _DefaultScopeId:
+    __slots__ = ()
+
+
+_DEFAULT_SCOPE_ID = _DefaultScopeId()
 
 
 def seed_chapter(
@@ -160,7 +165,7 @@ def chapter_selector_public_payload(
     client_application_id: str | None = None,
     responses: dict[str, Any] | None = None,
     scope_kind: str = "chapter",
-    scope_id: str | None | object = _DEFAULT_SCOPE_ID,
+    scope_id: str | None | _DefaultScopeId = _DEFAULT_SCOPE_ID,
 ) -> dict[str, Any]:
     resolved_scope_id = chapter_id if scope_id is _DEFAULT_SCOPE_ID else scope_id
     payload: dict[str, Any] = {
@@ -179,11 +184,11 @@ def chapter_selector_public_payload(
 
 
 def fetch_application_target_row(
-    database_url: str,
+    db: PostgresDatabase,
     application_id: UUID,
 ) -> dict[str, Any]:
-    with psycopg.connect(database_url, row_factory=dict_row) as connection:
-        row = connection.execute(
+    with db.connection() as connection, connection.cursor(row_factory=dict_row) as cursor:
+        row = cursor.execute(
             """
             SELECT
                 id,
@@ -257,11 +262,11 @@ def seed_form_definition(
         )
 
 
-def fetch_global_forms(database_url: str) -> list[dict[str, Any]]:
-    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+def fetch_global_forms(db: PostgresDatabase) -> list[dict[str, Any]]:
+    with db.connection() as connection, connection.cursor(row_factory=dict_row) as cursor:
         return [
             dict(row)
-            for row in connection.execute(
+            for row in cursor.execute(
                 """
                 SELECT id, version, status, archived_at, fields, routing_rules
                 FROM form_definitions
@@ -272,9 +277,9 @@ def fetch_global_forms(database_url: str) -> list[dict[str, Any]]:
         ]
 
 
-def fetch_form_aggregate_head(database_url: str) -> dict[str, Any] | None:
-    with psycopg.connect(database_url, row_factory=dict_row) as connection:
-        row = connection.execute(
+def fetch_form_aggregate_head(db: PostgresDatabase) -> dict[str, Any] | None:
+    with db.connection() as connection, connection.cursor(row_factory=dict_row) as cursor:
+        row = cursor.execute(
             """
             SELECT aggregate_type, aggregate_id, current_seq, latest_change_id
             FROM aggregate_heads
@@ -285,11 +290,11 @@ def fetch_form_aggregate_head(database_url: str) -> dict[str, Any] | None:
     return None if row is None else dict(row)
 
 
-def fetch_form_actions(database_url: str) -> list[dict[str, Any]]:
-    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+def fetch_form_actions(db: PostgresDatabase) -> list[dict[str, Any]]:
+    with db.connection() as connection, connection.cursor(row_factory=dict_row) as cursor:
         return [
             dict(row)
-            for row in connection.execute(
+            for row in cursor.execute(
                 """
                 SELECT action_type, aggregate_type, aggregate_id, request_json
                 FROM activity_actions
@@ -301,11 +306,11 @@ def fetch_form_actions(database_url: str) -> list[dict[str, Any]]:
         ]
 
 
-def fetch_form_state_changes(database_url: str) -> list[dict[str, Any]]:
-    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+def fetch_form_state_changes(db: PostgresDatabase) -> list[dict[str, Any]]:
+    with db.connection() as connection, connection.cursor(row_factory=dict_row) as cursor:
         return [
             dict(row)
-            for row in connection.execute(
+            for row in cursor.execute(
                 """
                 SELECT change_type, aggregate_seq, payload_json
                 FROM activity_state_changes

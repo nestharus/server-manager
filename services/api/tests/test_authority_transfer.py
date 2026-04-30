@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from uuid import UUID
 
 import psycopg
 import pytest

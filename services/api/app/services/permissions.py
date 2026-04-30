@@ -22,7 +22,6 @@ from app.contracts.permissions import (
     PermissionDriftRead,
     PermissionDriftResolutionRequest,
     PermissionExpirySweepResult,
-    PermissionIntentCreate,
     PermissionIntentNotFoundError,
     PermissionIntentRead,
     PermissionIntentRenewalRequest,

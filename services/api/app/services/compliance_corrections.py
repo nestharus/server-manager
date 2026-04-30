@@ -17,7 +17,6 @@ from app.contracts.mutations import MutationRequest, MutationResult, StateChange
 from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
 from app.services.authority import _require_scoped_authority
-from app.services.compliance import _evidence_from_row
 from app.services.mutations import mutate_entity
 
 

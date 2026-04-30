@@ -13,7 +13,7 @@ from psycopg.types.json import Jsonb
 
 from app.repositories._claim import claim_due_rows
 from app.repositories.db import PostgresDatabase
-from app.services.deferred_effects import deferred_effect_worker_tick, read_degraded_state_summary
+from app.services.deferred_effects import read_degraded_state_summary
 from app.services.notifications_delivery import deliver_envelope
 
 

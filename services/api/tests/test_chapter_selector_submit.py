@@ -72,7 +72,6 @@ def _client_id(label: str) -> str:
 async def test_positive_1_selector_form_chapter_scope_matching_response(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    governance_dsn: str,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=public_chapter_submit_uses_global_form_and_chapter_target;
@@ -97,7 +96,7 @@ async def test_positive_1_selector_form_chapter_scope_matching_response(
 
     assert response.status_code == HTTPStatus.CREATED, response.text
     application_id = response.json()["application_id"]
-    row = fetch_application_target_row(governance_dsn, application_id)
+    row = fetch_application_target_row(governance_db, application_id)
     assert row["target_scope_kind"] == "chapter"
     assert row["target_scope_id"] == chapter_id
     assert row["form_snapshot"]["scope_kind"] == "global"
@@ -129,7 +128,7 @@ async def test_positive_1_selector_form_chapter_scope_matching_response(
         ),
     ],
 )
-async def test_positive_2_selector_form_chapter_scope_missing_or_mismatched_response(
+async def test_negative_selector_form_chapter_scope_missing_or_mismatched_response(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
     responses: dict[str, Any],
@@ -157,7 +156,6 @@ async def test_positive_2_selector_form_chapter_scope_missing_or_mismatched_resp
 async def test_positive_3_non_selector_global_form_global_scope_uses_existing_path(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    governance_dsn: str,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=public_chapter_submit_uses_global_form_and_chapter_target;
@@ -172,7 +170,7 @@ async def test_positive_3_non_selector_global_form_global_scope_uses_existing_pa
     )
 
     assert response.status_code == HTTPStatus.CREATED, response.text
-    row = fetch_application_target_row(governance_dsn, response.json()["application_id"])
+    row = fetch_application_target_row(governance_db, response.json()["application_id"])
     assert row["target_scope_kind"] == "global"
     assert row["target_scope_id"] is None
 
@@ -218,33 +216,6 @@ async def test_negative_2_selector_form_global_scope_rejected(
             client_application_id=_client_id("selector-global"),
             scope_kind="global",
             scope_id=None,
-        ),
-    )
-
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, response.text
-
-
-@pytest.mark.usefixtures("allowed_public_route")
-async def test_negative_3_selector_form_chapter_scope_missing_chapter_response(
-    migrated_async_client: AsyncClient,
-    governance_db: PostgresDatabase,
-) -> None:
-    """Risk annotation: group=TG-3;
-    named_risk=public_chapter_submit_uses_global_form_and_chapter_target;
-    level=component; source=.tmp/init-135/phase6/step6a-contract.md#TG-3-F2.
-    """
-    seed_global_chapter_selector_form(governance_db)
-    chapter_id = seed_chapter(governance_db, name="Echo", state="active")
-
-    response = await _post_public_application(
-        migrated_async_client,
-        payload=chapter_selector_public_payload(
-            chapter_id=chapter_id,
-            client_application_id=_client_id("selector-missing-response"),
-            responses={
-                "character_name": "Test Applicant",
-                "application_text": "I want to join scheduled guild activities.",
-            },
         ),
     )
 

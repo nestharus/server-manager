@@ -361,7 +361,6 @@ def evaluate(
     has_scope_match = False
     has_permission_match = False
     saw_expired = False
-    saw_revoked = False
 
     for grant in grants:
         has_any_grant = True
@@ -377,7 +376,6 @@ def evaluate(
             saw_expired = True
             continue
         if grant.revoked_at is not None:
-            saw_revoked = True
             continue
         return AuthorityDecisionRead(
             allowed=True,

@@ -172,6 +172,11 @@ function renderFormField(
           required={field.required}
           multiple={field.type === "multi_select"}
         >
+          {field.required && field.type === "select" && (
+            <option value="" disabled>
+              Select an option
+            </option>
+          )}
           {field.options.map((option) => (
             <option value={option}>{option}</option>
           ))}
