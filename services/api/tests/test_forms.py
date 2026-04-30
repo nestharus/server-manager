@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from collections.abc import Iterator
 from http import HTTPStatus
 from typing import Any
@@ -11,6 +12,7 @@ from httpx import AsyncClient
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
+from app.services.applications import validate_application_responses
 from app.services.authority import grant_authority
 
 
@@ -72,6 +74,42 @@ def _payload(*, scope_id: str = "chapter-1", name: str = "Chapter Application") 
             "schema_version": 1,
             "queue": "chapter_officers",
             "review_scope": {"scope_kind": "chapter", "scope_id": scope_id},
+        },
+    }
+
+
+def _global_chapter_selector_payload() -> dict[str, Any]:
+    return {
+        "name": "Global Chapter Selector Application",
+        "target_type": "chapter_membership",
+        "scope": {"scope_kind": "global", "scope_id": None},
+        "fields": [
+            {
+                "id": "chapter",
+                "type": "chapter_select",
+                "label": "Chapter",
+                "required": True,
+                "placeholder": "Choose a chapter",
+            },
+            {
+                "id": "character_name",
+                "type": "short",
+                "label": "Character name",
+                "required": True,
+                "max_length": 64,
+            },
+            {
+                "id": "application_text",
+                "type": "long",
+                "label": "Application text",
+                "required": True,
+                "max_length": 4000,
+            },
+        ],
+        "routing_rules": {
+            "schema_version": 1,
+            "queue": "chapter_officers",
+            "review_scope": None,
         },
     }
 
@@ -174,3 +212,178 @@ async def test_publish_form_normalizes_scope_id(
     assert response.status_code == HTTPStatus.CREATED, response.text
     assert response.json()["scope"]["scope_id"] == "chapter-1"
     assert response.json()["routing_rules"]["review_scope"]["scope_id"] == "chapter-1"
+
+
+@pytest.mark.asyncio
+async def test_publish_form_with_chapter_select_round_trips(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """Risk annotation: group=TG-1;
+    named_risk=chapter_select_form_contract_roundtrip; level=contract;
+    source=.tmp/init-135/phase6/step6a-contract.md#TG-1.
+    """
+    _grant(governance_db)
+    payload = _global_chapter_selector_payload()
+
+    published = await migrated_async_client.post(
+        FORMS_URL,
+        json=payload,
+        headers=_headers(**{"If-Match": '"0"'}),
+    )
+
+    assert published.status_code == HTTPStatus.CREATED, published.text
+    current = await migrated_async_client.get(
+        f"{FORMS_URL}/current",
+        params={"scope_kind": "global"},
+        headers=_headers(),
+    )
+    assert current.status_code == HTTPStatus.OK, current.text
+    fields = current.json()["fields"]
+    assert fields[0] == payload["fields"][0]
+    assert [field["type"] for field in fields] == ["chapter_select", "short", "long"]
+    assert current.json()["scope"] == {"scope_kind": "global", "scope_id": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda body: body["fields"].insert(
+                1,
+                {
+                    "id": "second_chapter",
+                    "type": "chapter_select",
+                    "label": "Second chapter",
+                    "required": True,
+                },
+            ),
+            id="duplicate",
+        ),
+        pytest.param(
+            lambda body: body["fields"][0].update({"required": False}),
+            id="required-false",
+        ),
+        pytest.param(
+            lambda body: body.update(
+                {
+                    "scope": {"scope_kind": "chapter", "scope_id": "chapter-1"},
+                    "routing_rules": {
+                        "schema_version": 1,
+                        "queue": "chapter_officers",
+                        "review_scope": {
+                            "scope_kind": "chapter",
+                            "scope_id": "chapter-1",
+                        },
+                    },
+                }
+            ),
+            id="non-global",
+        ),
+        pytest.param(
+            lambda body: body["fields"][0].update({"id": ""}),
+            id="blank-id",
+        ),
+        pytest.param(
+            lambda body: body["fields"][0].update({"label": ""}),
+            id="blank-label",
+        ),
+        pytest.param(
+            lambda body: body["routing_rules"].update(
+                {"review_scope": {"scope_kind": "global", "scope_id": None}}
+            ),
+            id="conflicting-review-scope",
+        ),
+    ],
+)
+async def test_publish_form_rejects_invalid_chapter_select_contract_shapes(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+    mutate,
+) -> None:
+    """Risk annotation: group=TG-1;
+    named_risk=chapter_select_form_contract_roundtrip; level=contract;
+    source=.tmp/init-135/phase6/step6a-contract.md#TG-1.
+    """
+    _grant(governance_db)
+    body = _global_chapter_selector_payload()
+    mutate(body)
+
+    response = await migrated_async_client.post(
+        FORMS_URL,
+        json=body,
+        headers=_headers(**{"If-Match": '"0"'}),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def test_validate_application_responses_uses_typeadapter_for_union() -> None:
+    """Risk annotation: group=TG-1;
+    named_risk=chapter_select_form_contract_roundtrip; level=contract;
+    source=.tmp/init-135/phase6/step6a-contract.md#TG-1-F1.
+    """
+    fields: list[dict[str, Any]] = [
+        {
+            "id": "short_answer",
+            "type": "short",
+            "label": "Short answer",
+            "required": True,
+            "max_length": 64,
+        },
+        {
+            "id": "long_answer",
+            "type": "long",
+            "label": "Long answer",
+            "required": True,
+            "max_length": 4000,
+        },
+        {
+            "id": "raid_count",
+            "type": "number",
+            "label": "Raid count",
+            "required": True,
+        },
+        {
+            "id": "class",
+            "type": "select",
+            "label": "Class",
+            "required": True,
+            "options": ["warrior", "mage"],
+        },
+        {
+            "id": "roles",
+            "type": "multi_select",
+            "label": "Roles",
+            "required": True,
+            "options": ["tank", "healer", "damage"],
+        },
+        {
+            "id": "rules",
+            "type": "boolean",
+            "label": "Rules accepted",
+            "required": True,
+        },
+        {
+            "id": "chapter",
+            "type": "chapter_select",
+            "label": "Chapter",
+            "required": True,
+            "placeholder": "Choose a chapter",
+        },
+    ]
+    reparsed_fields = deepcopy(fields)
+
+    validate_application_responses(
+        reparsed_fields,
+        {
+            "short_answer": "Kalec",
+            "long_answer": "I want to join scheduled guild activities.",
+            "raid_count": 3,
+            "class": "mage",
+            "roles": ["damage"],
+            "rules": True,
+            "chapter": "chapter-1",
+        },
+    )

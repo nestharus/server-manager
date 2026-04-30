@@ -117,9 +117,12 @@ assert(contract.auth.identity.groups.includes("officers"), "officer group fixtur
 assert(contract.auth.identity.discord_user_id === "210987654321098765", "officer Discord claim fixture")
 assert(contract.form.submit.method === "POST", "form submit method")
 assert(contract.form.submit.endpoint === "/api/public/applications", "public form submit endpoint")
+assert(contract.form.definition_endpoint === "/api/public/application-forms/current", "public form definition endpoint")
+assert(contract.form.chapters.endpoint === "/api/public/chapters", "public chapters endpoint")
+assert(contract.form.chapters.selected_id === "chapter-alpha", "selected chapter fixture")
 assert(contract.form.submit.success_status === 201, "form success status")
-assert(contract.form.fields.map((field) => field.name).sort().join(",") === "application_text,character_name", "form fields")
-assert(contract.form.submit.payload_fields.map((field) => field.name).sort().join(",") === "responses.application_text,responses.character_name,scope.scope_id,scope.scope_kind", "public submit payload fields")
+assert(contract.form.fields.map((field) => `${field.type}:${field.name}`).sort().join(",") === "chapter_select:chapter,long:application_text,short:character_name", "form fields")
+assert(contract.form.submit.payload_fields.map((field) => field.name).sort().join(",") === "responses.application_text,responses.chapter,responses.character_name,scope.scope_id,scope.scope_kind", "public submit payload fields")
 assert(contract.form.submit.client_application_id_pattern.includes("-4"), "client_application_id UUIDv4 pattern")
 assert(Object.keys(contract.ui_libraries).sort().join(",") === "ark,fontawesome,tanstack", "UI library coverage")
 assert(contract.applications.queue.endpoint === "/api/web/officer/applications", "officer queue endpoint")
@@ -153,6 +156,7 @@ assert_playwright_contract_spec() {
   rg -q 'unauthenticated_api_status' "$spec" || die "Playwright spec covers auth-gated API behavior"
   rg -q 'success_status' "$spec" || die "Playwright spec covers form submit response"
   rg -q '/api/public/applications' "$CONTRACT_FIXTURE" || die "fixture targets public submit route"
+  rg -q '/api/public/chapters' "$CONTRACT_FIXTURE" || die "fixture targets public chapters route"
   rg -q 'client_application_id_pattern' "$spec" || die "Playwright spec covers public client id contract"
   rg -q 'ui_libraries' "$spec" || die "Playwright spec covers UI library integration"
   if rg -q 'Dark Nemesis application|2\.0\.0-beta' "$spec"; then
@@ -204,6 +208,8 @@ assert_web_source_api_paths() {
   local client="${REPO_ROOT}/services/web/src/api/client.ts"
   rg -q '"/api/me"' "$client" || die "client.ts calls /api/me"
   rg -q '"/api/web/admin/chapters"' "$client" || die "client.ts calls /api/web/admin/chapters"
+  rg -q '"/api/public/chapters"' "$client" || die "client.ts calls /api/public/chapters"
+  rg -q '"/api/public/application-forms/current"' "$client" || die "client.ts calls public application form endpoint"
   rg -q '/api/web/officer/applications' "$client" || die "client.ts calls /api/web/officer/applications"
   rg -q '/api/web/officer/applications/\$\{input\.applicationId\}/claim' "$client" || die "client.ts calls officer claim endpoint"
   rg -q '/api/web/officer/applications/\$\{applicationId\}`' "$client" || die "client.ts calls officer detail endpoint"

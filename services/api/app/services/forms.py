@@ -54,7 +54,8 @@ def _make_request(
 
 def _effective_routing_rules(request: FormDefinitionPublish) -> dict[str, Any]:
     rules = request.routing_rules.model_dump(mode="json")
-    if rules.get("review_scope") is None:
+    has_chapter_select = any(field.type == "chapter_select" for field in request.fields)
+    if rules.get("review_scope") is None and not has_chapter_select:
         rules["review_scope"] = request.scope.as_persisted()
     return rules
 

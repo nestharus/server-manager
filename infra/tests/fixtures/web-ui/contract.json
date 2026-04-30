@@ -98,15 +98,35 @@
   },
   "form": {
     "route": "/applications",
+    "definition_endpoint": "/api/public/application-forms/current",
+    "chapters": {
+      "endpoint": "/api/public/chapters",
+      "selected_id": "chapter-alpha",
+      "selected_name": "Alpha Chapter",
+      "response": {
+        "chapters": [
+          {
+            "id": "chapter-alpha",
+            "name": "Alpha Chapter"
+          }
+        ]
+      }
+    },
     "fields": [
       {
-        "type": "text",
+        "type": "chapter_select",
+        "name": "chapter",
+        "label": "Chapter",
+        "value": "chapter-alpha"
+      },
+      {
+        "type": "short",
         "name": "character_name",
         "label": "Character name",
         "value": "Test Applicant"
       },
       {
-        "type": "textarea",
+        "type": "long",
         "name": "application_text",
         "label": "Application text",
         "value": "I want to join scheduled guild activities."
@@ -123,11 +143,15 @@
       "payload_fields": [
         {
           "name": "scope.scope_kind",
-          "value": "global"
+          "value": "chapter"
         },
         {
           "name": "scope.scope_id",
-          "value": null
+          "value": "chapter-alpha"
+        },
+        {
+          "name": "responses.chapter",
+          "source_field": "chapter"
         },
         {
           "name": "responses.character_name",

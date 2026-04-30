@@ -28,6 +28,13 @@ spec:
                 name: pomerium-proxy
                 port:
                   number: 80
+          - path: /api/public/chapters
+            pathType: Prefix
+            backend:
+              service:
+                name: pomerium-proxy
+                port:
+                  number: 80
           - path: /api/applications
             pathType: Prefix
             backend:

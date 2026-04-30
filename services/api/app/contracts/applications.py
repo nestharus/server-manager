@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -77,13 +77,10 @@ class ApplicationScope(_ApplicationModel):
         return {"scope_kind": self.scope_kind, "scope_id": self.scope_id}
 
 
-class ApplicationFormField(_ApplicationModel):
+class _BaseFormField(_ApplicationModel):
     id: str
-    type: Literal["short", "long", "number", "select", "multi_select", "boolean"]
     label: str
     required: bool = False
-    max_length: int | None = None
-    options: list[str] | None = None
 
     @field_validator("id")
     @classmethod
@@ -102,43 +99,123 @@ class ApplicationFormField(_ApplicationModel):
             raise ValueError("field label must be 160 characters or fewer")
         return stripped
 
+
+class _NoOptionsMixin(_BaseFormField):
+    options: None = None
+
     @model_validator(mode="after")
-    def validate_shape(self) -> "ApplicationFormField":
-        if self.type == "short":
-            if self.options is not None:
-                raise ValueError("short fields must not set options")
-            if self.max_length is not None and not 1 <= self.max_length <= 256:
-                raise ValueError("short max_length must be between 1 and 256")
-            return self
-        if self.type == "long":
-            if self.options is not None:
-                raise ValueError("long fields must not set options")
-            if self.max_length is not None and not 1 <= self.max_length <= 4096:
-                raise ValueError("long max_length must be between 1 and 4096")
-            return self
-        if self.type in {"number", "boolean"}:
-            if self.max_length is not None or self.options is not None:
-                raise ValueError(f"{self.type} fields must not set max_length or options")
-            return self
-        if self.type in {"select", "multi_select"}:
-            if self.max_length is not None:
-                raise ValueError(f"{self.type} fields must not set max_length")
-            if self.options is None or not 1 <= len(self.options) <= 50:
-                raise ValueError(f"{self.type} fields require 1-50 options")
-            normalized: list[str] = []
-            seen: set[str] = set()
-            for option in self.options:
-                stripped = option.strip()
-                if not stripped:
-                    raise ValueError("select options must not be blank")
-                if stripped in seen:
-                    raise ValueError("select options must be unique")
-                seen.add(stripped)
-                normalized.append(stripped)
-            self.options = normalized
-            return self
+    def validate_no_options(self) -> "_NoOptionsMixin":
+        if self.options is not None:
+            raise ValueError(f"{self.type} fields must not set options")
         return self
 
+
+class FormFieldShort(_NoOptionsMixin):
+    type: Literal["short"]
+    max_length: int | None = None
+
+    @model_validator(mode="after")
+    def validate_short_shape(self) -> "FormFieldShort":
+        if self.max_length is not None and not 1 <= self.max_length <= 256:
+            raise ValueError("short max_length must be between 1 and 256")
+        return self
+
+
+class FormFieldLong(_NoOptionsMixin):
+    type: Literal["long"]
+    max_length: int | None = None
+
+    @model_validator(mode="after")
+    def validate_long_shape(self) -> "FormFieldLong":
+        if self.max_length is not None and not 1 <= self.max_length <= 4096:
+            raise ValueError("long max_length must be between 1 and 4096")
+        return self
+
+
+class FormFieldNumber(_BaseFormField):
+    type: Literal["number"]
+    max_length: None = None
+    options: None = None
+
+    @model_validator(mode="after")
+    def validate_number_shape(self) -> "FormFieldNumber":
+        if self.max_length is not None or self.options is not None:
+            raise ValueError("number fields must not set max_length or options")
+        return self
+
+
+class _OptionsField(_BaseFormField):
+    max_length: None = None
+    options: list[str]
+
+    @model_validator(mode="after")
+    def validate_options_shape(self) -> "_OptionsField":
+        if self.max_length is not None:
+            raise ValueError(f"{self.type} fields must not set max_length")
+        if not 1 <= len(self.options) <= 50:
+            raise ValueError(f"{self.type} fields require 1-50 options")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for option in self.options:
+            stripped = option.strip()
+            if not stripped:
+                raise ValueError("select options must not be blank")
+            if stripped in seen:
+                raise ValueError("select options must be unique")
+            seen.add(stripped)
+            normalized.append(stripped)
+        self.options = normalized
+        return self
+
+
+class FormFieldSelect(_OptionsField):
+    type: Literal["select"]
+
+
+class FormFieldMultiSelect(_OptionsField):
+    type: Literal["multi_select"]
+
+
+class FormFieldBoolean(_BaseFormField):
+    type: Literal["boolean"]
+    max_length: None = None
+    options: None = None
+
+    @model_validator(mode="after")
+    def validate_boolean_shape(self) -> "FormFieldBoolean":
+        if self.max_length is not None or self.options is not None:
+            raise ValueError("boolean fields must not set max_length or options")
+        return self
+
+
+class FormFieldChapterSelect(_BaseFormField):
+    type: Literal["chapter_select"]
+    required: Literal[True] = True
+    placeholder: str | None = None
+
+    @field_validator("placeholder")
+    @classmethod
+    def validate_placeholder(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("chapter_select placeholder must not be blank")
+        if len(stripped) > 160:
+            raise ValueError("chapter_select placeholder must be 160 characters or fewer")
+        return stripped
+
+
+ApplicationFormField: TypeAlias = Annotated[
+    FormFieldShort
+    | FormFieldLong
+    | FormFieldNumber
+    | FormFieldSelect
+    | FormFieldMultiSelect
+    | FormFieldBoolean
+    | FormFieldChapterSelect,
+    Field(discriminator="type"),
+]
 
 FormFieldSpec = ApplicationFormField
 
@@ -179,6 +256,21 @@ class FormDefinitionPublish(_ApplicationModel):
                 raise ValueError(f"duplicate field id: {field.id}")
             seen.add(field.id)
         return value
+
+    @model_validator(mode="after")
+    def validate_chapter_select_contract(self) -> "FormDefinitionPublish":
+        chapter_select_fields = [
+            field for field in self.fields if field.type == "chapter_select"
+        ]
+        if not chapter_select_fields:
+            return self
+        if len(chapter_select_fields) > 1:
+            raise ValueError("forms may contain at most one chapter_select field")
+        if self.scope.scope_kind != "global" or self.scope.scope_id is not None:
+            raise ValueError("chapter_select fields are allowed only on global forms")
+        if self.routing_rules.review_scope is not None:
+            raise ValueError("chapter_select forms must not set routing_rules.review_scope")
+        return self
 
 
 FormDefinitionCreate = FormDefinitionPublish
@@ -497,7 +589,14 @@ __all__ = [
     "FormDefinitionNotFoundError",
     "FormDefinitionPublish",
     "FormDefinitionRead",
+    "FormFieldBoolean",
+    "FormFieldChapterSelect",
+    "FormFieldLong",
+    "FormFieldMultiSelect",
+    "FormFieldNumber",
+    "FormFieldSelect",
     "FormFieldSpec",
+    "FormFieldShort",
     "FormRoutingRules",
     "FormStatus",
     "FormTargetType",

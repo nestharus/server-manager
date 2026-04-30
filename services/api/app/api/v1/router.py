@@ -24,6 +24,8 @@ from app.api.v1.endpoints import (
     operations,
     permissions,
     policies,
+    public_application_forms,
+    public_chapters,
     protected,
     ready,
     roster,
@@ -49,6 +51,8 @@ router.include_router(notifications.router, tags=["notification-rules"])
 router.include_router(operations.router, tags=["operations"])
 router.include_router(permissions.router)
 router.include_router(policies.router, tags=["policies"])
+router.include_router(public_application_forms.router, tags=["public-application-forms"])
+router.include_router(public_chapters.router, tags=["public-chapters"])
 router.include_router(protected.router, tags=["protected"])
 router.include_router(ready.router, tags=["ready"])
 router.include_router(roster.router, tags=["roster"])
