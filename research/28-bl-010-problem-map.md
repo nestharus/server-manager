@@ -73,8 +73,8 @@ required (it's just a list of chapters — no PII).
 Pydantic field shape:
 ```python
 class FormFieldChapterSelect(BaseModel):
-    field_id: str
-    field_type: Literal["chapter_select"]
+    id: str
+    type: Literal["chapter_select"]
     label: str
     required: bool = True
     placeholder: str | None = None

@@ -98,6 +98,13 @@ function restoreApplicationDraft(form: HTMLFormElement) {
     const draft = JSON.parse(raw) as Record<string, string | string[]>;
     for (const [key, value] of Object.entries(draft)) {
       const element = form.elements.namedItem(key);
+      if (element instanceof HTMLSelectElement && element.multiple && Array.isArray(value)) {
+        const values = new Set(value.map(String));
+        for (const option of element.options) {
+          option.selected = values.has(option.value);
+        }
+        continue;
+      }
       if (
         element instanceof HTMLInputElement ||
         element instanceof HTMLTextAreaElement ||

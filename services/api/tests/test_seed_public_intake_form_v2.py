@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+import yaml
 
 from app.repositories.db import PostgresDatabase
 
@@ -32,13 +33,16 @@ def _seed_manifest(repo_root: Path) -> Path:
 
 
 def _seed_sql(repo_root: Path) -> str:
-    raw = _seed_manifest(repo_root).read_text()
-    match = re.search(r"  seed\.sql: \|\n(?P<body>.*?)(?:\n---\n|\Z)", raw, re.DOTALL)
-    assert match, "seed-public-intake-form.yaml must contain data.seed.sql block"
-    sql = "\n".join(
-        line[4:] if line.startswith("    ") else line
-        for line in match.group("body").splitlines()
+    manifests = yaml.safe_load_all(_seed_manifest(repo_root).read_text())
+    sql = next(
+        (
+            manifest.get("data", {}).get("seed.sql")
+            for manifest in manifests
+            if isinstance(manifest, dict) and manifest.get("data", {}).get("seed.sql")
+        ),
+        None,
     )
+    assert sql, "seed-public-intake-form.yaml must contain data.seed.sql block"
     sql = re.sub(r"^\s*BEGIN;\s*\n", "", sql, count=1)
     sql = re.sub(r"\n\s*COMMIT;\s*$", "\n", sql)
     return sql

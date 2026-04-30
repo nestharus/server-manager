@@ -16,6 +16,7 @@ def list_public_chapters(db: PostgresDatabase) -> PublicChapterListRead:
     )
 
 
+# Service-layer alias mirrors the repository naming used by chapter-scoped callers.
 list_public_active_chapters = list_public_chapters
 
 
