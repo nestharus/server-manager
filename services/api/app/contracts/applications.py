@@ -139,8 +139,6 @@ class _OptionsField(_BaseFormField):
 
     @model_validator(mode="after")
     def validate_options_shape(self) -> "_OptionsField":
-        if self.max_length is not None:
-            raise ValueError(f"{self.type} fields must not set max_length")
         if not 1 <= len(self.options) <= 50:
             raise ValueError(f"{self.type} fields require 1-50 options")
         normalized: list[str] = []
