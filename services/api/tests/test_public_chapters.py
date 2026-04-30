@@ -27,6 +27,15 @@ async def _get_public_chapters(
     return response.status_code, response.json()
 
 
+def _collect_dependency_names(dependant: Any) -> set[str]:
+    names: set[str] = set()
+    for dependency in getattr(dependant, "dependencies", ()):
+        if dependency.call is not None:
+            names.add(dependency.call.__name__)
+        names.update(_collect_dependency_names(dependency))
+    return names
+
+
 async def test_public_chapters_returns_only_active(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
@@ -98,14 +107,6 @@ async def test_public_chapters_returns_id_and_name_only(
     assert set(body) == {"chapters"}
     assert body["chapters"]
     assert set(body["chapters"][0]) == {"id", "name"}
-    assert not {
-        "state",
-        "version",
-        "created_at",
-        "template_snapshot",
-        "configuration",
-        "discord_resources",
-    } & set(body["chapters"][0])
 
 
 async def test_public_chapters_returns_empty_list_when_no_actives(
@@ -183,10 +184,6 @@ def test_public_chapters_endpoint_dependency_tree_is_identity_free(app: FastAPI)
         and "GET" in route.methods
     )
 
-    dependency_names = {
-        dependency.call.__name__
-        for dependency in route.dependant.dependencies
-        if dependency.call is not None
-    }
+    dependency_names = _collect_dependency_names(route.dependant)
 
     assert dependency_names.isdisjoint(forbidden)
