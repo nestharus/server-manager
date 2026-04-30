@@ -320,18 +320,49 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
     to land somewhere meaningful and for the "private interview
     channel" workflow.
 
-### BL-010 [open] — INIT-123: Web form richer inputs (chapter selector, multi-page, file upload)
+### BL-010 [β-1 done; β-2/β-3 open] — INIT-135: Web form richer inputs (chapter selector / multi-page / file upload)
 
 - **Source:** `proposals/02-public-application-intake.md:445` (Out
-  of scope for follow-up)
+  of scope for follow-up); β-1 spec at
+  `proposals/17-init-135-chapter-selector.md`.
 - **Description:** Day-1 form has two visible fields targeting
   global scope. Roadmap wants chapter selection, file uploads,
   multi-page forms with conditional fields. The fixture
   `infra/tests/fixtures/web-ui/contract.json` is the contract
   surface to extend.
-- **Plan:** New initiative when product priority surfaces. Touch:
-  SPA form renderer, `form_definitions.fields` shape, validator,
-  and the e2e contract.
+- **β-1 chapter selector — done at f3e28a7 (recovery/test-first-audit):**
+  - New `chapter_select` form-field discriminated-union variant on
+    JSONB `form_definitions.fields` (no migration).
+  - New `GET /api/v1/public/chapters` (active-only, name ASC, 200
+    cap, identity-free dependency tree).
+  - Form-lookup override gate (chapter-selector global form +
+    scope_kind=chapter), 6 positive/negative cases (audit F2).
+  - Server-side chapter existence + active re-check;
+    `responses[chapter] == scope.scope_id` enforced.
+  - `TypeAdapter` for `ApplicationFormField` union alias (audit F1).
+  - v1→v2 seed advance with archive + version bump + state-change
+    write (audit F3); preserves BL-002 fail-closed guard.
+  - SPA `ApplicationFormRoute` is data-driven; chapter dropdown
+    fetched from new endpoint; multi_select draft restoration
+    iterates `<select multiple>` options.
+  - 41 unit tests pass; web typecheck + build pass.
+  - 8 rounds of CodeRabbit applied (path normalization, dead-code
+    removal of unreachable validators, `selected` placeholder
+    attributes, documentation cleanups).
+  - Risk gates: 4×LOW, audit r2 confirmed F1–F4 absorbed.
+  - Pre-existing residual: Playwright spec carrier failure on the
+    Solid 2 beta compat shim "Cannot read properties of undefined
+    (reading 'effect')" affects ALL specs in this worktree, not
+    introduced by INIT-135.
+  - Pre-existing residual: cluster e2e validation blocked — Infisical
+    operator down, e2e-fixtures secret stale (carryover from prior
+    INIT-134 cluster state); cluster reconciliation is a separate
+    operational concern, not INIT-135 scope.
+- **β-2 (multi-page + conditional fields) and β-3 (file upload):**
+  open. New initiatives when product priority surfaces. Touch:
+  SPA form renderer state machine, `form_definitions.fields` shape
+  for `page` + `visible_when`, S3 / object-storage backend +
+  presigned upload + reference in response, and the e2e contract.
 
 ### BL-011 [done] — Legacy SQLite `/apply` modernization or deletion
 
