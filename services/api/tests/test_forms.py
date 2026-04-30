@@ -90,6 +90,8 @@ def _global_chapter_selector_payload() -> dict[str, Any]:
                 "label": "Chapter",
                 "required": True,
                 "placeholder": "Choose a chapter",
+                "max_length": None,
+                "options": None,
             },
             {
                 "id": "character_name",

@@ -153,11 +153,18 @@ test("test_required_chapter_select_blocks_submit_when_empty", async ({ page }) =
   const payloads = await mockPublicSubmit(page);
 
   await page.goto(FORM_ROUTE);
+  const chapterSelect = page.getByLabel("Chapter");
   await page.getByLabel("Character name").fill("Kalec");
   await page.getByLabel("Application text").fill("I want to join scheduled guild activities.");
-  await expect(page.getByLabel("Chapter")).toHaveValue("");
+  await expect(chapterSelect).toHaveValue("");
   await page.getByRole("button", { name: "Submit application" }).click();
 
+  await expect(chapterSelect).toBeFocused();
+  await expect
+    .poll(async () =>
+      chapterSelect.evaluate((element) => (element as HTMLSelectElement).validity.valueMissing),
+    )
+    .toBe(true);
   await expect.poll(() => payloads.length).toBe(0);
 });
 

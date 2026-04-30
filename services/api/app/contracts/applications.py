@@ -104,12 +104,6 @@ class _NoOptionsMixin(_BaseFormField):
     options: None = None
     type: str
 
-    @model_validator(mode="after")
-    def validate_no_options(self) -> "_NoOptionsMixin":
-        if self.options is not None:
-            raise ValueError(f"{self.type} fields must not set options")
-        return self
-
 
 class FormFieldShort(_NoOptionsMixin):
     type: Literal["short"]
@@ -137,12 +131,6 @@ class FormFieldNumber(_BaseFormField):
     type: Literal["number"]
     max_length: None = None
     options: None = None
-
-    @model_validator(mode="after")
-    def validate_number_shape(self) -> "FormFieldNumber":
-        if self.max_length is not None or self.options is not None:
-            raise ValueError("number fields must not set max_length or options")
-        return self
 
 
 class _OptionsField(_BaseFormField):
@@ -182,17 +170,13 @@ class FormFieldBoolean(_BaseFormField):
     max_length: None = None
     options: None = None
 
-    @model_validator(mode="after")
-    def validate_boolean_shape(self) -> "FormFieldBoolean":
-        if self.max_length is not None or self.options is not None:
-            raise ValueError("boolean fields must not set max_length or options")
-        return self
-
 
 class FormFieldChapterSelect(_BaseFormField):
     type: Literal["chapter_select"]
     required: Literal[True] = True
     placeholder: str | None = None
+    max_length: None = None
+    options: None = None
 
     @field_validator("placeholder")
     @classmethod
