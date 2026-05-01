@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { renderToString } from "@solidjs/web";
 import * as solid from "../src/solid-compat/solid";
 
 function flush() {
@@ -157,6 +158,7 @@ test("createSignal smoke: get and set", async () => {
     ([value, setValue]) => {
       expect(value()).toBe("before");
       setValue("after");
+      flush();
       expect(value()).toBe("after");
     },
   );
@@ -165,16 +167,17 @@ test("createSignal smoke: get and set", async () => {
 test("For smoke: renders each item and Show smoke: renders when when-true", async () => {
   await withRoot(
     () => ({
-      rendered: solid.For({
-        each: ["alpha", "bravo"],
-        children: (item) => item().toUpperCase(),
-      }) as solid.Accessor<string[]>,
-      shown: solid.Show({ when: true, fallback: "hidden", children: "visible" }),
+      rendered: renderToString(() =>
+        solid.For({
+          each: ["alpha", "bravo"],
+          children: (item) => item().toUpperCase(),
+        }),
+      ),
+      shown: renderToString(() => solid.Show({ when: true, fallback: "hidden", children: "visible" })),
     }),
     ({ rendered, shown }) => {
-      flush();
-      expect(rendered()).toEqual(["ALPHA", "BRAVO"]);
-      expect(shown()).toBe("visible");
+      expect(rendered).toBe("ALPHA<!--!$-->BRAVO");
+      expect(shown).toBe("visible");
     },
   );
 });

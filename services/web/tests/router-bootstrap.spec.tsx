@@ -51,5 +51,5 @@ test("admin chapters route mounts under QueryClientProvider", async ({ page }) =
 
   await expect(page.locator("#root")).not.toBeEmpty();
   await expect(page.getByRole("heading", { name: "Chapter administration" })).toBeVisible();
-  expect(pageErrors.filter((message) => message.includes("effect"))).toEqual([]);
+  expect(pageErrors).toEqual([]);
 });
