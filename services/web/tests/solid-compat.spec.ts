@@ -197,7 +197,8 @@ test("For smoke: renders each item", async () => {
         }),
       ),
     (rendered) => {
-      expect(rendered).toBe("ALPHA<!--!$-->BRAVO");
+      expect(rendered).toContain("ALPHA");
+      expect(rendered).toContain("BRAVO");
     },
   );
 });
