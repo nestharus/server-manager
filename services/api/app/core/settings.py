@@ -58,6 +58,11 @@ class Settings(BaseSettings):
         repr=False,
     )
     applicant_receipt_ttl_seconds: int = 600
+    s3_endpoint: str = Field(...)
+    s3_region: str = "us-east-1"
+    s3_bucket: str = Field(...)
+    s3_access_key_id: SecretStr = Field(..., repr=False)
+    s3_secret_access_key: SecretStr = Field(..., repr=False)
 
     def to_read(self) -> ApiSettingsRead:
         return ApiSettingsRead(

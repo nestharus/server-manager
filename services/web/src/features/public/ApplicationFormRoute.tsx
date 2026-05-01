@@ -5,6 +5,8 @@ import {
   fetchApplicantDiscordIdentity,
   fetchPublicApplicationForm,
   fetchPublicChapters,
+  requestPublicApplicationUploadUrl,
+  type FormFileResponse,
   type PublicChapterSummary,
   type PublicFormDefinition,
   type PublicFormField,
@@ -26,6 +28,8 @@ type ApplicantAuthState =
   | { status: "checking" }
   | { status: "anonymous" }
   | { status: "verified"; discord_user_id: string };
+
+type FileUploadState = "idle" | "uploading" | "uploaded" | "failed";
 
 const CLIENT_APPLICATION_ID_KEY = "humility.publicApplication.clientApplicationId";
 const DRAFT_KEY = "humility.publicApplication.draft";
@@ -101,12 +105,12 @@ function preserveApplicationDraft(
   sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
 }
 
-function readApplicationDraft(): Record<string, string | string[] | number | boolean | null> | undefined {
+function readApplicationDraft(): Record<string, unknown> | undefined {
   if (typeof sessionStorage === "undefined") return undefined;
   const raw = sessionStorage.getItem(DRAFT_KEY);
   if (!raw) return undefined;
   try {
-    return JSON.parse(raw) as Record<string, string | string[] | number | boolean | null>;
+    return JSON.parse(raw) as Record<string, unknown>;
   } catch {
     sessionStorage.removeItem(DRAFT_KEY);
     return undefined;
@@ -115,12 +119,15 @@ function readApplicationDraft(): Record<string, string | string[] | number | boo
 
 function restoreApplicationDraft(
   form: HTMLFormElement,
-): Record<string, string | string[] | number | boolean | null> | undefined {
+): Record<string, unknown> | undefined {
   const draft = readApplicationDraft();
   if (!draft) return undefined;
   try {
     for (const [key, value] of Object.entries(draft)) {
       const element = form.elements.namedItem(key);
+      if (element instanceof HTMLInputElement && element.type === "file") {
+        continue;
+      }
       if (element instanceof HTMLSelectElement && element.multiple && Array.isArray(value)) {
         const values = new Set(value.map(String));
         for (const option of element.options) {
@@ -147,6 +154,9 @@ function chapterSelectField(form: PublicFormDefinition): PublicFormField | undef
 }
 
 function responseValue(field: PublicFormField, formData: FormData): unknown {
+  if (field.type === "file") {
+    return undefined;
+  }
   if (field.type === "number") {
     const raw = String(formData.get(field.id) ?? "");
     return raw === "" ? null : Number(raw);
@@ -162,8 +172,11 @@ function responseValue(field: PublicFormField, formData: FormData): unknown {
 
 function draftResponseValue(
   field: PublicFormField,
-  value: string | string[] | number | boolean | null,
+  value: unknown,
 ): unknown {
+  if (field.type === "file") {
+    return isFormFileResponse(value) ? value : undefined;
+  }
   if (field.type === "number") {
     const raw = Array.isArray(value) ? value[0] : value;
     return raw === "" || raw === null ? null : Number(raw);
@@ -177,10 +190,22 @@ function draftResponseValue(
   return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
 }
 
+function isFormFileResponse(value: unknown): value is FormFileResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.object_key === "string"
+    && typeof candidate.content_type === "string"
+    && typeof candidate.size_bytes === "number"
+  );
+}
+
 function renderFormField(
   field: PublicFormField,
   chapters: readonly PublicChapterSummary[],
   value: unknown,
+  uploadState: FileUploadState,
+  onFileSelected: (field: PublicFormField, event: Event) => void,
 ) {
   if (field.type === "long") {
     return (
@@ -281,6 +306,33 @@ function renderFormField(
       </label>
     );
   }
+  if (field.type === "file") {
+    const uploaded = isFormFileResponse(value);
+    return (
+      <label class="runtimeField">
+        <span>{field.label}</span>
+        <input
+          class="input"
+          name={field.id}
+          aria-label={field.label}
+          required={field.required && !uploaded}
+          type="file"
+          accept={field.accept.join(",")}
+          disabled={uploadState === "uploading"}
+          onChange={(event) => onFileSelected(field, event)}
+        />
+        <Show when={uploadState !== "idle" || uploaded}>
+          <span class="runtimeCopy" aria-live="polite">
+            {uploadState === "uploading"
+              ? "Uploading..."
+              : uploadState === "failed"
+                ? "Upload failed."
+                : "Uploaded."}
+          </span>
+        </Show>
+      </label>
+    );
+  }
   return (
     <label class="runtimeField">
       <span>{field.label}</span>
@@ -311,6 +363,7 @@ export function ApplicationFormRoute() {
   const [publicChapters, setPublicChapters] = createSignal<readonly PublicChapterSummary[]>([]);
   const [currentPageIndex, setCurrentPageIndex] = createSignal(0);
   const [responses, setResponses] = createSignal<Record<string, unknown>>({});
+  const [fileUploadStates, setFileUploadStates] = createSignal<Record<string, FileUploadState>>({});
   const visibility = createMemo(() => evaluateVisibility(formDefinition().fields, responses()));
   const visiblePages = createMemo(() => {
     const fields = formDefinition().fields;
@@ -342,6 +395,10 @@ export function ApplicationFormRoute() {
     setResponses((current) =>
       pruneHiddenResponses(formDefinition().fields, { ...current, [field.id]: value }),
     );
+  }
+
+  function setFileUploadState(fieldId: string, state: FileUploadState) {
+    setFileUploadStates((current) => ({ ...current, [fieldId]: state }));
   }
 
   function applyResponsesToForm(values: Record<string, unknown>) {
@@ -379,9 +436,58 @@ export function ApplicationFormRoute() {
       return;
     }
     if (!target.name) return;
+    if (target instanceof HTMLInputElement && target.type === "file") return;
     const field = formDefinition().fields.find((candidate) => candidate.id === target.name);
     if (!field) return;
     setResponseValue(field, responseValue(field, new FormData(formRef)));
+  }
+
+  async function onFileSelected(field: PublicFormField, event: Event) {
+    if (field.type !== "file") return;
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement)) return;
+    const file = target.files?.[0];
+    setResponses((current) => {
+      const next = { ...current };
+      delete next[field.id];
+      return pruneHiddenResponses(formDefinition().fields, next);
+    });
+    if (!file) {
+      setFileUploadState(field.id, "idle");
+      return;
+    }
+    if (!field.accept.includes(file.type) || file.size > field.max_size_bytes) {
+      target.value = "";
+      setFileUploadState(field.id, "failed");
+      return;
+    }
+    setFileUploadState(field.id, "uploading");
+    try {
+      const upload = await requestPublicApplicationUploadUrl({
+        form_definition_id: formDefinition().id,
+        field_id: field.id,
+        content_type: file.type,
+        size_bytes: file.size,
+      });
+      const putResponse = await fetch(upload.upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!putResponse.ok) {
+        throw new Error(`upload failed with ${putResponse.status}`);
+      }
+      setResponseValue(field, {
+        object_key: upload.object_key,
+        content_type: file.type,
+        size_bytes: file.size,
+      });
+      setFileUploadState(field.id, "uploaded");
+    } catch (error) {
+      console.error("[ApplicationFormRoute] File upload failed", error);
+      target.value = "";
+      setFileUploadState(field.id, "failed");
+    }
   }
 
   function goNext() {
@@ -527,6 +633,16 @@ export function ApplicationFormRoute() {
 
     const form = formDefinition();
     const visibleResponses = pruneHiddenResponses(form.fields, responsesWithDraftDefaults(form));
+    const pendingFileField = form.fields.find(
+      (field) =>
+        field.type === "file"
+        && visibility()[field.id]
+        && fileUploadStates()[field.id] === "uploading",
+    );
+    if (pendingFileField) {
+      setSubmitStatus("File upload still in progress. Please try again.");
+      return;
+    }
     const chapterField = chapterSelectField(form);
     const selectedChapterId = chapterField
       ? String(visibleResponses[chapterField.id] ?? "")
@@ -711,7 +827,13 @@ export function ApplicationFormRoute() {
               Step {currentPageIndex() + 1} of {visiblePages().length}
             </p>
             {currentVisibleFields().map((field) =>
-              renderFormField(field, publicChapters(), responseForField(field)),
+              renderFormField(
+                field,
+                publicChapters(),
+                responseForField(field),
+                fileUploadStates()[field.id] ?? "idle",
+                onFileSelected,
+              ),
             )}
             <div class="runtimeActions">
               <Show when={currentPageIndex() > 0}>

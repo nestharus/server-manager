@@ -4,11 +4,19 @@ const FORM_ROUTE = "/applications";
 const PUBLIC_FORM_ENDPOINT = "/api/public/application-forms/current";
 const PUBLIC_CHAPTERS_ENDPOINT = "/api/public/chapters";
 const PUBLIC_SUBMIT_ENDPOINT = "/api/public/applications";
+const PUBLIC_UPLOAD_URL_ENDPOINT = "/api/public/applications/upload-url";
 const CHAPTER_ID = "chapter-alpha";
 
 type SubmittedPayload = {
   scope?: { scope_kind?: string; scope_id?: string | null };
   responses?: Record<string, unknown>;
+};
+
+type UploadUrlPayload = {
+  form_definition_id?: string;
+  field_id?: string;
+  content_type?: string;
+  size_bytes?: number;
 };
 
 const selectorForm = {
@@ -140,6 +148,82 @@ const conditionalForm = {
   ],
 };
 
+const fileForm = {
+  ...textOnlyForm,
+  id: "form-file",
+  fields: [
+    {
+      id: "character_name",
+      type: "short",
+      label: "Character name",
+      required: true,
+      max_length: 64,
+      page: 1,
+    },
+    {
+      id: "character_sheet",
+      type: "file",
+      label: "Character sheet",
+      required: true,
+      accept: ["image/png", "application/pdf"],
+      max_size_bytes: 1024,
+      page: 1,
+    },
+    {
+      id: "application_text",
+      type: "long",
+      label: "Application text",
+      required: true,
+      max_length: 4000,
+      page: 1,
+    },
+  ],
+};
+
+const hiddenFileForm = {
+  ...textOnlyForm,
+  id: "form-hidden-file",
+  fields: [
+    {
+      id: "character_name",
+      type: "short",
+      label: "Character name",
+      required: true,
+      max_length: 64,
+      page: 1,
+    },
+    {
+      id: "has_character_sheet",
+      type: "boolean",
+      label: "Has character sheet",
+      required: false,
+      page: 1,
+    },
+    {
+      id: "character_sheet",
+      type: "file",
+      label: "Character sheet",
+      required: true,
+      accept: ["image/png"],
+      max_size_bytes: 1024,
+      page: 1,
+      visible_when: {
+        field_id: "has_character_sheet",
+        op: "eq",
+        value: true,
+      },
+    },
+    {
+      id: "application_text",
+      type: "long",
+      label: "Application text",
+      required: true,
+      max_length: 4000,
+      page: 1,
+    },
+  ],
+};
+
 async function mockVerifiedApplicant(page: Page) {
   await page.route("**/auth/discord/me", async (route) => {
     await route.fulfill({
@@ -189,6 +273,39 @@ async function mockPublicSubmit(page: Page) {
     });
   });
   return payloads;
+}
+
+async function mockUploadUrl(page: Page) {
+  const payloads: UploadUrlPayload[] = [];
+  await page.route(`**${PUBLIC_UPLOAD_URL_ENDPOINT}`, async (route) => {
+    payloads.push(route.request().postDataJSON() as UploadUrlPayload);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        upload_url: "https://uploads.test.local/presigned-character-sheet",
+        object_key:
+          "applications/11111111-1111-4111-8111-111111111111/character_sheet/22222222-2222-4222-8222-222222222222",
+        expires_at: "2026-05-01T12:00:00Z",
+      }),
+    });
+  });
+  return payloads;
+}
+
+async function mockPresignedPut(page: Page) {
+  const puts: { url: string; method: string; contentType: string | null; size: number }[] = [];
+  await page.route("https://uploads.test.local/**", async (route) => {
+    const request = route.request();
+    puts.push({
+      url: request.url(),
+      method: request.method(),
+      contentType: request.headers()["content-type"] ?? null,
+      size: request.postDataBuffer()?.byteLength ?? 0,
+    });
+    await route.fulfill({ status: 200, body: "" });
+  });
+  return puts;
 }
 
 test("test_chapter_select_renders_as_native_select", async ({ page }) => {
@@ -454,4 +571,129 @@ test("test_hidden_dependent_field_value_does_not_appear_in_submit_payload", asyn
     application_text: "I want to join scheduled guild activities.",
   });
   expect(payloads[0].responses?.officer_statement).toBeUndefined();
+});
+
+test("test_file_field_renders_as_single_file_input_with_accept", async ({ page }) => {
+  // Risk annotation: group=TG-4;
+  //   named_risk=spa_file_input_upload_real_put_no_fake_reference;
+  //   level=component;
+  //   source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-4
+  await mockVerifiedApplicant(page);
+  await mockPublicForm(page, fileForm);
+
+  await page.goto(FORM_ROUTE);
+
+  const fileInput = page.getByLabel("Character sheet");
+  await expect(fileInput).toBeVisible();
+  await expect(fileInput).toHaveJSProperty("type", "file");
+  await expect(fileInput).toHaveAttribute("accept", "image/png,application/pdf");
+  await expect(fileInput).not.toHaveAttribute("multiple", "");
+});
+
+test("test_file_selection_calls_upload_url_and_puts_to_presigned_url", async ({ page }) => {
+  // Risk annotation: group=TG-4;
+  //   named_risk=spa_file_input_upload_real_put_no_fake_reference;
+  //   level=component;
+  //   source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-4
+  await mockVerifiedApplicant(page);
+  await mockPublicForm(page, fileForm);
+  const uploadPayloads = await mockUploadUrl(page);
+  const puts = await mockPresignedPut(page);
+
+  await page.goto(FORM_ROUTE);
+  await page.getByLabel("Character sheet").setInputFiles({
+    name: "sheet.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("png-bytes"),
+  });
+
+  await expect.poll(() => uploadPayloads.length).toBe(1);
+  expect(uploadPayloads[0]).toEqual({
+    form_definition_id: "form-file",
+    field_id: "character_sheet",
+    content_type: "image/png",
+    size_bytes: 9,
+  });
+  await expect.poll(() => puts.length).toBe(1);
+  expect(puts[0]).toEqual({
+    url: "https://uploads.test.local/presigned-character-sheet",
+    method: "PUT",
+    contentType: "image/png",
+    size: 9,
+  });
+});
+
+test("test_submit_posts_file_response_object_after_successful_upload", async ({ page }) => {
+  // Risk annotation: group=TG-4;
+  //   named_risk=spa_file_input_upload_real_put_no_fake_reference;
+  //   level=component;
+  //   source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-4
+  await mockVerifiedApplicant(page);
+  await mockPublicForm(page, fileForm);
+  await mockUploadUrl(page);
+  const puts = await mockPresignedPut(page);
+  const payloads = await mockPublicSubmit(page);
+
+  await page.goto(FORM_ROUTE);
+  await page.getByLabel("Character name").fill("Kalec");
+  await page.getByLabel("Application text").fill("I want to join scheduled guild activities.");
+  await page.getByLabel("Character sheet").setInputFiles({
+    name: "sheet.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("png-bytes"),
+  });
+  await expect.poll(() => puts.length).toBe(1);
+  await page.getByRole("button", { name: "Submit application" }).click();
+
+  await expect.poll(() => payloads.length).toBe(1);
+  expect(payloads[0].responses?.character_sheet).toEqual({
+    object_key:
+      "applications/11111111-1111-4111-8111-111111111111/character_sheet/22222222-2222-4222-8222-222222222222",
+    content_type: "image/png",
+    size_bytes: 9,
+  });
+  expect(JSON.stringify(payloads[0].responses)).not.toContain("presigned-character-sheet");
+});
+
+test("test_oversized_file_selection_does_not_call_upload_url", async ({ page }) => {
+  // Risk annotation: group=TG-4;
+  //   named_risk=spa_file_input_upload_real_put_no_fake_reference;
+  //   level=component;
+  //   source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-4
+  await mockVerifiedApplicant(page);
+  await mockPublicForm(page, fileForm);
+  const uploadPayloads = await mockUploadUrl(page);
+
+  await page.goto(FORM_ROUTE);
+  await page.getByLabel("Character sheet").setInputFiles({
+    name: "too-large.png",
+    mimeType: "image/png",
+    buffer: Buffer.alloc(1025, "x"),
+  });
+
+  await page.waitForTimeout(250);
+  expect(uploadPayloads).toHaveLength(0);
+});
+
+test("test_hidden_file_field_does_not_render_or_submit_reference", async ({ page }) => {
+  // Risk annotation: group=TG-4;
+  //   named_risk=spa_file_input_upload_real_put_no_fake_reference;
+  //   level=component;
+  //   source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-4
+  await mockVerifiedApplicant(page);
+  await mockPublicForm(page, hiddenFileForm);
+  const uploadPayloads = await mockUploadUrl(page);
+  const puts = await mockPresignedPut(page);
+  const payloads = await mockPublicSubmit(page);
+
+  await page.goto(FORM_ROUTE);
+  await expect(page.getByLabel("Character sheet")).toHaveCount(0);
+  await page.getByLabel("Character name").fill("Kalec");
+  await page.getByLabel("Application text").fill("I want to join scheduled guild activities.");
+  await page.getByRole("button", { name: "Submit application" }).click();
+
+  await expect.poll(() => payloads.length).toBe(1);
+  expect(uploadPayloads).toHaveLength(0);
+  expect(puts).toHaveLength(0);
+  expect(payloads[0].responses?.character_sheet).toBeUndefined();
 });

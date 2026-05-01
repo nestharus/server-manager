@@ -19,6 +19,8 @@ JSONValue: TypeAlias = Any
 _VISIBLE_WHEN_SCALAR_SOURCE_TYPES = frozenset(
     {"short", "long", "number", "select", "boolean"}
 )
+MIME_TYPE_PATTERN = re.compile(r"^[a-z]+/[a-z0-9.+-]+$")
+MAX_FILE_FIELD_SIZE_BYTES = 100 * 1024 * 1024
 
 
 class _ApplicationModel(BaseModel):
@@ -229,6 +231,33 @@ class FormFieldChapterSelect(_BaseFormField):
         return stripped
 
 
+class FormFieldFile(_BaseFormField):
+    type: Literal["file"]
+    accept: list[str]
+    max_size_bytes: int = Field(default=10 * 1024 * 1024, gt=0, le=MAX_FILE_FIELD_SIZE_BYTES)
+    max_length: None = None
+    options: None = None
+
+    @field_validator("accept")
+    @classmethod
+    def validate_accept(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("file accept must contain at least one MIME type")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            stripped = item.strip()
+            if stripped in {"*", "*/*"} or "*" in stripped:
+                raise ValueError("file accept entries must not use wildcards")
+            if not MIME_TYPE_PATTERN.fullmatch(stripped):
+                raise ValueError("file accept entries must be fully-qualified MIME types")
+            if stripped in seen:
+                raise ValueError("file accept entries must be unique")
+            seen.add(stripped)
+            normalized.append(stripped)
+        return normalized
+
+
 ApplicationFormField: TypeAlias = Annotated[
     FormFieldShort
     | FormFieldLong
@@ -236,7 +265,8 @@ ApplicationFormField: TypeAlias = Annotated[
     | FormFieldSelect
     | FormFieldMultiSelect
     | FormFieldBoolean
-    | FormFieldChapterSelect,
+    | FormFieldChapterSelect
+    | FormFieldFile,
     Field(discriminator="type"),
 ]
 
@@ -293,6 +323,13 @@ class FormDefinitionPublish(_ApplicationModel):
             raise ValueError("chapter_select fields are allowed only on global forms")
         if self.routing_rules.review_scope is not None:
             raise ValueError("chapter_select forms must not set routing_rules.review_scope")
+        return self
+
+    @model_validator(mode="after")
+    def validate_single_file_field(self) -> "FormDefinitionPublish":
+        file_fields = [field for field in self.fields if field.type == "file"]
+        if len(file_fields) > 1:
+            raise ValueError("forms may contain at most one file field")
         return self
 
     @model_validator(mode="after")
@@ -382,6 +419,42 @@ class PublicApplicationSubmission(_ApplicationModel):
 class PublicApplicationSubmissionReceipt(_ApplicationModel):
     message: str
     application_id: UUID
+
+
+class FileUploadUrlRequest(_ApplicationModel):
+    form_definition_id: UUID
+    field_id: str
+    content_type: str
+    size_bytes: int = Field(gt=0)
+
+    @field_validator("field_id")
+    @classmethod
+    def validate_field_id(cls, value: str) -> str:
+        if not FIELD_ID_PATTERN.fullmatch(value):
+            raise ValueError("field_id must match ^[a-z][a-z0-9_]{0,63}$")
+        return value
+
+    @field_validator("content_type")
+    @classmethod
+    def validate_content_type(cls, value: str) -> str:
+        stripped = value.strip()
+        if stripped in {"*", "*/*"} or "*" in stripped:
+            raise ValueError("content_type must not use wildcards")
+        if not MIME_TYPE_PATTERN.fullmatch(stripped):
+            raise ValueError("content_type must be a fully-qualified MIME type")
+        return stripped
+
+
+class FileUploadUrlResponse(_ApplicationModel):
+    upload_url: str
+    object_key: str
+    expires_at: datetime
+
+
+class FormFileResponse(_ApplicationModel):
+    object_key: str
+    content_type: str
+    size_bytes: int = Field(gt=0)
 
 
 class ApplicationTransitionRequest(_ApplicationModel):
@@ -631,12 +704,15 @@ __all__ = [
     "ApplicationWaitlistReasonRequiredError",
     "ApplicationWaitlistRequest",
     "DuplicateApplicationCreateError",
+    "FileUploadUrlRequest",
+    "FileUploadUrlResponse",
     "FormDefinitionCreate",
     "FormDefinitionNotFoundError",
     "FormDefinitionPublish",
     "FormDefinitionRead",
     "FormFieldBoolean",
     "FormFieldChapterSelect",
+    "FormFieldFile",
     "FormFieldLong",
     "FormFieldMultiSelect",
     "FormFieldNumber",
@@ -644,6 +720,7 @@ __all__ = [
     "FormFieldSpec",
     "FormFieldShort",
     "FormFieldVisibleWhen",
+    "FormFileResponse",
     "FormRoutingRules",
     "FormStatus",
     "FormTargetType",
