@@ -426,6 +426,61 @@ async def test_publish_form_with_pages_and_visible_when_round_trips(
     assert round_tripped_fields[0].get("visible_when") is None
 
 
+@pytest.mark.asyncio
+async def test_publish_form_with_file_field_round_trips(
+    migrated_async_client: AsyncClient,
+    governance_db: PostgresDatabase,
+) -> None:
+    """Risk annotation: group=TG-1;
+    named_risk=file_field_contract_roundtrip_and_publish_validators;
+    level=contract;
+    source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-1.
+    """
+    _grant(governance_db)
+    fields = [
+        {
+            "id": "has_character_sheet",
+            "type": "boolean",
+            "label": "Has character sheet",
+            "required": True,
+            "page": 1,
+        },
+        {
+            "id": "character_sheet",
+            "type": "file",
+            "label": "Character sheet",
+            "required": True,
+            "accept": ["image/png", "application/pdf"],
+            "max_size_bytes": 1_048_576,
+            "page": 2,
+            "visible_when": {
+                "field_id": "has_character_sheet",
+                "op": "eq",
+                "value": True,
+            },
+        },
+    ]
+
+    published = await migrated_async_client.post(
+        FORMS_URL,
+        json=_global_conditional_payload(
+            fields,
+            name="Global File Upload Application",
+        ),
+        headers=_headers(**{"If-Match": '"0"'}),
+    )
+
+    assert published.status_code == HTTPStatus.CREATED, published.text
+    current = await migrated_async_client.get(
+        f"{FORMS_URL}/current",
+        params={"scope_kind": "global"},
+        headers=_headers(),
+    )
+    assert current.status_code == HTTPStatus.OK, current.text
+    round_tripped_file = current.json()["fields"][1]
+    assert round_tripped_file == fields[1]
+
+
 def test_application_form_field_union_defaults_page_and_visible_when() -> None:
     """Risk annotation: group=TG-1;
     named_risk=visible_when_contract_roundtrip_and_publish_validator;

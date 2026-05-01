@@ -37,6 +37,10 @@ API_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
             "SUPABASE_DB_URL",
             "SUPABASE_SERVICE_KEY",
             "WEB_PUBLIC_BASE_URL",
+            "S3_ENDPOINT",
+            "S3_BUCKET",
+            "S3_ACCESS_KEY_ID",
+            "S3_SECRET_ACCESS_KEY",
         }
     ),
     optional_env_vars=frozenset(
@@ -51,6 +55,7 @@ API_SETTINGS_SOURCE: Final[SettingsSourceRead] = SettingsSourceRead(
             "GLOBAL_APPLICATIONS_REVIEW_CHANNEL_ID",
             "GLOBAL_APPLICATION_MANAGERS_ROLE_ID",
             "GLOBAL_PRIMARY_GUILD_CHANNEL_URL",
+            "S3_REGION",
             "GOOGLE_CLOUD_VISION_KEY",
             "GEMINI_API_KEY",
             "Z_AI_API_KEY",

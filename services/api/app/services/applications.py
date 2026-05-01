@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from psycopg import Connection, errors
 from psycopg.rows import dict_row
 
@@ -35,6 +35,7 @@ from app.contracts.applications import (
     ApplicationWaitlistReasonRequiredError,
     ApplicationWaitlistRequest,
     DuplicateApplicationCreateError,
+    FormFileResponse,
     FormDefinitionNotFoundError,
     InvalidApplicationResponseError,
     InvalidApplicationTransitionError,
@@ -58,6 +59,7 @@ from app.repositories.members import fetch_member_by_id
 from app.repositories.public_chapters import fetch_active_public_chapter
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
 from app.services.form_visibility import evaluate_visibility
+from app.services import file_upload
 from app.services.members import (
     is_synthetic_member,
     resolve_or_create_real_discord_member,
@@ -575,6 +577,73 @@ def validate_application_responses(
                 )
             if connection is not None and fetch_active_public_chapter(connection, chapter_id) is None:
                 raise InvalidApplicationResponseError(f"{field_id} must be an active chapter")
+        elif field.type == "file":
+            try:
+                file_response = FormFileResponse.model_validate(value)
+            except ValidationError as error:
+                raise InvalidApplicationResponseError(
+                    f"{field_id} must be a file response object"
+                ) from error
+            if file_response.content_type not in field.accept:
+                raise InvalidApplicationResponseError(
+                    f"{field_id} content_type is not accepted"
+                )
+            if (
+                file_response.size_bytes <= 0
+                or file_response.size_bytes > field.max_size_bytes
+            ):
+                raise InvalidApplicationResponseError(
+                    f"{field_id} size exceeds max_size_bytes"
+                )
+            _application_id, key_field_id, _object_id = file_upload.parse_object_key(
+                file_response.object_key
+            )
+            if key_field_id != field_id:
+                raise InvalidApplicationResponseError(
+                    f"{field_id} object key does not match field"
+                )
+            content_length, content_type = file_upload.head_object(
+                file_response.object_key
+            )
+            if content_length != file_response.size_bytes:
+                raise InvalidApplicationResponseError(
+                    f"{field_id} uploaded object size mismatch"
+                )
+            if content_type != file_response.content_type:
+                raise InvalidApplicationResponseError(
+                    f"{field_id} uploaded object content_type mismatch"
+                )
+
+
+def _resolve_application_id(
+    responses: dict[str, Any],
+    fields: list[dict[str, Any]],
+) -> UUID:
+    field_list = [_APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw) for raw in fields]
+    visibility = evaluate_visibility(field_list, responses)
+    application_ids: set[UUID] = set()
+    for field in field_list:
+        if field.type != "file" or field.id not in responses:
+            continue
+        if not visibility.get(field.id, False):
+            continue
+        try:
+            file_response = FormFileResponse.model_validate(responses[field.id])
+        except ValidationError as error:
+            raise InvalidApplicationResponseError(
+                f"{field.id} must be a file response object"
+            ) from error
+        application_id, _field_id, _object_id = file_upload.parse_object_key(
+            file_response.object_key
+        )
+        application_ids.add(application_id)
+    if not application_ids:
+        return uuid4()
+    if len(application_ids) > 1:
+        raise InvalidApplicationResponseError(
+            "file responses must reference the same application id"
+        )
+    return next(iter(application_ids))
 
 
 def _chapter_select_field_ids(form_row: dict[str, Any]) -> list[str]:
@@ -766,7 +835,6 @@ def _submit_application_internal(
             )
 
     validated = ApplicationSubmission.model_validate(request)
-    application_id = uuid4()
     submitted_at = datetime.now(UTC)
 
     with db.transaction() as connection:
@@ -816,6 +884,10 @@ def _submit_application_internal(
         snapshot = build_form_snapshot(form_row)
         if target_scope_override is not None:
             snapshot["target_scope"] = target_scope_override
+        application_id = _resolve_application_id(
+            validated.responses,
+            snapshot["fields"],
+        )
         validate_application_responses(
             snapshot["fields"],
             validated.responses,
@@ -891,16 +963,20 @@ def _submit_application_internal(
                 scope_id=target_scope.get("scope_id"),
             )
         except errors.UniqueViolation as error:
-            if validated.client_application_id is None:
-                raise
             with db.connection() as recovery_connection:
-                existing = get_application_by_client_application_id(
-                    recovery_connection,
-                    applicant_id=validated.applicant_id,
-                    client_application_id=validated.client_application_id,
+                existing = (
+                    None
+                    if validated.client_application_id is None
+                    else get_application_by_client_application_id(
+                        recovery_connection,
+                        applicant_id=validated.applicant_id,
+                        client_application_id=validated.client_application_id,
+                    )
                 )
             if existing is None:
-                raise
+                raise InvalidApplicationResponseError(
+                    "file upload application id already exists"
+                ) from error
             raise DuplicateApplicationCreateError(_row_to_read(existing)) from error
 
         route_request = ApplicationTransitionRequest(action="route")

@@ -75,6 +75,11 @@ export const publicFormFieldSchema = z.discriminatedUnion("type", [
     visible_when: z.null().optional(),
     placeholder: z.string().nullable().optional(),
   }),
+  basePublicFormFieldSchema.extend({
+    type: z.literal("file"),
+    accept: z.array(z.string()).min(1),
+    max_size_bytes: z.number().int().positive(),
+  }),
 ]);
 
 export const publicFormDefinitionSchema = z.object({
@@ -92,6 +97,25 @@ export const publicFormDefinitionSchema = z.object({
   published_at: z.string(),
   archived_at: z.string().nullable().optional(),
   created_at: z.string(),
+});
+
+export const fileUploadUrlRequestSchema = z.object({
+  form_definition_id: z.string(),
+  field_id: z.string(),
+  content_type: z.string(),
+  size_bytes: z.number().int().positive(),
+});
+
+export const fileUploadUrlResponseSchema = z.object({
+  upload_url: z.string(),
+  object_key: z.string(),
+  expires_at: z.string(),
+});
+
+export const formFileResponseSchema = z.object({
+  object_key: z.string(),
+  content_type: z.string(),
+  size_bytes: z.number().int().positive(),
 });
 
 const submissionResponseBodySchema = z.object({
@@ -229,6 +253,9 @@ export type AdminChapterSummary = z.infer<typeof chapterListSchema>["chapters"][
 export type PublicChapterSummary = z.infer<typeof publicChapterSummarySchema>;
 export type PublicFormDefinition = z.infer<typeof publicFormDefinitionSchema>;
 export type PublicFormField = z.infer<typeof publicFormFieldSchema>;
+export type FileUploadUrlRequest = z.infer<typeof fileUploadUrlRequestSchema>;
+export type FileUploadUrlResponse = z.infer<typeof fileUploadUrlResponseSchema>;
+export type FormFileResponse = z.infer<typeof formFileResponseSchema>;
 export type ApplicationState = z.infer<typeof applicationStateSchema>;
 export type ApplicationRead = z.infer<typeof applicationReadSchema>;
 export type ApplicationListRead = z.infer<typeof applicationListReadSchema>;
@@ -357,6 +384,30 @@ export async function fetchApplicantDiscordIdentity() {
       discord_user_id: z.string(),
     }),
   );
+}
+
+export async function requestPublicApplicationUploadUrl(
+  payload: FileUploadUrlRequest,
+): Promise<FileUploadUrlResponse> {
+  const path = "/api/public/applications/upload-url";
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new ApiError({
+      status: response.status,
+      path,
+      statusText: response.statusText,
+      payload: await readErrorPayload(response),
+    });
+  }
+  return fileUploadUrlResponseSchema.parse(await response.json());
 }
 
 export async function submitPublicApplication(payload: unknown) {

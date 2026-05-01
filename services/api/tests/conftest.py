@@ -183,6 +183,11 @@ def required_env(monkeypatch_session: MonkeyPatch, postgres_dsn: str) -> None:
     monkeypatch_session.setenv("SUPABASE_DB_URL", postgres_dsn)
     monkeypatch_session.setenv("DATABASE_URL", postgres_dsn)
     monkeypatch_session.setenv("SUPABASE_SERVICE_KEY", "test-service-key")
+    monkeypatch_session.setenv("S3_ENDPOINT", "http://minio.test.local:9000")
+    monkeypatch_session.setenv("S3_REGION", "us-east-1")
+    monkeypatch_session.setenv("S3_BUCKET", "server-manager")
+    monkeypatch_session.setenv("S3_ACCESS_KEY_ID", "test-s3-access-key")
+    monkeypatch_session.setenv("S3_SECRET_ACCESS_KEY", "test-s3-secret-key")
 
 
 @pytest.fixture(scope="session")
