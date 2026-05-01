@@ -5,9 +5,7 @@ export * from "../../node_modules/solid-js/dist/solid.js";
 export type { Accessor } from "solid-js";
 
 export const createRoot: typeof import("solid-js").createRoot = solid.createRoot;
-export const createSignal: typeof import("solid-js").createSignal = ((...args: unknown[]) => {
-  return solid.createSignal(...args);
-}) as typeof import("solid-js").createSignal;
+export const createSignal: typeof import("solid-js").createSignal = solid.createSignal;
 export const flush: typeof import("solid-js").flush = solid.flush;
 export const createComponent: typeof import("solid-js").createComponent = solid.createComponent;
 export const useContext: typeof import("solid-js").useContext = solid.useContext;
