@@ -274,9 +274,18 @@ export E2E_OFFICER_DISCORD_USER_ID="$(
 [[ -n "$E2E_OFFICER_DISCORD_USER_ID" && "$E2E_OFFICER_DISCORD_USER_ID" != "undefined" ]] || e2e_fail "web UI contract fixture missing officer Discord user id"
 
 run_validator validate-web-ui infra/tests/validate_web_ui_local.sh --kubeconfig "$KUBECONFIG_PATH" --tag init-118-local --skip-image-build
+KUBECONFIG_PATH="$KUBECONFIG_PATH" \
+  node "${REPO_ROOT}/infra/tests/e2e/lib/seed-chapter-fixture.mjs" >/tmp/seed-chapter-fixture.json
+e2e_pass "seeded chapter fixture chapter-alpha"
 KUBECONFIG_PATH="$KUBECONFIG_PATH" E2E_OFFICER_DISCORD_USER_ID="$E2E_OFFICER_DISCORD_USER_ID" \
   node "${REPO_ROOT}/infra/tests/e2e/lib/seed-authority-grants.mjs" >/tmp/seed-officer-authority.json
 e2e_pass "seeded officer application.claim/application.review/application.approve/application.message authority"
+KUBECONFIG_PATH="$KUBECONFIG_PATH" \
+  E2E_OFFICER_DISCORD_USER_ID="$E2E_OFFICER_DISCORD_USER_ID" \
+  E2E_APPLICATION_SCOPE_KIND=chapter \
+  E2E_APPLICATION_SCOPE_ID=chapter-alpha \
+  node "${REPO_ROOT}/infra/tests/e2e/lib/seed-authority-grants.mjs" >/tmp/seed-officer-chapter-authority.json
+e2e_pass "seeded officer chapter-alpha application authority"
 grant_officer_message_authority
 "${REPO_ROOT}/infra/tests/e2e/lib/playwright/run-browser-flow.sh" web-ui "$KUBECONFIG_PATH" "$(e2e_log_path playwright-web-ui)"
 assert_public_submit_persisted
