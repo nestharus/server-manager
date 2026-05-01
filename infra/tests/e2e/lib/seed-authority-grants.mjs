@@ -80,6 +80,93 @@ checked_member AS (
   SELECT id, kind FROM members WHERE discord_user_id = ${sqlLiteral(discordUserId)}
   LIMIT 1
 ),
+inserted_member_head AS (
+  INSERT INTO aggregate_heads (
+    aggregate_type,
+    aggregate_id,
+    current_seq,
+    latest_change_id
+  )
+  SELECT
+    'member',
+    cm.id::text,
+    1,
+    NULL
+  FROM checked_member AS cm
+  WHERE cm.kind = 'discord'
+  ON CONFLICT (aggregate_type, aggregate_id) DO NOTHING
+  RETURNING aggregate_type, aggregate_id, current_seq, latest_change_id
+),
+member_head_rows AS (
+  SELECT
+    h.aggregate_type,
+    h.aggregate_id,
+    h.current_seq,
+    h.latest_change_id
+  FROM aggregate_heads AS h
+  JOIN checked_member AS cm
+    ON h.aggregate_type = 'member'
+   AND h.aggregate_id = cm.id::text
+  UNION ALL
+  SELECT aggregate_type, aggregate_id, current_seq, latest_change_id
+  FROM inserted_member_head
+),
+member_head_status AS (
+  SELECT
+    CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM inserted_member_head
+        WHERE aggregate_type = 'member'
+          AND aggregate_id = (SELECT id::text FROM checked_member)
+          AND current_seq = 1
+          AND latest_change_id IS NULL
+      ) THEN 'inserted'
+      WHEN EXISTS (
+        SELECT 1
+        FROM member_head_rows
+        WHERE aggregate_type = 'member'
+          AND aggregate_id = (SELECT id::text FROM checked_member)
+          AND current_seq = 1
+          AND latest_change_id IS NULL
+      ) THEN 'noop'
+      ELSE 'aborted'
+    END AS status,
+    CASE
+      WHEN EXISTS (
+        SELECT 1
+        FROM inserted_member_head
+        WHERE aggregate_type = 'member'
+          AND aggregate_id = (SELECT id::text FROM checked_member)
+          AND current_seq = 1
+          AND latest_change_id IS NULL
+      ) THEN NULL
+      WHEN EXISTS (
+        SELECT 1
+        FROM member_head_rows
+        WHERE aggregate_type = 'member'
+          AND aggregate_id = (SELECT id::text FROM checked_member)
+          AND current_seq = 1
+          AND latest_change_id IS NULL
+      ) THEN NULL
+      ELSE COALESCE(
+        (
+          SELECT STRING_AGG(
+            FORMAT(
+              'found aggregate_type=%s aggregate_id=%s current_seq=%s latest_change_id=%s',
+              aggregate_type,
+              aggregate_id,
+              current_seq,
+              COALESCE(latest_change_id::text, 'NULL')
+            ),
+            '; '
+          )
+          FROM member_head_rows
+        ),
+        'member aggregate head missing after insert'
+      )
+    END AS error
+),
 inserted_grant AS (
   INSERT INTO authority_grants (
     id,
@@ -104,8 +191,9 @@ inserted_grant AS (
     NULL,
     NULL,
     NULL
-  FROM checked_member AS cm
+  FROM checked_member AS cm, member_head_status AS mhs
   WHERE cm.kind = 'discord'
+    AND mhs.status <> 'aborted'
     AND NOT EXISTS (
       SELECT 1
       FROM authority_grants existing
@@ -117,9 +205,17 @@ inserted_grant AS (
     )
   RETURNING grantee_id
 )
-SELECT id::text
-FROM checked_member
-WHERE kind = 'discord';
+SELECT json_build_object(
+  'discord_user_id', ${sqlLiteral(discordUserId)},
+  'member_id', cm.id::text,
+  'scope_kind', ${sqlLiteral(scopeKind)},
+  'scope_id', ${sqlLiteral(scopeId)},
+  'permissions', ${sqlLiteral(permissions)}::jsonb,
+  'member_head', mhs.status,
+  'member_head_error', mhs.error
+)::text
+FROM checked_member AS cm, member_head_status AS mhs
+WHERE cm.kind = 'discord';
 `;
 
 const output = kubectl([
@@ -145,24 +241,24 @@ if (!output) {
   );
 }
 
-const resolvedMemberId = output
+const resultLine = output
   .split("\n")
   .map((line) => line.trim())
   .filter(Boolean)
   .at(-1);
 
-if (!resolvedMemberId) {
+if (!resultLine) {
   throw new Error(
     `failed to parse Discord officer member: discord_user_id=${discordUserId}, scope_kind=${scopeKind}, scope_id=${scopeId}, output=${JSON.stringify(output)}`,
   );
 }
 
-console.log(
-  JSON.stringify({
-    discord_user_id: discordUserId,
-    member_id: resolvedMemberId,
-    scope_kind: scopeKind,
-    scope_id: scopeId,
-    permissions: seededPermissions,
-  }),
-);
+const result = JSON.parse(resultLine);
+console.log(JSON.stringify(result));
+
+if (result.member_head === "aborted") {
+  console.error(
+    `officer member aggregate head aborted: expected aggregate_type=member aggregate_id=${result.member_id} current_seq=1 latest_change_id=NULL; ${result.member_head_error}`,
+  );
+  process.exitCode = 1;
+}
