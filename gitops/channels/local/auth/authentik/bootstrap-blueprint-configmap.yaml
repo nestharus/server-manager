@@ -106,6 +106,8 @@ data:
           client_type: confidential
           issuer_mode: per_provider
           include_claims_in_id_token: true
+          authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+          invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
           redirect_uris:
             - matching_mode: strict
               url: https://web.local.humility.local/auth/discord/callback
@@ -187,6 +189,8 @@ data:
           client_type: confidential
           issuer_mode: per_provider
           include_claims_in_id_token: true
+          authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+          invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
           redirect_uris:
             - matching_mode: strict
               url: https://authenticate.local.humility.local/oauth2/callback
