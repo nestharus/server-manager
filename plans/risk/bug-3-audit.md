@@ -8,7 +8,7 @@ Inputs:
 
 ## Verdict
 
-APPROVED — proceed to implementation.
+**Risk level: LOW.** APPROVED — proceed to implementation.
 
 The proposed `.coderabbit.yaml` with a `services/web/**`-scoped
 `reviews.path_instructions` block addresses the RCA's named root cause
@@ -43,7 +43,7 @@ the locked Q4 instruction bullets:
 
 | Canonical pattern | Q4 bullet | RCA evidence |
 |---|---|---|
-| Version pin (umbrella) | bullet 1 (`solid-js@2.0.0-beta.8`, `@solidjs/web@2.0.0-beta.8`, `@solidjs/signals@2.0.0-beta.8`) | RCA §Summary, §"Pattern 6" |
+| Version pin (umbrella) | bullet 1 (`solid-js@2.0.0-beta.8`, `@solidjs/web@2.0.0-beta.8`, `@solidjs/signals@2.0.0-beta.8`*) | RCA §Summary, §"Pattern 6" |
 | `For` accessor children | bullet 2 (`(item: Accessor<T>, index: Accessor<number>) => U`; `item()` correct; do not suggest `item.id`) | RCA Patterns 1-4 (8+ recurrences across init-133B-i/ii/iii rounds) |
 | `Show` accessor children | bullet 3 (callback children receive an accessor for the narrowed `when` value) | RCA Pattern 8 (typed in `flow.d.ts:4-6, :47-52`) |
 | `@solidjs/web` import | bullet 4 (do not suggest `solid-js/web`; not exported by `solid-js@2.0.0-beta.8`) | RCA Pattern 6 (BUG-1 r2/r4/r6 recurrences) |
@@ -54,6 +54,11 @@ Each bullet calls out both the correct semantic AND the wrong CodeRabbit
 suggestion, which is the right shape for path_instructions text — the model
 has both the rule and the anti-rule to compare against generic Solid 1
 training data.
+
+\* `@solidjs/signals` is a transitive dependency of `solid-js@2.0.0-beta.8`,
+not a direct dependency of `services/web` (see Observation 1 below). The
+version is included in the umbrella pin because effect-handler arity
+behavior comes from this transitive package.
 
 ### F-3 Path scope — PASS
 
