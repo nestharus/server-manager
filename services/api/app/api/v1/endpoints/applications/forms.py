@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api/v1/application-forms")
 @router.post(
     "",
     response_model=FormDefinitionRead,
+    response_model_exclude_unset=True,
     status_code=HTTPStatus.CREATED,
     dependencies=[Depends(RequireAuthority("application_form.publish", "global"))],
 )
@@ -38,7 +39,7 @@ def publish_form_endpoint(
     return read
 
 
-@router.get("/current", response_model=FormDefinitionRead)
+@router.get("/current", response_model=FormDefinitionRead, response_model_exclude_unset=True)
 def get_current_form_endpoint(
     scope_kind: str,
     response: Response,

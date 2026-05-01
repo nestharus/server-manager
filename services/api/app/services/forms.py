@@ -85,7 +85,10 @@ def publish_form(
     validated = FormDefinitionPublish.model_validate(request)
     form_id = uuid4()
     published_at = datetime.now(UTC)
-    fields = [field.model_dump(mode="json") for field in validated.fields]
+    fields = [
+        field.model_dump(mode="json", exclude_unset=True)
+        for field in validated.fields
+    ]
     routing_rules = _effective_routing_rules(validated)
     scope = validated.scope
     next_form_version = expected_version + 1
