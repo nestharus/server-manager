@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -17,6 +18,12 @@ PUBLIC_SUBMIT_ACTION = 'Action::"application:submit_public"'
 API_READ_ACTION = 'Action::"api:read"'
 PUBLIC_RESOURCE = 'Resource::"server-manager-api:public-applications"'
 API_RESOURCE = 'Resource::"server-manager-api"'
+
+PAYLOAD_PATTERN = re.compile(
+    r"""^[A-Za-z_][A-Za-z0-9_]*="\$\(jq\s+-nc\s+'(\{[^']+\})'\)"$""",
+    re.MULTILINE,
+)
+JQ_OBJECT_KEY_PATTERN = re.compile(r"([,{]\s*)(principal|action|resource):")
 
 
 def _yaml(path: Path) -> dict:
@@ -41,6 +48,21 @@ def _service_identities(fixture: dict) -> dict:
 
 def _policy_contents(policies: list[dict]) -> str:
     return "\n".join(policy["content"] for policy in policies)
+
+
+def _validator_payloads(validator: str) -> list[dict]:
+    payloads = []
+    matches = PAYLOAD_PATTERN.findall(validator)
+    assert matches, "expected at least one jq -nc payload assignment in validator"
+
+    for source in matches:
+        json_source = JQ_OBJECT_KEY_PATTERN.sub(r'\1"\2":', source)
+        try:
+            payloads.append(json.loads(json_source))
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"validator jq payload did not parse as JSON: {source}") from exc
+
+    return payloads
 
 
 def test_access_policy_matrix_contains_public_submit_allow_and_read_deny() -> None:
@@ -98,7 +120,7 @@ def test_public_intake_does_not_add_service_identity() -> None:
     assert "Public::" not in serialized
 
 
-def test_access_policy_validator_remains_matrix_driven_for_public_intake() -> None:
+def test_access_policy_validator_uses_canonical_seeded_policy_source() -> None:
     """Risk annotation: group=TG-6; named_risk=validator_public_policy_drift;
     level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.3,C5.5;
     assumptions=A5.
@@ -109,5 +131,55 @@ def test_access_policy_validator_remains_matrix_driven_for_public_intake() -> No
     assert "service-identities.json" in validator
     assert SEEDED_POLICY_SOURCE_MISMATCH in validator
     assert "GitOps ConfigMap policy differs from policy repo" not in validator
-    assert "application:submit_public" not in validator
-    assert "web-intake.local" not in validator
+
+
+def test_access_policy_validator_contains_public_runtime_probe_payloads() -> None:
+    """Risk annotation: group=TG-2; named_risk=validator_public_runtime_probe_drift;
+    level=particular-integration; source=proposals/29-bl-012-public-entity-runtime-probe.md;
+    assumptions=A8.
+    """
+    validator = VALIDATOR.read_text(encoding="utf-8")
+    triples = {
+        (payload.get("principal"), payload.get("action"), payload.get("resource"))
+        for payload in _validator_payloads(validator)
+    }
+
+    assert (PUBLIC_PRINCIPAL, PUBLIC_SUBMIT_ACTION, PUBLIC_RESOURCE) in triples
+    assert (PUBLIC_PRINCIPAL, API_READ_ACTION, API_RESOURCE) in triples
+
+
+def test_access_policy_validator_die_messages_name_resource_literal() -> None:
+    """Risk annotation: group=TG-2; named_risk=validator_public_runtime_probe_drift;
+    level=particular-integration; source=proposals/29-bl-012-public-entity-runtime-probe.md;
+    assumptions=A8.
+    """
+    validator = VALIDATOR.read_text(encoding="utf-8")
+
+    assert (
+        'Cedar public submit runtime probe expected Allow for '
+        'Public::\\"web-intake.local\\" application:submit_public '
+        'on Resource::\\"server-manager-api:public-applications\\"'
+    ) in validator
+    assert (
+        'Cedar public read runtime probe expected Deny for '
+        'Public::\\"web-intake.local\\" api:read '
+        'on Resource::\\"server-manager-api\\"'
+    ) in validator
+
+
+def test_access_policy_validator_decision_checks_wired_for_public_probes() -> None:
+    """Risk annotation: group=TG-2; named_risk=validator_public_runtime_probe_drift;
+    level=particular-integration; source=proposals/29-bl-012-public-entity-runtime-probe.md;
+    assumptions=A8.
+    """
+    validator = VALIDATOR.read_text(encoding="utf-8")
+
+    public_decision_checks = [
+        r"""jq\s+-e\s+'\.decision == "Allow"'\s+<<<"\$\{[^}]+#public_submit=\}""",
+        r"""jq\s+-e\s+'\.decision == "Deny"'\s+<<<"\$\{[^}]+#public_read=\}""",
+        r"""jq\s+-e\s+'\.decision == "Allow"'\s+<<<"\$\{[^}]+#public_submit_after_poll=\}""",
+        r"""jq\s+-e\s+'\.decision == "Deny"'\s+<<<"\$\{[^}]+#public_read_after_poll=\}""",
+    ]
+
+    for pattern in public_decision_checks:
+        assert re.search(pattern, validator), f"missing public decision check: {pattern}"

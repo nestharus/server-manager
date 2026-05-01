@@ -190,6 +190,16 @@ pass "OPAL/Cedar deployment available"
 
 allow_payload="$(jq -nc '{principal: "User::\"sample@local.humility.local\"", action: "Action::\"api:read\"", resource: "Resource::\"server-manager-api\""}')"
 deny_payload="$(jq -nc '{principal: "User::\"other@local.humility.local\"", action: "Action::\"api:read\"", resource: "Resource::\"server-manager-api\""}')"
+PUBLIC_ALLOW_PAYLOAD="$(jq -nc '{
+  principal: "Public::\"web-intake.local\"",
+  action: "Action::\"application:submit_public\"",
+  resource: "Resource::\"server-manager-api:public-applications\""
+}')"
+PUBLIC_DENY_PAYLOAD="$(jq -nc '{
+  principal: "Public::\"web-intake.local\"",
+  action: "Action::\"api:read\"",
+  resource: "Resource::\"server-manager-api\""
+}')"
 cedar_proof_command='
 set -e
 policy_url="http://opal-client:8180/v1/policies"
@@ -220,14 +230,22 @@ wait_for_policy_ids() {
 wait_for_policy_ids
 allow="$(printf "%s" "$ALLOW_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
 deny="$(printf "%s" "$DENY_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
+public_submit="$(printf "%s" "$PUBLIC_ALLOW_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
+public_read="$(printf "%s" "$PUBLIC_DENY_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
 sleep 31
 wait_for_policy_ids
 allow_after_poll="$(printf "%s" "$ALLOW_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
 deny_after_poll="$(printf "%s" "$DENY_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
+public_submit_after_poll="$(printf "%s" "$PUBLIC_ALLOW_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
+public_read_after_poll="$(printf "%s" "$PUBLIC_DENY_PAYLOAD" | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- http://opal-client:8180/v1/is_authorized)"
 printf "allow=%s\n" "$allow"
 printf "deny=%s\n" "$deny"
+printf "public_submit=%s\n" "$public_submit"
+printf "public_read=%s\n" "$public_read"
 printf "allow_after_poll=%s\n" "$allow_after_poll"
 printf "deny_after_poll=%s\n" "$deny_after_poll"
+printf "public_submit_after_poll=%s\n" "$public_submit_after_poll"
+printf "public_read_after_poll=%s\n" "$public_read_after_poll"
 '
 kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system delete pod init-115-cedar --ignore-not-found >/dev/null
 kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system run init-115-cedar \
@@ -237,6 +255,8 @@ kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system run init-115-cedar \
   --env="EXPECTED_POLICY_IDS=${expected_policy_ids}" \
   --env="ALLOW_PAYLOAD=${allow_payload}" \
   --env="DENY_PAYLOAD=${deny_payload}" \
+  --env="PUBLIC_ALLOW_PAYLOAD=${PUBLIC_ALLOW_PAYLOAD}" \
+  --env="PUBLIC_DENY_PAYLOAD=${PUBLIC_DENY_PAYLOAD}" \
   --command -- /bin/sh -ec "$cedar_proof_command" >/dev/null
 if ! kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system wait pod/init-115-cedar --for=jsonpath='{.status.phase}'=Succeeded --timeout=180s >/dev/null; then
   phase="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system get pod/init-115-cedar -o jsonpath='{.status.phase}' 2>/dev/null || true)"
@@ -246,15 +266,32 @@ fi
 cedar_logs="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n auth-system logs pod/init-115-cedar)"
 allow_count="$(grep -c '^allow=' <<<"$cedar_logs" || true)"
 deny_count="$(grep -c '^deny=' <<<"$cedar_logs" || true)"
+public_submit_count="$(grep -c '^public_submit=' <<<"$cedar_logs" || true)"
+public_read_count="$(grep -c '^public_read=' <<<"$cedar_logs" || true)"
+public_submit_after_poll_count="$(grep -c '^public_submit_after_poll=' <<<"$cedar_logs" || true)"
+public_read_after_poll_count="$(grep -c '^public_read_after_poll=' <<<"$cedar_logs" || true)"
 [[ "$allow_count" == "1" ]] || die "expected exactly one Cedar Allow log line, found ${allow_count}"
 [[ "$deny_count" == "1" ]] || die "expected exactly one Cedar Deny log line, found ${deny_count}"
+[[ "$public_submit_count" == "1" ]] || die "expected exactly one Cedar public submit Allow log line, found ${public_submit_count}"
+[[ "$public_read_count" == "1" ]] || die "expected exactly one Cedar public read Deny log line, found ${public_read_count}"
+[[ "$public_submit_after_poll_count" == "1" ]] || die "expected exactly one Cedar public submit Allow log line (after polling-interval recheck), found ${public_submit_after_poll_count}"
+[[ "$public_read_after_poll_count" == "1" ]] || die "expected exactly one Cedar public read Deny log line (after polling-interval recheck), found ${public_read_after_poll_count}"
 allowed_body="$(grep '^allow=' <<<"$cedar_logs")"
 denied_body="$(grep '^deny=' <<<"$cedar_logs")"
+public_submit_body="$(grep '^public_submit=' <<<"$cedar_logs")"
+public_read_body="$(grep '^public_read=' <<<"$cedar_logs")"
+public_submit_after_poll_body="$(grep '^public_submit_after_poll=' <<<"$cedar_logs")"
+public_read_after_poll_body="$(grep '^public_read_after_poll=' <<<"$cedar_logs")"
 [[ -n "$allowed_body" ]] || die "Cedar Allow decision for sample user not found"
 [[ -n "$denied_body" ]] || die "Cedar Deny decision for non-sample user not found"
 jq -e '.decision == "Allow"' <<<"${allowed_body#allow=}" >/dev/null || die "Cedar Allow decision for sample user not found"
 jq -e '.decision == "Deny"' <<<"${denied_body#deny=}" >/dev/null || die "Cedar Deny decision for non-sample user not found"
+jq -e '.decision == "Allow"' <<<"${public_submit_body#public_submit=}" >/dev/null || die "Cedar public submit runtime probe expected Allow for Public::\"web-intake.local\" application:submit_public on Resource::\"server-manager-api:public-applications\", got: ${public_submit_body#public_submit=}"
+jq -e '.decision == "Deny"' <<<"${public_read_body#public_read=}" >/dev/null || die "Cedar public read runtime probe expected Deny for Public::\"web-intake.local\" api:read on Resource::\"server-manager-api\", got: ${public_read_body#public_read=}"
+jq -e '.decision == "Allow"' <<<"${public_submit_after_poll_body#public_submit_after_poll=}" >/dev/null || die "Cedar public submit runtime probe expected Allow for Public::\"web-intake.local\" application:submit_public on Resource::\"server-manager-api:public-applications\" (after polling-interval recheck), got: ${public_submit_after_poll_body#public_submit_after_poll=}"
+jq -e '.decision == "Deny"' <<<"${public_read_after_poll_body#public_read_after_poll=}" >/dev/null || die "Cedar public read runtime probe expected Deny for Public::\"web-intake.local\" api:read on Resource::\"server-manager-api\" (after polling-interval recheck), got: ${public_read_after_poll_body#public_read_after_poll=}"
 pass "Cedar access policy enforces user rule"
+pass "Cedar access policy enforces public intake rule"
 
 "${REPO_ROOT}/infra/scripts/verify-service-identity-claim.sh" --channel "$channel" --kubeconfig "$KUBECONFIG_PATH" >/dev/null
 pass "Cedar service identity claim runtime proof"
