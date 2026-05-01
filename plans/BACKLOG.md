@@ -320,7 +320,7 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
     to land somewhere meaningful and for the "private interview
     channel" workflow.
 
-### BL-010 [β-1 done; β-2/β-3 open] — INIT-135: Web form richer inputs (chapter selector / multi-page / file upload)
+### BL-010 [β-1 + β-2 done; β-3 open] — INIT-135/INIT-136: Web form richer inputs (chapter selector / multi-page / file upload)
 
 - **Source:** `proposals/02-public-application-intake.md:445` (Out
   of scope for follow-up); β-1 spec at
@@ -371,11 +371,20 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
     `chapter-alpha`/`Alpha Chapter` to exist for the chapter_select
     dropdown, but cluster has no chapters seeded and `seed-authority-grants.mjs`
     doesn't add one. Tracked as BUG-5 (separate slice).
-- **β-2 (multi-page + conditional fields) and β-3 (file upload):**
-  open. New initiatives when product priority surfaces. Touch:
-  SPA form renderer state machine, `form_definitions.fields` shape
-  for `page` + `visible_when`, S3 / object-storage backend +
-  presigned upload + reference in response, and the e2e contract.
+- **β-2 multi-page + conditional fields — done at 510d86a:**
+  proposals/27-init-136-multi-page-conditional.md. Adds `page: int`
+  and `visible_when: {field_id, op (eq/neq/in/not_in), value}` to
+  the form-field discriminated union (additive — no migration).
+  Server `evaluate_visibility` recursively resolves predicates;
+  `validate_application_responses` skips required check on hidden
+  fields and rejects 422 on submitted hidden values (anti-bypass).
+  Publish-time graph validator rejects cycles, forward references,
+  multi_select/chapter_select sources. SPA wizard with Step N of M
+  indicator, Next/Prev gating, draft preservation. 71 API tests +
+  32 SPA tests pass. CodeRabbit r1: 0 findings.
+- **β-3 (file upload):** open. New initiative when product priority
+  surfaces. Touch: S3 / object-storage backend + presigned upload +
+  reference in response, and the e2e contract.
 
 ### BL-011 [done] — Legacy SQLite `/apply` modernization or deletion
 
