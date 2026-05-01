@@ -8,4 +8,10 @@ import "./styles/layers.css";
 const rootElement = document.querySelector<HTMLElement>("#root");
 if (!rootElement) throw new Error("missing #root");
 render(() => <AppProviders router={router} />, rootElement);
-void router.load().finally(flush);
+(async () => {
+  try {
+    await router.load();
+  } finally {
+    flush();
+  }
+})();

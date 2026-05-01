@@ -164,19 +164,48 @@ test("createSignal smoke: get and set", async () => {
   );
 });
 
-test("For smoke: renders each item and Show smoke: renders when when-true", async () => {
+test("createContext exposes a Solid 1-style Provider component", async () => {
   await withRoot(
-    () => ({
-      rendered: renderToString(() =>
+    () => {
+      const Context = solid.createContext("fallback");
+      return {
+        Context,
+        rendered: renderToString(() =>
+          solid.createComponent(Context.Provider, {
+            value: "provided",
+            children: () => solid.useContext(Context),
+          }),
+        ),
+      };
+    },
+    ({ Context, rendered }) => {
+      expect(typeof Context).toBe("function");
+      expect(typeof Context.Provider).toBe("function");
+      expect(Context.Provider).not.toBe(Context);
+      expect(rendered).toBe("provided");
+    },
+  );
+});
+
+test("For smoke: renders each item", async () => {
+  await withRoot(
+    () =>
+      renderToString(() =>
         solid.For({
           each: ["alpha", "bravo"],
           children: (item) => item().toUpperCase(),
         }),
       ),
-      shown: renderToString(() => solid.Show({ when: true, fallback: "hidden", children: "visible" })),
-    }),
-    ({ rendered, shown }) => {
+    (rendered) => {
       expect(rendered).toBe("ALPHA<!--!$-->BRAVO");
+    },
+  );
+});
+
+test("Show smoke: renders when true", async () => {
+  await withRoot(
+    () => renderToString(() => solid.Show({ when: true, fallback: "hidden", children: "visible" })),
+    (shown) => {
       expect(shown).toBe("visible");
     },
   );
