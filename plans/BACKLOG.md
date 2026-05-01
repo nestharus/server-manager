@@ -320,7 +320,7 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
     to land somewhere meaningful and for the "private interview
     channel" workflow.
 
-### BL-010 [β-1 + β-2 done; β-3 open] — INIT-135/INIT-136: Web form richer inputs (chapter selector / multi-page / file upload)
+### BL-010 [done — all betas closed] — INIT-135/INIT-136/INIT-137: Web form richer inputs (chapter selector / multi-page / file upload)
 
 - **Source:** `proposals/02-public-application-intake.md:445` (Out
   of scope for follow-up); β-1 spec at
@@ -382,9 +382,20 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
   multi_select/chapter_select sources. SPA wizard with Step N of M
   indicator, Next/Prev gating, draft preservation. 71 API tests +
   32 SPA tests pass. CodeRabbit r1: 0 findings.
-- **β-3 (file upload):** open. New initiative when product priority
-  surfaces. Touch: S3 / object-storage backend + presigned upload +
-  reference in response, and the e2e contract.
+- **β-3 file upload — done at a7afd17:**
+  proposals/28-init-137-file-upload.md. Adds `file` form-field
+  variant with strict MIME allowlist (no wildcards per audit F1)
+  + max_size_bytes (audit F2: presigned URL binds Content-Length).
+  Single-file-per-form Pydantic post-validator (audit F3 stopgap).
+  New `POST /api/v1/public/applications/upload-url` endpoint
+  (receipt-required + authorize_public_intake) returns presigned
+  PUT URL via boto3 against existing MinIO/S3 substrate. Submit
+  validator HEAD-verifies file existence + content_type + size
+  match; hidden file fields (β-2) skip upload + reject submitted
+  reference (anti-bypass parity). SPA: native file input + fetch
+  PUT upload + Submit guard while uploads pending. 99 API tests
+  pass + 1 skipped (F3 stopgap). Web typecheck + build pass.
+  CodeRabbit r1: 0 findings. boto3>=1.40 added to deps.
 
 ### BL-011 [done] — Legacy SQLite `/apply` modernization or deletion
 
