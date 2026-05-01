@@ -537,7 +537,15 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
   pre-existing fail).
 - **Priority:** LOW (residual cleanup).
 
-### BL-019 [in-progress, decomposed] — In-product application review surface (chapter roles + assignment + private channels + transcripts)
+### BL-019 [done — all sub-items closed] — In-product application review surface (chapter roles + assignment + private channels + transcripts)
+
+- **Closed at 61343a3 (recovery/test-first-audit):** all sub-items
+  019B/019C/019D-α/β-0a+β-0b+β-i/β-ii/β-iii landed in prior slices.
+  The β-i carrier residuals (admin route Playwright timeout,
+  CodeRabbit For-accessor false positives) were tracked as BUG-1
+  + BUG-3 and resolved via the BUG-1..BUG-15 RCA cascade
+  (commits 743f25b, 8a3e834). e2e test 19 is now 10/10 PASS
+  end-to-end through the chapter-scoped officer review surface.
 
 - **Source:** Surfaced in BL-009 product-direction discussion
   with user (2026-04-29).
@@ -744,8 +752,7 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
             revisited.
 - **Dependency graph:** 019B → 019C → 019D-α (done) → β-0a +
   β-0b + β-i (done bundled) → β-ii → β-iii.
-- **Priority:** MEDIUM (β-ii + β-iii still block BL-009
-  Discord-side rollout + BL-020 DM materialization).
+- **Priority:** DONE (all sub-items closed).
 
 ---
 
