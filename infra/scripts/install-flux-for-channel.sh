@@ -37,12 +37,13 @@ Usage: install-flux-for-channel.sh --channel local [--reseed-gitserver-only]
 Installs Flux into the local k3d channel, seeds the in-cluster Git daemon,
 delivers the SOPS age key Secret, applies Flux source CRs, and waits for
 reconciliation. Use --reseed-gitserver-only to render the local snapshot,
-reseed the existing in-cluster Git daemon, apply source CRs, and wait for the
-GitRepository artifact revision without running full bootstrap actions.
+reseed the existing in-cluster Git daemon, apply source CRs, wait for the
+GitRepository artifact revision, and bounce OPAL Server until OPAL Client
+fetches the refreshed policy bundle without running full bootstrap actions.
 
 Options:
   --channel <id>              Channel id to resolve (default: local); resolved JSON id is canonical
-  --reseed-gitserver-only     Reseed the existing in-cluster GitOps source only
+  --reseed-gitserver-only     Reseed GitOps source and refresh OPAL policy bundle
   -h, --help                  Show this help
 EOF
 }
@@ -492,6 +493,93 @@ wait_for_infisical_runtime() {
   wait_for_target_secret
 }
 
+bounce_started_timestamp() {
+  date -u --iso-8601=seconds
+}
+
+wait_for_opal_log_signal() {
+  local resource="$1"
+  local since_time="$2"
+  local signal="$3"
+  local description="$4"
+  local attempt
+
+  log "Waiting for ${description}"
+  for attempt in $(seq 1 30); do
+    if kubectl_cmd -n auth-system logs "$resource" --since-time="$since_time" 2>/dev/null \
+      | grep -q "$signal"; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  kubectl_cmd -n auth-system logs "$resource" --since-time="$since_time" || true
+  die "${description} did not appear after OPAL Server bounce"
+}
+
+opal_server_running_pod() {
+  kubectl_cmd -n auth-system get pods \
+    -l app.kubernetes.io/name=opal-server,opal.ac/role=server \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{.items[0].metadata.name}{" "}{.items[0].metadata.uid}' 2>/dev/null || true
+}
+
+wait_for_opal_server_replacement() {
+  local old_uid="$1"
+  local attempt
+  local pod_info
+  local pod_name
+  local pod_uid
+
+  log "Waiting for replacement OPAL Server pod"
+  for attempt in $(seq 1 60); do
+    pod_info="$(opal_server_running_pod)"
+    pod_name="${pod_info%% *}"
+    pod_uid="${pod_info#* }"
+    if [[ -n "$pod_name" && -n "$pod_uid" && ( -z "$old_uid" || "$pod_uid" != "$old_uid" ) ]] \
+      && kubectl_cmd -n auth-system wait "pod/${pod_name}" --for=condition=Ready --timeout=10s >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  kubectl_cmd -n auth-system get pods -l app.kubernetes.io/name=opal-server,opal.ac/role=server -o wide || true
+  die "replacement OPAL Server pod did not become Ready after rollout restart"
+}
+
+bounce_opal_for_reseed() {
+  local bounce_started_at
+  local old_pod_info
+  local old_pod_uid
+
+  old_pod_info="$(opal_server_running_pod)"
+  old_pod_uid="${old_pod_info#* }"
+  [[ "$old_pod_uid" != "$old_pod_info" ]] || old_pod_uid=""
+  bounce_started_at="$(bounce_started_timestamp)"
+
+  log "Restarting OPAL Server after gitserver reseed"
+  kubectl_cmd -n auth-system get deployment/opal-server >/dev/null 2>&1 \
+    || die "Deployment/auth-system/opal-server not found for OPAL reseed bounce"
+  kubectl_cmd -n auth-system rollout restart deployment/opal-server \
+    || die "OPAL Server rollout restart failed"
+  kubectl_cmd -n auth-system rollout status deployment/opal-server --timeout=180s \
+    || die "OPAL Server rollout status timed out"
+  wait_for_opal_server_replacement "$old_pod_uid"
+
+  wait_for_opal_log_signal \
+    deployment/opal-server \
+    "$bounce_started_at" \
+    "Clone succeeded" \
+    "OPAL Server clone success log"
+  wait_for_opal_log_signal \
+    deployment/opal-client \
+    "$bounce_started_at" \
+    "Fetched valid bundle" \
+    "OPAL Client bundle fetch log"
+
+  log "OPAL bundle refreshed"
+}
+
 render_local_snapshot() {
   SNAPSHOT_DIR="${REPO_ROOT}/.tmp/gitops-source/${CHANNEL_ID}"
   "$PYTHON_BIN" "$RENDERER" --channel "$CHANNEL_ID" --out "$SNAPSHOT_DIR"
@@ -503,6 +591,7 @@ reseed_gitserver_only() {
   seed_git_daemon
   apply_source_crs
   wait_for_source_revision "$SEEDED_REVISION_SHA"
+  bounce_opal_for_reseed
 
   log "Reseeded GitRepository/${SOURCE_NAME}: ${SOURCE_ARTIFACT_REVISION}"
   log "Synthetic gitserver commit SHA: ${SEEDED_REVISION_SHA}"
