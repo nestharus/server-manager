@@ -10,15 +10,18 @@ CHANNEL_ID=""
 FORCE=0
 REPAIR=0
 CLUSTER_ONLY=0
+RESEED_GITSERVER_ONLY=0
 K3D_REGISTRY_PORT="${K3D_REGISTRY_PORT:-5000}"
 REGISTRY_CONFIG_PATH=""
 
 usage() {
   cat <<'EOF'
-Usage: bring-up-local-channel.sh [--channel local] [--force | --repair] [--cluster-only]
+Usage: bring-up-local-channel.sh [--channel local] [--force | --repair] [--cluster-only] [--reseed-gitserver-only]
 
 Creates the local k3d platform cluster for a resolved local channel and runs
-the Flux post-install unless --cluster-only is passed.
+the Flux post-install unless --cluster-only is passed. Use
+--reseed-gitserver-only to update the existing in-cluster GitOps source from
+the current worktree without running the full bootstrap sequence.
 
 Environment:
   K3D_REGISTRY_PORT  Host port for the local k3d registry (default: 5000)
@@ -28,6 +31,8 @@ Options:
   --force          Delete stale local state and recreate the cluster
   --repair         Repair stale generated kubeconfig state without recreating a matching cluster
   --cluster-only   Skip Flux post-install
+  --reseed-gitserver-only
+                   Reseed the existing in-cluster GitOps source only
   -h, --help       Show this help
 EOF
 }
@@ -80,6 +85,9 @@ parse_args() {
       --cluster-only)
         CLUSTER_ONLY=1
         ;;
+      --reseed-gitserver-only)
+        RESEED_GITSERVER_ONLY=1
+        ;;
       -h|--help)
         usage
         exit 0
@@ -93,6 +101,10 @@ parse_args() {
 
   if [[ "$FORCE" -eq 1 && "$REPAIR" -eq 1 ]]; then
     die "--force and --repair are mutually exclusive"
+  fi
+  if [[ "$RESEED_GITSERVER_ONLY" -eq 1 \
+    && ( "$FORCE" -eq 1 || "$REPAIR" -eq 1 || "$CLUSTER_ONLY" -eq 1 ) ]]; then
+    die "--reseed-gitserver-only is mutually exclusive with --force, --repair, and --cluster-only"
   fi
 }
 
@@ -424,6 +436,22 @@ install_flux_post_install() {
   bootstrap_pomerium_oidc_application
 }
 
+reseed_gitserver_only() {
+  [[ "$RESEED_GITSERVER_ONLY" -eq 1 ]] || return 0
+
+  cluster_exists || die "--reseed-gitserver-only requires existing k3d cluster '${cluster_name}'"
+  kubeconfig_matches_cluster || die "--reseed-gitserver-only requires kubeconfig '${kubeconfig_path}' to match k3d cluster '${cluster_name}'"
+
+  verify_kubectl_reachability
+  if ! verify_cluster_contract; then
+    die "stale state detected: cluster '${cluster_name}' does not match channel topology: expected $((servers + agents)) Ready node(s)"
+  fi
+
+  log "Reseeding in-cluster GitOps source for local channel '${CHANNEL_ID}'"
+  bash "$FLUX_INSTALLER" --channel "$CHANNEL_ID" --reseed-gitserver-only
+  exit 0
+}
+
 # Copies step-ca's CA bundle (root + intermediate) into the auth-system
 # namespace so Pomerium can trust the OIDC provider's TLS cert when fetching
 # the OpenID discovery doc from auth.local.humility.local.
@@ -637,6 +665,8 @@ main() {
   registry_name="$(resolve_field registry_name)"
   kubeconfig_path="$(resolve_field kubeconfig_path)"
   kubeconfig_path="${kubeconfig_path/#\~/$HOME}"
+
+  reseed_gitserver_only
 
   if [[ "$FORCE" -eq 1 ]]; then
     delete_existing_state

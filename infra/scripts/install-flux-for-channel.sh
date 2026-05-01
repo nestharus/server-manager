@@ -26,18 +26,24 @@ INFISICAL_SAMPLE_KEY="INFISICAL_SAMPLE_KEY"
 INFISICAL_SAMPLE_VALUE="infisical-local-ready"
 MINIO_NAMESPACE="minio-system"
 MINIO_DEPLOYMENT="minio"
+RESEED_GITSERVER_ONLY=0
+SEEDED_REVISION_SHA=""
+SOURCE_ARTIFACT_REVISION=""
 
 usage() {
   cat <<'EOF'
-Usage: install-flux-for-channel.sh --channel local
+Usage: install-flux-for-channel.sh --channel local [--reseed-gitserver-only]
 
 Installs Flux into the local k3d channel, seeds the in-cluster Git daemon,
 delivers the SOPS age key Secret, applies Flux source CRs, and waits for
-reconciliation.
+reconciliation. Use --reseed-gitserver-only to render the local snapshot,
+reseed the existing in-cluster Git daemon, apply source CRs, and wait for the
+GitRepository artifact revision without running full bootstrap actions.
 
 Options:
-  --channel <id>  Channel id to resolve (default: local); resolved JSON id is canonical
-  -h, --help      Show this help
+  --channel <id>              Channel id to resolve (default: local); resolved JSON id is canonical
+  --reseed-gitserver-only     Reseed the existing in-cluster GitOps source only
+  -h, --help                  Show this help
 EOF
 }
 
@@ -67,6 +73,9 @@ parse_args() {
         [[ $# -ge 2 ]] || die "--channel requires a value"
         CHANNEL_REQUEST="$2"
         shift
+        ;;
+      --reseed-gitserver-only)
+        RESEED_GITSERVER_ONLY=1
         ;;
       -h|--help)
         usage
@@ -165,6 +174,17 @@ wait_for_git_daemon() {
   die "git-daemon container did not become exec-ready"
 }
 
+ensure_git_daemon_for_reseed() {
+  if kubectl_cmd -n git-system get deployment/git-daemon >/dev/null 2>&1; then
+    log "Deployment/git-daemon already exists; leaving manifest untouched"
+  else
+    log "Deployment/git-daemon missing; applying in-cluster Git daemon manifest"
+    kubectl_cmd apply -f "${REPO_ROOT}/gitops/sources/local/git-daemon.yaml"
+  fi
+
+  wait_for_git_daemon
+}
+
 seed_git_daemon() {
   local pod
   local repo_name="humility-${CHANNEL_ID}.git"
@@ -202,6 +222,9 @@ seed_git_daemon() {
     git --git-dir='${repo_path}' symbolic-ref HEAD refs/heads/main
     git --git-dir='${repo_path}' update-server-info
   "
+
+  SEEDED_REVISION_SHA="$(kubectl_cmd -n git-system exec "$pod" -c git-daemon -- git --git-dir="$repo_path" rev-parse refs/heads/main)"
+  [[ -n "$SEEDED_REVISION_SHA" ]] || die "seeded gitserver revision could not be resolved"
 }
 
 ensure_age_secret() {
@@ -246,6 +269,33 @@ wait_for_source_reconciliation() {
   kubectl_cmd -n "$SOURCE_NAMESPACE" wait "gitrepository/${SOURCE_NAME}" \
     --for=condition=Ready \
     --timeout="$WAIT_TIMEOUT"
+}
+
+source_artifact_revision() {
+  kubectl_cmd -n "$SOURCE_NAMESPACE" get "gitrepository/${SOURCE_NAME}" \
+    -o jsonpath='{.status.artifact.revision}' 2>/dev/null || true
+}
+
+wait_for_source_revision() {
+  local expected_sha="$1"
+  local expected_revision="main@sha1:${expected_sha}"
+  local attempt
+  local revision
+
+  wait_for_source_reconciliation
+
+  log "Waiting for GitRepository/${SOURCE_NAME} artifact ${expected_revision}"
+  for attempt in $(seq 1 60); do
+    revision="$(source_artifact_revision)"
+    if [[ "$revision" == "$expected_revision" ]]; then
+      SOURCE_ARTIFACT_REVISION="$revision"
+      return 0
+    fi
+    sleep 2
+  done
+
+  kubectl_cmd -n "$SOURCE_NAMESPACE" get "gitrepository/${SOURCE_NAME}" -o yaml || true
+  die "GitRepository/${SOURCE_NAME} did not report artifact revision ${expected_revision}"
 }
 
 wait_for_reconciliation() {
@@ -442,6 +492,24 @@ wait_for_infisical_runtime() {
   wait_for_target_secret
 }
 
+render_local_snapshot() {
+  SNAPSHOT_DIR="${REPO_ROOT}/.tmp/gitops-source/${CHANNEL_ID}"
+  "$PYTHON_BIN" "$RENDERER" --channel "$CHANNEL_ID" --out "$SNAPSHOT_DIR"
+}
+
+reseed_gitserver_only() {
+  render_local_snapshot
+  ensure_git_daemon_for_reseed
+  seed_git_daemon
+  apply_source_crs
+  wait_for_source_revision "$SEEDED_REVISION_SHA"
+
+  log "Reseeded GitRepository/${SOURCE_NAME}: ${SOURCE_ARTIFACT_REVISION}"
+  log "Synthetic gitserver commit SHA: ${SEEDED_REVISION_SHA}"
+  log "After verifying the revision, resume Flux with:"
+  log "kubectl patch kustomization -n ${SOURCE_NAMESPACE} ${SOURCE_NAME} --type=merge -p '{\"spec\":{\"suspend\":false}}'"
+}
+
 main() {
   parse_args "$@"
 
@@ -468,8 +536,12 @@ main() {
   INFISICAL_UA_SECRET_NAMESPACE="$(json_field infisical_universal_auth_secret_namespace)"
   [[ "$DECRYPTION_SECRET_NAMESPACE" == "$SOURCE_NAMESPACE" ]] || die "Flux SOPS secret namespace must match Kustomization namespace"
 
-  SNAPSHOT_DIR="${REPO_ROOT}/.tmp/gitops-source/${CHANNEL_ID}"
-  "$PYTHON_BIN" "$RENDERER" --channel "$CHANNEL_ID" --out "$SNAPSHOT_DIR"
+  if [[ "$RESEED_GITSERVER_ONLY" -eq 1 ]]; then
+    reseed_gitserver_only
+    exit 0
+  fi
+
+  render_local_snapshot
 
   log "Applying Flux controllers"
   kubectl_cmd apply -f "${REPO_ROOT}/gitops/flux/gotk-components.yaml"
