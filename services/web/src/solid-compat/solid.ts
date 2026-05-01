@@ -6,29 +6,12 @@ export type { Accessor } from "solid-js";
 
 export const createRoot: typeof import("solid-js").createRoot = solid.createRoot;
 export const createSignal: typeof import("solid-js").createSignal = ((...args: unknown[]) => {
-  const [value, setValue] = solid.createSignal(...args);
-  return [
-    value,
-    (...setterArgs: unknown[]) => {
-      const result = setValue(...setterArgs);
-      solid.flush();
-      return result;
-    },
-  ];
+  return solid.createSignal(...args);
 }) as typeof import("solid-js").createSignal;
 export const flush: typeof import("solid-js").flush = solid.flush;
-type CompatFor = <T, U>(props: {
-  readonly each: readonly T[] | undefined | null;
-  readonly children: (item: import("solid-js").Accessor<T>, index: import("solid-js").Accessor<number>) => U;
-}) => import("solid-js").Accessor<U[]>;
-type CompatShow = <T>(props: {
-  readonly when: unknown;
-  readonly fallback?: unknown;
-  readonly children: T;
-}) => import("solid-js").Accessor<T | unknown>;
 
-export const For: CompatFor = solid.For;
-export const Show: CompatShow = solid.Show;
+export const For: typeof import("solid-js").For = solid.For;
+export const Show: typeof import("solid-js").Show = solid.Show;
 
 export function createContext<T>(defaultValue?: T, options?: unknown) {
   const context = solid.createContext(defaultValue, options);
