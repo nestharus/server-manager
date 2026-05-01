@@ -421,6 +421,26 @@ test("test_existing_two_text_field_path_remains_functional", async ({ page }) =>
   expect(chapterListCalled).toBe(false);
 });
 
+test("test_submit_success_status_shows_application_reference", async ({ page }) => {
+  // Risk annotation: group=TG-1;
+  //   named_risk=spa_reference_render;
+  //   level=component;
+  //   source=.tmp/bl-006-envelope-review/phase6/step6a-contract.md#TG-1
+  await mockVerifiedApplicant(page);
+  await mockPublicForm(page, textOnlyForm);
+  const payloads = await mockPublicSubmit(page);
+
+  await page.goto(FORM_ROUTE);
+  await page.getByLabel("Character name").fill("Kalec");
+  await page.getByLabel("Application text").fill("I want to join scheduled guild activities.");
+  await page.getByRole("button", { name: "Submit application" }).click();
+
+  const status = page.locator("#submit-status");
+  await expect(status).toContainText("Application received");
+  await expect(status).toContainText("Reference: 11111111-1111-4111-8111-111111111111");
+  await expect.poll(() => payloads.length).toBe(1);
+});
+
 test("test_draft_restore_preserves_multi_select_values", async ({ page }) => {
   await page.addInitScript(() => {
     window.sessionStorage.setItem(

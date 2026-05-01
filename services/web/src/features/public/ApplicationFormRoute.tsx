@@ -668,7 +668,9 @@ export function ApplicationFormRoute() {
       redirectToDiscordAuth();
       return;
     }
-    setSubmitStatus(submission.body.message ?? `Application returned ${submission.status}`);
+    const submitMessage = submission.body.message ?? `Application returned ${submission.status}`;
+    const applicationId = submission.body.application_id;
+    setSubmitStatus(applicationId ? `${submitMessage}\nReference: ${applicationId}` : submitMessage);
   }
 
   onMount(() => {

@@ -86,6 +86,24 @@ def test_public_application_submission_receipt_is_minimal_envelope() -> None:
     assert isinstance(receipt.application_id, UUID)
 
 
+def test_public_application_submission_receipt_field_set_is_locked_for_bl006() -> None:
+    """Risk annotation: group=TG-2; named_risk=public_envelope_drift;
+    level=unit; source=.tmp/bl-006-envelope-review/phase6/step6a-contract.md#TG-2.
+    """
+    assert_risk_annotation(
+        group="TG-2",
+        named_risk="public_envelope_drift",
+        level="unit",
+        source=".tmp/bl-006-envelope-review/phase6/step6a-contract.md#TG-2",
+    )
+
+    assert set(PublicApplicationSubmissionReceipt.model_fields) == {
+        "message",
+        "application_id",
+    }
+    assert PublicApplicationSubmissionReceipt.model_config["extra"] == "forbid"
+
+
 @pytest.mark.parametrize("extra_key", ["applicant_id", "state", "version", "responses"])
 def test_public_application_submission_receipt_rejects_application_read_fields(
     extra_key: str,
