@@ -52,7 +52,7 @@ data:
         blueprints.goauthentik.io/instantiate: "true"
         blueprints.goauthentik.io/description: "INIT-127 applicant Discord OAuth"
     entries:
-      - model: authentik_sources_oauth.sourcepropertymapping
+      - model: authentik_sources_oauth.oauthsourcepropertymapping
         state: present
         identifiers:
           name: discord-applicant-snowflake
@@ -94,7 +94,7 @@ data:
           request_token_url: ""
           scope: identify
           property_mappings:
-            - !Find [authentik_sources_oauth.sourcepropertymapping, [name, discord-applicant-snowflake]]
+            - !Find [authentik_sources_oauth.oauthsourcepropertymapping, [name, discord-applicant-snowflake]]
       - model: authentik_providers_oauth2.oauth2provider
         state: present
         identifiers:
@@ -130,7 +130,7 @@ data:
         blueprints.goauthentik.io/instantiate: "true"
         blueprints.goauthentik.io/description: "INIT-133B Pomerium officer Discord OAuth"
     entries:
-      - model: authentik_sources_oauth.sourcepropertymapping
+      - model: authentik_sources_oauth.oauthsourcepropertymapping
         state: present
         identifiers:
           name: discord-pomerium-snowflake
@@ -172,7 +172,7 @@ data:
           request_token_url: ""
           scope: identify
           property_mappings:
-            - !Find [authentik_sources_oauth.sourcepropertymapping, [name, discord-pomerium-snowflake]]
+            - !Find [authentik_sources_oauth.oauthsourcepropertymapping, [name, discord-pomerium-snowflake]]
       - model: authentik_providers_oauth2.oauth2provider
         state: present
         identifiers:
