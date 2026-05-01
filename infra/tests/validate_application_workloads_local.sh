@@ -193,10 +193,10 @@ assert_kustomize() {
   pass "local root kustomization includes applications"
 
   grep -q 'name: server-manager-postgres' "$app_render" || die "server-manager CNPG Cluster rendered"
-  grep -q 'name: server-manager-alembic-migrate' "$app_render" || die "server-manager Alembic Job rendered"
+  grep -q 'name: server-manager-alembic-migrate-__ALEMBIC_HASH__' "$app_render" || die "server-manager Alembic Job rendered"
   # Risk annotation: group=TG-4; named_risk=validator_seed_render_gap; level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
   grep -q 'name: seed-public-intake-form-payload' "$app_render" || die "public intake form seed ConfigMap rendered"
-  grep -q 'name: seed-public-intake-form' "$app_render" || die "public intake form seed Job rendered"
+  grep -q 'name: seed-public-intake-form-__SEED_HASH__' "$app_render" || die "public intake form seed Job rendered"
   grep -q 'name: server-manager-postgres-url' "$app_render" || die "public intake form seed DATABASE_URL secret rendered"
   grep -q 'mountPath: /seed/seed.sql' "$app_render" || die "public intake form seed SQL mount rendered"
   grep -q "host: ${ingress_host}" "$app_render" || die "server-manager API ingress rendered"
@@ -334,15 +334,23 @@ assert_runtime() {
   wait_json_condition "Cluster/server-manager-postgres" "server-manager" "cluster/server-manager-postgres" "Ready" 180
   pass "PG Cluster/server-manager-postgres Ready=True"
 
-  kubectl_cmd -n server-manager wait job/server-manager-alembic-migrate --for=condition=Complete --timeout=300s >/dev/null
+  kubectl_cmd -n server-manager wait \
+    --for=condition=Complete \
+    --timeout=300s \
+    job \
+    -l app.kubernetes.io/component=alembic-migrate >/dev/null
   pass "Alembic migration Job complete"
 
   # Risk annotation: group=TG-4; named_risk=validator_seed_completion_gap; level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
   kubectl_cmd -n server-manager get configmap seed-public-intake-form-payload >/dev/null
   pass "public intake form seed ConfigMap exists"
 
-  kubectl_cmd -n server-manager wait job/seed-public-intake-form --for=condition=Complete --timeout=300s >/dev/null
-  [[ "$(kubectl_cmd -n server-manager get job seed-public-intake-form -o jsonpath='{.status.succeeded}')" == "1" ]] \
+  kubectl_cmd -n server-manager wait \
+    --for=condition=Complete \
+    --timeout=300s \
+    job \
+    -l app.kubernetes.io/component=seed-public-intake-form >/dev/null
+  [[ "$(kubectl_cmd -n server-manager get job -l app.kubernetes.io/component=seed-public-intake-form -o jsonpath='{.items[0].status.succeeded}')" == "1" ]] \
     || die "public intake form seed Job succeeded exactly once"
   pass "public intake form seed Job succeeded"
 

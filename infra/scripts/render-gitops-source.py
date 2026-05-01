@@ -170,6 +170,71 @@ def _tree_digest(root: Path, ignored_relative_paths: set[str] | None = None) -> 
     return digest.hexdigest()[:12]
 
 
+def _alembic_migrations_digest(repo_root: str | Path) -> str:
+    versions_root = Path(repo_root) / "migrations" / "versions"
+    if not versions_root.is_dir():
+        raise ValueError(f"missing Alembic migrations directory: {versions_root}")
+
+    digest = hashlib.sha256()
+    for path in sorted(item for item in versions_root.rglob("*") if item.is_file()):
+        relative_path = path.relative_to(versions_root)
+        if "__pycache__" in relative_path.parts or path.suffix == ".pyc":
+            continue
+        relative = relative_path.as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:12]
+
+
+def _seed_sql_digest(seed_manifest: Path) -> str:
+    try:
+        documents = list(yaml.safe_load_all(seed_manifest.read_text(encoding="utf-8")))
+    except FileNotFoundError as exc:
+        raise ValueError(f"missing seed manifest: {seed_manifest}") from exc
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid seed manifest YAML: {seed_manifest}: {exc}") from exc
+
+    seed_sql: str | None = None
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        if document.get("kind") != "ConfigMap":
+            continue
+        metadata = document.get("metadata")
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("name") != "seed-public-intake-form-payload"
+        ):
+            continue
+        data = document.get("data")
+        if not isinstance(data, dict):
+            raise ValueError(f"seed ConfigMap data must be an object: {seed_manifest}")
+        value = data.get("seed.sql")
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"seed ConfigMap must contain non-empty data.seed.sql: {seed_manifest}"
+            )
+        seed_sql = value
+        break
+
+    if seed_sql is None:
+        raise ValueError(f"missing ConfigMap/seed-public-intake-form-payload in {seed_manifest}")
+
+    return hashlib.sha256(seed_sql.encode("utf-8")).hexdigest()[:12]
+
+
+def _substitute_tokens(path: Path, substitutions: dict[str, str]) -> None:
+    content = path.read_text(encoding="utf-8")
+    missing = [token for token in substitutions if token not in content]
+    if missing:
+        raise ValueError(f"missing placeholder token(s) in {path}: {', '.join(missing)}")
+    for token, value in substitutions.items():
+        content = content.replace(token, value)
+    path.write_text(content, encoding="utf-8")
+
+
 def _render_source_manifests(out: Path, channel_id: str, gitops: dict[str, Any]) -> None:
     source_name = _required_string(gitops.get("kustomization_name"), "gitops.kustomization_name")
     namespace = _required_string(gitops.get("kustomization_namespace"), "gitops.kustomization_namespace")
@@ -182,6 +247,16 @@ def _render_source_manifests(out: Path, channel_id: str, gitops: dict[str, Any])
     interval = _required_string(gitops.get("interval"), "gitops.interval")
     retry_interval = _required_string(gitops.get("retry_interval"), "gitops.retry_interval")
     source_dir = out / "gitops" / "sources" / channel_id
+    server_manager_dir = _source_path(out, gitops) / "applications" / "server-manager"
+    alembic_hash = _alembic_migrations_digest(REPO_ROOT)
+    seed_manifest = server_manager_dir / "seed-public-intake-form.yaml"
+    seed_hash = _seed_sql_digest(seed_manifest)
+
+    _substitute_tokens(
+        server_manager_dir / "alembic-migration-job.yaml",
+        {"__ALEMBIC_HASH__": alembic_hash},
+    )
+    _substitute_tokens(seed_manifest, {"__SEED_HASH__": seed_hash})
 
     _write_yaml(
         source_dir / "gitrepository.yaml",

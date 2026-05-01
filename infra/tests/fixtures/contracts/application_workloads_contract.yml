@@ -41,4 +41,4 @@ runtime:
   namespace: server-manager
   api_deployment: server-manager-api
   discord_deployment: server-manager-discord
-  migration_job: server-manager-alembic-migrate
+  migration_job: server-manager-alembic-migrate-__ALEMBIC_HASH__

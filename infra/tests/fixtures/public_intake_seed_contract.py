@@ -10,7 +10,7 @@ SEED_MANIFEST_RELATIVE_PATH = Path(
     "gitops/channels/local/applications/server-manager/seed-public-intake-form.yaml"
 )
 SEED_CONFIGMAP_NAME = "seed-public-intake-form-payload"
-SEED_JOB_NAME = "seed-public-intake-form"
+SEED_JOB_NAME = "seed-public-intake-form-__SEED_HASH__"
 SEED_AGGREGATE_ID = "application_form|global|"
 SEED_ACTOR_KIND = "service"
 SEED_ACTOR_ID = "init-122-bootstrap"
