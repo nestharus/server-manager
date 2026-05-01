@@ -361,13 +361,16 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
     Flux Kustomization `humility-local` left **suspended** because
     its tracked git revision (`5d872983`) predates INIT-134 and would
     revert the new InfisicalSecret + api-deployment env vars.
-  - e2e residual: test 19's Playwright admin step still times out
-    waiting for "Chapter administration" heading on `/admin/chapters`
-    (cluster OAuth boundary). Same carrier failure from β-i through
-    INIT-134; not introduced by INIT-135 and INIT-135's public submit
-    + chapter selector flow only runs AFTER the admin step in the
-    Playwright sequence. INIT-135 functional validation rests on
-    41 unit tests + risk gates + 8 rounds CodeRabbit instead.
+  - e2e admin step timeout (β-i carrier through INIT-134) **fixed**
+    in BUG-1 at 743f25b: services/web/src/solid-compat/solid.ts
+    createLegacyEffect was passing one arg to Solid 2 beta's
+    createEffect; beta needed two. SPA now bootstraps and admin
+    route renders. Verified via re-run of test 19 — "Chapter
+    administration" heading visible.
+  - e2e downstream blocker (now exposed): test 19 expects chapter
+    `chapter-alpha`/`Alpha Chapter` to exist for the chapter_select
+    dropdown, but cluster has no chapters seeded and `seed-authority-grants.mjs`
+    doesn't add one. Tracked as BUG-5 (separate slice).
 - **β-2 (multi-page + conditional fields) and β-3 (file upload):**
   open. New initiatives when product priority surfaces. Touch:
   SPA form renderer state machine, `form_definitions.fields` shape
