@@ -233,6 +233,14 @@ kubectl_cmd() {
   kubectl --kubeconfig "$KUBECONFIG_PATH" "$@"
 }
 
+assert_authentik_blueprint_runtime() {
+  "${REPO_ROOT}/infra/tests/validate_authentik_blueprints_local.sh" \
+    --kubeconfig "$KUBECONFIG_PATH" \
+    --channel local \
+    || die "Authentik blueprint runtime validator failed"
+  pass "Authentik blueprint runtime state is valid"
+}
+
 assert_runtime() {
   if [[ "$STATIC_ONLY" -eq 1 ]]; then
     skip "runtime proof skipped by --static-only"
@@ -240,6 +248,7 @@ assert_runtime() {
   fi
   command -v kubectl >/dev/null 2>&1 || die "kubectl is required for runtime proof"
   [[ -f "$KUBECONFIG_PATH" ]] || die "kubeconfig not found: ${KUBECONFIG_PATH}"
+  assert_authentik_blueprint_runtime
 
   if [[ "$SKIP_IMAGE_BUILD" -eq 1 ]]; then
     skip "web image build skipped by --skip-image-build"

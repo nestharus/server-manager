@@ -274,6 +274,7 @@ export E2E_OFFICER_DISCORD_USER_ID="$(
 [[ -n "$E2E_OFFICER_DISCORD_USER_ID" && "$E2E_OFFICER_DISCORD_USER_ID" != "undefined" ]] || e2e_fail "web UI contract fixture missing officer Discord user id"
 
 run_validator validate-web-ui infra/tests/validate_web_ui_local.sh --kubeconfig "$KUBECONFIG_PATH" --tag init-118-local --skip-image-build
+run_validator authentik-blueprints infra/tests/validate_authentik_blueprints_local.sh --kubeconfig "$KUBECONFIG_PATH" --channel local
 KUBECONFIG_PATH="$KUBECONFIG_PATH" \
   node "${REPO_ROOT}/infra/tests/e2e/lib/seed-chapter-fixture.mjs" >/tmp/seed-chapter-fixture.json
 e2e_pass "seeded chapter fixture chapter-alpha"

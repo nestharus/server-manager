@@ -11,6 +11,7 @@ INFISICAL_DATABASES_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-da
 INFISICAL_AUTH_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-auth.sh"
 INFISICAL_SERVER_MANAGER_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-server-manager.sh"
 INFISICAL_CICD_BOOTSTRAP="${REPO_ROOT}/infra/scripts/bootstrap-infisical-cicd.sh"
+AUTHENTIK_BLUEPRINT_VALIDATOR="${REPO_ROOT}/infra/tests/validate_authentik_blueprints_local.sh"
 CHANNEL_REQUEST="local"
 CHANNEL_ID=""
 WAIT_TIMEOUT="180s"
@@ -580,6 +581,15 @@ bounce_opal_for_reseed() {
   log "OPAL bundle refreshed"
 }
 
+validate_authentik_blueprints_for_reseed() {
+  log "Validating Authentik blueprint runtime state"
+  if ! "$AUTHENTIK_BLUEPRINT_VALIDATOR" \
+    --kubeconfig "$KUBECONFIG_PATH" \
+    --channel "$CHANNEL_REQUEST"; then
+    die "Authentik blueprint runtime state is invalid (Flux not yet resumed; rerun validator after 'kubectl patch kustomization … suspend:false')"
+  fi
+}
+
 render_local_snapshot() {
   SNAPSHOT_DIR="${REPO_ROOT}/.tmp/gitops-source/${CHANNEL_ID}"
   "$PYTHON_BIN" "$RENDERER" --channel "$CHANNEL_ID" --out "$SNAPSHOT_DIR"
@@ -592,6 +602,7 @@ reseed_gitserver_only() {
   apply_source_crs
   wait_for_source_revision "$SEEDED_REVISION_SHA"
   bounce_opal_for_reseed
+  validate_authentik_blueprints_for_reseed
 
   log "Reseeded GitRepository/${SOURCE_NAME}: ${SOURCE_ARTIFACT_REVISION}"
   log "Synthetic gitserver commit SHA: ${SEEDED_REVISION_SHA}"
