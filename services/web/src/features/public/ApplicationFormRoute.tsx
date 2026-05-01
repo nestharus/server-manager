@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 
 import {
   ApiError,
@@ -11,6 +11,7 @@ import {
   submitPublicApplication,
 } from "@/api/client";
 import { Button } from "@/components/primitives/Button";
+import { derivePages, evaluateVisibility, pageVisibleFields } from "./formVisibility";
 
 type FormPayload = {
   scope: {
@@ -40,6 +41,7 @@ const FALLBACK_FORM: PublicFormDefinition = {
       label: "Character name",
       required: true,
       max_length: 64,
+      page: 1,
     },
     {
       id: "application_text",
@@ -47,6 +49,7 @@ const FALLBACK_FORM: PublicFormDefinition = {
       label: "Application text",
       required: true,
       max_length: 4000,
+      page: 1,
     },
   ],
   routing_rules: {},
@@ -77,7 +80,14 @@ function redirectToDiscordAuth() {
   window.location.assign("/auth/discord/start?return_to=/applications");
 }
 
-function preserveApplicationDraft(form: HTMLFormElement) {
+function preserveApplicationDraft(
+  form: HTMLFormElement,
+  responseValues?: Record<string, unknown>,
+) {
+  if (responseValues) {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(responseValues));
+    return;
+  }
   const formData = new FormData(form);
   const draft: Record<string, FormDataEntryValue | FormDataEntryValue[]> = {};
   for (const [key, value] of formData.entries()) {
@@ -91,11 +101,24 @@ function preserveApplicationDraft(form: HTMLFormElement) {
   sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
 }
 
-function restoreApplicationDraft(form: HTMLFormElement) {
+function readApplicationDraft(): Record<string, string | string[] | number | boolean | null> | undefined {
+  if (typeof sessionStorage === "undefined") return undefined;
   const raw = sessionStorage.getItem(DRAFT_KEY);
-  if (!raw) return;
+  if (!raw) return undefined;
   try {
-    const draft = JSON.parse(raw) as Record<string, string | string[]>;
+    return JSON.parse(raw) as Record<string, string | string[] | number | boolean | null>;
+  } catch {
+    sessionStorage.removeItem(DRAFT_KEY);
+    return undefined;
+  }
+}
+
+function restoreApplicationDraft(
+  form: HTMLFormElement,
+): Record<string, string | string[] | number | boolean | null> | undefined {
+  const draft = readApplicationDraft();
+  if (!draft) return undefined;
+  try {
     for (const [key, value] of Object.entries(draft)) {
       const element = form.elements.namedItem(key);
       if (element instanceof HTMLSelectElement && element.multiple && Array.isArray(value)) {
@@ -113,8 +136,9 @@ function restoreApplicationDraft(form: HTMLFormElement) {
         element.value = Array.isArray(value) ? String(value[0] ?? "") : String(value);
       }
     }
+    return draft;
   } catch {
-    sessionStorage.removeItem(DRAFT_KEY);
+    return undefined;
   }
 }
 
@@ -136,9 +160,27 @@ function responseValue(field: PublicFormField, formData: FormData): unknown {
   return String(formData.get(field.id) ?? "");
 }
 
+function draftResponseValue(
+  field: PublicFormField,
+  value: string | string[] | number | boolean | null,
+): unknown {
+  if (field.type === "number") {
+    const raw = Array.isArray(value) ? value[0] : value;
+    return raw === "" || raw === null ? null : Number(raw);
+  }
+  if (field.type === "multi_select") {
+    return Array.isArray(value) ? value.map(String) : [String(value)];
+  }
+  if (field.type === "boolean") {
+    return value === true || value === "on";
+  }
+  return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+}
+
 function renderFormField(
   field: PublicFormField,
   chapters: readonly PublicChapterSummary[],
+  value: unknown,
 ) {
   if (field.type === "long") {
     return (
@@ -150,6 +192,7 @@ function renderFormField(
           aria-label={field.label}
           required={field.required}
           maxlength={field.max_length ?? undefined}
+          value={value == null ? "" : String(value)}
         />
       </label>
     );
@@ -164,6 +207,7 @@ function renderFormField(
           aria-label={field.label}
           required={field.required}
           type="number"
+          value={value == null ? "" : String(value)}
         />
       </label>
     );
@@ -180,12 +224,21 @@ function renderFormField(
           multiple={field.type === "multi_select"}
         >
           {field.required && field.type === "select" && (
-            <option value="" disabled selected>
+            <option value="" disabled selected={value == null || value === ""}>
               Select an option
             </option>
           )}
           {field.options.map((option) => (
-            <option value={option}>{option}</option>
+            <option
+              value={option}
+              selected={
+                Array.isArray(value)
+                  ? value.map(String).includes(option)
+                  : String(value ?? "") === option
+              }
+            >
+              {option}
+            </option>
           ))}
         </select>
       </label>
@@ -201,6 +254,7 @@ function renderFormField(
           aria-required={field.required ? "true" : undefined}
           required={field.required}
           type="checkbox"
+          checked={value === true}
         />
       </label>
     );
@@ -215,11 +269,13 @@ function renderFormField(
           aria-label={field.label}
           required
         >
-          <option value="" disabled selected>
+          <option value="" disabled selected={value == null || value === ""}>
             {field.placeholder ?? "Choose a chapter"}
           </option>
           {chapters.map((chapter) => (
-            <option value={chapter.id}>{chapter.name}</option>
+            <option value={chapter.id} selected={String(value ?? "") === chapter.id}>
+              {chapter.name}
+            </option>
           ))}
         </select>
       </label>
@@ -234,6 +290,7 @@ function renderFormField(
         aria-label={field.label}
         required={field.required}
         maxlength={field.max_length ?? undefined}
+        value={value == null ? "" : String(value)}
       />
     </label>
   );
@@ -252,6 +309,110 @@ export function ApplicationFormRoute() {
   const [submitStatus, setSubmitStatus] = createSignal("No application submitted yet.");
   const [formDefinition, setFormDefinition] = createSignal<PublicFormDefinition>(FALLBACK_FORM);
   const [publicChapters, setPublicChapters] = createSignal<readonly PublicChapterSummary[]>([]);
+  const [currentPageIndex, setCurrentPageIndex] = createSignal(0);
+  const [responses, setResponses] = createSignal<Record<string, unknown>>({});
+  const visibility = createMemo(() => evaluateVisibility(formDefinition().fields, responses()));
+  const visiblePages = createMemo(() => {
+    const fields = formDefinition().fields;
+    const currentVisibility = visibility();
+    const visible = derivePages(fields).filter(
+      (page) => pageVisibleFields(fields, page, currentVisibility).length > 0,
+    );
+    return visible.length > 0 ? visible : derivePages(fields);
+  });
+  const currentVisibleFields = createMemo(() => {
+    const page = visiblePages()[currentPageIndex()] ?? visiblePages()[0] ?? 1;
+    return pageVisibleFields(formDefinition().fields, page, visibility());
+  });
+
+  function pruneHiddenResponses(
+    fields: PublicFormField[],
+    values: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const currentVisibility = evaluateVisibility(fields, values);
+    const knownFieldIds = new Set(fields.map((field) => field.id));
+    return Object.fromEntries(
+      Object.entries(values).filter(
+        ([fieldId]) => knownFieldIds.has(fieldId) && currentVisibility[fieldId],
+      ),
+    );
+  }
+
+  function setResponseValue(field: PublicFormField, value: unknown) {
+    setResponses((current) =>
+      pruneHiddenResponses(formDefinition().fields, { ...current, [field.id]: value }),
+    );
+  }
+
+  function applyResponsesToForm(values: Record<string, unknown>) {
+    if (!formRef) return;
+    for (const field of currentVisibleFields()) {
+      const element = formRef.elements.namedItem(field.id);
+      if (element instanceof HTMLSelectElement && element.multiple) {
+        const value = values[field.id];
+        const selectedValues = new Set(
+          Array.isArray(value) ? value.map(String) : [],
+        );
+        for (const option of element.options) {
+          option.selected = selectedValues.has(option.value);
+        }
+      } else if (element instanceof HTMLInputElement && element.type === "checkbox") {
+        element.checked = values[field.id] === true;
+      } else if (
+        element instanceof HTMLInputElement
+        || element instanceof HTMLTextAreaElement
+        || element instanceof HTMLSelectElement
+      ) {
+        element.value = values[field.id] == null ? "" : String(values[field.id]);
+      }
+    }
+  }
+
+  function onFormInput(event: Event) {
+    if (!formRef) return;
+    const target = event.target;
+    if (
+      !(target instanceof HTMLInputElement)
+      && !(target instanceof HTMLTextAreaElement)
+      && !(target instanceof HTMLSelectElement)
+    ) {
+      return;
+    }
+    if (!target.name) return;
+    const field = formDefinition().fields.find((candidate) => candidate.id === target.name);
+    if (!field) return;
+    setResponseValue(field, responseValue(field, new FormData(formRef)));
+  }
+
+  function goNext() {
+    if (!formRef?.reportValidity()) return;
+    setCurrentPageIndex((index) => Math.min(index + 1, visiblePages().length - 1));
+  }
+
+  function goPrevious() {
+    setCurrentPageIndex((index) => Math.max(index - 1, 0));
+  }
+
+  function responseForField(field: PublicFormField) {
+    const current = responses()[field.id];
+    if (current !== undefined) return current;
+    const draft = readApplicationDraft();
+    if (draft && Object.prototype.hasOwnProperty.call(draft, field.id)) {
+      return draftResponseValue(field, draft[field.id]);
+    }
+    return undefined;
+  }
+
+  function responsesWithDraftDefaults(form: PublicFormDefinition) {
+    const draft = readApplicationDraft();
+    if (!draft) return responses();
+    const draftResponses = Object.fromEntries(
+      form.fields
+        .filter((field) => Object.prototype.hasOwnProperty.call(draft, field.id))
+        .map((field) => [field.id, draftResponseValue(field, draft[field.id])]),
+    );
+    return { ...draftResponses, ...responses() };
+  }
 
   async function refreshPublicFormDefinition() {
     let loadedForm: PublicFormDefinition;
@@ -262,6 +423,15 @@ export function ApplicationFormRoute() {
       loadedForm = FALLBACK_FORM;
     }
     setFormDefinition(loadedForm);
+    const draft = readApplicationDraft();
+    if (draft) {
+      const nextResponses = Object.fromEntries(
+        loadedForm.fields
+          .filter((field) => Object.prototype.hasOwnProperty.call(draft, field.id))
+          .map((field) => [field.id, draftResponseValue(field, draft[field.id])]),
+      );
+      setResponses(pruneHiddenResponses(loadedForm.fields, nextResponses));
+    }
     if (!chapterSelectField(loadedForm)) {
       setPublicChapters([]);
       return;
@@ -345,43 +515,40 @@ export function ApplicationFormRoute() {
     try {
       identity = await fetchApplicantDiscordIdentity();
     } catch {
-      preserveApplicationDraft(formRef);
+      preserveApplicationDraft(formRef, responses());
       redirectToDiscordAuth();
       return;
     }
     if (!identity.discord_user_id) {
-      preserveApplicationDraft(formRef);
+      preserveApplicationDraft(formRef, responses());
       redirectToDiscordAuth();
       return;
     }
 
     const form = formDefinition();
-    const formData = new FormData(formRef);
-    const responses = Object.fromEntries(
-      form.fields.map((field) => [field.id, responseValue(field, formData)]),
-    );
+    const visibleResponses = pruneHiddenResponses(form.fields, responsesWithDraftDefaults(form));
     const chapterField = chapterSelectField(form);
     const selectedChapterId = chapterField
-      ? String(responses[chapterField.id] ?? "")
+      ? String(visibleResponses[chapterField.id] ?? "")
       : "";
     const payload: FormPayload = {
       scope: {
         scope_kind: chapterField ? "chapter" : "global",
         scope_id: chapterField ? selectedChapterId : null,
       },
-      responses,
+      responses: visibleResponses,
       client_application_id: getClientApplicationId(),
     };
     let submission: Awaited<ReturnType<typeof submitPublicApplication>>;
     try {
       submission = await submitPublicApplication(payload);
     } catch {
-      preserveApplicationDraft(formRef);
+      preserveApplicationDraft(formRef, responses());
       setSubmitStatus("Network error. Please try again.");
       return;
     }
     if (submission.status === 401) {
-      preserveApplicationDraft(formRef);
+      preserveApplicationDraft(formRef, responses());
       redirectToDiscordAuth();
       return;
     }
@@ -404,7 +571,15 @@ export function ApplicationFormRoute() {
     draftRestoreFrame = window.requestAnimationFrame(() => {
       draftRestoreFrame = undefined;
       if (formRef) {
-        restoreApplicationDraft(formRef);
+        const draft = restoreApplicationDraft(formRef);
+        if (draft) {
+          const nextResponses = Object.fromEntries(
+            formDefinition().fields
+              .filter((field) => Object.prototype.hasOwnProperty.call(draft, field.id))
+              .map((field) => [field.id, draftResponseValue(field, draft[field.id])]),
+          );
+          setResponses(pruneHiddenResponses(formDefinition().fields, nextResponses));
+        }
         return;
       }
       if (retries > 0) scheduleDraftRestore(retries - 1);
@@ -421,6 +596,38 @@ export function ApplicationFormRoute() {
       },
     ),
   );
+
+  createEffect(
+    on(
+      () => formDefinition().id,
+      () => {
+        setCurrentPageIndex(0);
+        const draft = readApplicationDraft();
+        if (draft) {
+          const nextResponses = Object.fromEntries(
+            formDefinition().fields
+              .filter((field) => Object.prototype.hasOwnProperty.call(draft, field.id))
+              .map((field) => [field.id, draftResponseValue(field, draft[field.id])]),
+          );
+          setResponses(pruneHiddenResponses(formDefinition().fields, nextResponses));
+        }
+        if (authState().status === "verified") scheduleDraftRestore();
+      },
+    ),
+  );
+
+  createEffect(() => {
+    const pages = visiblePages();
+    if (currentPageIndex() >= pages.length) {
+      setCurrentPageIndex(Math.max(pages.length - 1, 0));
+    }
+  });
+
+  createEffect(() => {
+    responses();
+    currentVisibleFields();
+    queueMicrotask(() => applyResponsesToForm(responses()));
+  });
 
   createEffect(() => {
     if (!dialogOpen()) {
@@ -497,14 +704,37 @@ export function ApplicationFormRoute() {
             class="runtimeStack"
             aria-label="Application form"
             onSubmit={onSubmit}
+            onInput={onFormInput}
+            onChange={onFormInput}
           >
-            {formDefinition().fields.map((field) => renderFormField(field, publicChapters()))}
-            <Button type="submit">
-              <span data-testid="application-submit-icon" aria-hidden="true">
-                +
-              </span>
-              Submit application
-            </Button>
+            <p class="runtimeCopy">
+              Step {currentPageIndex() + 1} of {visiblePages().length}
+            </p>
+            {currentVisibleFields().map((field) =>
+              renderFormField(field, publicChapters(), responseForField(field)),
+            )}
+            <div class="runtimeActions">
+              <Show when={currentPageIndex() > 0}>
+                <Button type="button" variant="secondary" onClick={goPrevious}>
+                  Previous
+                </Button>
+              </Show>
+              <Show
+                when={currentPageIndex() === visiblePages().length - 1}
+                fallback={
+                  <Button type="button" onClick={goNext}>
+                    Next
+                  </Button>
+                }
+              >
+                <Button type="submit">
+                  <span data-testid="application-submit-icon" aria-hidden="true">
+                    +
+                  </span>
+                  Submit application
+                </Button>
+              </Show>
+            </div>
           </form>
           <p id="discord-login-state" class="runtimeCopy" aria-live="polite">
             {loginState()}

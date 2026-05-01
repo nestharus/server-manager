@@ -12,7 +12,7 @@ from .applications._shared import get_db, raise_known_application_error
 router = APIRouter(prefix="/api/v1/public/application-forms")
 
 
-@router.get("/current", response_model=FormDefinitionRead)
+@router.get("/current", response_model=FormDefinitionRead, response_model_exclude_unset=True)
 def get_current_public_application_form_endpoint(
     db: PostgresDatabase = Depends(get_db),
 ) -> FormDefinitionRead:

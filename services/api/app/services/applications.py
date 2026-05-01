@@ -57,6 +57,7 @@ from app.repositories.forms import get_current_form_for_scope
 from app.repositories.members import fetch_member_by_id
 from app.repositories.public_chapters import fetch_active_public_chapter
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.form_visibility import evaluate_visibility
 from app.services.members import (
     is_synthetic_member,
     resolve_or_create_real_discord_member,
@@ -500,22 +501,26 @@ def validate_application_responses(
     connection: Connection[Any] | None = None,
     submitted_scope: dict[str, Any] | None = None,
 ) -> None:
-    field_map = {
-        field.id: field
-        for field in (
-            _APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw) for raw in fields
-        )
-    }
+    field_list = [_APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw) for raw in fields]
+    field_map = {field.id: field for field in field_list}
     response_keys = set(responses)
     unknown = response_keys - set(field_map)
     if unknown:
         raise InvalidApplicationResponseError(
             f"unknown response fields: {', '.join(sorted(unknown))}"
         )
+    visibility = evaluate_visibility(field_list, responses)
+    hidden = sorted(
+        field_id for field_id in response_keys if not visibility.get(field_id, False)
+    )
+    if hidden:
+        raise InvalidApplicationResponseError(
+            f"hidden field cannot be submitted: {', '.join(hidden)}"
+        )
     missing = sorted(
         field_id
         for field_id, field in field_map.items()
-        if field.required and field_id not in responses
+        if visibility.get(field_id, False) and field.required and field_id not in responses
     )
     if missing:
         raise InvalidApplicationResponseError(

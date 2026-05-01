@@ -34,6 +34,16 @@ const basePublicFormFieldSchema = z.object({
   id: z.string(),
   label: z.string(),
   required: z.boolean().default(false),
+  page: z.number().int().min(1).default(1),
+  max_length: z.number().nullable().optional(),
+  visible_when: z
+    .object({
+      field_id: z.string(),
+      op: z.enum(["eq", "neq", "in", "not_in"]),
+      value: z.unknown(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const publicFormFieldSchema = z.discriminatedUnion("type", [
@@ -62,6 +72,7 @@ export const publicFormFieldSchema = z.discriminatedUnion("type", [
   basePublicFormFieldSchema.extend({
     type: z.literal("chapter_select"),
     required: z.literal(true),
+    visible_when: z.null().optional(),
     placeholder: z.string().nullable().optional(),
   }),
 ]);

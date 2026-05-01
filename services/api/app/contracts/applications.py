@@ -16,6 +16,9 @@ APPLICATION_REASSIGN_ACTION_TYPE = "application.reassign"
 APPLICATION_REASSIGN_CHANGE_TYPE = "application.reassigned"
 APPLICATION_REASSIGN_PAYLOAD_ALLOWLIST = frozenset({"new_owner_id"})
 JSONValue: TypeAlias = Any
+_VISIBLE_WHEN_SCALAR_SOURCE_TYPES = frozenset(
+    {"short", "long", "number", "select", "boolean"}
+)
 
 
 class _ApplicationModel(BaseModel):
@@ -77,10 +80,46 @@ class ApplicationScope(_ApplicationModel):
         return {"scope_kind": self.scope_kind, "scope_id": self.scope_id}
 
 
+def _is_visible_when_scalar(value: Any) -> bool:
+    return isinstance(value, str | int | float | bool)
+
+
+class FormFieldVisibleWhen(_ApplicationModel):
+    field_id: str
+    op: Literal["eq", "neq", "in", "not_in"]
+    value: JSONValue
+
+    @field_validator("field_id")
+    @classmethod
+    def validate_field_id(cls, value: str) -> str:
+        if not FIELD_ID_PATTERN.fullmatch(value):
+            raise ValueError("visible_when field_id must match ^[a-z][a-z0-9_]{0,63}$")
+        return value
+
+    @model_validator(mode="after")
+    def validate_value_shape(self) -> "FormFieldVisibleWhen":
+        if self.op in {"eq", "neq"}:
+            if not _is_visible_when_scalar(self.value):
+                raise ValueError("visible_when eq/neq value must be a scalar")
+            return self
+
+        if not isinstance(self.value, list):
+            raise ValueError("visible_when in/not_in value must be a list")
+        if not self.value:
+            raise ValueError("visible_when in/not_in value must not be empty")
+        if any(not _is_visible_when_scalar(item) for item in self.value):
+            raise ValueError("visible_when in/not_in values must be scalars")
+        if len(self.value) != len(set(self.value)):
+            raise ValueError("visible_when in/not_in values must be unique")
+        return self
+
+
 class _BaseFormField(_ApplicationModel):
     id: str
     label: str
     required: bool = False
+    page: int = Field(default=1, ge=1)
+    visible_when: FormFieldVisibleWhen | None = None
 
     @field_validator("id")
     @classmethod
@@ -172,6 +211,7 @@ class FormFieldBoolean(_BaseFormField):
 class FormFieldChapterSelect(_BaseFormField):
     type: Literal["chapter_select"]
     required: Literal[True] = True
+    visible_when: None = None
     placeholder: str | None = None
     max_length: None = None
     options: None = None
@@ -253,6 +293,29 @@ class FormDefinitionPublish(_ApplicationModel):
             raise ValueError("chapter_select fields are allowed only on global forms")
         if self.routing_rules.review_scope is not None:
             raise ValueError("chapter_select forms must not set routing_rules.review_scope")
+        return self
+
+    @model_validator(mode="after")
+    def validate_visible_when_graph(self) -> "FormDefinitionPublish":
+        seen_ids: dict[str, ApplicationFormField] = {}
+        for field in self.fields:
+            if field.visible_when is None:
+                seen_ids[field.id] = field
+                continue
+
+            if field.type == "chapter_select":
+                raise ValueError("chapter_select fields cannot set visible_when")
+
+            source = seen_ids.get(field.visible_when.field_id)
+            if source is None:
+                raise ValueError(
+                    f"visible_when source must reference an earlier field: {field.visible_when.field_id}"
+                )
+            if source.type not in _VISIBLE_WHEN_SCALAR_SOURCE_TYPES:
+                raise ValueError(
+                    f"visible_when source must be a scalar field: {field.visible_when.field_id}"
+                )
+            seen_ids[field.id] = field
         return self
 
 
@@ -580,6 +643,7 @@ __all__ = [
     "FormFieldSelect",
     "FormFieldSpec",
     "FormFieldShort",
+    "FormFieldVisibleWhen",
     "FormRoutingRules",
     "FormStatus",
     "FormTargetType",
