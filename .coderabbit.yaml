@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  path_instructions:
+    - path: "services/web/**"
+      instructions: |
+        - This package intentionally uses `solid-js@2.0.0-beta.8`,
+          `@solidjs/web@2.0.0-beta.8`, and `@solidjs/signals@2.0.0-beta.8`.
+          Prefer the installed beta package types, runtime files, and package exports
+          over public Solid 1/stable documentation when reviewing `services/web/**`.
+        - In this Solid 2 beta, `<For>` child callbacks receive accessors:
+          `(item: Accessor<T>, index: Accessor<number>) => U`. Calling `item()` and
+          `index()` is correct; do not suggest raw item property access such as
+          `item.id` for `<For>` callback parameters.
+        - In this Solid 2 beta, `<Show>` callback children receive an accessor for the
+          narrowed `when` value. Calling the callback parameter, such as `value()`, is
+          correct.
+        - SSR/web helpers are imported from `@solidjs/web` in this beta. Do not suggest
+          changing `renderToString` imports to `solid-js/web`; `solid-js/web` is not
+          exported by the installed `solid-js@2.0.0-beta.8` package.
+        - In this Solid 2 beta, `createContext` returns a callable provider function
+          with `id` and `defaultValue`; it does not return an object with a native
+          `.Provider` property. The local compat shim may intentionally attach a
+          Solid 1-style `.Provider` wrapper.
+        - Solid 2 beta native `createEffect` and `createRenderEffect` require an
+          effect handler argument. The local compat shim intentionally preserves
+          legacy `createEffect(fn)` / `createRenderEffect(fn)` call sites by routing
+          them through handler-supplying compatibility paths.
