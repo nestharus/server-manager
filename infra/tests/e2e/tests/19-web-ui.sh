@@ -22,7 +22,7 @@ assert_public_submit_persisted() {
   url="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-postgres-url -o jsonpath='{.data.url}' | base64 -d)"
   # psql variable substitutions are expanded when SQL is read from stdin.
   row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
-    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F '|' <<'SQL'
 SELECT a.state,
        a.applicant_id,
        m.kind,
@@ -40,7 +40,7 @@ SELECT a.state,
 SQL
   )"
   [[ -n "$row" ]] || e2e_fail "public submit application row not found: ${application_id}"
-  IFS=$'\t' read -r state applicant_id member_kind discord_user_id target_scope_kind target_scope_id snapshot_scope_kind snapshot_scope_id snapshot_target_scope_kind snapshot_target_scope_id <<<"$row"
+  IFS='|' read -r state applicant_id member_kind discord_user_id target_scope_kind target_scope_id snapshot_scope_kind snapshot_scope_id snapshot_target_scope_kind snapshot_target_scope_id <<<"$row"
   [[ "$state" == "approved" ]] || e2e_fail "application state expected approved after officer flow, got ${state}"
   [[ -n "$applicant_id" ]] || e2e_fail "public submit applicant_id missing"
   [[ "$member_kind" == "discord" ]] || e2e_fail "public submit applicant member kind expected discord, got ${member_kind}"
@@ -60,7 +60,7 @@ SQL
       -v application_id="$application_id" \
       -v expected_discord_user_id="$expected_discord_user_id" \
       -v applications_review_channel_id="$E2E_APPLICATIONS_REVIEW_CHANNEL_ID" \
-      -At -F $'\t' <<'SQL'
+      -At -F '|' <<'SQL'
 WITH matching_events AS (
   SELECT id
     FROM notification_events
@@ -89,7 +89,7 @@ SELECT
     WHERE de.effect_type = 'notifications_deliver');
 SQL
   )"
-  IFS=$'\t' read -r event_count officer_envelopes applicant_envelopes delivery_effects <<<"$notification_row"
+  IFS='|' read -r event_count officer_envelopes applicant_envelopes delivery_effects <<<"$notification_row"
   [[ "$event_count" == "1" ]] || e2e_fail "expected one application.public_submitted event for ${application_id}, got ${event_count}"
   [[ "$officer_envelopes" == "1" ]] || e2e_fail "expected one officer designated-channel notification envelope for ${application_id}, got ${officer_envelopes}"
   [[ "$applicant_envelopes" == "1" ]] || e2e_fail "expected one applicant DM notification envelope for ${application_id}, got ${applicant_envelopes}"
@@ -115,7 +115,7 @@ assert_officer_review_persisted() {
   primary_pod="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get pods -l 'cnpg.io/cluster=server-manager-postgres,role=primary' -o jsonpath='{.items[0].metadata.name}')"
   url="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager get secret server-manager-postgres-url -o jsonpath='{.data.url}' | base64 -d)"
   row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
-    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F '|' <<'SQL'
 SELECT a.state,
        a.applicant_id,
        a.owner_id,
@@ -130,7 +130,7 @@ SELECT a.state,
 SQL
   )"
   [[ -n "$row" ]] || e2e_fail "claimed application row not found: ${application_id}"
-  IFS=$'\t' read -r state applicant_id owner_id applicant_kind applicant_discord_user_id owner_kind owner_discord_user_id <<<"$row"
+  IFS='|' read -r state applicant_id owner_id applicant_kind applicant_discord_user_id owner_kind owner_discord_user_id <<<"$row"
   [[ "$state" == "approved" ]] || e2e_fail "officer flow state expected approved, got ${state}"
   [[ -n "$owner_id" ]] || e2e_fail "officer claim owner_id missing"
   [[ "$applicant_id" != "$owner_id" ]] || e2e_fail "officer claim owner_id must differ from applicant_id"
@@ -141,11 +141,11 @@ SQL
 
   local audit_row
   audit_row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
-    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F '|' <<'SQL'
 SELECT request_surface
   FROM activity_actions
  WHERE aggregate_type = 'application'
-   AND aggregate_id = :'application_id'::uuid
+   AND aggregate_id = :'application_id'
    AND action_type = 'application.claim'
  ORDER BY recorded_at DESC
  LIMIT 1;
@@ -154,11 +154,11 @@ SQL
   [[ "$audit_row" == "api:/api/v1/web/officer/applications/${application_id}/claim" ]] || e2e_fail "officer claim audit request_surface mismatch: ${audit_row}"
   local review_audit_row
   review_audit_row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
-    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F $'\t' <<'SQL'
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -At -F '|' <<'SQL'
 SELECT request_surface
   FROM activity_actions
  WHERE aggregate_type = 'application'
-   AND aggregate_id = :'application_id'::uuid
+   AND aggregate_id = :'application_id'
    AND action_type = 'application.review'
  ORDER BY recorded_at DESC
  LIMIT 1;
@@ -168,7 +168,7 @@ SQL
 
   local message_row
   message_row="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n server-manager exec -i "$primary_pod" -c postgres -- \
-    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -v body_markdown="$officer_message" -At -F $'\t' <<'SQL'
+    psql "$url" -v ON_ERROR_STOP=1 -v application_id="$application_id" -v body_markdown="$officer_message" -At -F '|' <<'SQL'
 SELECT visibility, body_markdown
   FROM application_messages
  WHERE application_id = :'application_id'::uuid
@@ -179,7 +179,7 @@ SQL
   )"
   [[ -n "$message_row" ]] || e2e_fail "officer message row not found for ${application_id}"
   local message_visibility message_body
-  IFS=$'\t' read -r message_visibility message_body <<<"$message_row"
+  IFS='|' read -r message_visibility message_body <<<"$message_row"
   [[ "$message_visibility" == "officer_only" ]] || e2e_fail "officer message visibility expected officer_only, got ${message_visibility}"
   [[ "$message_body" == "$officer_message" ]] || e2e_fail "officer message body mismatch: ${message_body}"
   e2e_pass "officer reviewed and approved application ${application_id} as Discord member ${owner_id}"

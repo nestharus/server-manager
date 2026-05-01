@@ -16,7 +16,7 @@ import {
 import styles from "./officer.module.css";
 
 export type ApplicationTransitionActionsProps = {
-  readonly application: ApplicationRead;
+  readonly application: () => ApplicationRead;
   readonly disabled?: boolean;
   readonly onTransitioned: (application: ApplicationRead) => Promise<void> | void;
   readonly onError: (notice: string, status?: number) => Promise<void> | void;
@@ -78,8 +78,8 @@ export function ApplicationTransitionActions(
     setSubmitting(true);
     try {
       const nextApplication = await transitionOfficerApplication({
-        applicationId: props.application.id,
-        expectedVersion: props.application.version,
+        applicationId: props.application().id,
+        expectedVersion: props.application().version,
         request: buildRequest(action),
       });
       setActiveAction(null);
@@ -100,17 +100,13 @@ export function ApplicationTransitionActions(
     <section class={styles.detailCard} aria-labelledby="application-transition-actions-title">
       <h3 id="application-transition-actions-title">Actions</h3>
       <div class={styles.transitionButtonGroup}>
-        <For each={validOfficerTransitionActions(props.application.state)}>
+        <For each={validOfficerTransitionActions(props.application().state)}>
           {(action) => (
             <Button
               type="button"
               variant={activeAction() === action() ? "primary" : "secondary"}
               data-testid={`application-transition-action-${action()}`}
-              disabled={
-                props.disabled ||
-                submitting() ||
-                forbiddenActions().has(action())
-              }
+              disabled={props.disabled || submitting() || forbiddenActions().has(action())}
               onClick={() => selectAction(action())}
             >
               {actionLabel(action())}

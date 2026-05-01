@@ -19,15 +19,24 @@ import { ApplicationTransitionActions } from "./ApplicationTransitionActions";
 import styles from "./officer.module.css";
 
 export type ApplicationMetadataPanelProps = {
-  readonly application: ApplicationRead;
+  readonly application: () => ApplicationRead;
 };
 
 export type ApplicationResponsesPanelProps = {
-  readonly application: ApplicationRead;
+  readonly application: () => ApplicationRead;
 };
 
 export type ApplicationTranscriptListProps = {
-  readonly entries: ApplicationTranscriptRead["entries"];
+  readonly entries: () => ApplicationTranscriptRead["entries"];
+};
+
+type DetailLayoutProps = {
+  readonly read: () => ApplicationRead;
+  readonly readTranscript: () => ApplicationTranscriptRead;
+  readonly loading: () => boolean;
+  readonly onMessageAppended: (message: ApplicationMessageRead) => Promise<void> | void;
+  readonly onTransitioned: (application: ApplicationRead) => Promise<void> | void;
+  readonly onError: (notice: string, status?: number) => Promise<void> | void;
 };
 
 function shortId(value: string | null) {
@@ -56,7 +65,9 @@ function detailNotice(error: unknown) {
   return "Network error loading application detail.";
 }
 
-function transcriptTransition(entry: Extract<ApplicationTranscriptEntry, { type: "state_change" }>) {
+function transcriptTransition(
+  entry: Extract<ApplicationTranscriptEntry, { type: "state_change" }>,
+) {
   return `${entry.from_state ?? "none"} -> ${entry.to_state ?? "none"}`;
 }
 
@@ -109,21 +120,24 @@ function TranscriptEntryView(props: { readonly entry: ApplicationTranscriptEntry
 
 export function ApplicationMetadataPanel(props: ApplicationMetadataPanelProps): JSX.Element {
   const rows = () => [
-    ["State", props.application.state],
-    ["Owner", shortId(props.application.owner_id)],
-    ["Applicant", shortId(props.application.applicant_id)],
-    ["Scope", `${props.application.target_scope.scope_kind}:${props.application.target_scope.scope_id ?? "global"}`],
-    ["Submitted", formatTimestamp(props.application.submitted_at)],
-    ["Queued", formatTimestamp(props.application.queued_at)],
-    ["Claimed", formatTimestamp(props.application.claimed_at)],
-    ["Updated", formatTimestamp(props.application.updated_at)],
+    ["State", props.application().state],
+    ["Owner", shortId(props.application().owner_id)],
+    ["Applicant", shortId(props.application().applicant_id)],
+    [
+      "Scope",
+      `${props.application().target_scope.scope_kind}:${props.application().target_scope.scope_id ?? "global"}`,
+    ],
+    ["Submitted", formatTimestamp(props.application().submitted_at)],
+    ["Queued", formatTimestamp(props.application().queued_at)],
+    ["Claimed", formatTimestamp(props.application().claimed_at)],
+    ["Updated", formatTimestamp(props.application().updated_at)],
   ];
 
   return (
     <section class={styles.detailCard} aria-labelledby="application-metadata-title">
       <div class={styles.detailCardHeader}>
         <h3 id="application-metadata-title">Application metadata</h3>
-        <span data-testid="application-detail-version">Version {props.application.version}</span>
+        <span data-testid="application-detail-version">Version {props.application().version}</span>
       </div>
       <dl class={styles.metadataList}>
         <For each={rows()}>
@@ -142,16 +156,13 @@ export function ApplicationMetadataPanel(props: ApplicationMetadataPanelProps): 
 }
 
 export function ApplicationResponsesPanel(props: ApplicationResponsesPanelProps): JSX.Element {
-  const responses = () => Object.entries(props.application.responses);
+  const responses = () => Object.entries(props.application().responses);
 
   return (
     <section class={styles.detailCard} aria-labelledby="application-responses-title">
       <h3 id="application-responses-title">Responses</h3>
       <dl class={styles.responseList}>
-        <For
-          each={responses()}
-          fallback={<p class="runtimeCopy">No responses were recorded.</p>}
-        >
+        <For each={responses()} fallback={<p class="runtimeCopy">No responses were recorded.</p>}>
           {(entry) => (
             <div>
               <dt>{entry()[0]}</dt>
@@ -174,13 +185,37 @@ export function ApplicationTranscriptList(props: ApplicationTranscriptListProps)
       <h3 id="application-transcript-title">Transcript</h3>
       <ol class={styles.transcriptList}>
         <For
-          each={props.entries}
+          each={props.entries()}
           fallback={<p class="runtimeCopy">No transcript entries were recorded.</p>}
         >
           {(entry) => <TranscriptEntryView entry={entry()} />}
         </For>
       </ol>
     </section>
+  );
+}
+
+function DetailLayout(props: DetailLayoutProps): JSX.Element {
+  return (
+    <div class={styles.detailLayout} data-application-id={props.read().id}>
+      <div class={styles.detailColumn}>
+        <ApplicationMetadataPanel application={props.read} />
+        <ApplicationResponsesPanel application={props.read} />
+        <ApplicationMessageComposer
+          applicationId={() => props.read().id}
+          disabled={props.loading()}
+          onMessageAppended={props.onMessageAppended}
+          onError={props.onError}
+        />
+        <ApplicationTransitionActions
+          application={props.read}
+          disabled={props.loading()}
+          onTransitioned={props.onTransitioned}
+          onError={props.onError}
+        />
+      </div>
+      <ApplicationTranscriptList entries={() => props.readTranscript().entries} />
+    </div>
   );
 }
 
@@ -265,7 +300,9 @@ export function ApplicationDetailRoute(): JSX.Element {
   const principalReady = () => principalStatus() === "ready" && principal() !== null;
   const canReview = () => {
     const current = principal();
-    return current !== null && current.groups.includes("officers") && current.discord_user_id !== null;
+    return (
+      current !== null && current.groups.includes("officers") && current.discord_user_id !== null
+    );
   };
 
   return (
@@ -299,8 +336,16 @@ export function ApplicationDetailRoute(): JSX.Element {
       <Show when={principalReady() && principal() && !principal()?.groups.includes("officers")}>
         <p class="runtimeCopy">Officer access forbidden.</p>
       </Show>
-      <Show when={principalReady() && principal()?.groups.includes("officers") && !principal()?.discord_user_id}>
-        <p class="runtimeCopy">Discord identity incomplete. Officer Discord identity is required.</p>
+      <Show
+        when={
+          principalReady() &&
+          principal()?.groups.includes("officers") &&
+          !principal()?.discord_user_id
+        }
+      >
+        <p class="runtimeCopy">
+          Discord identity incomplete. Officer Discord identity is required.
+        </p>
       </Show>
 
       <Show when={notice()}>
@@ -315,42 +360,15 @@ export function ApplicationDetailRoute(): JSX.Element {
         <p class="runtimeCopy">Loading application detail.</p>
       </Show>
 
-      <Show
-        when={(() => {
-          const read = application();
-          const readTranscript = transcript();
-          return canReview() && read !== null && readTranscript !== null
-            ? { read, readTranscript }
-            : null;
-        })()}
-      >
-        {(detail) => {
-          const { read, readTranscript } = detail();
-          return (
-            <div
-              class={styles.detailLayout}
-              data-application-id={read.id}
-            >
-              <div class={styles.detailColumn}>
-                <ApplicationMetadataPanel application={read} />
-                <ApplicationResponsesPanel application={read} />
-                <ApplicationMessageComposer
-                  applicationId={read.id}
-                  disabled={loading()}
-                  onMessageAppended={handleMessageAppended}
-                  onError={handleActionError}
-                />
-                <ApplicationTransitionActions
-                  application={read}
-                  disabled={loading()}
-                  onTransitioned={handleTransitioned}
-                  onError={handleActionError}
-                />
-              </div>
-              <ApplicationTranscriptList entries={readTranscript.entries} />
-            </div>
-          );
-        }}
+      <Show when={canReview() && application() !== null && transcript() !== null}>
+        <DetailLayout
+          read={() => application()!}
+          readTranscript={() => transcript()!}
+          loading={loading}
+          onMessageAppended={handleMessageAppended}
+          onTransitioned={handleTransitioned}
+          onError={handleActionError}
+        />
       </Show>
     </section>
   );

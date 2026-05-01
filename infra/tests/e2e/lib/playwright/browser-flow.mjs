@@ -268,7 +268,7 @@ const targets = {
           transcript_claimed_state_change: true,
           transcript_review_state_change: true,
           transcript_approved_state_change: true,
-          officer_message,
+          officer_message: officerMessage,
         }, null, 2),
       );
     },
