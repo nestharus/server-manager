@@ -9,13 +9,17 @@ export const createSignal: typeof import("solid-js").createSignal = ((...args: u
   return solid.createSignal(...args);
 }) as typeof import("solid-js").createSignal;
 export const flush: typeof import("solid-js").flush = solid.flush;
+export const createComponent: typeof import("solid-js").createComponent = solid.createComponent;
+export const useContext: typeof import("solid-js").useContext = solid.useContext;
 
 export const For: typeof import("solid-js").For = solid.For;
 export const Show: typeof import("solid-js").Show = solid.Show;
 
 export function createContext<T>(defaultValue?: T, options?: unknown) {
   const context = solid.createContext(defaultValue, options);
-  return Object.assign(context, { Provider: context });
+  const Provider = (props: { readonly value?: T; readonly children?: unknown }) =>
+    solid.createComponent(context, props);
+  return Object.assign(context, { Provider });
 }
 
 export function batch<T>(callback: () => T): T {
