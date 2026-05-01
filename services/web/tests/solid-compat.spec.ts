@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+// Solid 2 beta ships SSR helpers in @solidjs/web; solid-js/web does not exist
+// in node_modules under solid-js@2.0.0-beta.8. Do not "fix" this to solid-js/web.
 import { renderToString } from "@solidjs/web";
 import * as solid from "../src/solid-compat/solid";
 
