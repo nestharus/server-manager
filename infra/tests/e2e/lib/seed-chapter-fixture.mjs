@@ -69,6 +69,12 @@ function sqlLiteral(value) {
 
 const emptyArrayJson = JSON.stringify([]);
 const emptyObjectJson = JSON.stringify({});
+const reviewChannelId = process.env.E2E_APPLICATIONS_REVIEW_CHANNEL_ID || "222222222222222222";
+const managersRoleId = process.env.E2E_APPLICATION_MANAGERS_ROLE_ID || "333333333333333333";
+const discordResourcesJson = JSON.stringify({
+  channel_ids: { applications_review: reviewChannelId },
+  role_ids: { application_managers: managersRoleId },
+});
 const templateSnapshot = JSON.stringify({
   template_id: templateId,
   template_family_id: templateId,
@@ -88,6 +94,7 @@ WITH seed AS (
     ${sqlLiteral(templateName)}::text AS template_name,
     ${sqlLiteral(emptyArrayJson)}::jsonb AS empty_array,
     ${sqlLiteral(emptyObjectJson)}::jsonb AS empty_object,
+    ${sqlLiteral(discordResourcesJson)}::jsonb AS discord_resources,
     ${sqlLiteral(templateSnapshot)}::jsonb AS template_snapshot
 ),
 existing AS (
@@ -222,7 +229,7 @@ inserted_chapter AS (
     s.template_snapshot,
     s.empty_object,
     'active',
-    s.empty_object
+    s.discord_resources
   FROM seed s, guard g
   WHERE g.conflict_count = 0
     AND NOT EXISTS (

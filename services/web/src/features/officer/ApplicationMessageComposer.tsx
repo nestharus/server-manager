@@ -11,7 +11,7 @@ import { Button } from "@/components/primitives/Button";
 import styles from "./officer.module.css";
 
 export type ApplicationMessageComposerProps = {
-  readonly applicationId: string;
+  readonly applicationId: () => string;
   readonly disabled?: boolean;
   readonly onMessageAppended: (message: ApplicationMessageRead) => Promise<void> | void;
   readonly onError: (notice: string, status?: number) => Promise<void> | void;
@@ -34,9 +34,7 @@ function messageErrorNotice(error: unknown) {
   return "Network error appending message.";
 }
 
-export function ApplicationMessageComposer(
-  props: ApplicationMessageComposerProps,
-): JSX.Element {
+export function ApplicationMessageComposer(props: ApplicationMessageComposerProps): JSX.Element {
   const [bodyMarkdown, setBodyMarkdown] = createSignal("");
   const [visibility, setVisibility] =
     createSignal<ApplicationMessageVisibility>("applicant_visible");
@@ -51,7 +49,7 @@ export function ApplicationMessageComposer(
     setSubmitting(true);
     try {
       const message = await appendOfficerApplicationMessage({
-        applicationId: props.applicationId,
+        applicationId: props.applicationId(),
         bodyMarkdown: bodyMarkdown(),
         visibility: visibility(),
         clientMessageId: clientMessageId(),
