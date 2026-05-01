@@ -27,6 +27,8 @@ the live cluster.
 
 ## Reuse (call directly)
 
+Line numbers are approximate against the post-fix file; symbol names are authoritative.
+
 ### Shim internals
 
 - `services/web/src/solid-compat/solid.ts:2` — `import * as solid from
@@ -172,6 +174,8 @@ the live cluster.
   - Proposal §4 explicitly defers TG-3 to phase 6c.
 
 ## Modify in place
+
+Line numbers are approximate against the post-fix file; symbol names are authoritative.
 
 ### Shim
 
