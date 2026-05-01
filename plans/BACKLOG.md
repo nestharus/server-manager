@@ -179,7 +179,7 @@ SHA) or `[wontfix]` (with reason).
 
 ## Priority: MEDIUM
 
-### BL-006 [deferred] — Public submit response shape — verify final envelope is what we want long-term
+### BL-006 [done — Option A locked at 5104354] — Public submit response shape — verify final envelope is what we want long-term
 
 - **Source:** `proposals/02-public-application-intake.md` Implementation
   decision B1
@@ -412,7 +412,7 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
   it has. Verify nothing else in `daemon/` depends on its stubs.
   Consolidate any tests under `services/discord/tests/`.
 
-### BL-012 [deferred] — Cedar `Public::` entity-type assumption — monitor for OPAL/Cedar schema enforcement
+### BL-012 [done — runtime probe at dc7ce59] — Cedar `Public::` entity-type assumption — monitor for OPAL/Cedar schema enforcement
 
 - **Source:** `proposals/02-public-application-intake.md:327-339` (AS-4)
 - **Description:** INIT-120 introduces `Public::"web-intake.<channel>"`
@@ -428,7 +428,7 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
 
 ## Priority: LOW
 
-### BL-013 [deferred] — INIT-124: Public intake remote channel apply
+### BL-013 [tripwire shipped at 8038b8a; full work blocked on remote-channel-materialization initiative] — INIT-124: Public intake remote channel apply
 
 - **Source:** `proposals/02-public-application-intake.md:447` (Out
   of scope for follow-up)
@@ -441,7 +441,7 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
   channel-template port: same logical resources, channel-derived
   hosts.
 
-### BL-014 [deferred] — Kong rate-limit binding feasibility — version-pin watch
+### BL-014 [done — version-pin tests at b53ddf2; live-KIC smoke deferred] — Kong rate-limit binding feasibility — version-pin watch
 
 - **Source:** `proposals/02-public-application-intake.md:327-339` (AS-5)
 - **Description:** INIT-120's path-specific KongPlugin binding
