@@ -419,6 +419,55 @@ KUBECONFIG=~/.kube/humility-local.yaml kubectl get gitrepository,kustomization -
 
 All listed Flux resources should report `Ready=True`.
 
+### Reseeding the local gitserver after local manifest changes
+
+Use this when an existing `humility-local` cluster is healthy enough to reach
+with `~/.kube/humility-local.yaml`, but the in-cluster GitOps source is stale
+relative to the checkout you want Flux to consume. The command renders the
+current worktree into `.tmp/gitops-source/local`, force-pushes that snapshot to
+the existing in-cluster `humility-local.git`, applies the generated Flux source
+CRs, and waits for `GitRepository/humility-local` to report the new artifact
+revision. It is not a full bootstrap: it does not run Infisical bootstraps,
+Pomerium OIDC bootstrap, step-ca trust distribution, or resume the Flux
+Kustomization.
+
+Run the reseed from the checkout whose manifests should become the local
+GitOps source:
+
+```bash
+bash infra/scripts/bring-up-local-channel.sh --channel local --reseed-gitserver-only
+```
+
+Verify the GitRepository observed the new synthetic revision:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml \
+  kubectl get gitrepository -n flux-system humility-local
+```
+
+After the revision has advanced, resume Flux explicitly:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml \
+  kubectl patch kustomization -n flux-system humility-local \
+    --type=merge \
+    -p '{"spec":{"suspend":false}}'
+```
+
+Watch reconcile:
+
+```bash
+KUBECONFIG=~/.kube/humility-local.yaml \
+  flux reconcile kustomization humility-local \
+    --namespace flux-system \
+    --with-source
+
+KUBECONFIG=~/.kube/humility-local.yaml \
+  kubectl -n flux-system wait kustomization/humility-local \
+    --for=condition=Ready \
+    --timeout=300s
+```
+
 Tear down the local channel:
 
 ```bash
