@@ -254,20 +254,23 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: seed-public-intake-form
+  name: seed-public-intake-form-__SEED_HASH__
   namespace: server-manager
   labels:
     app.kubernetes.io/name: server-manager-api
-    app.kubernetes.io/component: migrations
+    app.kubernetes.io/component: seed-public-intake-form
     platform.humility.gg/init: "122"
+    platform.humility.gg/content-hash: "__SEED_HASH__"
 spec:
+  ttlSecondsAfterFinished: 86400
   backoffLimit: 6
   template:
     metadata:
       labels:
         app.kubernetes.io/name: server-manager-api
-        app.kubernetes.io/component: migrations
+        app.kubernetes.io/component: seed-public-intake-form
         platform.humility.gg/init: "122"
+        platform.humility.gg/content-hash: "__SEED_HASH__"
     spec:
       automountServiceAccountToken: false
       restartPolicy: OnFailure
