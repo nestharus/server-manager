@@ -14,4 +14,6 @@ render(() => <AppProviders router={router} />, rootElement);
   } finally {
     flush();
   }
-})();
+})().catch((error) => {
+  console.error("Router initialization failed:", error);
+});
