@@ -2,6 +2,38 @@
 import * as solid from "../../node_modules/solid-js/dist/solid.js";
 
 export * from "../../node_modules/solid-js/dist/solid.js";
+export type { Accessor } from "solid-js";
+
+export const createRoot: typeof import("solid-js").createRoot = solid.createRoot;
+export const createSignal: typeof import("solid-js").createSignal = ((...args: unknown[]) => {
+  const [value, setValue] = solid.createSignal(...args);
+  return [
+    value,
+    (...setterArgs: unknown[]) => {
+      const result = setValue(...setterArgs);
+      solid.flush();
+      return result;
+    },
+  ];
+}) as typeof import("solid-js").createSignal;
+export const flush: typeof import("solid-js").flush = solid.flush;
+type CompatFor = <T, U>(props: {
+  readonly each: readonly T[] | undefined | null;
+  readonly children: (item: import("solid-js").Accessor<T>, index: import("solid-js").Accessor<number>) => U;
+}) => import("solid-js").Accessor<U[]>;
+type CompatShow = <T>(props: {
+  readonly when: unknown;
+  readonly fallback?: unknown;
+  readonly children: T;
+}) => import("solid-js").Accessor<T | unknown>;
+
+export const For: CompatFor = solid.For;
+export const Show: CompatShow = solid.Show;
+
+export function createContext<T>(defaultValue?: T, options?: unknown) {
+  const context = solid.createContext(defaultValue, options);
+  return Object.assign(context, { Provider: context });
+}
 
 export function batch<T>(callback: () => T): T {
   return callback();
@@ -71,15 +103,46 @@ export function onMount(callback: () => void) {
   });
 }
 
-function createLegacyEffect<T>(effect: (previous?: T) => T | void, initial?: T) {
-  let hasPrevious = arguments.length > 1;
+function legacyEffectHandler(_value: unknown): void {}
+
+function normalizeNativeEffectHandler<T>(handler: T): T {
+  if (typeof handler === "function") {
+    return ((value: unknown, previous: unknown) => {
+      const cleanup = (handler as (value: unknown, previous?: unknown) => unknown)(value, previous);
+      return typeof cleanup === "function" ? cleanup : undefined;
+    }) as T;
+  }
+  if (
+    handler !== null &&
+    typeof handler === "object" &&
+    "effect" in handler &&
+    typeof (handler as { effect?: unknown }).effect === "function"
+  ) {
+    const bundle = handler as { effect: (value: unknown, previous?: unknown) => unknown };
+    return {
+      ...handler,
+      effect: (value: unknown, previous: unknown) => {
+        const cleanup = bundle.effect(value, previous);
+        return typeof cleanup === "function" ? cleanup : undefined;
+      },
+    };
+  }
+  return handler;
+}
+
+function createLegacyEffect<T>(
+  nativeCreateEffect: typeof solid.createEffect,
+  effect: (previous?: T) => T | void,
+  initial?: T,
+) {
+  let hasPrevious = arguments.length > 2;
   let previous = initial;
-  return solid.createEffect(() => {
+  return nativeCreateEffect(() => {
     const result = effect(hasPrevious ? previous : undefined);
     previous = result;
     hasPrevious = true;
     return result;
-  });
+  }, legacyEffectHandler);
 }
 
 // Legacy initial values that look exactly like Solid 2 effect handlers are
@@ -102,12 +165,12 @@ export function createEffect<T>(
   options?: unknown,
 ) {
   if (arguments.length === 1) {
-    return createLegacyEffect(effect);
+    return createLegacyEffect(solid.createEffect, effect);
   }
   if (!isNativeEffectHandler(initialOrEffect)) {
-    return createLegacyEffect(effect, initialOrEffect as T);
+    return createLegacyEffect(solid.createEffect, effect, initialOrEffect as T);
   }
-  return solid.createEffect(effect, initialOrEffect, options);
+  return solid.createEffect(effect, normalizeNativeEffectHandler(initialOrEffect), options);
 }
 
 export const createComputed = createEffect;
@@ -118,12 +181,12 @@ export function createRenderEffect<T>(
   options?: unknown,
 ) {
   if (arguments.length === 1) {
-    return createLegacyEffect(effect);
+    return createLegacyEffect(solid.createRenderEffect, effect);
   }
   if (!isNativeEffectHandler(initialOrEffect)) {
-    return createLegacyEffect(effect, initialOrEffect as T);
+    return createLegacyEffect(solid.createRenderEffect, effect, initialOrEffect as T);
   }
-  return solid.createRenderEffect(effect, initialOrEffect, options);
+  return solid.createRenderEffect(effect, normalizeNativeEffectHandler(initialOrEffect), options);
 }
 
 export function on<T>(
@@ -148,7 +211,7 @@ export function createResource<T>(fetcher: () => Promise<T>) {
   const [loading, setLoading] = solid.createSignal(true);
   const [error, setError] = solid.createSignal<unknown>(undefined);
 
-  solid.createEffect(() => {
+  createLegacyEffect(solid.createEffect, () => {
     setLoading(true);
     fetcher()
       .then((result) => {
