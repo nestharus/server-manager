@@ -428,7 +428,7 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
 
 ## Priority: LOW
 
-### BL-013 [tripwire shipped at 8038b8a; full work blocked on remote-channel-materialization initiative] — INIT-124: Public intake remote channel apply
+### BL-013 [done — INIT-138 dev-channel materialization at e54ca54 + r1 fix at 930d605] — INIT-124: Public intake remote channel apply
 
 - **Source:** `proposals/02-public-application-intake.md:447` (Out
   of scope for follow-up)
@@ -436,20 +436,32 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
   (Kong rate-limit, Cedar policy, Pomerium binding). Remote channel
   config in `gitops/channels/dev/` does not have application
   workload specs yet.
-- **Plan:** Block on remote channel application-workload
-  materialization (separate initiative). Then this is a
-  channel-template port: same logical resources, channel-derived
-  hosts.
+- **Outcome (closed in INIT-138, full pipeline; CodeRabbit r2 = 0
+  findings on dev channel materialization):** `gitops/channels/dev/`
+  now ships the public-intake KongPlugin rate-limit binding,
+  Pomerium route + secrets, Cedar policy
+  (`Public::"web-intake.dev"` allow + no-read), and dev-channel
+  Kustomize root. Tests cover Pomerium routes, Cedar policy
+  shape, Kustomize build, no-local-leakage, and tripwire.
 
-### BL-014 [done — version-pin tests at b53ddf2; live-KIC smoke deferred] — Kong rate-limit binding feasibility — version-pin watch
+### BL-014 [done — version-pin tests at b53ddf2; live-KIC smoke at 559510c] — Kong rate-limit binding feasibility — version-pin watch
 
 - **Source:** `proposals/02-public-application-intake.md:327-339` (AS-5)
 - **Description:** INIT-120's path-specific KongPlugin binding
   depends on Kong/KIC supporting that pattern. Current Kong 3.2.0
   + KIC supports it. Future major bumps could break the binding.
-- **Plan:** Watch Kong/KIC releases for breaking changes;
-  re-evaluate per-service binding if path-specific support
-  changes.
+- **Outcome (closed in INIT-139, full pipeline; CodeRabbit r2 = 0
+  findings):** Cluster-runtime validator
+  `infra/tests/validate_kong_kic_translation_local.sh` walks the
+  Kong Admin API at `kong-system` ns + 8444, paginates `/routes`
+  and `/routes/<id>/plugins`, asserts route-scoped `rate-limiting`
+  plugin on each public-intake tuple, and asserts NO `rate-limiting`
+  on the adjacent admin path. Wired into
+  `pr-cluster-merge-readiness-runtime-validators` so a future
+  Kong/KIC bump that silently breaks the path-specific binding
+  will fail the merge gate. Live TG-1 against humility-local
+  surfaced a real plugin-binding gap on `web.local.humility.local`
+  — validator works as designed.
 
 ### BL-015 [done] — Web `test-results/` Playwright artifacts cluttered the worktree
 
