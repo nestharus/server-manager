@@ -1,11 +1,11 @@
 {
   "slice": "SLICE-R.25",
   "source_documents": [
-    "proposals/01-recovery-test-first.md",
-    "research/03-recovery-hookpoints.md",
-    "research/02-coverage-audit-init-100-118.md",
-    "risk/01-recovery-scope.md",
-    "risk/01-recovery-shortcut.md"
+    "planning/proposals/01-recovery-test-first.md",
+    "planning/research/03-recovery-hookpoints.md",
+    "planning/research/02-coverage-audit-init-100-118.md",
+    "planning/risk/01-recovery-scope.md",
+    "planning/risk/01-recovery-shortcut.md"
   ],
   "ci_lanes": {
     "tests/": "pytest tests services/api/tests services/discord/tests -v",
@@ -19,7 +19,7 @@
     {
       "path": "tests/test_daemon_init.py",
       "disposition": "DELETE_AND_REWRITE",
-      "contract_source": "proposals/13-daemon-init.md; proposals/25-discord-main.md; services/discord runtime contract",
+      "contract_source": "planning/proposals/13-daemon-init.md; planning/proposals/25-discord-main.md; services/discord runtime contract",
       "fixture_source": "legacy root daemon test",
       "replacement_paths": [
         "services/discord/tests/test_bot.py",
@@ -29,7 +29,7 @@
     {
       "path": "tests/test_daemon_config.py",
       "disposition": "MIGRATE",
-      "contract_source": "proposals/14-config.md; proposals/20-settings.md; proposals/23-discord-settings.md; runtime settings contracts",
+      "contract_source": "planning/proposals/14-config.md; planning/proposals/20-settings.md; planning/proposals/23-discord-settings.md; runtime settings contracts",
       "fixture_source": "legacy root daemon test",
       "replacement_paths": [
         "services/api/tests/test_settings.py",
@@ -39,7 +39,7 @@
     {
       "path": "tests/test_daemon_db.py",
       "disposition": "MIGRATE",
-      "contract_source": "proposals/15-db.md; API persistence contract; Alembic migration contract",
+      "contract_source": "planning/proposals/15-db.md; API persistence contract; Alembic migration contract",
       "fixture_source": "legacy root daemon test",
       "replacement_paths": [
         "services/api/tests/test_persistence.py"
@@ -48,7 +48,7 @@
     {
       "path": "tests/test_daemon_claim.py",
       "disposition": "MIGRATE",
-      "contract_source": "proposals/16-claim.md; ticket/application ownership contracts; Discord interaction contracts",
+      "contract_source": "planning/proposals/16-claim.md; ticket/application ownership contracts; Discord interaction contracts",
       "fixture_source": "legacy root daemon test",
       "replacement_paths": [
         "services/api/tests/test_application_interviews.py",
@@ -60,7 +60,7 @@
     {
       "path": "tests/test_daemon_applications.py",
       "disposition": "MIGRATE",
-      "contract_source": "proposals/18-applications.md; application contracts; Discord application submission contract",
+      "contract_source": "planning/proposals/18-applications.md; application contracts; Discord application submission contract",
       "fixture_source": "legacy root daemon test",
       "replacement_paths": [
         "services/api/tests/test_applications.py",
@@ -72,7 +72,7 @@
     {
       "path": "tests/test_daemon_entry.py",
       "disposition": "DELETE_AND_REWRITE",
-      "contract_source": "proposals/17-daemon-entry.md; proposals/24-discord-bot.md; proposals/25-discord-main.md",
+      "contract_source": "planning/proposals/17-daemon-entry.md; planning/proposals/24-discord-bot.md; planning/proposals/25-discord-main.md",
       "fixture_source": "legacy root daemon test",
       "replacement_paths": [
         "services/discord/tests/test_bot.py",
@@ -82,14 +82,14 @@
     {
       "path": "tests/test_discord_cli.py",
       "disposition": "DELETE_AND_REWRITE",
-      "contract_source": "proposals/05-discord-cli.md read-only CLI behavior with real or recorded Discord API boundary",
+      "contract_source": "planning/proposals/05-discord-cli.md read-only CLI behavior with real or recorded Discord API boundary",
       "fixture_source": "legacy root CLI test",
       "residual_risk": "read-only Discord CLI behavior has no real or recorded Discord API boundary replacement in this slice"
     },
     {
       "path": "services/api/tests/test_activity_model.py",
       "disposition": "MODERNIZE",
-      "contract_source": "plans/proposals/activity-audit-model.md; API activity and audit contracts",
+      "contract_source": "planning/plans/proposals/activity-audit-model.md; API activity and audit contracts",
       "fixture_source": "API service conftest and existing testcontainers fixtures",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -242,7 +242,7 @@
     {
       "path": "services/api/tests/test_conftest.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/28-conftest.md; API testing contract",
+      "contract_source": "planning/proposals/28-conftest.md; API testing contract",
       "fixture_source": "API service conftest",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -251,7 +251,7 @@
     {
       "path": "services/api/tests/test_contracts_base.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/22-contracts-base.md",
+      "contract_source": "planning/proposals/22-contracts-base.md",
       "fixture_source": "API contract tests",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -260,7 +260,7 @@
     {
       "path": "services/api/tests/test_contracts_chapter_lifecycle.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/26-chapters-contract.md; chapter contracts",
+      "contract_source": "planning/proposals/26-chapters-contract.md; chapter contracts",
       "fixture_source": "API contract tests",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -275,7 +275,7 @@
     {
       "path": "services/api/tests/test_endpoints_chapters_stubs.py",
       "disposition": "DELETE_AND_REWRITE",
-      "contract_source": "proposals/27-chapter-endpoints.md real endpoint contract tests",
+      "contract_source": "planning/proposals/27-chapter-endpoints.md real endpoint contract tests",
       "fixture_source": "API service conftest",
       "replacement_paths": [
         "services/api/tests/test_chapter_lifecycle.py",
@@ -286,7 +286,7 @@
     {
       "path": "services/api/tests/test_factory.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/21-factory.md; runtime readiness contract",
+      "contract_source": "planning/proposals/21-factory.md; runtime readiness contract",
       "fixture_source": "API service conftest",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -295,7 +295,7 @@
     {
       "path": "services/api/tests/test_forms.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/18-applications.md; application contracts",
+      "contract_source": "planning/proposals/18-applications.md; application contracts",
       "fixture_source": "API service conftest",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -304,7 +304,7 @@
     {
       "path": "services/api/tests/test_harness.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/28-conftest.md; API testing contract",
+      "contract_source": "planning/proposals/28-conftest.md; API testing contract",
       "fixture_source": "API service conftest",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -451,7 +451,7 @@
     {
       "path": "services/api/tests/test_settings.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/20-settings.md; API runtime settings contract",
+      "contract_source": "planning/proposals/20-settings.md; API runtime settings contract",
       "fixture_source": "API service conftest",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -577,7 +577,7 @@
     {
       "path": "services/discord/tests/test_bot.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/24-discord-bot.md; Discord runtime contract",
+      "contract_source": "planning/proposals/24-discord-bot.md; Discord runtime contract",
       "fixture_source": "Discord fake client fixtures",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -595,7 +595,7 @@
     {
       "path": "services/discord/tests/test_harness.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/28-conftest.md; Discord testing contract",
+      "contract_source": "planning/proposals/28-conftest.md; Discord testing contract",
       "fixture_source": "Discord fake client fixtures",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"
@@ -610,7 +610,7 @@
     {
       "path": "services/discord/tests/test_main.py",
       "disposition": "DELETE_AND_REWRITE",
-      "contract_source": "proposals/25-discord-main.md command registry contract",
+      "contract_source": "planning/proposals/25-discord-main.md command registry contract",
       "fixture_source": "Discord fake client fixtures",
       "replacement_paths": [
         "services/discord/tests/test_bot.py",
@@ -660,7 +660,7 @@
     {
       "path": "services/discord/tests/test_settings.py",
       "disposition": "MODERNIZE",
-      "contract_source": "proposals/23-discord-settings.md; Discord runtime settings contract",
+      "contract_source": "planning/proposals/23-discord-settings.md; Discord runtime settings contract",
       "fixture_source": "Discord fake client fixtures",
       "modernization_evidence": [
         "already meets modernization criteria; CI lane wired by SLICE-R.02"

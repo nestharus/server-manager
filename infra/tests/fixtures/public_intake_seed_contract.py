@@ -17,7 +17,7 @@ SEED_ACTOR_ID = "init-122-bootstrap"
 SEED_REQUEST_SURFACE = "kubernetes:job/seed-public-intake-form"
 SEED_FORM_NAME = "Public application intake (global)"
 SEED_TARGET_TYPE = "chapter_membership"
-SEED_SOURCE = "proposals/04-public-intake-form-seed.md#test-intent-track"
+SEED_SOURCE = "planning/proposals/04-public-intake-form-seed.md#test-intent-track"
 
 
 @dataclass(frozen=True)

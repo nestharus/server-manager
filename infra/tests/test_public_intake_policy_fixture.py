@@ -67,7 +67,7 @@ def _validator_payloads(validator: str) -> list[dict]:
 
 def test_access_policy_matrix_contains_public_submit_allow_and_read_deny() -> None:
     """Risk annotation: group=TG-6; named_risk=public_policy_fixture_gap;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T6;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T6;
     assumptions=A5.
     """
     fixture = _yaml(MATRIX)
@@ -89,7 +89,7 @@ def test_access_policy_matrix_contains_public_submit_allow_and_read_deny() -> No
 
 def test_public_intake_policy_bundle_contains_matching_permit_and_forbid() -> None:
     """Risk annotation: group=TG-6; named_risk=public_policy_fixture_gap;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T6;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T6;
     assumptions=A5.
     """
     fixture = _yaml(MATRIX)
@@ -107,7 +107,7 @@ def test_public_intake_policy_bundle_contains_matching_permit_and_forbid() -> No
 
 def test_public_intake_does_not_add_service_identity() -> None:
     """Risk annotation: group=TG-6; named_risk=public_service_identity_scope_creep;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T6;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T6;
     assumptions=A5.
     """
     fixture = _yaml(MATRIX)
@@ -122,7 +122,7 @@ def test_public_intake_does_not_add_service_identity() -> None:
 
 def test_access_policy_validator_uses_canonical_seeded_policy_source() -> None:
     """Risk annotation: group=TG-6; named_risk=validator_public_policy_drift;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.3,C5.5;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C5.3,C5.5;
     assumptions=A5.
     """
     validator = VALIDATOR.read_text(encoding="utf-8")
@@ -135,7 +135,7 @@ def test_access_policy_validator_uses_canonical_seeded_policy_source() -> None:
 
 def test_access_policy_validator_contains_public_runtime_probe_payloads() -> None:
     """Risk annotation: group=TG-2; named_risk=validator_public_runtime_probe_drift;
-    level=particular-integration; source=proposals/29-bl-012-public-entity-runtime-probe.md;
+    level=particular-integration; source=planning/proposals/29-bl-012-public-entity-runtime-probe.md;
     assumptions=A8.
     """
     validator = VALIDATOR.read_text(encoding="utf-8")
@@ -150,7 +150,7 @@ def test_access_policy_validator_contains_public_runtime_probe_payloads() -> Non
 
 def test_access_policy_validator_die_messages_name_resource_literal() -> None:
     """Risk annotation: group=TG-2; named_risk=validator_public_runtime_probe_drift;
-    level=particular-integration; source=proposals/29-bl-012-public-entity-runtime-probe.md;
+    level=particular-integration; source=planning/proposals/29-bl-012-public-entity-runtime-probe.md;
     assumptions=A8.
     """
     validator = VALIDATOR.read_text(encoding="utf-8")
@@ -169,7 +169,7 @@ def test_access_policy_validator_die_messages_name_resource_literal() -> None:
 
 def test_access_policy_validator_decision_checks_wired_for_public_probes() -> None:
     """Risk annotation: group=TG-2; named_risk=validator_public_runtime_probe_drift;
-    level=particular-integration; source=proposals/29-bl-012-public-entity-runtime-probe.md;
+    level=particular-integration; source=planning/proposals/29-bl-012-public-entity-runtime-probe.md;
     assumptions=A8.
     """
     validator = VALIDATOR.read_text(encoding="utf-8")

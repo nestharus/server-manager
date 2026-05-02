@@ -17,7 +17,7 @@ from infra.tests.fixtures.cedar_policy_source import (
 
 def test_seeded_cedar_files_equal_canonical_policy_source() -> None:
     """Risk annotation: group=TG-1; named_risk=seeded_policy_source_drift;
-    level=component; source=proposals/03-cedar-policy-source.md#test-intent-track T1;
+    level=component; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T1;
     assumptions=A3,A5.
     """
     with tempfile.TemporaryDirectory() as tmp:
@@ -30,7 +30,7 @@ def test_seeded_cedar_files_equal_canonical_policy_source() -> None:
 
 def test_seeded_cedar_render_removes_stale_generated_files() -> None:
     """Risk annotation: group=TG-1; named_risk=stale_generated_cedar_policy;
-    level=component; source=proposals/03-cedar-policy-source.md#test-intent-track T1;
+    level=component; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T1;
     assumptions=A3,A5.
     """
     with tempfile.TemporaryDirectory() as tmp:
@@ -70,7 +70,7 @@ def test_seeded_cedar_materializer_rejects_invalid_policy_json(
     message_fragments: tuple[str, ...],
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=invalid_policy_source_accepted;
-    level=component; source=proposals/03-cedar-policy-source.md#contract C1;
+    level=component; source=planning/proposals/03-cedar-policy-source.md#contract C1;
     assumptions=A3,A5.
     """
     serialized = payload if isinstance(payload, str) else json.dumps(payload)
