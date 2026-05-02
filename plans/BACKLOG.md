@@ -786,6 +786,32 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
   β-0b + β-i (done bundled) → β-ii → β-iii.
 - **Priority:** DONE (all sub-items closed).
 
+### BL-020 [open] — Web host public-intake paths unrate-limited on humility-local
+
+- **Source:** INIT-139 live TG-1 run against humility-local
+  (2026-05-01)
+- **Symptom:** The validator ran clean against
+  `api.local.humility.local/api/v1/public/{applications,chapters}`
+  but found a Kong route bound to host `web.local.humility.local`
+  exposing `/api/public/applications`, `/api/public/chapters`,
+  and `/api/applications` with **no** route-scoped rate-limiting
+  plugin attached. The web frontend ingress proxies these paths
+  to the API service but skips the rate-limit plugin that the
+  API-host ingress applies.
+- **Impact:** Public submission via the web UI host bypasses
+  rate-limiting — abusers can hit the web host paths instead
+  of the api host and circumvent the protection. The API-host
+  binding is the only one INIT-120 set up; the web-host paths
+  were not in scope.
+- **Plan:** Either (a) attach the existing
+  `public-intake-rate-limit` KongPlugin to the web-host ingress
+  for the public-intake paths via
+  `konghq.com/override`/`konghq.com/plugins` annotation on a
+  path-specific Ingress, or (b) collapse the public-intake
+  paths to a single host (api or web, not both). Option (a)
+  preserves the current dual-host UX. Mirror to dev channel
+  (INIT-138) once landed locally.
+
 ---
 
 ## Notes
