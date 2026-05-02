@@ -32,3 +32,4 @@ steps:
       infra/tests/validate_app_clusters_local.sh --cluster
       infra/tests/validate_cluster_security_local.sh --cluster
       infra/tests/validate_container_delivery_local.sh --cluster
+      infra/tests/validate_kong_kic_translation_local.sh --cluster --kubeconfig "${KUBECONFIG_PATH}"
