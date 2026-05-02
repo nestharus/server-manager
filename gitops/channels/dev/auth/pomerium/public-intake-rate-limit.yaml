@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-public-intake
+  namespace: auth-system
+  labels:
+    app.kubernetes.io/name: pomerium
+  annotations:
+    konghq.com/plugins: public-intake-rate-limit
+spec:
+  ingressClassName: kong
+  rules:
+    - host: web.dev.humility.gg
+      http:
+        paths:
+          - path: /api/public/applications
+            pathType: Prefix
+            backend:
+              service:
+                name: pomerium-proxy
+                port:
+                  number: 80
+          - path: /api/public/chapters
+            pathType: Prefix
+            backend:
+              service:
+                name: pomerium-proxy
+                port:
+                  number: 80
+          - path: /api/applications
+            pathType: Prefix
+            backend:
+              service:
+                name: pomerium-proxy
+                port:
+                  number: 80

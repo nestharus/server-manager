@@ -574,6 +574,12 @@ def test_repository_state_passes() -> None:
     assert failures == [], "\n".join(failures)
 
 
+def test_dev_channel_is_discovered_and_validates() -> None:
+    channels = discover_channels(GITOPS_ROOT)
+    assert channels == ["dev"]
+    assert verify_substrate("dev", GITOPS_ROOT, CEDAR_ROOT) == []
+
+
 def test_partial_synthetic_channel_fails(tmp_path: Path) -> None:
     channel = "dev"
     _write(

@@ -10,5 +10,13 @@
   {
     "id": "dev-cluster-api-crossplane-reconcile",
     "content": "permit(principal == Service::\"crossplane-provider.dev\", action == Action::\"cluster:claim:reconcile\", resource == Resource::\"cluster-api\");"
+  },
+  {
+    "id": "public-intake-allow",
+    "content": "permit(principal == Public::\"web-intake.dev\", action == Action::\"application:submit_public\", resource == Resource::\"server-manager-api:public-applications\");"
+  },
+  {
+    "id": "public-intake-no-read",
+    "content": "forbid(principal == Public::\"web-intake.dev\", action == Action::\"api:read\", resource == Resource::\"server-manager-api\");"
   }
 ]

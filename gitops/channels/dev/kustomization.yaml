@@ -1,0 +1,6 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - applications/server-manager/public-intake-rate-limit.yaml
+  - auth/pomerium/public-intake-rate-limit.yaml
+  - auth/pomerium/secrets-infisicalsecret.yaml
