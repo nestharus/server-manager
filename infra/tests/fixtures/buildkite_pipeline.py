@@ -9,6 +9,7 @@ REQUIRED_CLUSTER_RUNTIME_VALIDATORS = (
     "infra/tests/validate_app_clusters_local.sh",
     "infra/tests/validate_cluster_security_local.sh",
     "infra/tests/validate_container_delivery_local.sh",
+    "infra/tests/validate_kong_kic_translation_local.sh",
 )
 
 
