@@ -17,6 +17,11 @@ REQUIRED_ENV_VARS = {
     "DISCORD_GUILD_ID": "900000000000000001",
     "SUPABASE_DB_URL": "postgresql://user:pass@localhost:5432/db",
     "SUPABASE_SERVICE_KEY": "test-service-key",
+    "WEB_PUBLIC_BASE_URL": "https://web.test.local",
+    "S3_ENDPOINT": "http://minio.test.local:9000",
+    "S3_BUCKET": "server-manager",
+    "S3_ACCESS_KEY_ID": "test-s3-access-key",
+    "S3_SECRET_ACCESS_KEY": "test-s3-secret-key",
 }
 
 
