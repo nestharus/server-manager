@@ -320,7 +320,7 @@ async def test_applicant_transcript_includes_state_changes_and_applicant_visible
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=applicant_transcript_visibility_leak;
     level=service; source=.tmp/init-132/phase6/step6a-contract.md#TG-1 and
-    proposals/11-application-transcript.md#Q2.
+    planning/proposals/11-application-transcript.md#Q2.
     """
     seed = await _seed_claimed_application_with_messages(
         migrated_async_client,
@@ -359,7 +359,7 @@ async def test_officer_transcript_includes_state_changes_and_both_message_visibi
 ) -> None:
     """Risk annotation: group=TG-2; named_risk=officer_transcript_visibility_regression;
     level=service; source=.tmp/init-132/phase6/step6a-contract.md#TG-2 and
-    proposals/11-application-transcript.md#Q2.
+    planning/proposals/11-application-transcript.md#Q2.
     """
     seed = await _seed_claimed_application_with_messages(
         migrated_async_client,
@@ -397,7 +397,7 @@ async def test_stranger_transcript_reuses_application_message_forbidden_error(
 ) -> None:
     """Risk annotation: group=TG-3; named_risk=stranger_transcript_authorization_bypass;
     level=service; source=.tmp/init-132/phase6/step6a-contract.md#TG-3 and
-    proposals/11-application-transcript.md#Q2.
+    planning/proposals/11-application-transcript.md#Q2.
     """
     seed = await _seed_claimed_application_with_messages(
         migrated_async_client,
@@ -422,7 +422,7 @@ async def test_transcript_chronologically_interleaves_state_changes_and_messages
 ) -> None:
     """Risk annotation: group=TG-4; named_risk=transcript_chronological_merge_drift;
     level=service; source=.tmp/init-132/phase6/step6a-contract.md#TG-4 and
-    proposals/11-application-transcript.md#Q1.
+    planning/proposals/11-application-transcript.md#Q1.
     """
     applicant_id = _create_member(governance_db)
     created = await _create_application(

@@ -17,7 +17,7 @@ def _has_permit(contents: str, principal: str, resource: str) -> bool:
 
 def test_tenant_cedar_policies_preserve_allow_allow_deny_contract() -> None:
     """Risk annotation: group=TG-5; named_risk=tenant_policy_not_materialized_or_loaded;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T5;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T5;
     assumptions=A5.
     """
     contents = "\n".join(policy["content"] for policy in canonical_policies())
@@ -29,7 +29,7 @@ def test_tenant_cedar_policies_preserve_allow_allow_deny_contract() -> None:
 
 def test_tenant_validator_runs_cedar_probes_only_after_policy_id_gate() -> None:
     """Risk annotation: group=TG-5; named_risk=tenant_authorization_probe_before_hydration_gate;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.2;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C5.2;
     assumptions=A1,A2,A3,A5.
     """
     validator = text(TENANT_VALIDATOR)

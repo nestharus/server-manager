@@ -681,7 +681,7 @@ work.
 
 ## Cross-References
 
-Controlling decision: `DECISIONS.md` D8, "Environment-agnostic Phase 5 reset:
+Controlling decision: `../planning/DECISIONS.md` D8, "Environment-agnostic Phase 5 reset:
 local-as-first-deployment and self-managed k3s everywhere."
 
 Workflow library references under `~/ai/` apply here, especially the
@@ -690,5 +690,5 @@ future INIT proposals at the environment-agnostic stack reference: local is a
 deployment target, channels carry provider configuration, and k3s is used
 locally and remotely.
 
-For contributors starting in `docs/`, see `docs/deployment-substrate.md` for
+For contributors starting in `docs/`, see `../planning/docs/deployment-substrate.md` for
 the short context handoff back to this README.

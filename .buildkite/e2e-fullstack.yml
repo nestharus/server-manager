@@ -12,4 +12,4 @@ steps:
     artifact_paths:
       - ".tmp/init-119-e2e/**/*"
       - ".tmp/init-119-bringup-diagnostics/**/*"
-      - "docs/infra-e2e-status.md"
+      - "infra/tests/e2e/status.md"

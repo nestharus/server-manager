@@ -25,7 +25,7 @@ def test_seed_sql_inserts_aggregate_consistent_rows_and_is_idempotent(
     public_intake_seed_runner,
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=projection_only_or_duplicate_seed;
-    level=component; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+    level=component; source=planning/proposals/04-public-intake-form-seed.md#test-intent-track.
     """
     assert_init122_risk_annotation(
         group="TG-1",
@@ -89,13 +89,13 @@ def test_seed_sql_skips_different_current_global_form_without_duplicate(
     public_intake_seed_runner,
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=operator_form_overwrite;
-    level=component; source=proposals/04-public-intake-form-seed.md#assumption-register-A4.
+    level=component; source=planning/proposals/04-public-intake-form-seed.md#assumption-register-A4.
     """
     assert_init122_risk_annotation(
         group="TG-1",
         named_risk="operator_form_overwrite",
         level="component",
-        source="proposals/04-public-intake-form-seed.md#assumption-register-A4",
+        source="planning/proposals/04-public-intake-form-seed.md#assumption-register-A4",
     )
     officer_form_id = insert_officer_current_global_form(fresh_migrated_public_intake_db)
 
@@ -122,7 +122,7 @@ def test_service_current_form_lookup_returns_seeded_global_form(
     public_intake_seed_runner,
 ) -> None:
     """Risk annotation: group=TG-2; named_risk=current_form_api_404_after_seed;
-    level=component; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+    level=component; source=planning/proposals/04-public-intake-form-seed.md#test-intent-track.
     """
     assert_init122_risk_annotation(
         group="TG-2",

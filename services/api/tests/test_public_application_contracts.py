@@ -15,13 +15,13 @@ from .public_intake_fixtures import assert_risk_annotation, public_application_p
 
 def test_public_application_submission_accepts_fixture_shape() -> None:
     """Risk annotation: group=TG-1; named_risk=public_contract_drift;
-    level=unit; source=proposals/02-public-application-intake.md#§1 AS-1 AS-3.
+    level=unit; source=planning/proposals/02-public-application-intake.md#§1 AS-1 AS-3.
     """
     assert_risk_annotation(
         group="TG-1",
         named_risk="public_contract_drift",
         level="unit",
-        source="proposals/02-public-application-intake.md#§1",
+        source="planning/proposals/02-public-application-intake.md#§1",
     )
 
     submission = PublicApplicationSubmission.model_validate(
@@ -49,13 +49,13 @@ def test_public_application_submission_rejects_drift_shapes(
     invalid_payload: dict,
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=public_contract_drift;
-    level=unit; source=proposals/02-public-application-intake.md#§1 AS-1 AS-3.
+    level=unit; source=planning/proposals/02-public-application-intake.md#§1 AS-1 AS-3.
     """
     assert_risk_annotation(
         group="TG-1",
         named_risk="public_contract_drift",
         level="unit",
-        source="proposals/02-public-application-intake.md#§1",
+        source="planning/proposals/02-public-application-intake.md#§1",
     )
 
     with pytest.raises(ValidationError):
@@ -64,13 +64,13 @@ def test_public_application_submission_rejects_drift_shapes(
 
 def test_public_application_submission_receipt_is_minimal_envelope() -> None:
     """Risk annotation: group=TG-1; named_risk=public_contract_drift;
-    level=unit; source=proposals/02-public-application-intake.md#§1.
+    level=unit; source=planning/proposals/02-public-application-intake.md#§1.
     """
     assert_risk_annotation(
         group="TG-1",
         named_risk="public_contract_drift",
         level="unit",
-        source="proposals/02-public-application-intake.md#§1",
+        source="planning/proposals/02-public-application-intake.md#§1",
     )
     application_id = uuid4()
 
@@ -109,13 +109,13 @@ def test_public_application_submission_receipt_rejects_application_read_fields(
     extra_key: str,
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=public_contract_drift;
-    level=unit; source=proposals/02-public-application-intake.md#§1.
+    level=unit; source=planning/proposals/02-public-application-intake.md#§1.
     """
     assert_risk_annotation(
         group="TG-1",
         named_risk="public_contract_drift",
         level="unit",
-        source="proposals/02-public-application-intake.md#§1",
+        source="planning/proposals/02-public-application-intake.md#§1",
     )
     payload = {
         "message": "Application received",

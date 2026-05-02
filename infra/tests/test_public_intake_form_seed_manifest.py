@@ -35,7 +35,7 @@ def test_public_intake_seed_manifest_contains_configmap_and_hardened_job(
     public_intake_seed_manifest_documents: list[dict],
 ) -> None:
     """Risk annotation: group=TG-3; named_risk=seed_manifest_omitted_or_unhardened;
-    level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+    level=particular-integration; source=planning/proposals/04-public-intake-form-seed.md#test-intent-track.
     """
     assert_init122_risk_annotation(
         group="TG-3",
@@ -118,7 +118,7 @@ def test_public_intake_seed_manifest_is_ordered_after_alembic_job(
     repo_root: Path,
 ) -> None:
     """Risk annotation: group=TG-3; named_risk=seed_runs_before_migrations;
-    level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+    level=particular-integration; source=planning/proposals/04-public-intake-form-seed.md#test-intent-track.
     """
     assert_init122_risk_annotation(
         group="TG-3",

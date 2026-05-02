@@ -161,7 +161,7 @@ assert_static_files() {
   assert_file "gitops/channels/local/applications/server-manager/kustomization.yaml"
   assert_file "gitops/channels/local/applications/server-manager/postgres-cluster.yaml"
   assert_file "gitops/channels/local/applications/server-manager/alembic-migration-job.yaml"
-  # Risk annotation: group=TG-4; named_risk=validator_seed_resource_gap; level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+  # Risk annotation: group=TG-4; named_risk=validator_seed_resource_gap; level=particular-integration; source=planning/proposals/04-public-intake-form-seed.md#test-intent-track.
   assert_file "gitops/channels/local/applications/server-manager/seed-public-intake-form.yaml"
   assert_file "gitops/channels/local/applications/server-manager/api-deployment.yaml"
   assert_file "gitops/channels/local/applications/server-manager/discord-deployment.yaml"
@@ -194,7 +194,7 @@ assert_kustomize() {
 
   grep -q 'name: server-manager-postgres' "$app_render" || die "server-manager CNPG Cluster rendered"
   grep -q 'name: server-manager-alembic-migrate-__ALEMBIC_HASH__' "$app_render" || die "server-manager Alembic Job rendered"
-  # Risk annotation: group=TG-4; named_risk=validator_seed_render_gap; level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+  # Risk annotation: group=TG-4; named_risk=validator_seed_render_gap; level=particular-integration; source=planning/proposals/04-public-intake-form-seed.md#test-intent-track.
   grep -q 'name: seed-public-intake-form-payload' "$app_render" || die "public intake form seed ConfigMap rendered"
   grep -q 'name: seed-public-intake-form-__SEED_HASH__' "$app_render" || die "public intake form seed Job rendered"
   grep -q 'name: server-manager-postgres-url' "$app_render" || die "public intake form seed DATABASE_URL secret rendered"
@@ -341,7 +341,7 @@ assert_runtime() {
     -l app.kubernetes.io/component=alembic-migrate >/dev/null
   pass "Alembic migration Job complete"
 
-  # Risk annotation: group=TG-4; named_risk=validator_seed_completion_gap; level=particular-integration; source=proposals/04-public-intake-form-seed.md#test-intent-track.
+  # Risk annotation: group=TG-4; named_risk=validator_seed_completion_gap; level=particular-integration; source=planning/proposals/04-public-intake-form-seed.md#test-intent-track.
   kubectl_cmd -n server-manager get configmap seed-public-intake-form-payload >/dev/null
   pass "public intake form seed ConfigMap exists"
 
