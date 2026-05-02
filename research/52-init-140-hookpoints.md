@@ -160,7 +160,7 @@ that immediately.
 
 **Primary test hook:** add the TG-2 static guard under `infra/tests/`.
 The proposal names a new file:
-`infra/tests/test_kong_plugin_orphan_references.py`.
+`infra/tests/test_public_intake_rate_limit_kongplugin_parity.py`.
 
 **Existing helper patterns to reuse:**
 
@@ -264,7 +264,7 @@ Failure messages should include:
 **Tests to run for TG-2:**
 
 ```bash
-pytest infra/tests/test_kong_plugin_orphan_references.py
+pytest infra/tests/test_public_intake_rate_limit_kongplugin_parity.py
 pytest infra/tests/test_public_intake_rate_limit.py
 pytest infra/tests/test_public_intake_channel_tripwire.py
 pytest infra/tests/test_dev_channel_kustomize_build.py

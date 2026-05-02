@@ -134,7 +134,7 @@ surface; the intended config pin for this proposal is the block above.
 
 ### New test file
 
-- `infra/tests/test_kong_plugin_orphan_references.py`
+- `infra/tests/test_public_intake_rate_limit_kongplugin_parity.py`
   - Parse relevant channel GitOps YAML.
   - For any Ingress with
     `konghq.com/plugins: public-intake-rate-limit`, require a
