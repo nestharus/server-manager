@@ -51,7 +51,7 @@ def test_dev_channel_has_no_local_hostname_or_principal_leakage() -> None:
                 match = pattern.search(line)
                 if match is None:
                     continue
-                if _allowed_line(match.group(0)):
+                if _allowed_line(line):
                     continue
                 findings.append(f"{path.relative_to(REPO_ROOT)}:{line_number}: {match.group(0)}")
 
