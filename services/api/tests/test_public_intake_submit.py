@@ -176,13 +176,13 @@ async def test_authenticated_submit_keeps_user_surface_and_authority_gate(
     governance_dsn: str,
 ) -> None:
     """Risk annotation: group=TG-3; named_risk=adjacent_authenticated_submit_regression;
-    level=component; source=proposals/02-public-application-intake.md#§3 AS-6.
+    level=component; source=planning/proposals/02-public-application-intake.md#§3 AS-6.
     """
     assert_risk_annotation(
         group="TG-3",
         named_risk="adjacent_authenticated_submit_regression",
         level="component",
-        source="proposals/02-public-application-intake.md#§3",
+        source="planning/proposals/02-public-application-intake.md#§3",
     )
     seed_global_public_application_form(governance_db)
     applicant_id = create_real_member(governance_db, "200000000000000001")

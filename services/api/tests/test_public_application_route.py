@@ -255,13 +255,13 @@ async def test_authenticated_application_route_still_requires_actor_headers(
     migrated_async_client: AsyncClient,
 ) -> None:
     """Risk annotation: group=TG-5; named_risk=authenticated_route_leaks_public_access;
-    level=particular-integration; source=proposals/02-public-application-intake.md#§5 AS-6.
+    level=particular-integration; source=planning/proposals/02-public-application-intake.md#§5 AS-6.
     """
     assert_risk_annotation(
         group="TG-5",
         named_risk="authenticated_route_leaks_public_access",
         level="particular-integration",
-        source="proposals/02-public-application-intake.md#§5",
+        source="planning/proposals/02-public-application-intake.md#§5",
     )
 
     response = await migrated_async_client.post(

@@ -207,7 +207,7 @@ async def test_create_member_returns_active_with_uuid_id(
 def test_create_or_get_member_external_signature_does_not_accept_kind() -> None:
     """Risk annotation: group=TG-4; named_risk=caller_supplied_kind_escape_hatch;
     level=component; source=.tmp/init-125a/phase6/step6a-contract.md#Anti-scope and
-    proposals/06-members-kind.md#Q3.
+    planning/proposals/06-members-kind.md#Q3.
     """
 
     parameters = inspect.signature(create_or_get_member).parameters
@@ -222,7 +222,7 @@ def test_create_or_get_member_sets_discord_kind(
 ) -> None:
     """Risk annotation: group=TG-4; named_risk=normal_member_kind_stamping;
     level=component; source=.tmp/init-125a/phase6/step6a-contract.md#C2 and
-    proposals/06-members-kind.md#Normal-creation.
+    planning/proposals/06-members-kind.md#Normal-creation.
     """
     discord_user_id = str(uuid4())
     request = MemberCreate(

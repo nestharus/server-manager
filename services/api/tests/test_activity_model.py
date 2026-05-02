@@ -1,7 +1,7 @@
 """Tests for the Activity/Audit Model.
 
 These tests encode the specification from the Activity/Audit Model proposal
-(plans/proposals/activity-audit-model.md). They are written test-first and
+(planning/plans/proposals/activity-audit-model.md). They are written test-first and
 will fail until the implementation is complete.
 
 Sections:

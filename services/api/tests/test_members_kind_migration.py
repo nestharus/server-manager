@@ -111,7 +111,7 @@ def test_members_kind_migration_adds_not_null_checked_column(
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=migration_constraint_drift;
     level=component; source=.tmp/init-125a/phase6/step6a-contract.md#C1 and
-    proposals/06-members-kind.md#Migration-unit.
+    planning/proposals/06-members-kind.md#Migration-unit.
     """
     revision, _down_revision = _members_kind_revision(repo_root)
 
@@ -148,7 +148,7 @@ def test_members_kind_migration_backfills_legacy_rows_and_rerun_is_noop(
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=migration_backfill_misclassification;
     level=component; source=.tmp/init-125a/phase6/step6a-contract.md#C1 and
-    proposals/06-members-kind.md#Assumption-register-A1.
+    planning/proposals/06-members-kind.md#Assumption-register-A1.
     """
     revision, down_revision = _members_kind_revision(repo_root)
     _assert_alembic_ok(alembic_runner(fresh_postgres_dsn, "upgrade", down_revision))
@@ -187,7 +187,7 @@ def test_members_kind_migration_downgrade_drops_column_and_constraint(
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=migration_downgrade_contract_drift;
     level=component; source=.tmp/init-125a/phase6/step6a-contract.md#C1 and
-    proposals/06-members-kind.md#Migration-rollback.
+    planning/proposals/06-members-kind.md#Migration-rollback.
     """
     revision, down_revision = _members_kind_revision(repo_root)
     _assert_alembic_ok(alembic_runner(fresh_postgres_dsn, "upgrade", revision))

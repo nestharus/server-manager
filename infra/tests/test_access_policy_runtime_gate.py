@@ -14,7 +14,7 @@ from infra.tests.fixtures.cedar_policy_source import (
 
 def test_access_policy_validator_waits_for_canonical_policy_ids_not_bootstrap_job() -> None:
     """Risk annotation: group=TG-3; named_risk=ready_opal_client_empty_cedar_store;
-    level=end-to-end; source=proposals/03-cedar-policy-source.md#test-intent-track T3;
+    level=end-to-end; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T3;
     assumptions=A1,A2,A3.
     """
     validator = text(ACCESS_POLICY_VALIDATOR)
@@ -31,7 +31,7 @@ def test_access_policy_validator_waits_for_canonical_policy_ids_not_bootstrap_jo
 
 def test_all_runtime_validators_use_policy_id_gate_before_authorization_probes() -> None:
     """Risk annotation: group=TG-3; named_risk=bootstrap_completion_retained_as_hydration_gate;
-    level=end-to-end; source=proposals/03-cedar-policy-source.md#contract C5.1,C5.2,C5.6;
+    level=end-to-end; source=planning/proposals/03-cedar-policy-source.md#contract C5.1,C5.2,C5.6;
     assumptions=A1,A2,A3.
     """
     for script in (
@@ -51,7 +51,7 @@ def test_all_runtime_validators_use_policy_id_gate_before_authorization_probes()
 
 def test_access_policy_validator_rechecks_hydration_after_one_polling_interval() -> None:
     """Risk annotation: group=TG-7; named_risk=opal_polling_cycle_erases_cedar_policies;
-    level=end-to-end; source=proposals/03-cedar-policy-source.md#test-intent-track T7;
+    level=end-to-end; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T7;
     assumptions=A1,A2.
     """
     validator = text(ACCESS_POLICY_VALIDATOR)

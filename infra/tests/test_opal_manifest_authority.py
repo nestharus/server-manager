@@ -20,7 +20,7 @@ from infra.tests.fixtures.cedar_policy_source import (
 
 def test_opal_server_manifest_uses_git_repo_cedar_policy_authority() -> None:
     """Risk annotation: group=TG-2; named_risk=empty_or_wrong_opal_policy_source;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T2;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T2;
     assumptions=A1,A2.
     """
     values = yaml_document(OPAL_VALUES)
@@ -42,7 +42,7 @@ def test_opal_server_manifest_uses_git_repo_cedar_policy_authority() -> None:
 
 def test_opal_client_keeps_cedar_store_and_policy_updater_enabled() -> None:
     """Risk annotation: group=TG-2; named_risk=opal_client_policy_updater_disabled;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C3;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C3;
     assumptions=A2.
     """
     docs = yaml_documents(OPAL_RENDERED)
@@ -56,7 +56,7 @@ def test_opal_client_keeps_cedar_store_and_policy_updater_enabled() -> None:
 
 def test_local_root_renders_without_direct_cedar_writer_resources() -> None:
     """Risk annotation: group=TG-2; named_risk=direct_cedar_writer_survives;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C4;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C4;
     assumptions=A5.
     """
     rendered = {
@@ -70,7 +70,7 @@ def test_local_root_renders_without_direct_cedar_writer_resources() -> None:
 
 def test_old_bootstrap_and_configmap_manifests_are_deleted() -> None:
     """Risk annotation: group=TG-2; named_risk=legacy_direct_writer_files_survive;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C4;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C4;
     assumptions=A5.
     """
     opal_dir = LOCAL_ROOT / "auth" / "opal-cedar"
@@ -81,7 +81,7 @@ def test_old_bootstrap_and_configmap_manifests_are_deleted() -> None:
 
 def test_legacy_bootstrap_references_are_removed_from_runtime_surface() -> None:
     """Risk annotation: group=TG-2; named_risk=bootstrap_job_reference_survives;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C6;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C6;
     assumptions=A5.
     """
     needle = bootstrap_job_name()

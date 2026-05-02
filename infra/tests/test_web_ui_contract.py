@@ -87,7 +87,7 @@ def test_playwright_spec_covers_route_auth_submit_and_ui_libraries() -> None:
 
 def test_shell_validator_keeps_runtime_ingress_reachability_strict() -> None:
     """TG-9 risk annotation: e2e_fixture_false_green; level=end-to-end;
-    source=proposals/02-public-application-intake.md#§9 AS-1 AS-3 AS-4 AS-5.
+    source=planning/proposals/02-public-application-intake.md#§9 AS-1 AS-3 AS-4 AS-5.
     """
     validator = _text(VALIDATOR)
 

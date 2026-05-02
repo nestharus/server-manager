@@ -264,7 +264,7 @@ def test_application_messages_migration_adds_expected_table_shape(
 ) -> None:
     """Risk annotation: group=TG-6; named_risk=migration_table_shape_drift;
     level=component; source=.tmp/init-131/phase6/step6a-contract.md#TG-6 and
-    proposals/10-application-messages.md#Q3.
+    planning/proposals/10-application-messages.md#Q3.
     """
     revision, down_revision = _application_messages_revision(repo_root)
     assert revision == "wu_044_application_messages"
@@ -296,7 +296,7 @@ def test_application_messages_migration_enforces_visibility_check(
 ) -> None:
     """Risk annotation: group=TG-6; named_risk=visibility_constraint_missing;
     level=component; source=.tmp/init-131/phase6/step6a-contract.md#TG-6 and
-    proposals/10-application-messages.md#Q3.
+    planning/proposals/10-application-messages.md#Q3.
     """
     revision, _down_revision = _application_messages_revision(repo_root)
     _assert_alembic_ok(alembic_runner(fresh_postgres_dsn, "upgrade", revision))
@@ -324,7 +324,7 @@ def test_application_messages_migration_adds_partial_client_message_unique_index
 ) -> None:
     """Risk annotation: group=TG-6; named_risk=client_message_id_unique_index_missing;
     level=component; source=.tmp/init-131/phase6/step6a-contract.md#TG-6 and
-    proposals/10-application-messages.md#Q3.
+    planning/proposals/10-application-messages.md#Q3.
     """
     revision, _down_revision = _application_messages_revision(repo_root)
     _assert_alembic_ok(alembic_runner(fresh_postgres_dsn, "upgrade", revision))
@@ -371,7 +371,7 @@ def test_application_messages_migration_restricts_application_delete(
 ) -> None:
     """Risk annotation: group=TG-6; named_risk=application_fk_delete_not_restricted;
     level=component; source=.tmp/init-131/phase6/step6a-contract.md#TG-6 and
-    proposals/10-application-messages.md#Q3.
+    planning/proposals/10-application-messages.md#Q3.
     """
     revision, _down_revision = _application_messages_revision(repo_root)
     _assert_alembic_ok(alembic_runner(fresh_postgres_dsn, "upgrade", revision))
@@ -403,7 +403,7 @@ def test_application_messages_migration_downgrade_drops_table(
 ) -> None:
     """Risk annotation: group=TG-6; named_risk=migration_downgrade_table_drift;
     level=component; source=.tmp/init-131/phase6/step6a-contract.md#TG-6 and
-    proposals/10-application-messages.md#Q3.
+    planning/proposals/10-application-messages.md#Q3.
     """
     revision, down_revision = _application_messages_revision(repo_root)
     _assert_alembic_ok(alembic_runner(fresh_postgres_dsn, "upgrade", revision))
