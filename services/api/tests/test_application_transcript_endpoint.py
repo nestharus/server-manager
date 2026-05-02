@@ -216,7 +216,7 @@ async def test_get_transcript_as_applicant_returns_applicant_visible_messages_on
 ) -> None:
     """Risk annotation: group=TG-5; named_risk=applicant_endpoint_visibility_leak;
     level=endpoint; source=.tmp/init-132/phase6/step6a-contract.md#TG-5 and
-    proposals/11-application-transcript.md#Q3.
+    planning/proposals/11-application-transcript.md#Q3.
     """
     seed = await _seed_application_with_messages(migrated_async_client, governance_db)
 
@@ -247,7 +247,7 @@ async def test_get_transcript_as_officer_returns_both_message_visibilities(
 ) -> None:
     """Risk annotation: group=TG-5; named_risk=officer_endpoint_visibility_regression;
     level=endpoint; source=.tmp/init-132/phase6/step6a-contract.md#TG-5 and
-    proposals/11-application-transcript.md#Q3.
+    planning/proposals/11-application-transcript.md#Q3.
     """
     seed = await _seed_application_with_messages(migrated_async_client, governance_db)
 
@@ -273,7 +273,7 @@ async def test_get_transcript_as_stranger_maps_to_application_transcript_forbidd
 ) -> None:
     """Risk annotation: group=TG-5; named_risk=stranger_endpoint_error_mapping_drift;
     level=endpoint; source=.tmp/init-132/phase6/step6a-contract.md#TG-5 and
-    proposals/11-application-transcript.md#Q3.
+    planning/proposals/11-application-transcript.md#Q3.
     """
     seed = await _seed_application_with_messages(migrated_async_client, governance_db)
 
@@ -293,7 +293,7 @@ async def test_get_transcript_for_missing_application_maps_to_application_not_fo
 ) -> None:
     """Risk annotation: group=TG-5; named_risk=missing_application_error_mapping_drift;
     level=endpoint; source=.tmp/init-132/phase6/step6a-contract.md#TG-5 and
-    proposals/11-application-transcript.md#Q3.
+    planning/proposals/11-application-transcript.md#Q3.
     """
     applicant_id = _create_member(governance_db)
 

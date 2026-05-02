@@ -65,7 +65,7 @@ def _permits(policies: list[dict], principal: str, action: str, resource: str) -
 
 def test_cedar_policy_decisions_match_the_contract_matrix() -> None:
     """Risk annotation: group=TG-4; named_risk=access_policy_decision_contract_drift;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T4;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T4;
     assumptions=A5.
     """
     fixture = _fixture()
@@ -114,7 +114,7 @@ def test_cedar_policy_decisions_match_the_contract_matrix() -> None:
 
 def test_seeded_policy_files_load_the_contract_policy_set() -> None:
     """Risk annotation: group=TG-4; named_risk=generated_seeded_bundle_differs_from_contract;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.4;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C5.4;
     assumptions=A3,A5.
     """
     fixture = _fixture()
@@ -125,7 +125,7 @@ def test_seeded_policy_files_load_the_contract_policy_set() -> None:
 
 def test_service_identities_cover_machine_principals_in_the_matrix() -> None:
     """Risk annotation: group=TG-4; named_risk=service_identity_matrix_principals_missing;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#test-intent-track T4;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#test-intent-track T4;
     assumptions=A5.
     """
     fixture = _fixture()
@@ -141,7 +141,7 @@ def test_service_identities_cover_machine_principals_in_the_matrix() -> None:
 
 def test_bundle_fixtures_do_not_commit_operator_secret_material() -> None:
     """Risk annotation: group=TG-4; named_risk=operator_secret_material_in_seeded_policy_fixture;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.4;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C5.4;
     assumptions=A5.
     """
     fixture = _fixture()
@@ -157,7 +157,7 @@ def test_bundle_fixtures_do_not_commit_operator_secret_material() -> None:
 
 def test_access_policy_matrix_uses_seeded_policy_file_bundle_reference() -> None:
     """Risk annotation: group=TG-4; named_risk=matrix_fixture_retains_deleted_configmap_bundle;
-    level=particular-integration; source=proposals/03-cedar-policy-source.md#contract C5.5;
+    level=particular-integration; source=planning/proposals/03-cedar-policy-source.md#contract C5.5;
     assumptions=A5.
     """
     fixture = _fixture()

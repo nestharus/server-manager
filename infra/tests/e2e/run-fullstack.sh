@@ -14,7 +14,7 @@ source "${REPO_ROOT}/infra/tests/e2e/lib/teardown.sh"
 KEEP_CLUSTER=0
 SKIP_BRINGUP=0
 SUMMARY_TSV="${E2E_ARTIFACT_DIR}/summary.tsv"
-DOC_PATH="${REPO_ROOT}/docs/infra-e2e-status.md"
+DOC_PATH="${REPO_ROOT}/infra/tests/e2e/status.md"
 
 usage() {
   cat <<'EOF'

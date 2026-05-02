@@ -60,7 +60,7 @@ def test_is_synthetic_member_uses_kind_discriminator(
 ) -> None:
     """Risk annotation: group=TG-2; named_risk=helper_prefix_discriminator_drift;
     level=unit; source=.tmp/init-125a/phase6/step6a-contract.md#C3 and
-    proposals/06-members-kind.md#Helper-unit.
+    planning/proposals/06-members-kind.md#Helper-unit.
     """
 
     assert members_service.is_synthetic_member(candidate) is expected

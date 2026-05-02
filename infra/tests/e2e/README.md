@@ -9,7 +9,7 @@ infra/tests/e2e/run-fullstack.sh
 The harness deletes and recreates the `humility-local` k3d cluster, builds the
 local images, runs the 19 cross-cutting tests, writes artifacts under
 `.tmp/init-119-e2e/`, writes diagnostics under
-`.tmp/init-119-bringup-diagnostics/`, updates `docs/infra-e2e-status.md`, and
+`.tmp/init-119-bringup-diagnostics/`, updates `infra/tests/e2e/status.md`, and
 then deletes the cluster plus local registry/cache containers.
 
 Expected optional secrets:

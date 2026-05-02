@@ -3,10 +3,10 @@ initiative: INIT-101
 contract: local platform cluster bootstrap
 source_documents:
   - .tmp/recovery-R05-6a-contract.md
-  - proposals/01-recovery-test-first.md
-  - research/03-recovery-hookpoints.md
-  - plans/proposals/platform-bootstrap.md
-  - plans/audit-history/init-101-audit-history.md
+  - planning/proposals/01-recovery-test-first.md
+  - planning/research/03-recovery-hookpoints.md
+  - planning/plans/proposals/platform-bootstrap.md
+  - planning/plans/audit-history/init-101-audit-history.md
 
 fixture_boundary:
   channel_fixture: local

@@ -121,7 +121,7 @@ def _annotated_ingress_path_details() -> list[tuple[str, str, str | None, str]]:
 
 def test_tg_1a_readme_chart_version_is_3_2_0() -> None:
     """Risk annotation: group=TG-1; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     readme = _kong_version_file("readme").read_text(encoding="utf-8")
     got = ", ".join(line.strip() for line in readme.splitlines() if "--version" in line)
@@ -133,7 +133,7 @@ def test_tg_1a_readme_chart_version_is_3_2_0() -> None:
 
 def test_tg_1b_kustomization_references_rendered_chart_3_2_0() -> None:
     """Risk annotation: group=TG-1; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     resources = _single_yaml_document("kustomization").get("resources", [])
     assert "rendered/kong-3.2.0.yaml" in resources, (
@@ -144,7 +144,7 @@ def test_tg_1b_kustomization_references_rendered_chart_3_2_0() -> None:
 
 def test_tg_1c_rendered_chart_label_is_kong_3_2_0() -> None:
     """Risk annotation: group=TG-1; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     labels = _kong_deployment()["spec"]["template"]["metadata"].get("labels", {})
     assert labels.get("helm.sh/chart") == "kong-3.2.0", (
@@ -155,7 +155,7 @@ def test_tg_1c_rendered_chart_label_is_kong_3_2_0() -> None:
 
 def test_tg_1d_render_values_gateway_image_is_kong_3_9() -> None:
     """Risk annotation: group=TG-1; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     image = _single_yaml_document("values").get("image", {})
     got = f"{image.get('repository')}:{image.get('tag')}"
@@ -167,7 +167,7 @@ def test_tg_1d_render_values_gateway_image_is_kong_3_9() -> None:
 
 def test_tg_1e_rendered_gateway_image_is_kong_3_9() -> None:
     """Risk annotation: group=TG-1; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     containers = _kong_containers_by_name()
     for name in ("clear-stale-pid", "proxy"):
@@ -180,7 +180,7 @@ def test_tg_1e_rendered_gateway_image_is_kong_3_9() -> None:
 
 def test_tg_1f_render_values_kic_image_is_3_5() -> None:
     """Risk annotation: group=TG-1; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     image = _single_yaml_document("values").get("ingressController", {}).get("image", {})
     got = f"{image.get('repository')}:{image.get('tag')}"
@@ -195,7 +195,7 @@ def test_tg_1f_render_values_kic_image_is_3_5() -> None:
 
 def test_tg_1g_rendered_kic_image_is_3_5() -> None:
     """Risk annotation: group=TG-1; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     got = _kong_containers_by_name().get("ingress-controller", {}).get("image")
     assert got == "kong/kubernetes-ingress-controller:3.5", (
@@ -206,7 +206,7 @@ def test_tg_1g_rendered_kic_image_is_3_5() -> None:
 
 def test_tg_1h_kongplugin_crd_bundle_annotation_is_v1_5_2() -> None:
     """Risk annotation: group=TG-1; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     crd = next(
         (
@@ -227,7 +227,7 @@ def test_tg_1h_kongplugin_crd_bundle_annotation_is_v1_5_2() -> None:
 
 def test_tg_2a_server_manager_side_path_set_covers_public_intake_routes() -> None:
     """Risk annotation: group=TG-2; named_risk=public_intake_route_set_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     details = _annotated_ingress_path_details()
     covered = {(host, path) for host, path, _, _ in details}
@@ -246,7 +246,7 @@ def test_tg_2a_server_manager_side_path_set_covers_public_intake_routes() -> Non
 
 def test_tg_2b_pomerium_side_path_set_covers_public_intake_routes() -> None:
     """Risk annotation: group=TG-2; named_risk=public_intake_route_set_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     details = _annotated_ingress_path_details()
     covered = {(host, path) for host, path, _, _ in details}
@@ -266,7 +266,7 @@ def test_tg_2b_pomerium_side_path_set_covers_public_intake_routes() -> None:
 
 def test_tg_2c_upload_url_is_covered_by_prefix_type_parent() -> None:
     """Risk annotation: group=TG-2; named_risk=public_intake_route_set_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     details = _annotated_ingress_path_details()
     expected = (
@@ -287,7 +287,7 @@ def test_tg_2c_upload_url_is_covered_by_prefix_type_parent() -> None:
 
 def test_tg_3_anti_list_plugin_annotation_not_applied_to_adjacent_ingresses() -> None:
     """Risk annotation: group=TG-3; named_risk=public_intake_route_set_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     adjacent = (
         ("api.local.humility.local", "/api/v1/web/"),
@@ -306,7 +306,7 @@ def test_tg_3_anti_list_plugin_annotation_not_applied_to_adjacent_ingresses() ->
 
 def test_tg_3_path_anti_list_not_in_public_intake_covered_route_set() -> None:
     """Risk annotation: group=TG-3; named_risk=public_intake_route_set_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     forbidden = {"/api/v1/web/admin", "/auth/discord/me", "/api/v1/health"}
     for host, path, _, source in _annotated_ingress_path_details():
@@ -319,7 +319,7 @@ def test_tg_3_path_anti_list_not_in_public_intake_covered_route_set() -> None:
 
 def test_tg_4_kong_version_files_exist() -> None:
     """Risk annotation: group=TG-4; named_risk=kong_version_pin_drift;
-    level=particular-integration; source=proposals/30-bl-014-kong-version-pin.md.
+    level=particular-integration; source=planning/proposals/30-bl-014-kong-version-pin.md.
     """
     for name in ("readme", "kustomization", "values", "rendered"):
         _kong_version_file(name)
@@ -327,7 +327,7 @@ def test_tg_4_kong_version_files_exist() -> None:
 
 def test_public_intake_kong_plugin_has_documented_rate_limit_config() -> None:
     """Risk annotation: group=TG-7; named_risk=public_rate_limit_absent_or_misbound;
-    level=particular-integration; source=proposals/02-public-application-intake.md#§7 AS-5.
+    level=particular-integration; source=planning/proposals/02-public-application-intake.md#§7 AS-5.
     """
     plugins = [
         resource
@@ -347,7 +347,7 @@ def test_public_intake_kong_plugin_has_documented_rate_limit_config() -> None:
 
 def test_public_intake_plugin_is_bound_only_to_public_submit_paths() -> None:
     """Risk annotation: group=TG-7; named_risk=public_rate_limit_absent_or_misbound;
-    level=particular-integration; source=proposals/02-public-application-intake.md#§7 AS-5.
+    level=particular-integration; source=planning/proposals/02-public-application-intake.md#§7 AS-5.
     """
     ingresses = [
         resource for resource in _local_resources() if resource.get("kind") == "Ingress"
