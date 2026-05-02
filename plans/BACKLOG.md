@@ -786,7 +786,7 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
   β-0b + β-i (done bundled) → β-ii → β-iii.
 - **Priority:** DONE (all sub-items closed).
 
-### BL-020 [open] — Web host public-intake paths unrate-limited on humility-local
+### BL-020 [done — INIT-140 at 5b16875 + r1 fix at 674b60c] — Web host public-intake paths unrate-limited on humility-local
 
 - **Source:** INIT-139 live TG-1 run against humility-local
   (2026-05-01)
@@ -811,6 +811,20 @@ proposal at `proposals/16-init-134-discord-notifications.md`.
   paths to a single host (api or web, not both). Option (a)
   preserves the current dual-host UX. Mirror to dev channel
   (INIT-138) once landed locally.
+- **Outcome (closed in INIT-140, full pipeline; CodeRabbit r2 = 0
+  findings):** RCA proved KIC's `konghq.com/plugins` resolves
+  in the Ingress's namespace; `Ingress/auth-system/web-public-intake`
+  referenced `public-intake-rate-limit` but only
+  `KongPlugin/server-manager/public-intake-rate-limit` existed,
+  so KIC emitted `KongConfigurationTranslationFailed` and the
+  route shipped with `plugins=[]`. Fix copies the canonical
+  KongPlugin into `auth-system` for both local and dev channels,
+  and TG-2 anti-orphan + canonical-config-parity guard
+  (`infra/tests/test_public_intake_rate_limit_kongplugin_parity.py`)
+  prevents regressions. The parity guard also caught a
+  pre-existing config drift in dev's server-manager-ns plugin
+  (missing `policy: local`) which was reconciled in the same
+  slice.
 
 ---
 
