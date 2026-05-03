@@ -8,7 +8,7 @@ from app.contracts.actor import ActorIdentity
 from app.contracts.compliance import ComplianceEvaluationRead
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
-from app.services.authority import _require_scoped_authority
+from app.services._helpers.authority import _require_scoped_authority
 from app.services.compliance import compliance_evaluator_actor, run_scheduled_compliance_evaluations
 
 from ._shared import get_db, raise_known_compliance_error

@@ -17,8 +17,9 @@ from app.contracts.authority import AuthorityRequirement
 from app.contracts.chapters import ChapterGovernanceTransitionRequest, ChapterRead
 from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
+from app.repositories.authority import AuthorityRepository
 from app.repositories.db import PostgresDatabase
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import current_time, evaluate, _row_to_read
 from app.services.chapters import ChaptersService
 
 router = APIRouter(prefix="/api/v1/chapters")
@@ -31,7 +32,16 @@ def _require_governance_authority(
     chapter_id: str,
     permission: str,
 ) -> None:
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
+    authority_repo = AuthorityRepository(db)
+    grants = [
+        _row_to_read(row)
+        for row in authority_repo.list_grants(
+            grantee_id=actor.actor_id,
+            include_revoked=True,
+            limit=None,
+            after_id=None,
+        )
+    ]
     decision = evaluate(
         requirement=AuthorityRequirement(
             scope_kind="chapter",

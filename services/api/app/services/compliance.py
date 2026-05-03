@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -34,10 +35,12 @@ from app.contracts.roster import (
 )
 from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
+from app.repositories.members import MembersRepository
+from app.repositories.roster import RosterRepository
 from app.contracts.authority import InvalidHolderIdError
-from app.services.authority import _collect_member_aliases, _require_scoped_authority
+from app.services._helpers.authority import _collect_member_aliases, _require_scoped_authority
 from app.services.mutations import mutate_entity
-from app.services import roster as roster_service
+from app.services.roster import RosterService
 
 
 logger = logging.getLogger(__name__)
@@ -495,7 +498,11 @@ def _resolve_submitted_by(
         return actor.actor_id
     with db.connection() as connection:
         try:
-            actor_text_aliases, _ = _collect_member_aliases(connection, [actor.actor_id])
+            actor_text_aliases, _ = _collect_member_aliases(
+                connection,
+                [actor.actor_id],
+                members_repo=MembersRepository(db),
+            )
         except InvalidHolderIdError:
             actor_text_aliases = [actor.actor_id]
     if requested not in actor_text_aliases:
@@ -673,11 +680,15 @@ def _evaluate_member_rule(
 
         roster_entry = None
         if consequence_applied == "under_review_applied":
+            roster_service = RosterService(
+                roster_repo=RosterRepository(db),
+                members_repo=MembersRepository(db),
+                mutations_callable=partial(mutate_entity, db=db),
+            )
             try:
-                roster_entry, _etag = roster_service.get_roster_entry(
-                    db,
+                roster_entry, _etag = roster_service._get_roster_entry_on(
+                    connection,
                     member["id"],
-                    connection=connection,
                 )
             except RosterEntryNotFoundError:
                 roster_entry = None
@@ -702,8 +713,8 @@ def _evaluate_member_rule(
             return None
 
         if consequence_applied == "under_review_applied" and roster_entry is not None:
-            roster_service.transition_roster_entry(
-                db,
+            roster_service._transition_roster_entry_on(
+                connection,
                 roster_entry.id,
                 RosterEntryTransitionRequest(
                     to_status="under_review",
@@ -713,7 +724,6 @@ def _evaluate_member_rule(
                 ),
                 actor=actor,
                 expected_version=roster_entry.version,
-                connection=connection,
             )
 
         mutate_entity(

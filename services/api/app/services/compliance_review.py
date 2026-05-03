@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from uuid import UUID
 
@@ -18,13 +19,15 @@ from app.contracts.mutations import MutationRequest, MutationResult, StateChange
 from app.contracts.roster import RosterEntryTransitionRequest
 from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
-from app.services.authority import _require_scoped_authority
+from app.repositories.members import MembersRepository
+from app.repositories.roster import RosterRepository
+from app.services._helpers.authority import _require_scoped_authority
 from app.services.compliance import (
     _compute_consequence_shape,
     _evaluation_from_row,
 )
 from app.services.mutations import mutate_entity
-from app.services import roster as roster_service
+from app.services.roster import RosterService
 
 
 AUDIT_ACTION_TYPE: dict[str, str] = {
@@ -209,14 +212,18 @@ def review_evaluation(
                 None,
             )
             if roster_member is not None:
-                roster_entry, _etag = roster_service.get_roster_entry(
-                    db,
+                roster_service = RosterService(
+                    roster_repo=RosterRepository(db),
+                    members_repo=MembersRepository(db),
+                    mutations_callable=partial(mutate_entity, db=db),
+                )
+                roster_entry, _etag = roster_service._get_roster_entry_on(
+                    connection,
                     roster_member["id"],
-                    connection=connection,
                 )
                 if roster_entry.status in {"active", "on_leave"}:
-                    roster_service.transition_roster_entry(
-                        db,
+                    roster_service._transition_roster_entry_on(
+                        connection,
                         roster_member["id"],
                         RosterEntryTransitionRequest(
                             to_status="under_review",
@@ -226,7 +233,6 @@ def review_evaluation(
                         ),
                         actor=actor,
                         expected_version=roster_entry.version,
-                        connection=connection,
                     )
                 else:
                     resolved_consequence_applied = "none"

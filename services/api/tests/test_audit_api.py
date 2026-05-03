@@ -40,7 +40,7 @@ from app.services.audit_queries import (
     get_audit_entries_by_correlation,  # noqa: F401 — imported to pin service symbol
     get_audit_entry_chain,  # noqa: F401 — imported to pin service symbol
 )
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 from app.services.mutations import mutate_entity
 
 

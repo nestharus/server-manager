@@ -136,6 +136,7 @@ def _applications_service(db: PostgresDatabase, notification_emitter):
     from app.repositories.applications import ApplicationsRepository
     from app.repositories.application_messages import ApplicationMessagesRepository
     from app.repositories.forms import FormsRepository
+    from app.repositories.members import MembersRepository
     from app.repositories.public_chapters import PublicChaptersRepository
     from app.services.applications import ApplicationsService
 
@@ -143,6 +144,7 @@ def _applications_service(db: PostgresDatabase, notification_emitter):
         applications_repo=ApplicationsRepository(db),
         application_messages_repo=ApplicationMessagesRepository(db),
         forms_repo=FormsRepository(db),
+        members_repo=MembersRepository(db),
         public_chapters_repo=PublicChaptersRepository(db),
         file_upload_service=FakeFileUploadService(),
         mutations_callable=partial(mutate_entity, db=db),

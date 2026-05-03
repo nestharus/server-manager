@@ -12,7 +12,7 @@ from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.chapter_templates import CURRENT_TEMPLATE_SCHEMA_VERSION
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 
 
 TEMPLATES_URL = "/api/v1/chapter-templates"

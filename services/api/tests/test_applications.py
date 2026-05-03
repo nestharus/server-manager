@@ -15,8 +15,8 @@ from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.members import MemberCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
-from app.services.members import create_or_get_member
+from tests._authority_helpers import grant_authority
+from tests._authority_helpers import create_or_get_member
 
 
 FORMS_URL = "/api/v1/application-forms"

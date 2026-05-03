@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -17,9 +18,11 @@ from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.roster import RosterEntryTransitionRequest
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
-from app.services.roster import get_roster_entry as get_roster_entry_service
-from app.services.roster import transition_roster_entry
+from app.repositories.members import MembersRepository
+from app.repositories.roster import RosterRepository
+from app.services.mutations import mutate_entity
+from app.services.roster import RosterService
+from tests._authority_helpers import grant_authority
 
 
 ROSTER_URL = "/api/v1/roster-entries"
@@ -33,6 +36,14 @@ def _audit_context() -> AuditContextRead:
         correlation_id=cid,
         causation_id=None,
         headers=CorrelationHeadersRead(x_correlation_id=cid, x_causation_id=None),
+    )
+
+
+def _roster_service(db: PostgresDatabase) -> RosterService:
+    return RosterService(
+        roster_repo=RosterRepository(db),
+        members_repo=MembersRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
     )
 
 
@@ -618,17 +629,17 @@ def test_transition_roster_entry_accepts_shared_connection(
     _seed_grant(governance_db)
     entry, _ = _create_entry(client, governance_db, roles["member"])
     entry_id = UUID(entry["id"])
+    service = _roster_service(governance_db)
 
     with pytest.raises(RuntimeError, match="force rollback"):
         with use_audit_context(_audit_context()):
             with governance_db.transaction() as connection:
-                current, _etag = get_roster_entry_service(
-                    governance_db,
+                current, _etag = service._get_roster_entry_on(
+                    connection,
                     entry_id,
-                    connection=connection,
                 )
-                transition_roster_entry(
-                    governance_db,
+                service._transition_roster_entry_on(
+                    connection,
                     entry_id,
                     RosterEntryTransitionRequest(
                         to_status="under_review",
@@ -638,7 +649,6 @@ def test_transition_roster_entry_accepts_shared_connection(
                     ),
                     ActorIdentity(actor_kind="user", actor_id="operator"),
                     current.version,
-                    connection=connection,
                 )
                 row = connection.execute(
                     "SELECT status FROM roster_entries WHERE id = %s",
@@ -648,7 +658,7 @@ def test_transition_roster_entry_accepts_shared_connection(
                 assert row[0] == "under_review"
                 raise RuntimeError("force rollback")
 
-    rolled_back, _rolled_back_etag = get_roster_entry_service(governance_db, entry_id)
+    rolled_back, _rolled_back_etag = service.get_roster_entry(entry_id)
     assert rolled_back.status == "active"
 
 

@@ -16,7 +16,7 @@ from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.read_models import OperationalOverviewRead
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 from app.services.read_models import (
     ACTIVE_DRIFT_STATUSES,
     OPEN_APPLICATION_STATES,

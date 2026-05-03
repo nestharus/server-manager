@@ -8,7 +8,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 
 from .authority_slice_helpers import (
     actor_headers,

@@ -46,17 +46,15 @@ from app.contracts.mutations import MutationRequest, MutationResult, StaleMutati
 from app.core.context import get_current_audit_context, use_audit_context
 from app.repositories.application_messages import ApplicationMessagesRepository
 from app.repositories.applications import ApplicationsRepository
+from app.repositories.authority import AuthorityRepository
 from app.repositories.db import PostgresDatabase
 from app.repositories.forms import FormsRepository
-from app.repositories.members import fetch_member_by_id
+from app.repositories.members import MembersRepository
 from app.repositories.public_chapters import PublicChaptersRepository
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import current_time, evaluate, _row_to_read as _grant_row_to_read
 from app.services.form_visibility import evaluate_visibility
 from app.services.file_upload import FileUploadService, parse_object_key
-from app.services.members import (
-    is_synthetic_member,
-    resolve_or_create_real_discord_member,
-)
+from app.services.members import MembersService, is_synthetic_member
 from app.services.notifications import (
     NotificationEmitError,
     emit_application_public_submitted_event,
@@ -296,7 +294,16 @@ def _require_authority(
     scope_kind: str,
     scope_id: str | None,
 ) -> None:
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
+    authority_repo = AuthorityRepository(db)
+    grants = [
+        _grant_row_to_read(row)
+        for row in authority_repo.list_grants(
+            grantee_id=actor.actor_id,
+            include_revoked=True,
+            limit=None,
+            after_id=None,
+        )
+    ]
     decision = evaluate(
         requirement=AuthorityRequirement(
             scope_kind=scope_kind,  # type: ignore[arg-type]
@@ -337,13 +344,14 @@ def _raise_synthetic_application_error(*, code: str, message: str) -> None:
 
 
 def _require_non_synthetic_application_member(
+    members_repo: MembersRepository,
     connection: Connection[Any],
     member_id: UUID,
     *,
     code: str,
     message: str,
 ) -> dict[str, Any]:
-    member = fetch_member_by_id(connection, member_id)
+    member = members_repo._fetch_member_by_id_on(connection, member_id)
     if member is None:
         raise ValueError(f"member {member_id} was not found")
     if is_synthetic_member(member):
@@ -358,7 +366,16 @@ def _has_application_list_authority(
     scope_kind: str,
     scope_id: str | None,
 ) -> bool:
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
+    authority_repo = AuthorityRepository(db)
+    grants = [
+        _grant_row_to_read(row)
+        for row in authority_repo.list_grants(
+            grantee_id=actor.actor_id,
+            include_revoked=True,
+            limit=None,
+            after_id=None,
+        )
+    ]
     candidate_scopes = [(scope_kind, scope_id)]
     if scope_kind != "global":
         candidate_scopes.append(("global", None))
@@ -763,6 +780,7 @@ class ApplicationsService:
         application_messages_repo: ApplicationMessagesRepository,
         forms_repo: FormsRepository,
         public_chapters_repo: PublicChaptersRepository,
+        members_repo: MembersRepository,
         file_upload_service: FileUploadService,
         mutations_callable,
         notification_emitter: Callable[..., None] | None = None,
@@ -771,6 +789,7 @@ class ApplicationsService:
         self._application_messages_repo = application_messages_repo
         self._forms_repo = forms_repo
         self._public_chapters_repo = public_chapters_repo
+        self._members_repo = members_repo
         self._file_upload_service = file_upload_service
         self._mutations_callable = mutations_callable
         self._notification_emitter = notification_emitter
@@ -814,10 +833,16 @@ class ApplicationsService:
         if actor.actor_kind == "user" and actor.actor_id == str(application.applicant_id):
             return
         target_scope = application.form_snapshot["target_scope"]
-        grants = list_grants_for_grantee(
-            self._applications_repo.db,
-            grantee_id=actor.actor_id,
-        )
+        authority_repo = AuthorityRepository(self._applications_repo.db)
+        grants = [
+            _grant_row_to_read(row)
+            for row in authority_repo.list_grants(
+                grantee_id=actor.actor_id,
+                include_revoked=True,
+                limit=None,
+                after_id=None,
+            )
+        ]
         for permission in APPLICATION_READ_PERMISSIONS:
             decision = evaluate(
                 requirement=AuthorityRequirement(
@@ -942,7 +967,10 @@ class ApplicationsService:
         validated = ApplicationSubmission.model_validate(request)
         submitted_at = datetime.now(UTC)
 
-        applicant = fetch_member_by_id(connection, validated.applicant_id)
+        applicant = self._members_repo._fetch_member_by_id_on(
+            connection,
+            validated.applicant_id,
+        )
         if applicant is None:
             raise ValueError(f"member {validated.applicant_id} was not found")
         if is_synthetic_member(applicant):
@@ -1152,8 +1180,11 @@ class ApplicationsService:
             if validated.client_application_id is None
             else validated.client_application_id
         )
-        member = await resolve_or_create_real_discord_member(
-            self._applications_repo.db,
+        members_service = MembersService(
+            members_repo=self._members_repo,
+            mutations_callable=self._mutations_callable,
+        )
+        member = await members_service.resolve_or_create_real_discord_member(
             discord_user_id=discord_user_id,
         )
         internal_submission = ApplicationSubmission(
@@ -1236,6 +1267,7 @@ class ApplicationsService:
             elif action == "claim":
                 if reviewer_id is not None:
                     _require_non_synthetic_application_member(
+                        self._members_repo,
                         active_connection,
                         reviewer_id,
                         code="owner_synthetic_not_allowed",
@@ -1257,6 +1289,7 @@ class ApplicationsService:
                 if request.new_owner_id is None:
                     raise ValueError("new_owner_id is required for reassign")
                 _require_non_synthetic_application_member(
+                    self._members_repo,
                     active_connection,
                     request.new_owner_id,
                     code="owner_synthetic_not_allowed",
@@ -1268,6 +1301,7 @@ class ApplicationsService:
                 if next_owner_id is None:
                     raise ApplicationReactivateOwnerRequiredError()
                 _require_non_synthetic_application_member(
+                    self._members_repo,
                     active_connection,
                     next_owner_id,
                     code="owner_synthetic_not_allowed",
