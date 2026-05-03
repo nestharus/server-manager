@@ -87,6 +87,15 @@ def create_api_app(
         )
 
     app.state.container = container
+    container.wire(
+        modules=[
+            "app.api.v1.endpoints.tickets.categories",
+            "app.api.v1.endpoints.tickets.create",
+            "app.api.v1.endpoints.tickets.messages",
+            "app.api.v1.endpoints.tickets.reads",
+            "app.api.v1.endpoints.tickets.transitions",
+        ],
+    )
     # transitional: removed in INIT-142d (synthesis R7d)
     app.state.settings = resolved_settings
     app.state.db = resolved_db

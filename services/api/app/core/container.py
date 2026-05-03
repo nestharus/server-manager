@@ -32,10 +32,10 @@ from app.repositories import public_chapters as public_chapters_repo
 from app.repositories import read_models as read_models_repo
 from app.repositories import roster as roster_repo
 from app.repositories import scheduler as scheduler_repo
-from app.repositories import ticket_categories as ticket_categories_repo
-from app.repositories import ticket_messages as ticket_messages_repo
-from app.repositories import ticket_sla as ticket_sla_repo
-from app.repositories import tickets as tickets_repo
+from app.repositories.ticket_categories import TicketCategoriesRepository
+from app.repositories.ticket_messages import TicketMessagesRepository
+from app.repositories.ticket_sla import TicketSlaRepository
+from app.repositories.tickets import TicketsRepository
 from app.repositories import trust as trust_repo
 from app.repositories import web as web_repo
 from app.repositories.db import PostgresDatabase
@@ -81,11 +81,12 @@ from app.services import read_models as read_models_service
 from app.services import roster as roster_service
 from app.services import scheduler as scheduler_service
 from app.services import ticket_categories as ticket_categories_service
-from app.services import ticket_messages as ticket_messages_service
-from app.services import ticket_sla as ticket_sla_service
-from app.services import tickets as tickets_service
 from app.services import trust as trust_service
 from app.services import web as web_service
+from app.services.mutations import mutate_entity
+from app.services.ticket_messages import TicketMessagesService
+from app.services.ticket_sla import TicketSlaService
+from app.services.tickets import TicketsService
 from app.services.scheduler import build_scheduler_loop
 from app.tasks import archive as archive_task_module
 from app.tasks import compliance as compliance_task_module
@@ -123,6 +124,8 @@ class InfraContainer(containers.DeclarativeContainer):
 
 
 class ReposContainer(containers.DeclarativeContainer):
+    db = providers.Dependency()
+
     claim = providers.Object(claim_repo)
     activity = providers.Object(activity_repo)
     application_messages = providers.Object(application_messages_repo)
@@ -148,15 +151,18 @@ class ReposContainer(containers.DeclarativeContainer):
     read_models = providers.Object(read_models_repo)
     roster = providers.Object(roster_repo)
     scheduler = providers.Object(scheduler_repo)
-    ticket_categories = providers.Object(ticket_categories_repo)
-    ticket_messages = providers.Object(ticket_messages_repo)
-    ticket_sla = providers.Object(ticket_sla_repo)
-    tickets = providers.Object(tickets_repo)
+    ticket_categories = providers.Factory(TicketCategoriesRepository, db=db)
+    ticket_messages = providers.Factory(TicketMessagesRepository, db=db)
+    ticket_sla = providers.Factory(TicketSlaRepository, db=db)
+    tickets = providers.Factory(TicketsRepository, db=db)
     trust = providers.Object(trust_repo)
     web = providers.Object(web_repo)
 
 
 class ServicesContainer(containers.DeclarativeContainer):
+    repos = providers.DependenciesContainer()
+    mutations_callable = providers.Dependency()
+
     applicant_discord_auth = providers.Object(applicant_discord_auth_service)
     application_messages = providers.Object(application_messages_service)
     application_public_submit_notifications = providers.Object(
@@ -198,9 +204,25 @@ class ServicesContainer(containers.DeclarativeContainer):
     roster = providers.Object(roster_service)
     scheduler = providers.Object(scheduler_service)
     ticket_categories = providers.Object(ticket_categories_service)
-    ticket_messages = providers.Object(ticket_messages_service)
-    ticket_sla = providers.Object(ticket_sla_service)
-    tickets = providers.Object(tickets_service)
+    ticket_messages = providers.Factory(
+        TicketMessagesService,
+        tickets_repo=repos.tickets,
+        ticket_messages_repo=repos.ticket_messages,
+    )
+    tickets = providers.Factory(
+        TicketsService,
+        tickets_repo=repos.tickets,
+        ticket_categories_repo=repos.ticket_categories,
+        ticket_messages_repo=repos.ticket_messages,
+        ticket_messages_service=ticket_messages,
+        mutations_callable=mutations_callable.provider,
+    )
+    ticket_sla = providers.Factory(
+        TicketSlaService,
+        ticket_sla_repo=repos.ticket_sla,
+        tickets_service=tickets,
+        notification_events_module=providers.Object(notification_events_service),
+    )
     trust = providers.Object(trust_service)
     web = providers.Object(web_service)
 
@@ -223,6 +245,10 @@ class ApiContainer(containers.DeclarativeContainer):
 
     core = providers.Container(CoreContainer, settings=settings)
     infra = providers.Container(InfraContainer, settings=settings)
-    repos = providers.Container(ReposContainer)
-    services = providers.Container(ServicesContainer)
+    repos = providers.Container(ReposContainer, db=core.db)
+    services = providers.Container(
+        ServicesContainer,
+        repos=repos,
+        mutations_callable=providers.Callable(mutate_entity, db=core.db),
+    )
     tasks = providers.Container(TasksContainer, db=core.db)

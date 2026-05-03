@@ -21,7 +21,7 @@ from app.contracts.ticket_categories import (
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from app.services.authority import grant_authority
-from app.services.ticket_categories import create_ticket_category, update_ticket_category
+from app.services.tickets import TicketsService
 
 
 BASE_URL = "/api/v1/ticket-categories"
@@ -174,6 +174,15 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         db.close()
 
 
+@pytest.fixture
+def tickets_service(
+    governance_dsn: str,  # noqa: ARG001 — resets tables before resolving the app container
+    ticket_app_with_overrides: tuple[Any, Any],
+) -> TicketsService:
+    _app, container = ticket_app_with_overrides
+    return container.services.tickets()
+
+
 @pytest.mark.asyncio
 async def test_create_category_persists_all_fields(
     migrated_async_client: AsyncClient,
@@ -281,6 +290,7 @@ async def test_create_category_accepts_cycles_when_terminal_remains_reachable(
 
 def test_create_category_rejects_unreachable_terminal(
     governance_db: PostgresDatabase,
+    tickets_service: TicketsService,
 ) -> None:
     payload = _category_payload()
     payload["state_machine"]["edges"] = [
@@ -306,7 +316,7 @@ def test_create_category_rejects_unreachable_terminal(
     request = TicketCategoryCreate.model_validate(payload)
 
     with pytest.raises(InvalidTicketStateMachineError):
-        create_ticket_category(governance_db, request, _actor())
+        tickets_service.create_category(request, _actor())
 
 
 @pytest.mark.asyncio
@@ -449,10 +459,10 @@ async def test_create_category_rejects_sla_with_nonexistent_state(
 
 def test_patch_category_rejects_sla_with_nonexistent_state(
     governance_db: PostgresDatabase,
+    tickets_service: TicketsService,
 ) -> None:
     with use_audit_context(_make_audit_context()):
-        category, _result = create_ticket_category(
-            governance_db,
+        category, _result = tickets_service.create_category(
             TicketCategoryCreate.model_validate(_category_payload()),
             _actor(),
         )
@@ -474,8 +484,7 @@ def test_patch_category_rejects_sla_with_nonexistent_state(
     )
 
     with pytest.raises(InvalidTicketSlaRulesError):
-        update_ticket_category(
-            governance_db,
+        tickets_service.update_category(
             category.id,
             category.version,
             request,
