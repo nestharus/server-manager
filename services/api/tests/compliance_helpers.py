@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from dependency_injector import providers
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
@@ -16,7 +17,6 @@ from app.contracts.compliance import ComplianceRuleCreate, EvidenceSubmissionCre
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from tests._authority_helpers import grant_authority
-from app.services.compliance import create_rule, submit_evidence
 
 
 RULES_URL = "/api/v1/compliance/rules"
@@ -218,7 +218,7 @@ def submit_evidence_http(
 
 
 def seed_rule(
-    db: PostgresDatabase,
+    app: FastAPI,
     *,
     actor_id: str = "operator",
     chapter_id: str = "ch-1",
@@ -227,9 +227,9 @@ def seed_rule(
     consequence_params: dict[str, Any] | None = None,
     evidence_requirements: list[dict[str, Any]] | None = None,
 ):
+    service = app.state.container.services.compliance()
     with use_audit_context(audit_context()):
-        read, _result = create_rule(
-            db,
+        read, _result = service.create_rule(
             ComplianceRuleCreate(
                 chapter_id=chapter_id,
                 name=name,
@@ -250,7 +250,7 @@ def seed_rule(
 
 
 def seed_evidence(
-    db: PostgresDatabase,
+    app: FastAPI,
     *,
     rule_id: UUID,
     actor_id: str = "operator",
@@ -258,9 +258,9 @@ def seed_evidence(
     chapter_id: str = "ch-1",
     attachment_ref: str = "s3://bucket/evidence.png",
 ):
+    service = app.state.container.services.compliance()
     with use_audit_context(audit_context()):
-        read, _result = submit_evidence(
-            db,
+        read, _result = service.submit_evidence(
             EvidenceSubmissionCreate(
                 rule_id=rule_id,
                 member_id=member_id,
@@ -300,6 +300,9 @@ def latest_action(dsn: str, *, action_type: str) -> dict[str, Any]:
 
 def set_ocr_provider(app: FastAPI, provider: Any) -> None:
     app.state.ocr_provider = provider
+    container = getattr(app.state, "container", None)
+    if container is not None:
+        container.infra.ocr_provider.override(providers.Object(provider))
 
 
 class StaticOcrProvider:

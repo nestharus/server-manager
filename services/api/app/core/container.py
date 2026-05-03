@@ -10,7 +10,6 @@ from app.infrastructure.ocr import StubOcrProvider
 from app.repositories import _claim as claim_repo
 from app.repositories import activity as activity_repo
 from app.repositories import audit as audit_repo
-from app.repositories import compliance as compliance_repo
 from app.repositories import deferred_effects as deferred_effects_repo
 from app.repositories import mutations as mutations_repo
 from app.repositories import notification_events as notification_events_repo
@@ -38,6 +37,7 @@ from app.repositories.chapter_roles import ChapterRolesRepository
 from app.repositories.chapter_templates import ChapterTemplatesRepository
 from app.repositories.chapter_transitions import ChapterTransitionsRepository
 from app.repositories.chapters import ChaptersRepository
+from app.repositories.compliance import ComplianceRepository
 from app.repositories.db import PostgresDatabase
 from app.services import applicant_discord_auth as applicant_discord_auth_service
 from app.services import (
@@ -47,10 +47,10 @@ from app.services import audit as audit_service
 from app.services import audit_overrides as audit_overrides_service
 from app.services import audit_queries as audit_queries_service
 from app.services import authorization as authorization_service
-from app.services import compliance as compliance_service
-from app.services import compliance_corrections as compliance_corrections_service
-from app.services import compliance_extraction as compliance_extraction_service
-from app.services import compliance_review as compliance_review_service
+from app.services.compliance import ComplianceService
+from app.services.compliance_corrections import ComplianceCorrectionsService
+from app.services.compliance_extraction import ComplianceExtractionService
+from app.services.compliance_review import ComplianceReviewService
 from app.services import deferred_effects as deferred_effects_service
 from app.services import form_visibility as form_visibility_service
 from app.services import mutations as mutations_service
@@ -143,7 +143,7 @@ class ReposContainer(containers.DeclarativeContainer):
     chapter_templates = providers.Factory(ChapterTemplatesRepository, db=db)
     chapter_transitions = providers.Factory(ChapterTransitionsRepository, db=db)
     chapters = providers.Factory(ChaptersRepository, db=db)
-    compliance = providers.Object(compliance_repo)
+    compliance = providers.Factory(ComplianceRepository, db=db)
     deferred_effects = providers.Factory(
         deferred_effects_repo.DeferredEffectsRepository, db=db
     )
@@ -269,10 +269,6 @@ class ServicesContainer(containers.DeclarativeContainer):
         deferred_effects_repo=repos.deferred_effects,
         mutations_callable=mutations_callable.provider,
     )
-    compliance = providers.Object(compliance_service)
-    compliance_corrections = providers.Object(compliance_corrections_service)
-    compliance_extraction = providers.Object(compliance_extraction_service)
-    compliance_review = providers.Object(compliance_review_service)
     form_visibility = providers.Object(form_visibility_service)
     members = providers.Factory(
         MembersService,
@@ -313,6 +309,29 @@ class ServicesContainer(containers.DeclarativeContainer):
         roster_repo=repos.roster,
         members_repo=repos.members,
         deferred_effects_repo=repos.deferred_effects,
+        mutations_callable=mutations_callable.provider,
+    )
+    compliance = providers.Factory(
+        ComplianceService,
+        compliance_repo=repos.compliance,
+        roster_service=roster,
+        mutations_callable=mutations_callable.provider,
+    )
+    compliance_corrections = providers.Factory(
+        ComplianceCorrectionsService,
+        compliance_repo=repos.compliance,
+        mutations_callable=mutations_callable.provider,
+    )
+    compliance_extraction = providers.Factory(
+        ComplianceExtractionService,
+        compliance_repo=repos.compliance,
+        ocr_provider=infra.ocr_provider,
+        mutations_callable=mutations_callable.provider,
+    )
+    compliance_review = providers.Factory(
+        ComplianceReviewService,
+        compliance_repo=repos.compliance,
+        roster_service=roster,
         mutations_callable=mutations_callable.provider,
     )
     scheduler = providers.Factory(
