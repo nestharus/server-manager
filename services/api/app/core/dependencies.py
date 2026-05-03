@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from http import HTTPStatus
 
-from fastapi import HTTPException, Request
+from dependency_injector.wiring import Provide, inject
+from fastapi import Depends, HTTPException, Request
 
 from app.contracts.actor import ActorIdentity, ActorIdentityMissingError
 from app.contracts.authority import (
@@ -11,9 +12,11 @@ from app.contracts.authority import (
     AuthorityRequirement,
 )
 from app.contracts.scope import ScopeKind
+from app.core.container import ApiContainer
 from app.core.context import get_current_actor as _get_current_actor
+from app.repositories.authority import AuthorityRepository
 from app.services.audit_overrides import record_authority_override
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import current_time, evaluate, _row_to_read
 
 
 def _authority_error(
@@ -65,7 +68,14 @@ class _RequireAuthority:
         self._scope_kind = scope_kind
         self._scope_id_param = scope_id_param
 
-    def __call__(self, request: Request) -> AuthorityDecisionRead:
+    @inject
+    def __call__(
+        self,
+        request: Request,
+        authority_repo: AuthorityRepository = Depends(
+            Provide[ApiContainer.repos.authority]
+        ),
+    ) -> AuthorityDecisionRead:
         actor = get_current_actor()
         scope_id = None
         if self._scope_id_param is not None:
@@ -76,8 +86,15 @@ class _RequireAuthority:
             scope_id=scope_id,
             permission=self._permission,
         )
-        db = request.app.state.db
-        grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
+        grants = [
+            _row_to_read(row)
+            for row in authority_repo.list_grants(
+                grantee_id=actor.actor_id,
+                include_revoked=True,
+                limit=None,
+                after_id=None,
+            )
+        ]
         decision = evaluate(requirement=requirement, grants=grants, at=current_time())
         override_reason = _normalize_override_reason(
             request.headers.get("X-Override-Reason")
@@ -113,7 +130,7 @@ class _RequireAuthority:
             )
 
         record_authority_override(
-            db,
+            authority_repo.db,
             actor=actor,
             requirement=requirement,
             reason=override_reason,

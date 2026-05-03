@@ -12,7 +12,7 @@ from app.contracts.mutations import MutationRequest, MutationResult, StateChange
 from app.infrastructure.ocr import OcrProvider, OcrProviderNotConfiguredError
 from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
-from app.services.authority import _require_scoped_authority
+from app.services._helpers.authority import _require_scoped_authority
 from app.services.mutations import mutate_entity
 
 

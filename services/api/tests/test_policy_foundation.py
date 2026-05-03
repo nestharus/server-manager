@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -31,8 +32,9 @@ from app.contracts.policies import (
 )
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.policies import confirm as policy_confirm
-from app.services.policies import preview as policy_preview
+from app.repositories.policies import PoliciesRepository
+from app.services.mutations import mutate_entity
+from app.services.policies import PoliciesService
 
 
 POLICY_TYPE = "test_policy"
@@ -129,6 +131,13 @@ def _fetch_activity_actions(database_url: str) -> list[dict[str, Any]]:
         ).fetchall()
 
 
+def _policies_service(db: PostgresDatabase) -> PoliciesService:
+    return PoliciesService(
+        policies_repo=PoliciesRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
 @pytest.fixture()
 def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
     db = PostgresDatabase(dsn=governance_dsn)
@@ -172,7 +181,8 @@ def test_preview_is_read_only_and_returns_current_version_and_flat_diff(
         content={"a": 1, "b": 3, "c": 4},
     )
 
-    result = policy_preview(governance_db, request)
+    service = _policies_service(governance_db)
+    result = service.preview(request)
 
     after_rows = _fetch_policy_versions(governance_dsn)
     assert after_rows == before_rows, "preview must not write to policy_versions"
@@ -236,7 +246,8 @@ def test_confirm_recomputes_digest_and_raises_policy_preview_token_mismatch_erro
         content=preview_content,
     )
 
-    token = policy_preview(governance_db, preview_request).preview_token
+    service = _policies_service(governance_db)
+    token = service.preview(preview_request).preview_token
 
     # Caller tampers with content between preview and confirm.
     mutated_content = {"a": 99}
@@ -251,8 +262,7 @@ def test_confirm_recomputes_digest_and_raises_policy_preview_token_mismatch_erro
 
     with use_audit_context(_make_audit_context()):
         with pytest.raises(PolicyPreviewTokenMismatchError):
-            policy_confirm(
-                governance_db,
+            service.confirm(
                 confirm_request,
                 actor=ActorIdentity(actor_kind="user", actor_id="admin"),
             )
@@ -283,7 +293,8 @@ def test_confirm_with_matching_digest_persists_next_version(
         expected_current_version=2,
         content=next_content,
     )
-    token = policy_preview(governance_db, preview_request).preview_token
+    service = _policies_service(governance_db)
+    token = service.preview(preview_request).preview_token
 
     confirm_request = PolicyConfirmRequest(
         preview_token=token,
@@ -295,8 +306,7 @@ def test_confirm_with_matching_digest_persists_next_version(
     )
 
     with use_audit_context(_make_audit_context()):
-        created, etag = policy_confirm(
-            governance_db,
+        created, etag = service.confirm(
             confirm_request,
             actor=ActorIdentity(actor_kind="user", actor_id="admin"),
         )
@@ -343,7 +353,8 @@ def test_confirm_with_stale_expected_version_raises_stale_mutation_error(
         expected_current_version=1,
         content=preview_content,
     )
-    token = policy_preview(governance_db, preview_request).preview_token
+    service = _policies_service(governance_db)
+    token = service.preview(preview_request).preview_token
 
     confirm_request = PolicyConfirmRequest(
         preview_token=token,
@@ -356,8 +367,7 @@ def test_confirm_with_stale_expected_version_raises_stale_mutation_error(
 
     # First caller wins.
     with use_audit_context(_make_audit_context()):
-        policy_confirm(
-            governance_db,
+        service.confirm(
             confirm_request,
             actor=ActorIdentity(actor_kind="user", actor_id="admin"),
         )
@@ -366,8 +376,7 @@ def test_confirm_with_stale_expected_version_raises_stale_mutation_error(
     # preview input, but aggregate_heads has advanced past v1.
     with use_audit_context(_make_audit_context()):
         with pytest.raises(StaleMutationError):
-            policy_confirm(
-                governance_db,
+            service.confirm(
                 confirm_request,
                 actor=ActorIdentity(actor_kind="user", actor_id="admin"),
             )
@@ -406,7 +415,8 @@ def test_policy_aggregate_id_is_stable_across_preview_and_confirm(
         expected_current_version=1,
         content={"a": 2},
     )
-    token = policy_preview(governance_db, preview_request).preview_token
+    service = _policies_service(governance_db)
+    token = service.preview(preview_request).preview_token
 
     confirm_request = PolicyConfirmRequest(
         preview_token=token,
@@ -417,8 +427,7 @@ def test_policy_aggregate_id_is_stable_across_preview_and_confirm(
         content={"a": 2},
     )
     with use_audit_context(_make_audit_context()):
-        policy_confirm(
-            governance_db,
+        service.confirm(
             confirm_request,
             actor=ActorIdentity(actor_kind="user", actor_id="admin"),
         )

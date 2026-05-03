@@ -19,7 +19,7 @@ from app.contracts.permissions import (
 )
 from app.repositories.db import PostgresDatabase
 from app.repositories.permissions import PermissionsRepository
-from app.services.authority import _require_scoped_authority
+from app.services._helpers.authority import _require_scoped_authority
 
 
 VALID_RUN_TRANSITIONS: dict[tuple[str, str], str] = {

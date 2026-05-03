@@ -4,6 +4,7 @@ import asyncio
 import inspect
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -19,8 +20,10 @@ from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.members import MemberCreate, MemberRead
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
-from app.services.members import create_or_get_member
+from app.repositories.members import MembersRepository
+from app.services.members import MembersService
+from app.services.mutations import mutate_entity
+from tests._authority_helpers import grant_authority
 
 
 BASE_URL = "/api/v1/members"
@@ -143,6 +146,13 @@ def _fetch_latest_member_audit(database_url: str) -> dict[str, Any]:
     return row
 
 
+def _members_service(db: PostgresDatabase) -> MembersService:
+    return MembersService(
+        members_repo=MembersRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
 @pytest.fixture()
 def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
     db = PostgresDatabase(dsn=governance_dsn)
@@ -154,9 +164,12 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
 
 @pytest.fixture()
 def real_discord_member_resolver():
-    import importlib
+    async def resolve(db: PostgresDatabase, **kwargs: Any) -> MemberRead:
+        return await _members_service(db).resolve_or_create_real_discord_member(
+            **kwargs,
+        )
 
-    return importlib.import_module("app.services.members").resolve_or_create_real_discord_member
+    return resolve
 
 
 @pytest.fixture()
@@ -210,7 +223,7 @@ def test_create_or_get_member_external_signature_does_not_accept_kind() -> None:
     planning/proposals/06-members-kind.md#Q3.
     """
 
-    parameters = inspect.signature(create_or_get_member).parameters
+    parameters = inspect.signature(MembersService.create_or_get_member).parameters
 
     assert "kind" not in parameters
     assert "_kind" not in parameters
@@ -231,9 +244,9 @@ def test_create_or_get_member_sets_discord_kind(
         originating_actor_id="operator",
     )
 
+    service = _members_service(governance_db)
     with use_audit_context(_make_audit_context()):
-        member, _result, created = create_or_get_member(
-            governance_db,
+        member, _result, created = service.create_or_get_member(
             request,
             ActorIdentity(actor_kind="user", actor_id="operator"),
         )

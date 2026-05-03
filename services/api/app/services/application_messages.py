@@ -18,8 +18,9 @@ from app.contracts.authority import AuthorityRequirement
 from app.core.context import MissingCorrelationContextError, get_current_audit_context
 from app.repositories.application_messages import ApplicationMessagesRepository
 from app.repositories.applications import ApplicationsRepository
+from app.repositories.authority import AuthorityRepository
 from app.repositories.db import PostgresDatabase
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import current_time, evaluate, _row_to_read
 
 
 def _message_from_row(row: dict[str, Any]) -> ApplicationMessageRead:
@@ -55,7 +56,16 @@ def _has_officer_authority(
         scope_id=scope_id,
         permission=APPLICATION_MESSAGE_PERMISSION,
     )
-    grants = list_grants_for_grantee(db, grantee_id=actor_id)
+    authority_repo = AuthorityRepository(db)
+    grants = [
+        _row_to_read(row)
+        for row in authority_repo.list_grants(
+            grantee_id=actor_id,
+            include_revoked=True,
+            limit=None,
+            after_id=None,
+        )
+    ]
     decision = evaluate(requirement=requirement, grants=grants, at=current_time())
     return decision.allowed
 

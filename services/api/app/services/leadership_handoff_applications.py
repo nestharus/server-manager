@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import partial
 from uuid import UUID
 
 from app.contracts.actor import ActorIdentity
@@ -13,38 +12,17 @@ from app.contracts.applications import (
 )
 from app.contracts.authority import HandoffFailure, HandoffResult, LeadershipHandoffRequest
 from app.contracts.mutations import StaleMutationError
-from app.core.settings import Settings
-from app.repositories.application_messages import ApplicationMessagesRepository
-from app.repositories.applications import ApplicationsRepository
-from app.repositories.db import PostgresDatabase
-from app.repositories.forms import FormsRepository
-from app.repositories.public_chapters import PublicChaptersRepository
 from app.services.applications import ApplicationsService
-from app.services.authority import (
-    OPEN_APPLICATION_STATES,
+from app.services._helpers.authority import (
     _collect_member_aliases,
-    _normalize_holder_id,
     _require_scoped_authority,
-    get_authority_grant,
 )
-from app.services.file_upload import FileUploadService, build_s3_client
-from app.services.mutations import mutate_entity
-
-
-def _build_applications_service(db: PostgresDatabase) -> ApplicationsService:
-    settings = Settings()
-    return ApplicationsService(
-        applications_repo=ApplicationsRepository(db),
-        application_messages_repo=ApplicationMessagesRepository(db),
-        forms_repo=FormsRepository(db),
-        public_chapters_repo=PublicChaptersRepository(db),
-        file_upload_service=FileUploadService(
-            s3_client=build_s3_client(settings),
-            settings=settings,
-        ),
-        mutations_callable=partial(mutate_entity, db=db),
-        notification_emitter=None,  # handoff does not trigger public submit
-    )
+from app.services.authority import (
+    AuthorityService,
+    OPEN_APPLICATION_STATES,
+    _normalize_holder_id,
+    _row_to_read,
+)
 
 
 def _failure_reason(error: Exception) -> str:
@@ -65,90 +43,110 @@ def _failure_reason(error: Exception) -> str:
     raise error
 
 
-def execute_handoff(
-    db: PostgresDatabase,
-    *,
-    grant_id: UUID,
-    request: LeadershipHandoffRequest,
-    actor: ActorIdentity,
-) -> HandoffResult:
-    grant, _etag = get_authority_grant(db, grant_id=grant_id)
-    _require_scoped_authority(
-        "leadership_handoff.execute",
-        scope_kind=grant.scope_kind,
-        scope_id=grant.scope_id,
-        actor=actor,
-        db=db,
-    )
-    successor_member_id = _normalize_holder_id(
-        request.successor_member_id,
-        field_name="successor_member_id",
-    )
+class LeadershipHandoffApplicationsService:
+    def __init__(
+        self,
+        applications_service: ApplicationsService,
+        authority_service: AuthorityService,
+    ) -> None:
+        self._applications_service = applications_service
+        self._authority_service = authority_service
 
-    with db.connection() as connection:
-        _predecessor_aliases, predecessor_uuid_aliases = _collect_member_aliases(
-            connection,
-            [grant.grantee_id],
-        )
-        _successor_aliases, successor_uuid_aliases = _collect_member_aliases(
-            connection,
-            [successor_member_id],
-        )
-        if not successor_uuid_aliases:
-            raise ValueError(
-                "successor_member_id must resolve to a member UUID for application handoff"
-            )
-        application_rows = ApplicationsRepository(db)._list_open_applications_for_owner_ids_on(
-            connection,
-            owner_ids=sorted(
-                set(predecessor_uuid_aliases) | set(successor_uuid_aliases),
-                key=str,
-            ),
-            states=sorted(OPEN_APPLICATION_STATES),
-            scope_kind=grant.scope_kind,
-            scope_id=grant.scope_id,
-        )
-
-    transferred: list[UUID] = []
-    already_owned: list[UUID] = []
-    failed: list[HandoffFailure] = []
-    successor_uuid = sorted(successor_uuid_aliases, key=str)[0]
-    applications_service = _build_applications_service(db)
-
-    for row in application_rows:
-        owner_id = row["owner_id"]
-        if owner_id in successor_uuid_aliases:
-            already_owned.append(row["id"])
-            continue
-        if owner_id not in predecessor_uuid_aliases:
-            continue
-        try:
-            applications_service.transition_application(
-                application_id=row["id"],
-                expected_version=int(row["version"]),
-                request=ApplicationTransitionRequest(
-                    action="reassign",
-                    new_owner_id=successor_uuid,
-                    originating_actor_kind=actor.actor_kind,
-                    originating_actor_id=actor.actor_id,
-                ),
+    def execute_handoff(
+        self,
+        *,
+        grant_id: UUID,
+        request: LeadershipHandoffRequest,
+        actor: ActorIdentity,
+    ) -> HandoffResult:
+        authority_repo = self._authority_service._authority_repo
+        members_repo = self._authority_service._members_repo
+        with authority_repo.db.connection() as connection:
+            grant_row = self._authority_service._fetch_grant_row_on(connection, grant_id)
+            grant = _row_to_read(grant_row)
+            _require_scoped_authority(
+                authority_repo=authority_repo,
+                members_repo=members_repo,
+                permission="leadership_handoff.execute",
+                scope_kind=grant.scope_kind,
+                scope_id=grant.scope_id,
                 actor=actor,
-                request_surface=f"service:authority-grants/{grant_id}/handoff/applications",
-                skip_authority_check=True,
+                connection=connection,
             )
-        except Exception as error:
-            failed.append(
-                HandoffFailure(
-                    item_id=row["id"],
-                    reason=_failure_reason(error),  # type: ignore[arg-type]
-                    detail=str(error),
+            successor_member_id = _normalize_holder_id(
+                request.successor_member_id,
+                field_name="successor_member_id",
+            )
+            _predecessor_aliases, predecessor_uuid_aliases = _collect_member_aliases(
+                members_repo=members_repo,
+                connection=connection,
+                member_ids=[grant.grantee_id],
+            )
+            _successor_aliases, successor_uuid_aliases = _collect_member_aliases(
+                members_repo=members_repo,
+                connection=connection,
+                member_ids=[successor_member_id],
+            )
+            if not successor_uuid_aliases:
+                raise ValueError(
+                    "successor_member_id must resolve to a member UUID for application handoff"
                 )
+            applications_repo = self._applications_service._applications_repo
+            application_rows = applications_repo._list_open_applications_for_owner_ids_on(
+                connection,
+                owner_ids=sorted(
+                    set(predecessor_uuid_aliases) | set(successor_uuid_aliases),
+                    key=str,
+                ),
+                states=sorted(OPEN_APPLICATION_STATES),
+                scope_kind=grant.scope_kind,
+                scope_id=grant.scope_id,
             )
-            continue
-        transferred.append(row["id"])
 
-    return HandoffResult(
-        transferred=transferred,
-        already_owned=already_owned,
-        failed=failed,
-    )
+        transferred: list[UUID] = []
+        already_owned: list[UUID] = []
+        failed: list[HandoffFailure] = []
+        successor_uuid = sorted(successor_uuid_aliases, key=str)[0]
+
+        for row in application_rows:
+            owner_id = row["owner_id"]
+            if owner_id in successor_uuid_aliases:
+                already_owned.append(row["id"])
+                continue
+            if owner_id not in predecessor_uuid_aliases:
+                continue
+            try:
+                self._applications_service.transition_application(
+                    application_id=row["id"],
+                    expected_version=int(row["version"]),
+                    request=ApplicationTransitionRequest(
+                        action="reassign",
+                        new_owner_id=successor_uuid,
+                        originating_actor_kind=actor.actor_kind,
+                        originating_actor_id=actor.actor_id,
+                    ),
+                    actor=actor,
+                    request_surface=(
+                        f"service:authority-grants/{grant_id}/handoff/applications"
+                    ),
+                    skip_authority_check=True,
+                )
+            except Exception as error:
+                failed.append(
+                    HandoffFailure(
+                        item_id=row["id"],
+                        reason=_failure_reason(error),  # type: ignore[arg-type]
+                        detail=str(error),
+                    )
+                )
+                continue
+            transferred.append(row["id"])
+
+        return HandoffResult(
+            transferred=transferred,
+            already_owned=already_owned,
+            failed=failed,
+        )
+
+
+__all__ = ["LeadershipHandoffApplicationsService"]

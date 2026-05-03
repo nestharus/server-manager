@@ -3,33 +3,34 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Request, Response
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.authority import AuthorityGrantRead, AuthorityGrantTransferRequest
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.authority import transfer_authority_grant
+from app.services.authority import AuthorityService
 
-from ._shared import get_db, parse_if_match_strong, raise_known_authority_error, set_etag
+from ._shared import parse_if_match_strong, raise_known_authority_error, set_etag
 
 
 router = APIRouter(prefix="/api/v1/authority-grants")
 
 
 @router.post("/{grant_id}/transfer", response_model=AuthorityGrantRead)
+@inject
 def transfer_authority_grant_endpoint(
     grant_id: UUID,
     body: AuthorityGrantTransferRequest,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: AuthorityService = Depends(Provide[ApiContainer.services.authority]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> AuthorityGrantRead:
     expected_version = parse_if_match_strong(request)
     try:
-        read, result, created = transfer_authority_grant(
-            db,
+        read, result, created = service.transfer_authority_grant(
             grant_id=grant_id,
             expected_version=expected_version,
             request=body,

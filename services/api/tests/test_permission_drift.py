@@ -19,7 +19,7 @@ from app.contracts.permissions import (
 )
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 from app.services.permissions import (
     DRIFT_RESOLUTION_CHANGE_TYPE,
 )

@@ -17,7 +17,8 @@ from app.repositories.application_messages import ApplicationMessagesRepository
 from app.repositories.applications import ApplicationsRepository
 from app.repositories.archive_queries import ArchiveQueriesRepository
 from app.repositories.archive_runs import ArchiveRunsRepository
-from app.repositories.authority import fetch_grant
+from app.repositories.authority import AuthorityRepository
+from app.repositories.chapter_roles import ChapterRolesRepository
 from app.repositories.chapter_transitions import ChapterTransitionsRepository
 from app.repositories.chapters import ChaptersRepository
 from app.repositories.db import PostgresDatabase
@@ -31,9 +32,11 @@ from app.repositories.ticket_categories import TicketCategoriesRepository
 from app.repositories.ticket_messages import TicketMessagesRepository
 from app.repositories.tickets import TicketsRepository
 from app.repositories.forms import FormsRepository
+from app.repositories.members import MembersRepository
 from app.repositories.public_chapters import PublicChaptersRepository
+from app.repositories.roster import RosterRepository
 from app.services.applications import ApplicationsService
-from app.services.authority import current_time, revoke_authority
+from app.services.authority import AuthorityService, current_time
 from app.services.chapters import (
     ARCHIVE_EFFECT_APPLICATION_WITHDRAW,
     ARCHIVE_EFFECT_AUTHORITY_REVOKE,
@@ -98,6 +101,7 @@ def _build_applications_service(
         application_messages_repo=ApplicationMessagesRepository(db),
         forms_repo=FormsRepository(db),
         public_chapters_repo=PublicChaptersRepository(db),
+        members_repo=MembersRepository(db),
         file_upload_service=FileUploadService(
             s3_client=build_s3_client(settings),
             settings=settings,
@@ -253,7 +257,10 @@ def _validate_archive_effects(
                 else:
                     _skip_effect(connection, effect["id"], "stale_precondition")
             elif target_kind == "authority_grant":
-                grant = fetch_grant(connection, grant_id=UUID(target_id))
+                grant = AuthorityRepository(db)._fetch_grant_on(
+                    connection,
+                    grant_id=UUID(target_id),
+                )
                 if (
                     grant is None
                     or grant["revoked_at"] is not None
@@ -450,13 +457,24 @@ def handle_archive_authority_revoke(effect: DeferredEffectRead) -> None:
         return
 
     with db.connection() as connection:
-        grant = fetch_grant(connection, grant_id=UUID(str(payload["target_id"])))
+        grant = AuthorityRepository(db)._fetch_grant_on(
+            connection,
+            grant_id=UUID(str(payload["target_id"])),
+        )
     if grant is None or grant["revoked_at"] is not None:
         return
     if grant["expires_at"] is not None and grant["expires_at"] <= current_time():
         return
-    revoke_authority(
-        db,
+    authority_service = AuthorityService(
+        authority_repo=AuthorityRepository(db),
+        members_repo=MembersRepository(db),
+        roster_repo=RosterRepository(db),
+        chapter_roles_repo=ChapterRolesRepository(db),
+        applications_repo=ApplicationsRepository(db),
+        tickets_repo=TicketsRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+    authority_service.revoke_authority(
         grant_id=UUID(str(payload["target_id"])),
         actor=(ARCHIVE_WORKER_ACTOR.actor_kind, ARCHIVE_WORKER_ACTOR.actor_id),
         revoked_by=CHAPTER_ARCHIVER_ID,

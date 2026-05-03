@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 from app.contracts.scheduler import DeferredEffectCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 from app.services.deferred_effects import enqueue_effect
 
 from .chapter_governance_helpers import (
