@@ -14,13 +14,7 @@ from app.contracts.applications import (
     FormDefinitionRead,
 )
 from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
-from app.repositories.db import PostgresDatabase
-from app.repositories.forms import (
-    archive_current_form_for_scope,
-    get_current_form_for_scope,
-    insert_form,
-)
-from app.services.mutations import mutate_entity
+from app.repositories.forms import FormsRepository
 
 
 FORM_PUBLISH_PAYLOAD_ALLOWLIST = {
@@ -76,112 +70,125 @@ def _row_to_read(row: dict[str, Any]) -> FormDefinitionRead:
     )
 
 
-def publish_form(
-    db: PostgresDatabase,
-    request: FormDefinitionPublish,
-    actor: ActorIdentity,
-    expected_version: int,
-) -> tuple[FormDefinitionRead, MutationResult]:
-    validated = FormDefinitionPublish.model_validate(request)
-    form_id = uuid4()
-    published_at = datetime.now(UTC)
-    fields = [
-        field.model_dump(mode="json", exclude_unset=True)
-        for field in validated.fields
-    ]
-    routing_rules = _effective_routing_rules(validated)
-    scope = validated.scope
-    next_form_version = expected_version + 1
+class FormsService:
+    def __init__(self, forms_repo: FormsRepository, mutations_callable) -> None:
+        self._forms_repo = forms_repo
+        self._mutations_callable = mutations_callable
 
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        archive_current_form_for_scope(
-            connection,
-            scope_kind=scope.scope_kind,
-            scope_id=scope.scope_id,
-            archived_at=published_at,
-        )
-        insert_form(
-            connection,
-            row={
-                "id": form_id,
-                "scope_kind": scope.scope_kind,
-                "scope_id": scope.scope_id,
-                "version": next_form_version,
+    def publish_form(
+        self,
+        request: FormDefinitionPublish,
+        actor: ActorIdentity,
+        expected_version: int,
+    ) -> tuple[FormDefinitionRead, MutationResult]:
+        with self._forms_repo.db.transaction() as connection:
+            return self._publish_form_on(connection, request, actor, expected_version)
+
+    def _publish_form_on(
+        self,
+        connection: Connection[Any],
+        request: FormDefinitionPublish,
+        actor: ActorIdentity,
+        expected_version: int,
+    ) -> tuple[FormDefinitionRead, MutationResult]:
+        validated = FormDefinitionPublish.model_validate(request)
+        form_id = uuid4()
+        published_at = datetime.now(UTC)
+        fields = [
+            field.model_dump(mode="json", exclude_unset=True)
+            for field in validated.fields
+        ]
+        routing_rules = _effective_routing_rules(validated)
+        scope = validated.scope
+        next_form_version = expected_version + 1
+
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            self._forms_repo._archive_current_form_for_scope_on(
+                active_connection,
+                scope_kind=scope.scope_kind,
+                scope_id=scope.scope_id,
+                archived_at=published_at,
+            )
+            self._forms_repo._insert_form_on(
+                active_connection,
+                row={
+                    "id": form_id,
+                    "scope_kind": scope.scope_kind,
+                    "scope_id": scope.scope_id,
+                    "version": next_form_version,
+                    "name": validated.name,
+                    "target_type": validated.target_type.value,
+                    "fields": fields,
+                    "routing_rules": routing_rules,
+                    "status": "current",
+                    "published_by_kind": actor.actor_kind,
+                    "published_by_id": actor.actor_id,
+                    "published_at": published_at,
+                },
+            )
+            return StateChangeDraft(
+                change_type="form.published",
+                payload_json={
+                    "form_definition_id": str(form_id),
+                    "name": validated.name,
+                    "target_type": validated.target_type.value,
+                    "scope_kind": scope.scope_kind,
+                    "scope_id": scope.scope_id,
+                    "version": next_form_version,
+                    "fields": fields,
+                    "routing_rules": routing_rules,
+                    "status": "current",
+                },
+                diff_json={
+                    "version": {
+                        "old": expected_version or None,
+                        "new": next_form_version,
+                    },
+                    "status": {"old": None, "new": "current"},
+                },
+            )
+
+        result = self._mutations_callable(
+            connection=connection,
+            aggregate_type="application_form",
+            aggregate_id=application_form_aggregate_id(scope),
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface="api:/api/v1/application-forms",
+            ),
+            action_type="form.publish",
+            action_payload={
                 "name": validated.name,
                 "target_type": validated.target_type.value,
-                "fields": fields,
-                "routing_rules": routing_rules,
-                "status": "current",
-                "published_by_kind": actor.actor_kind,
-                "published_by_id": actor.actor_id,
-                "published_at": published_at,
-            },
-        )
-        return StateChangeDraft(
-            change_type="form.published",
-            payload_json={
-                "form_definition_id": str(form_id),
-                "name": validated.name,
-                "target_type": validated.target_type.value,
                 "scope_kind": scope.scope_kind,
                 "scope_id": scope.scope_id,
-                "version": next_form_version,
                 "fields": fields,
                 "routing_rules": routing_rules,
-                "status": "current",
             },
-            diff_json={
-                "version": {"old": expected_version or None, "new": next_form_version},
-                "status": {"old": None, "new": "current"},
-            },
+            payload_allowlist=FORM_PUBLISH_PAYLOAD_ALLOWLIST,
+            mutate_projection=mutate_projection,
+            scope_kind=scope.scope_kind,
+            scope_id=scope.scope_id,
         )
-
-    result = mutate_entity(
-        db=db,
-        aggregate_type="application_form",
-        aggregate_id=application_form_aggregate_id(scope),
-        request=_make_request(
-            expected_version=expected_version,
-            actor=actor,
-            request_surface="api:/api/v1/application-forms",
-        ),
-        action_type="form.publish",
-        action_payload={
-            "name": validated.name,
-            "target_type": validated.target_type.value,
-            "scope_kind": scope.scope_kind,
-            "scope_id": scope.scope_id,
-            "fields": fields,
-            "routing_rules": routing_rules,
-        },
-        payload_allowlist=FORM_PUBLISH_PAYLOAD_ALLOWLIST,
-        mutate_projection=mutate_projection,
-        scope_kind=scope.scope_kind,
-        scope_id=scope.scope_id,
-    )
-    with db.connection() as connection:
-        current = get_current_form_for_scope(
+        current = self._forms_repo._get_current_form_for_scope_on(
             connection,
             scope_kind=scope.scope_kind,
             scope_id=scope.scope_id,
         )
-    if current is None:
-        raise FormDefinitionNotFoundError(scope)
-    return _row_to_read(current), result
+        if current is None:
+            raise FormDefinitionNotFoundError(scope)
+        return _row_to_read(current), result
 
-
-def get_current_form(
-    db: PostgresDatabase,
-    *,
-    scope: ApplicationScope,
-) -> tuple[FormDefinitionRead, str]:
-    with db.connection() as connection:
-        row = get_current_form_for_scope(
-            connection,
+    def get_current_form(self, *, scope: ApplicationScope) -> tuple[FormDefinitionRead, str]:
+        row = self._forms_repo.get_current_form_for_scope(
             scope_kind=scope.scope_kind,
             scope_id=scope.scope_id,
         )
-    if row is None:
-        raise FormDefinitionNotFoundError(scope)
-    read = _row_to_read(row)
-    return read, f'"{read.version}"'
+        if row is None:
+            raise FormDefinitionNotFoundError(scope)
+        read = _row_to_read(row)
+        return read, f'"{read.version}"'
+
+    def get_form_by_id(self, form_id) -> dict[str, Any] | None:
+        return self._forms_repo.get_form_by_id(form_id)

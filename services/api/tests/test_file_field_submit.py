@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from dependency_injector import providers
 from fastapi import FastAPI
 from httpx import AsyncClient, Response
 
@@ -96,29 +96,37 @@ def _base_responses(file_value: dict[str, Any] | None) -> dict[str, Any]:
     return responses
 
 
+class FakeFileUploadService:
+    def __init__(self, *, head) -> None:
+        self._head = head
+
+    def head_object(self, object_key: str) -> tuple[int, str]:
+        return self._head(object_key)
+
+
 def _patch_head_object(
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
     *,
     size_bytes: int = 1024,
     content_type: str = "image/png",
     missing: bool = False,
 ) -> None:
-    file_upload = importlib.import_module("app.services.file_upload")
-
-    def fake_head_object(object_key: str) -> tuple[int, str]:
+    def fake_head(object_key: str) -> tuple[int, str]:
         if missing:
             raise InvalidApplicationResponseError(f"missing upload object for {FILE_FIELD_ID}")
         assert object_key.startswith("applications/")
         return size_bytes, content_type
 
-    monkeypatch.setattr(file_upload, "head_object", fake_head_object)
+    app.state.container.services.file_upload.override(
+        providers.Object(FakeFileUploadService(head=fake_head)),
+    )
 
 
 @pytest.mark.usefixtures("allowed_public_route")
 async def test_submit_with_file_response_matching_s3_object_succeeds(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -128,7 +136,7 @@ async def test_submit_with_file_response_matching_s3_object_succeeds(
     seed_global_file_field_form(governance_db)
     application_id = uuid4()
     uploaded = file_response(application_id=application_id)
-    _patch_head_object(monkeypatch)
+    _patch_head_object(app)
 
     response = await _post_public_application(
         migrated_async_client,
@@ -148,7 +156,7 @@ async def test_submit_with_file_response_matching_s3_object_succeeds(
 async def test_submit_object_key_absent_in_s3_returns_422(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -156,7 +164,7 @@ async def test_submit_object_key_absent_in_s3_returns_422(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-3.
     """
     seed_global_file_field_form(governance_db)
-    _patch_head_object(monkeypatch, missing=True)
+    _patch_head_object(app, missing=True)
 
     response = await _post_public_application(
         migrated_async_client,
@@ -174,7 +182,7 @@ async def test_submit_object_key_absent_in_s3_returns_422(
 async def test_submit_s3_content_type_mismatch_returns_422(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -182,7 +190,7 @@ async def test_submit_s3_content_type_mismatch_returns_422(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-3.
     """
     seed_global_file_field_form(governance_db)
-    _patch_head_object(monkeypatch, content_type="image/jpeg")
+    _patch_head_object(app, content_type="image/jpeg")
 
     response = await _post_public_application(
         migrated_async_client,
@@ -200,7 +208,7 @@ async def test_submit_s3_content_type_mismatch_returns_422(
 async def test_submit_s3_size_mismatch_returns_422(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -208,7 +216,7 @@ async def test_submit_s3_size_mismatch_returns_422(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-3.
     """
     seed_global_file_field_form(governance_db)
-    _patch_head_object(monkeypatch, size_bytes=2048)
+    _patch_head_object(app, size_bytes=2048)
 
     response = await _post_public_application(
         migrated_async_client,
@@ -226,7 +234,7 @@ async def test_submit_s3_size_mismatch_returns_422(
 async def test_submit_file_response_content_type_not_in_accept_returns_422(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -234,7 +242,7 @@ async def test_submit_file_response_content_type_not_in_accept_returns_422(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-3.
     """
     seed_global_file_field_form(governance_db)
-    _patch_head_object(monkeypatch, content_type="image/jpeg")
+    _patch_head_object(app, content_type="image/jpeg")
 
     response = await _post_public_application(
         migrated_async_client,
@@ -254,7 +262,7 @@ async def test_submit_file_response_content_type_not_in_accept_returns_422(
 async def test_submit_file_response_size_above_max_returns_422(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -263,7 +271,7 @@ async def test_submit_file_response_size_above_max_returns_422(
     """
     seed_global_file_field_form(governance_db)
     oversized = FILE_MAX_SIZE_BYTES + 1
-    _patch_head_object(monkeypatch, size_bytes=oversized)
+    _patch_head_object(app, size_bytes=oversized)
 
     response = await _post_public_application(
         migrated_async_client,
@@ -281,7 +289,7 @@ async def test_submit_file_response_size_above_max_returns_422(
 async def test_submit_object_key_wrong_prefix_returns_422(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -289,7 +297,7 @@ async def test_submit_object_key_wrong_prefix_returns_422(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-3.
     """
     seed_global_file_field_form(governance_db)
-    _patch_head_object(monkeypatch)
+    _patch_head_object(app)
 
     response = await _post_public_application(
         migrated_async_client,
@@ -308,7 +316,7 @@ async def test_submit_object_key_wrong_prefix_returns_422(
 async def test_submit_object_key_wrong_field_id_returns_422(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -316,7 +324,7 @@ async def test_submit_object_key_wrong_field_id_returns_422(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-3.
     """
     seed_global_file_field_form(governance_db)
-    _patch_head_object(monkeypatch)
+    _patch_head_object(app)
 
     response = await _post_public_application(
         migrated_async_client,
@@ -335,7 +343,7 @@ async def test_submit_object_key_wrong_field_id_returns_422(
 async def test_submit_file_response_extra_or_missing_keys_returns_422(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -343,7 +351,7 @@ async def test_submit_file_response_extra_or_missing_keys_returns_422(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-3.
     """
     seed_global_file_field_form(governance_db)
-    _patch_head_object(monkeypatch)
+    _patch_head_object(app)
     malformed_values = [
         {**file_response(), "upload_url": "https://uploads.test.local/raw-url"},
         {"content_type": "image/png", "size_bytes": 1024},
@@ -367,7 +375,7 @@ async def test_submit_file_response_extra_or_missing_keys_returns_422(
 async def test_hidden_file_field_does_not_require_upload_and_rejects_reference(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -384,12 +392,13 @@ async def test_hidden_file_field_does_not_require_upload_and_rejects_reference(
         ),
     ]
     seed_global_file_field_form(governance_db, fields=fields)
-    file_upload = importlib.import_module("app.services.file_upload")
 
     def fail_if_called(object_key: str) -> tuple[int, str]:
         raise AssertionError(f"hidden file field should not HEAD {object_key}")
 
-    monkeypatch.setattr(file_upload, "head_object", fail_if_called)
+    app.state.container.services.file_upload.override(
+        providers.Object(FakeFileUploadService(head=fail_if_called)),
+    )
     omitted_response = await _post_public_application(
         migrated_async_client,
         payload=_payload(
@@ -425,7 +434,7 @@ async def test_hidden_file_field_does_not_require_upload_and_rejects_reference(
 async def test_file_field_on_global_form_without_chapter_selector_works(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-3;
     named_risk=submit_authoritative_head_verification_no_trust_the_spa;
@@ -433,7 +442,7 @@ async def test_file_field_on_global_form_without_chapter_selector_works(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-3.
     """
     seed_global_file_field_form(governance_db)
-    _patch_head_object(monkeypatch)
+    _patch_head_object(app)
 
     response = await _post_public_application(
         migrated_async_client,

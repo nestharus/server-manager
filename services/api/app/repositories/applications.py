@@ -7,6 +7,8 @@ from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.repositories.db import PostgresDatabase
+
 
 _APPLICATION_SELECT = """
     SELECT a.id,
@@ -38,9 +40,22 @@ _APPLICATION_SELECT = """
 """
 
 
-def insert_application(connection: Connection[Any], *, row: dict[str, Any]) -> dict[str, Any]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
+class ApplicationsRepository:
+    def __init__(self, db: PostgresDatabase) -> None:
+        self.db = db
+
+    def insert_application(self, *, row: dict[str, Any]) -> dict[str, Any]:
+        with self.db.connection() as connection:
+            return self._insert_application_on(connection, row=row)
+
+    def _insert_application_on(
+        self,
+        connection: Connection[Any],
+        *,
+        row: dict[str, Any],
+    ) -> dict[str, Any]:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
             """
             INSERT INTO applications (
                 id,
@@ -89,114 +104,176 @@ def insert_application(connection: Connection[Any], *, row: dict[str, Any]) -> d
                 row.get("decided_at"),
                 row.get("withdrawn_at"),
             ),
-        ).fetchone()
+            ).fetchone()
 
+    def get_application(self, *, application_id: UUID) -> dict[str, Any] | None:
+        with self.db.connection() as connection:
+            return self._get_application_on(connection, application_id=application_id)
 
-def get_application(
-    connection: Connection[Any],
-    *,
-    application_id: UUID,
-) -> dict[str, Any] | None:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            _APPLICATION_SELECT + " WHERE a.id = %s",
-            (application_id,),
-        ).fetchone()
+    def _get_application_on(
+        self,
+        connection: Connection[Any],
+        *,
+        application_id: UUID,
+    ) -> dict[str, Any] | None:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                _APPLICATION_SELECT + " WHERE a.id = %s",
+                (application_id,),
+            ).fetchone()
 
+    def get_application_for_update(
+        self,
+        *,
+        application_id: UUID,
+    ) -> dict[str, Any] | None:
+        with self.db.connection() as connection:
+            return self._get_application_for_update_on(
+                connection,
+                application_id=application_id,
+            )
 
-def get_application_for_update(
-    connection: Connection[Any],
-    *,
-    application_id: UUID,
-) -> dict[str, Any] | None:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            _APPLICATION_SELECT + " WHERE a.id = %s FOR UPDATE OF a",
-            (application_id,),
-        ).fetchone()
+    def _get_application_for_update_on(
+        self,
+        connection: Connection[Any],
+        *,
+        application_id: UUID,
+    ) -> dict[str, Any] | None:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                _APPLICATION_SELECT + " WHERE a.id = %s FOR UPDATE OF a",
+                (application_id,),
+            ).fetchone()
 
+    def get_application_by_client_application_id(
+        self,
+        *,
+        applicant_id: UUID,
+        client_application_id: str,
+    ) -> dict[str, Any] | None:
+        with self.db.connection() as connection:
+            return self._get_application_by_client_application_id_on(
+                connection,
+                applicant_id=applicant_id,
+                client_application_id=client_application_id,
+            )
 
-def get_application_by_client_application_id(
-    connection: Connection[Any],
-    *,
-    applicant_id: UUID,
-    client_application_id: str,
-) -> dict[str, Any] | None:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            _APPLICATION_SELECT
-            + " WHERE a.applicant_id = %s AND a.client_application_id = %s",
-            (applicant_id, client_application_id),
-        ).fetchone()
+    def _get_application_by_client_application_id_on(
+        self,
+        connection: Connection[Any],
+        *,
+        applicant_id: UUID,
+        client_application_id: str,
+    ) -> dict[str, Any] | None:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                _APPLICATION_SELECT
+                + " WHERE a.applicant_id = %s AND a.client_application_id = %s",
+                (applicant_id, client_application_id),
+            ).fetchone()
 
+    def list_applications(
+        self,
+        *,
+        states: frozenset[str] | None,
+        scope_kind: str | None,
+        scope_id: str | None,
+        owner_id: UUID | None,
+        limit: int,
+        after_id: UUID | None,
+    ) -> list[dict[str, Any]]:
+        with self.db.connection() as connection:
+            return self._list_applications_on(
+                connection,
+                states=states,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+                owner_id=owner_id,
+                limit=limit,
+                after_id=after_id,
+            )
 
-def list_applications(
-    connection: Connection[Any],
-    *,
-    states: frozenset[str] | None,
-    scope_kind: str | None,
-    scope_id: str | None,
-    owner_id: UUID | None,
-    limit: int,
-    after_id: UUID | None,
-) -> list[dict[str, Any]]:
-    predicates: list[str] = []
-    params: list[Any] = []
-    if states is not None:
-        predicates.append("a.state = ANY(%s)")
-        params.append(sorted(states))
-    if scope_kind is not None:
-        predicates.append("a.target_scope_kind = %s")
-        params.append(scope_kind)
-    if scope_id is not None:
-        predicates.append("a.target_scope_id = %s")
-        params.append(scope_id)
-    if owner_id is not None:
-        predicates.append("a.owner_id = %s")
-        params.append(owner_id)
-    if after_id is not None:
-        predicates.append(
-            """
-            (
-                a.submitted_at < (
-                    SELECT cursor_app.submitted_at
-                    FROM applications AS cursor_app
-                    WHERE cursor_app.id = %s
-                )
-                OR (
-                    a.submitted_at = (
+    def _list_applications_on(
+        self,
+        connection: Connection[Any],
+        *,
+        states: frozenset[str] | None,
+        scope_kind: str | None,
+        scope_id: str | None,
+        owner_id: UUID | None,
+        limit: int,
+        after_id: UUID | None,
+    ) -> list[dict[str, Any]]:
+        predicates: list[str] = []
+        params: list[Any] = []
+        if states is not None:
+            predicates.append("a.state = ANY(%s)")
+            params.append(sorted(states))
+        if scope_kind is not None:
+            predicates.append("a.target_scope_kind = %s")
+            params.append(scope_kind)
+        if scope_id is not None:
+            predicates.append("a.target_scope_id = %s")
+            params.append(scope_id)
+        if owner_id is not None:
+            predicates.append("a.owner_id = %s")
+            params.append(owner_id)
+        if after_id is not None:
+            predicates.append(
+                """
+                (
+                    a.submitted_at < (
                         SELECT cursor_app.submitted_at
                         FROM applications AS cursor_app
                         WHERE cursor_app.id = %s
                     )
-                    AND a.id > %s
+                    OR (
+                        a.submitted_at = (
+                            SELECT cursor_app.submitted_at
+                            FROM applications AS cursor_app
+                            WHERE cursor_app.id = %s
+                        )
+                        AND a.id > %s
+                    )
                 )
+                """
             )
-            """
-        )
-        params.extend([after_id, after_id, after_id])
+            params.extend([after_id, after_id, after_id])
 
-    where_clause = "" if not predicates else f" WHERE {' AND '.join(predicates)}"
-    params.append(limit + 1)
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return list(
-            cursor.execute(
-                _APPLICATION_SELECT
-                + where_clause
-                + " ORDER BY a.submitted_at DESC, a.id ASC LIMIT %s",
-                params,
-            ).fetchall()
-        )
+        where_clause = "" if not predicates else f" WHERE {' AND '.join(predicates)}"
+        params.append(limit + 1)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return list(
+                cursor.execute(
+                    _APPLICATION_SELECT
+                    + where_clause
+                    + " ORDER BY a.submitted_at DESC, a.id ASC LIMIT %s",
+                    params,
+                ).fetchall()
+            )
 
+    def update_application(
+        self,
+        *,
+        application_id: UUID,
+        row: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        with self.db.connection() as connection:
+            return self._update_application_on(
+                connection,
+                application_id=application_id,
+                row=row,
+            )
 
-def update_application(
-    connection: Connection[Any],
-    *,
-    application_id: UUID,
-    row: dict[str, Any],
-) -> dict[str, Any] | None:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
+    def _update_application_on(
+        self,
+        connection: Connection[Any],
+        *,
+        application_id: UUID,
+        row: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
             """
             UPDATE applications
             SET state = %s,
@@ -224,12 +301,20 @@ def update_application(
                 row.get("withdrawn_at"),
                 application_id,
             ),
-        ).fetchone()
+            ).fetchone()
 
+    def insert_review_row(self, *, row: dict[str, Any]) -> dict[str, Any]:
+        with self.db.connection() as connection:
+            return self._insert_review_row_on(connection, row=row)
 
-def insert_review_row(connection: Connection[Any], *, row: dict[str, Any]) -> dict[str, Any]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
+    def _insert_review_row_on(
+        self,
+        connection: Connection[Any],
+        *,
+        row: dict[str, Any],
+    ) -> dict[str, Any]:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
             """
             INSERT INTO application_reviews (
                 id,
@@ -260,16 +345,27 @@ def insert_review_row(connection: Connection[Any], *, row: dict[str, Any]) -> di
                 row.get("notes"),
                 row.get("decision_reason"),
             ),
-        ).fetchone()
+            ).fetchone()
 
+    def list_application_state_changes(
+        self,
+        *,
+        application_id: UUID,
+    ) -> list[dict[str, Any]]:
+        with self.db.connection() as connection:
+            return self._list_application_state_changes_on(
+                connection,
+                application_id=application_id,
+            )
 
-def list_application_state_changes(
-    connection: Connection[Any],
-    *,
-    application_id: UUID,
-) -> list[dict[str, Any]]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        rows = cursor.execute(
+    def _list_application_state_changes_on(
+        self,
+        connection: Connection[Any],
+        *,
+        application_id: UUID,
+    ) -> list[dict[str, Any]]:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            rows = cursor.execute(
             """
             SELECT sc.aggregate_seq,
                    sc.change_type,
@@ -287,34 +383,53 @@ def list_application_state_changes(
             """,
             (str(application_id),),
         ).fetchall()
-    return list(rows)
+        return list(rows)
 
+    def list_open_applications_for_owner_ids(
+        self,
+        *,
+        owner_ids: list[UUID],
+        states: list[str],
+        scope_kind: str | None = None,
+        scope_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if not owner_ids:
+            return []
+        with self.db.connection() as connection:
+            return self._list_open_applications_for_owner_ids_on(
+                connection,
+                owner_ids=owner_ids,
+                states=states,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+            )
 
-def list_open_applications_for_owner_ids(
-    connection: Connection[Any],
-    *,
-    owner_ids: list[UUID],
-    states: list[str],
-    scope_kind: str | None = None,
-    scope_id: str | None = None,
-) -> list[dict[str, Any]]:
-    if not owner_ids:
-        return []
+    def _list_open_applications_for_owner_ids_on(
+        self,
+        connection: Connection[Any],
+        *,
+        owner_ids: list[UUID],
+        states: list[str],
+        scope_kind: str | None = None,
+        scope_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if not owner_ids:
+            return []
 
-    predicates = [
-        "a.owner_id = ANY(%s)",
-        "a.state = ANY(%s)",
-    ]
-    params: list[Any] = [owner_ids, states]
-    if scope_kind is not None:
-        predicates.append("a.target_scope_kind = %s")
-        params.append(scope_kind)
-    if scope_id is not None:
-        predicates.append("a.target_scope_id = %s")
-        params.append(scope_id)
+        predicates = [
+            "a.owner_id = ANY(%s)",
+            "a.state = ANY(%s)",
+        ]
+        params: list[Any] = [owner_ids, states]
+        if scope_kind is not None:
+            predicates.append("a.target_scope_kind = %s")
+            params.append(scope_kind)
+        if scope_id is not None:
+            predicates.append("a.target_scope_id = %s")
+            params.append(scope_id)
 
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
             f"""
             SELECT a.id,
                    a.owner_id,
@@ -328,4 +443,4 @@ def list_open_applications_for_owner_ids(
             ORDER BY a.created_at ASC, a.id ASC
             """,
             params,
-        ).fetchall()
+            ).fetchall()

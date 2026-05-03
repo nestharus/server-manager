@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from uuid import UUID
 
 from app.contracts.actor import ActorIdentity
@@ -12,9 +13,13 @@ from app.contracts.applications import (
 )
 from app.contracts.authority import HandoffFailure, HandoffResult, LeadershipHandoffRequest
 from app.contracts.mutations import StaleMutationError
-from app.repositories.applications import list_open_applications_for_owner_ids
+from app.core.settings import Settings
+from app.repositories.application_messages import ApplicationMessagesRepository
+from app.repositories.applications import ApplicationsRepository
 from app.repositories.db import PostgresDatabase
-from app.services.applications import transition_application
+from app.repositories.forms import FormsRepository
+from app.repositories.public_chapters import PublicChaptersRepository
+from app.services.applications import ApplicationsService
 from app.services.authority import (
     OPEN_APPLICATION_STATES,
     _collect_member_aliases,
@@ -22,6 +27,24 @@ from app.services.authority import (
     _require_scoped_authority,
     get_authority_grant,
 )
+from app.services.file_upload import FileUploadService, build_s3_client
+from app.services.mutations import mutate_entity
+
+
+def _build_applications_service(db: PostgresDatabase) -> ApplicationsService:
+    settings = Settings()
+    return ApplicationsService(
+        applications_repo=ApplicationsRepository(db),
+        application_messages_repo=ApplicationMessagesRepository(db),
+        forms_repo=FormsRepository(db),
+        public_chapters_repo=PublicChaptersRepository(db),
+        file_upload_service=FileUploadService(
+            s3_client=build_s3_client(settings),
+            settings=settings,
+        ),
+        mutations_callable=partial(mutate_entity, db=db),
+        notification_emitter=None,  # handoff does not trigger public submit
+    )
 
 
 def _failure_reason(error: Exception) -> str:
@@ -75,7 +98,7 @@ def execute_handoff(
             raise ValueError(
                 "successor_member_id must resolve to a member UUID for application handoff"
             )
-        application_rows = list_open_applications_for_owner_ids(
+        application_rows = ApplicationsRepository(db)._list_open_applications_for_owner_ids_on(
             connection,
             owner_ids=sorted(
                 set(predecessor_uuid_aliases) | set(successor_uuid_aliases),
@@ -90,6 +113,7 @@ def execute_handoff(
     already_owned: list[UUID] = []
     failed: list[HandoffFailure] = []
     successor_uuid = sorted(successor_uuid_aliases, key=str)[0]
+    applications_service = _build_applications_service(db)
 
     for row in application_rows:
         owner_id = row["owner_id"]
@@ -99,8 +123,7 @@ def execute_handoff(
         if owner_id not in predecessor_uuid_aliases:
             continue
         try:
-            transition_application(
-                db,
+            applications_service.transition_application(
                 application_id=row["id"],
                 expected_version=int(row["version"]),
                 request=ApplicationTransitionRequest(

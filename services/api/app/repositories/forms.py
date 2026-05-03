@@ -6,6 +6,8 @@ from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.repositories.db import PostgresDatabase
+
 
 _FORM_SELECT = """
     SELECT f.id,
@@ -30,9 +32,22 @@ _FORM_SELECT = """
 """
 
 
-def insert_form(connection: Connection[Any], *, row: dict[str, Any]) -> dict[str, Any]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
+class FormsRepository:
+    def __init__(self, db: PostgresDatabase) -> None:
+        self.db = db
+
+    def insert_form(self, *, row: dict[str, Any]) -> dict[str, Any]:
+        with self.db.connection() as connection:
+            return self._insert_form_on(connection, row=row)
+
+    def _insert_form_on(
+        self,
+        connection: Connection[Any],
+        *,
+        row: dict[str, Any],
+    ) -> dict[str, Any]:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
             """
             INSERT INTO form_definitions (
                 id,
@@ -65,42 +80,104 @@ def insert_form(connection: Connection[Any], *, row: dict[str, Any]) -> dict[str
                 row["published_by_id"],
                 row["published_at"],
             ),
-        ).fetchone()
+            ).fetchone()
 
+    def archive_current_form_for_scope(
+        self,
+        *,
+        scope_kind: str,
+        scope_id: str | None,
+        archived_at: Any,
+    ) -> None:
+        with self.db.connection() as connection:
+            self._archive_current_form_for_scope_on(
+                connection,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+                archived_at=archived_at,
+            )
 
-def archive_current_form_for_scope(
-    connection: Connection[Any],
-    *,
-    scope_kind: str,
-    scope_id: str | None,
-    archived_at: Any,
-) -> None:
-    connection.execute(
-        """
-        UPDATE form_definitions
-        SET status = 'archived',
-            archived_at = %s
-        WHERE scope_kind = %s
-          AND scope_id IS NOT DISTINCT FROM %s
-          AND status = 'current'
-        """,
-        (archived_at, scope_kind, scope_id),
-    )
-
-
-def get_current_form_for_scope(
-    connection: Connection[Any],
-    *,
-    scope_kind: str,
-    scope_id: str | None,
-) -> dict[str, Any] | None:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            _FORM_SELECT
-            + """
-            WHERE f.scope_kind = %s
-              AND f.scope_id IS NOT DISTINCT FROM %s
-              AND f.status = 'current'
+    def _archive_current_form_for_scope_on(
+        self,
+        connection: Connection[Any],
+        *,
+        scope_kind: str,
+        scope_id: str | None,
+        archived_at: Any,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE form_definitions
+            SET status = 'archived',
+                archived_at = %s
+            WHERE scope_kind = %s
+              AND scope_id IS NOT DISTINCT FROM %s
+              AND status = 'current'
             """,
-            (scope_kind, scope_id),
-        ).fetchone()
+            (archived_at, scope_kind, scope_id),
+        )
+
+    def get_current_form_for_scope(
+        self,
+        *,
+        scope_kind: str,
+        scope_id: str | None,
+    ) -> dict[str, Any] | None:
+        with self.db.connection() as connection:
+            return self._get_current_form_for_scope_on(
+                connection,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+            )
+
+    def _get_current_form_for_scope_on(
+        self,
+        connection: Connection[Any],
+        *,
+        scope_kind: str,
+        scope_id: str | None,
+    ) -> dict[str, Any] | None:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                _FORM_SELECT
+                + """
+                WHERE f.scope_kind = %s
+                  AND f.scope_id IS NOT DISTINCT FROM %s
+                  AND f.status = 'current'
+                """,
+                (scope_kind, scope_id),
+            ).fetchone()
+
+    def get_form_by_id(self, form_id: Any) -> dict[str, Any] | None:
+        with self.db.connection() as connection:
+            return self._get_form_by_id_on(connection, form_id)
+
+    def _get_form_by_id_on(
+        self,
+        connection: Connection[Any],
+        form_id: Any,
+    ) -> dict[str, Any] | None:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                """
+                SELECT id,
+                       scope_kind,
+                       scope_id,
+                       version,
+                       name,
+                       target_type,
+                       fields,
+                       routing_rules,
+                       status,
+                       published_by_kind,
+                       published_by_id,
+                       published_at,
+                       archived_at,
+                       created_at
+                FROM form_definitions
+                WHERE id = %s
+                  AND status = 'current'
+                LIMIT 1
+                """,
+                (form_id,),
+            ).fetchone()

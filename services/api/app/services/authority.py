@@ -27,7 +27,7 @@ from app.contracts.authority import (
     SuccessionPlanRead,
 )
 from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
-from app.repositories.applications import list_open_applications_for_owner_ids
+from app.repositories.applications import ApplicationsRepository
 from app.repositories.authority import (
     fetch_grants_by_ids,
     fetch_grant,
@@ -555,7 +555,7 @@ def compute_succession_plan(
             scope_kind="chapter",
             scope_id=chapter_id,
         )
-        application_rows = list_open_applications_for_owner_ids(
+        application_rows = ApplicationsRepository(db)._list_open_applications_for_owner_ids_on(
             connection,
             owner_ids=application_owner_ids,
             states=sorted(OPEN_APPLICATION_STATES),

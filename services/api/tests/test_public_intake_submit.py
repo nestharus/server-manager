@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from uuid import UUID, uuid4
 
 import pytest
@@ -7,10 +8,8 @@ import pytest
 from app.contracts.actor import ActorIdentity
 from app.contracts.applications import ApplicationSubmission, PublicApplicationSubmission
 from app.repositories.db import PostgresDatabase
-from app.services.applications import (
-    APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST,
-    submit_application,
-)
+from app.services.applications import APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST
+from app.services.mutations import mutate_entity
 
 from .public_intake_fixtures import (
     APPLICANT_DISCORD_USER_ID,
@@ -39,10 +38,33 @@ def public_form(governance_db: PostgresDatabase) -> None:
 
 
 @pytest.fixture()
-def receipt_submit_service():
-    import importlib
+def receipt_submit_service(governance_db: PostgresDatabase):
+    return _applications_service(
+        governance_db,
+    ).submit_public_application_with_receipt
 
-    return importlib.import_module("app.services.applications").submit_public_application_with_receipt
+
+class FakeFileUploadService:
+    def head_object(self, object_key: str) -> tuple[int, str]:
+        raise AssertionError(f"unexpected file HEAD for {object_key}")
+
+
+def _applications_service(db: PostgresDatabase):
+    from app.repositories.applications import ApplicationsRepository
+    from app.repositories.application_messages import ApplicationMessagesRepository
+    from app.repositories.forms import FormsRepository
+    from app.repositories.public_chapters import PublicChaptersRepository
+    from app.services.applications import ApplicationsService
+
+    return ApplicationsService(
+        applications_repo=ApplicationsRepository(db),
+        application_messages_repo=ApplicationMessagesRepository(db),
+        forms_repo=FormsRepository(db),
+        public_chapters_repo=PublicChaptersRepository(db),
+        file_upload_service=FakeFileUploadService(),
+        mutations_callable=partial(mutate_entity, db=db),
+        notification_emitter=lambda **_kwargs: None,
+    )
 
 
 @pytest.mark.usefixtures("public_form")
@@ -65,7 +87,6 @@ async def test_public_submit_with_receipt_creates_queued_application_for_real_di
     )
 
     application_id = await receipt_submit_service(
-        governance_db,
         submission,
         discord_user_id=APPLICANT_DISCORD_USER_ID,
     )
@@ -108,7 +129,6 @@ async def test_public_submit_with_receipt_stamps_user_audit_and_notification_eve
     )
 
     application_id = await receipt_submit_service(
-        governance_db,
         submission,
         discord_user_id=APPLICANT_DISCORD_USER_ID,
     )
@@ -158,7 +178,6 @@ async def test_public_submit_notification_event_targets_receipt_discord_user(
     )
 
     application_id = await receipt_submit_service(
-        governance_db,
         submission,
         discord_user_id=APPLICANT_DISCORD_USER_ID,
     )
@@ -192,8 +211,7 @@ async def test_authenticated_submit_keeps_user_surface_and_authority_gate(
         authenticated_submission(applicant_id, client_id=f"auth-{uuid4().hex}")
     )
 
-    created = await submit_application(
-        governance_db,
+    created = await _applications_service(governance_db).submit_application(
         submission,
         ActorIdentity(actor_kind="user", actor_id=str(applicant_id)),
     )
@@ -206,8 +224,7 @@ async def test_authenticated_submit_keeps_user_surface_and_authority_gate(
         authenticated_submission(applicant_id, client_id=f"auth-{uuid4().hex}")
     )
     with pytest.raises(Exception):
-        await submit_application(
-            governance_db,
+        await _applications_service(governance_db).submit_application(
             forbidden_submission,
             ActorIdentity(actor_kind="user", actor_id=str(reviewer_id)),
         )

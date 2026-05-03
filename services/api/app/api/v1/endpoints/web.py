@@ -4,6 +4,7 @@ from http import HTTPStatus
 from typing import NoReturn
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.api.v1.endpoints.applications._shared import (
@@ -40,16 +41,12 @@ from app.contracts.web import (
     CurrentPrincipalRead,
     OfficerApplicationMessageAppendRequest,
 )
+from app.core.container import ApiContainer
 from app.repositories.db import PostgresDatabase
 from app.services.applicant_discord_auth import DISCORD_SNOWFLAKE_RE
-from app.services.application_messages import append_application_message
-from app.services.application_transcript import read_application_transcript
-from app.services.applications import (
-    list_applications,
-    read_application,
-    require_application_read_authority,
-    transition_application,
-)
+from app.services.application_messages import ApplicationMessagesService
+from app.services.application_transcript import ApplicationTranscriptService
+from app.services.applications import ApplicationsService
 from app.services.members import NonDiscordMemberError, resolve_or_create_real_discord_member
 from app.services.web import list_web_admin_chapters
 
@@ -170,11 +167,12 @@ def _raise_officer_application_message_error(error: Exception) -> NoReturn:
 
 
 @router.get("/officer/applications", response_model=ApplicationListRead)
+@inject
 async def officer_list_applications(
     actor: ActorIdentity = Depends(
         get_officer_actor("api:/api/v1/web/officer/applications")
     ),
-    db: PostgresDatabase = Depends(_db),
+    service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
     state: str | None = Query(None),
     scope_kind: str | None = Query(None),
     scope_id: str | None = Query(None),
@@ -184,8 +182,7 @@ async def officer_list_applications(
 ) -> ApplicationListRead:
     try:
         states = _parse_state_query(state)
-        return list_applications(
-            db,
+        return service.list_applications(
             actor=actor,
             states=states,
             scope_kind=scope_kind,
@@ -203,16 +200,17 @@ async def officer_list_applications(
 
 
 @router.get("/officer/applications/{application_id}", response_model=ApplicationRead)
+@inject
 async def officer_read_application(
     application_id: UUID,
     actor: ActorIdentity = Depends(
         get_officer_actor("api:/api/v1/web/officer/applications/{application_id}")
     ),
-    db: PostgresDatabase = Depends(_db),
+    service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
 ) -> ApplicationRead:
     try:
-        read, _etag = read_application(db, application_id=application_id)
-        require_application_read_authority(db, actor=actor, application=read)
+        read, _etag = service.read_application(application_id=application_id)
+        service.require_application_read_authority(actor=actor, application=read)
         return read
     except (ApplicationNotFoundError, ValueError, PermissionError) as error:
         raise_known_application_error(error)
@@ -222,6 +220,7 @@ async def officer_read_application(
     "/officer/applications/{application_id}/claim",
     response_model=ApplicationRead,
 )
+@inject
 async def officer_claim_application(
     application_id: UUID,
     request: Request,
@@ -229,15 +228,14 @@ async def officer_claim_application(
     actor: ActorIdentity = Depends(
         get_officer_actor("api:/api/v1/web/officer/applications")
     ),
-    db: PostgresDatabase = Depends(_db),
+    service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
 ) -> ApplicationRead:
     expected_version = parse_if_match_strong(request)
     transition_request = ApplicationTransitionRequest(
         action=ApplicationTransitionAction.claim,
     )
     try:
-        read, result = transition_application(
-            db,
+        read, result = service.transition_application(
             actor=actor,
             application_id=application_id,
             expected_version=expected_version,
@@ -286,6 +284,7 @@ async def officer_claim_application(
     response_model=ApplicationMessageRead,
     status_code=HTTPStatus.CREATED,
 )
+@inject
 async def officer_append_application_message(
     application_id: UUID,
     response: Response,
@@ -295,7 +294,9 @@ async def officer_append_application_message(
             "api:/api/v1/web/officer/applications/{application_id}/messages"
         )
     ),
-    db: PostgresDatabase = Depends(_db),
+    service: ApplicationMessagesService = Depends(
+        Provide[ApiContainer.services.application_messages]
+    ),
 ) -> ApplicationMessageRead:
     service_request = ApplicationMessageAppendRequest(
         body_markdown=body.body_markdown,
@@ -305,8 +306,7 @@ async def officer_append_application_message(
         author_actor_id=actor.actor_id,
     )
     try:
-        read, created = append_application_message(
-            db,
+        read, created = service.append_application_message(
             application_id=application_id,
             request=service_request,
         )
@@ -326,6 +326,7 @@ async def officer_append_application_message(
     "/officer/applications/{application_id}/transcript",
     response_model=ApplicationTranscriptRead,
 )
+@inject
 async def officer_read_application_transcript(
     application_id: UUID,
     actor: ActorIdentity = Depends(
@@ -333,11 +334,12 @@ async def officer_read_application_transcript(
             "api:/api/v1/web/officer/applications/{application_id}/transcript"
         )
     ),
-    db: PostgresDatabase = Depends(_db),
+    service: ApplicationTranscriptService = Depends(
+        Provide[ApiContainer.services.application_transcript]
+    ),
 ) -> ApplicationTranscriptRead:
     try:
-        return read_application_transcript(
-            db,
+        return service.read_application_transcript(
             application_id=application_id,
             viewer_actor_kind=actor.actor_kind,
             viewer_actor_id=actor.actor_id,
@@ -355,6 +357,7 @@ async def officer_read_application_transcript(
     "/officer/applications/{application_id}/transitions",
     response_model=ApplicationRead,
 )
+@inject
 async def officer_transition_application(
     application_id: UUID,
     request: Request,
@@ -365,7 +368,7 @@ async def officer_transition_application(
             "api:/api/v1/web/officer/applications/{application_id}/transitions"
         )
     ),
-    db: PostgresDatabase = Depends(_db),
+    service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
 ) -> ApplicationRead:
     if body.action == ApplicationTransitionAction.claim:
         raise HTTPException(
@@ -380,8 +383,7 @@ async def officer_transition_application(
         )
     expected_version = parse_if_match_strong(request)
     try:
-        read, result = transition_application(
-            db,
+        read, result = service.transition_application(
             actor=actor,
             application_id=application_id,
             expected_version=expected_version,
