@@ -31,7 +31,7 @@ from app.core.dependencies import RequireAuthority
 from app.core.factory import create_api_app
 from app.core.settings import Settings
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 
 
 OVERRIDE_ACTION_TYPE = "authority.override"

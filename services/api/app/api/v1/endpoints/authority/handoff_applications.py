@@ -2,28 +2,32 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.authority import HandoffResult, LeadershipHandoffRequest
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.leadership_handoff_applications import execute_handoff
+from app.services.leadership_handoff_applications import LeadershipHandoffApplicationsService
 
-from ._shared import get_db, raise_known_authority_error
+from ._shared import raise_known_authority_error
 
 
 router = APIRouter(prefix="/api/v1/authority-grants")
 
 
 @router.post("/{grant_id}/handoff/applications", response_model=HandoffResult)
+@inject
 def handoff_applications_endpoint(
     grant_id: UUID,
     body: LeadershipHandoffRequest,
-    db: PostgresDatabase = Depends(get_db),
+    service: LeadershipHandoffApplicationsService = Depends(
+        Provide[ApiContainer.services.leadership_handoff_applications]
+    ),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> HandoffResult:
     try:
-        return execute_handoff(db, grant_id=grant_id, request=body, actor=actor)
+        return service.execute_handoff(grant_id=grant_id, request=body, actor=actor)
     except Exception as error:
         raise_known_authority_error(error)

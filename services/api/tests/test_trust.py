@@ -18,7 +18,7 @@ from app.contracts.members import MemberRead
 from app.contracts.trust import TrustProfileRead
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 
 
 MEMBERS_URL = "/api/v1/members"

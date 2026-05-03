@@ -30,7 +30,7 @@ from app.contracts.permissions import (
     RenewalExpiresAtInPastError,
 )
 from app.repositories.permissions import PermissionsRepository
-from app.services.authority import _require_scoped_authority
+from app.services._helpers.authority import _require_scoped_authority
 
 logger = logging.getLogger(__name__)
 

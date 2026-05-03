@@ -16,8 +16,9 @@ from app.contracts.read_models import (
     StaleHandoffEntry,
 )
 from app.repositories.applications import ApplicationsRepository
-from app.repositories.authority import fetch_grants_by_ids, list_active_grants_for_grantee_ids
+from app.repositories.authority import AuthorityRepository
 from app.repositories.db import PostgresDatabase
+from app.repositories.members import MembersRepository
 from app.repositories.read_models import (
     advance_cursor,
     count_active_drift,
@@ -28,7 +29,8 @@ from app.repositories.read_models import (
     max_event_id_settled,
 )
 from app.repositories.tickets import TicketsRepository
-from app.services.authority import OPEN_APPLICATION_STATES, _collect_member_aliases, _require_scoped_authority
+from app.services._helpers.authority import _collect_member_aliases, _require_scoped_authority
+from app.services.authority import OPEN_APPLICATION_STATES
 
 
 OPERATIONAL_OVERVIEW_PROJECTION_NAME = "operational_overview"
@@ -155,6 +157,8 @@ def read_operational_overview(
 
     _require_scoped_authority(
         _OVERVIEW_PERMISSION,
+        authority_repo=AuthorityRepository(db),
+        members_repo=MembersRepository(db),
         scope_kind=scope_kind,
         scope_id=scope_id,
         actor=actor,
@@ -228,6 +232,8 @@ def read_leadership_context(
 ) -> LeadershipContextRead:
     _require_scoped_authority(
         "leadership_context.read",
+        authority_repo=AuthorityRepository(db),
+        members_repo=MembersRepository(db),
         scope_kind="global",
         scope_id=None,
         actor=actor,
@@ -235,12 +241,15 @@ def read_leadership_context(
     )
 
     with db.connection() as connection:
+        authority_repo = AuthorityRepository(db)
+        members_repo = MembersRepository(db)
         member_text_aliases, member_uuid_aliases = _collect_member_aliases(
             connection,
             [member_id],
+            members_repo=members_repo,
             synthetic_policy="reject",
         )
-        active_grant_rows = list_active_grants_for_grantee_ids(
+        active_grant_rows = authority_repo._list_active_grants_for_grantee_ids_on(
             connection,
             grantee_ids=member_text_aliases,
         )
@@ -251,7 +260,10 @@ def read_leadership_context(
         ]
         predecessor_rows = {
             row["id"]: row
-            for row in fetch_grants_by_ids(connection, grant_ids=predecessor_ids)
+            for row in authority_repo._fetch_grants_by_ids_on(
+                connection,
+                grant_ids=predecessor_ids,
+            )
         }
         applications_repo = ApplicationsRepository(db)
         current_application_rows = applications_repo._list_open_applications_for_owner_ids_on(
@@ -285,6 +297,7 @@ def read_leadership_context(
             predecessor_text_aliases, predecessor_uuid_aliases = _collect_member_aliases(
                 connection,
                 [predecessor["grantee_id"]],
+                members_repo=members_repo,
                 synthetic_policy="reject",
             )
             pending_application_rows = applications_repo._list_open_applications_for_owner_ids_on(

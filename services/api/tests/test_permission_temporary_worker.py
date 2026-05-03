@@ -16,7 +16,7 @@ from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.permissions import GuildRolePermissionIntentCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 from app.services.scheduler import SchedulerLoop
 from app.tasks.permission_expiry import permission_expiry_worker_tick
 

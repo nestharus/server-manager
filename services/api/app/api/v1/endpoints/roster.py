@@ -5,10 +5,10 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.contracts.actor import ActorIdentity
-from app.contracts.authority import AuthorityDecisionRead, AuthorityRequirement
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
 from app.contracts.roster import (
     InvalidRosterStatusTransitionError,
@@ -21,21 +21,12 @@ from app.contracts.roster import (
     RosterRoleNotFoundError,
     RosterSyncFailureRequest,
 )
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority, get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
-from app.services.roster import (
-    create_roster_entry as create_roster_entry_service,
-    get_roster_entry as get_roster_entry_service,
-    record_roster_sync_failure,
-    transition_roster_entry,
-)
+from app.services.authority import AuthorityService
+from app.services.roster import RosterService
 
 router = APIRouter(prefix="/api/v1/roster-entries")
-
-
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
 
 
 def _parse_if_match(request: Request) -> int:
@@ -77,29 +68,27 @@ def _service_actor_only(actor: ActorIdentity = Depends(get_current_actor)) -> Ac
 
 def _require_authority(
     *,
-    db: PostgresDatabase,
+    authority_service: AuthorityService,
     actor: ActorIdentity,
     permission: str,
     scope_kind: str,
     scope_id: str | None,
-) -> AuthorityDecisionRead:
-    requirement = AuthorityRequirement(
-        scope_kind=scope_kind,
-        scope_id=scope_id,
-        permission=permission,
-    )
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
-    decision = evaluate(requirement=requirement, grants=grants, at=current_time())
-    if not decision.allowed:
+) -> None:
+    try:
+        authority_service.require_scoped_authority(
+            permission,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            actor=actor,
+        )
+    except PermissionError as error:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
             detail={
                 "code": "authority_decision_denied",
                 "message": "authority requirement denied",
-                "decision": decision.model_dump(mode="json"),
             },
-        )
-    return decision
+        ) from error
 
 
 def _raise_for_roster_error(error: Exception) -> None:
@@ -141,21 +130,23 @@ def _raise_for_roster_error(error: Exception) -> None:
 
 
 @router.post("", response_model=RosterEntryRead, status_code=HTTPStatus.CREATED)
+@inject
 def create_roster_entry(
     roster_entry: RosterEntryCreate,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: RosterService = Depends(Provide[ApiContainer.services.roster]),
+    authority_service: AuthorityService = Depends(Provide[ApiContainer.services.authority]),
     actor: ActorIdentity = Depends(_user_actor_only),
 ) -> RosterEntryRead:
     _require_authority(
-        db=db,
+        authority_service=authority_service,
         actor=actor,
         permission="roster.write",
         scope_kind="chapter",
         scope_id=roster_entry.chapter_id,
     )
     try:
-        read, result = create_roster_entry_service(db, roster_entry, actor)
+        read, result = service.create_roster_entry(roster_entry, actor)
     except Exception as error:
         _raise_for_roster_error(error)
     _set_etag(response, result.etag)
@@ -163,18 +154,20 @@ def create_roster_entry(
 
 
 @router.get("/{entry_id}", response_model=RosterEntryRead)
+@inject
 def get_roster_entry(
     entry_id: UUID,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: RosterService = Depends(Provide[ApiContainer.services.roster]),
+    authority_service: AuthorityService = Depends(Provide[ApiContainer.services.authority]),
     actor: ActorIdentity = Depends(_user_actor_only),
 ) -> RosterEntryRead:
     try:
-        read, etag = get_roster_entry_service(db, entry_id)
+        read, etag = service.get_roster_entry(entry_id)
     except Exception as error:
         _raise_for_roster_error(error)
     _require_authority(
-        db=db,
+        authority_service=authority_service,
         actor=actor,
         permission="roster.read",
         scope_kind="chapter",
@@ -185,29 +178,30 @@ def get_roster_entry(
 
 
 @router.post("/{entry_id}/transitions", response_model=RosterEntryRead)
+@inject
 def transition_roster_entry_endpoint(
     entry_id: UUID,
     transition: RosterEntryTransitionRequest,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: RosterService = Depends(Provide[ApiContainer.services.roster]),
+    authority_service: AuthorityService = Depends(Provide[ApiContainer.services.authority]),
     actor: ActorIdentity = Depends(_user_actor_only),
 ) -> RosterEntryRead:
     expected_version = _parse_if_match(request)
     try:
-        current, _etag = get_roster_entry_service(db, entry_id)
+        current, _etag = service.get_roster_entry(entry_id)
     except Exception as error:
         _raise_for_roster_error(error)
     _require_authority(
-        db=db,
+        authority_service=authority_service,
         actor=actor,
         permission=("roster.remove" if transition.to_status == "removed" else "roster.write"),
         scope_kind="chapter",
         scope_id=current.chapter_id,
     )
     try:
-        read, result = transition_roster_entry(
-            db,
+        read, result = service.transition_roster_entry(
             entry_id,
             transition,
             actor,
@@ -224,18 +218,18 @@ def transition_roster_entry_endpoint(
     response_model=RosterEntryRead,
     dependencies=[Depends(_service_actor_only), Depends(RequireAuthority("roster.write", "global"))],
 )
+@inject
 def record_sync_failure_endpoint(
     entry_id: UUID,
     failure: RosterSyncFailureRequest,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: RosterService = Depends(Provide[ApiContainer.services.roster]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> RosterEntryRead:
     expected_version = _parse_if_match(request)
     try:
-        read, result = record_roster_sync_failure(
-            db,
+        read, result = service.record_roster_sync_failure(
             entry_id,
             failure,
             actor,

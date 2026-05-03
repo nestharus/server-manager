@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from http import HTTPStatus
 from typing import NoReturn
 from uuid import UUID
@@ -43,11 +44,13 @@ from app.contracts.web import (
 )
 from app.core.container import ApiContainer
 from app.repositories.db import PostgresDatabase
+from app.repositories.members import MembersRepository
 from app.services.applicant_discord_auth import DISCORD_SNOWFLAKE_RE
 from app.services.application_messages import ApplicationMessagesService
 from app.services.application_transcript import ApplicationTranscriptService
 from app.services.applications import ApplicationsService
-from app.services.members import NonDiscordMemberError, resolve_or_create_real_discord_member
+from app.services.members import MembersService, NonDiscordMemberError
+from app.services.mutations import mutate_entity
 from app.services.web import list_web_admin_chapters
 
 
@@ -117,8 +120,10 @@ async def _build_officer_actor(
         )
 
     try:
-        member = await resolve_or_create_real_discord_member(
-            db,
+        member = await MembersService(
+            members_repo=MembersRepository(db),
+            mutations_callable=partial(mutate_entity, db=db),
+        ).resolve_or_create_real_discord_member(
             discord_user_id=discord_user_id,
             originating_actor=ActorIdentity(
                 actor_kind="service",

@@ -14,10 +14,11 @@ from app.contracts.ticket_messages import (
 )
 from app.contracts.tickets import TicketNotFoundError
 from app.core.context import MissingCorrelationContextError, get_current_audit_context
+from app.repositories.authority import AuthorityRepository
 from app.repositories.db import PostgresDatabase
 from app.repositories.ticket_messages import TicketMessagesRepository
 from app.repositories.tickets import TicketsRepository
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import current_time, evaluate, _row_to_read
 
 
 def _message_from_row(row: dict[str, Any]) -> TicketMessageRead:
@@ -53,7 +54,16 @@ def _assert_staff_authority(
         scope_id=scope_id,
         permission="ticket.message.staff",
     )
-    grants = list_grants_for_grantee(db, grantee_id=author_actor_id)
+    authority_repo = AuthorityRepository(db)
+    grants = [
+        _row_to_read(row)
+        for row in authority_repo.list_grants(
+            grantee_id=author_actor_id,
+            include_revoked=True,
+            limit=None,
+            after_id=None,
+        )
+    ]
     decision = evaluate(requirement=requirement, grants=grants, at=current_time())
     if not decision.allowed:
         raise TicketMessageAppendForbiddenError("ticket.message.staff authority denied")
