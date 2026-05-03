@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -33,18 +33,18 @@ from app.contracts.roster import (
     RosterEntryNotFoundError,
     RosterEntryTransitionRequest,
 )
-from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
-from app.repositories.deferred_effects import DeferredEffectsRepository
 from app.repositories.members import MembersRepository
-from app.repositories.roster import RosterRepository
 from app.contracts.authority import InvalidHolderIdError
+from app.core.context import (
+    get_current_audit_context,
+    resolve_register_correlation,
+    use_audit_context,
+)
 from app.services._helpers.authority import (
     _collect_member_aliases,
     _require_scoped_authority,
 )
-from app.services.mutations import mutate_entity
-from app.services.roster import RosterService
 
 
 logger = logging.getLogger(__name__)
@@ -142,30 +142,6 @@ def _evidence_from_row(row: dict[str, Any]) -> EvidenceSubmissionRead:
 
 def _evaluation_from_row(row: dict[str, Any]) -> ComplianceEvaluationRead:
     return ComplianceEvaluationRead.model_validate(row)
-
-
-def _get_rule_read_unchecked(
-    db: PostgresDatabase,
-    *,
-    rule_id: UUID,
-) -> ComplianceRuleRead:
-    with db.connection() as connection:
-        row = compliance_repo.get_rule(connection, rule_id)
-    if row is None:
-        raise ComplianceRuleNotFoundError(rule_id)
-    return _rule_from_row(row)
-
-
-def _get_evidence_submission_unchecked(
-    db: PostgresDatabase,
-    *,
-    evidence_id: UUID,
-) -> EvidenceSubmissionRead:
-    with db.connection() as connection:
-        row = compliance_repo.get_evidence(connection, evidence_id)
-    if row is None:
-        raise EvidenceSubmissionNotFoundError(evidence_id)
-    return _evidence_from_row(row)
 
 
 def _duplicate_rule_error(
@@ -307,193 +283,6 @@ def compliance_evaluator_actor() -> ActorIdentity:
     return ActorIdentity(actor_kind="service", actor_id=COMPLIANCE_EVALUATOR_ACTOR_ID)
 
 
-def create_rule(
-    db: PostgresDatabase,
-    request: ComplianceRuleCreate,
-    *,
-    actor: ActorIdentity,
-) -> tuple[ComplianceRuleRead, MutationResult]:
-    _require_scoped_authority(
-        "compliance_rule.write",
-        scope_kind="chapter",
-        scope_id=request.chapter_id,
-        actor=actor,
-        db=db,
-    )
-
-    rule_id = uuid4()
-    request_payload = request.model_dump(mode="json")
-
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        compliance_repo.insert_rule(
-            connection,
-            row={
-                "id": rule_id,
-                "chapter_id": request.chapter_id,
-                "name": request.name,
-                "cadence_kind": request.cadence_kind,
-                "cadence_params": request.cadence_params,
-                "evaluation_window_days": request.evaluation_window_days,
-                "evidence_requirements": [
-                    requirement.model_dump(mode="json")
-                    for requirement in request.evidence_requirements
-                ],
-                "consequence_kind": request.consequence_kind,
-                "consequence_params": request.consequence_params,
-                "active": True,
-                "archived_at": None,
-            },
-        )
-        return StateChangeDraft(
-            change_type=AUDIT_CHANGE_TYPE["rule_created"],
-            payload_json={
-                "rule_id": str(rule_id),
-                **request_payload,
-                "active": True,
-                "archived_at": None,
-            },
-        )
-
-    try:
-        result = mutate_entity(
-            db=db,
-            aggregate_type="compliance_rule",
-            aggregate_id=str(rule_id),
-            request=_make_request(
-                expected_version=0,
-                actor=actor,
-                request_surface="api:/api/v1/compliance/rules",
-            ),
-            action_type=AUDIT_ACTION_TYPE["rule_create"],
-            action_payload=request_payload,
-            payload_allowlist=set(RULE_CREATE_PAYLOAD_ALLOWLIST),
-            mutate_projection=mutate_projection,
-            scope_kind="chapter",
-            scope_id=request.chapter_id,
-        )
-    except errors.UniqueViolation as error:
-        raise _duplicate_rule_error(
-            error,
-            chapter_id=request.chapter_id,
-            name=request.name,
-        ) from error
-    return _get_rule_read_unchecked(db, rule_id=rule_id), result
-
-
-def update_rule(
-    db: PostgresDatabase,
-    rule_id: UUID,
-    request: ComplianceRuleUpdate,
-    *,
-    expected_version: int,
-    actor: ActorIdentity,
-) -> tuple[ComplianceRuleRead, MutationResult]:
-    with db.connection() as connection:
-        current_row = compliance_repo.get_rule(connection, rule_id)
-    if current_row is None:
-        raise ComplianceRuleNotFoundError(rule_id)
-
-    current = _rule_from_row(current_row)
-    _require_scoped_authority(
-        "compliance_rule.write",
-        scope_kind="chapter",
-        scope_id=current.chapter_id,
-        actor=actor,
-        db=db,
-    )
-
-    patch = request.model_dump(mode="python", exclude_unset=True)
-    if not patch:
-        raise ComplianceRulePatchEmptyError()
-    if patch.get("active") is False:
-        patch["archived_at"] = datetime.now(tz=UTC)
-    elif patch.get("active") is True:
-        patch["archived_at"] = None
-    updated = validated_update(current, patch)
-    action_payload = request.model_dump(mode="json", exclude_unset=True)
-
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        updated_count = compliance_repo.update_rule_row(
-            connection,
-            rule_id=rule_id,
-            row=updated.model_dump(mode="python"),
-        )
-        if updated_count != 1:
-            raise ComplianceRuleNotFoundError(rule_id)
-        return StateChangeDraft(
-            change_type=AUDIT_CHANGE_TYPE["rule_updated"],
-            payload_json=updated.model_dump(mode="json"),
-        )
-
-    try:
-        result = mutate_entity(
-            db=db,
-            aggregate_type="compliance_rule",
-            aggregate_id=str(rule_id),
-            request=_make_request(
-                expected_version=expected_version,
-                actor=actor,
-                request_surface=f"api:/api/v1/compliance/rules/{rule_id}",
-            ),
-            action_type=AUDIT_ACTION_TYPE["rule_update"],
-            action_payload=action_payload,
-            payload_allowlist=set(RULE_UPDATE_PAYLOAD_ALLOWLIST),
-            mutate_projection=mutate_projection,
-            scope_kind="chapter",
-            scope_id=current.chapter_id,
-        )
-    except errors.UniqueViolation as error:
-        raise _duplicate_rule_error(
-            error,
-            chapter_id=current.chapter_id,
-            name=updated.name,
-        ) from error
-    return _get_rule_read_unchecked(db, rule_id=rule_id), result
-
-
-def get_rule_read(
-    db: PostgresDatabase,
-    *,
-    rule_id: UUID,
-    actor: ActorIdentity,
-) -> ComplianceRuleRead:
-    with db.connection() as connection:
-        row = compliance_repo.get_rule(connection, rule_id)
-    if row is None:
-        raise ComplianceRuleNotFoundError(rule_id)
-    _require_scoped_authority(
-        "compliance_rule.read",
-        scope_kind="chapter",
-        scope_id=row["chapter_id"],
-        actor=actor,
-        db=db,
-    )
-    return _rule_from_row(row)
-
-
-def list_rules(
-    db: PostgresDatabase,
-    *,
-    chapter_id: str,
-    active_only: bool,
-    actor: ActorIdentity,
-) -> list[ComplianceRuleRead]:
-    _require_scoped_authority(
-        "compliance_rule.read",
-        scope_kind="chapter",
-        scope_id=chapter_id,
-        actor=actor,
-        db=db,
-    )
-    with db.connection() as connection:
-        rows = compliance_repo.list_rules_by_chapter(
-            connection,
-            chapter_id=chapter_id,
-            active_only=active_only,
-        )
-    return [_rule_from_row(row) for row in rows]
-
-
 def _resolve_submitted_by(
     db: PostgresDatabase,
     *,
@@ -522,159 +311,367 @@ def _resolve_submitted_by(
     return requested
 
 
-def submit_evidence(
-    db: PostgresDatabase,
-    request: EvidenceSubmissionCreate,
-    *,
-    actor: ActorIdentity,
-) -> tuple[EvidenceSubmissionRead, MutationResult]:
-    with db.connection() as connection:
-        rule_row = compliance_repo.get_rule(connection, request.rule_id)
-    if rule_row is None:
-        raise ComplianceRuleNotFoundError(request.rule_id)
-    if request.chapter_id != rule_row["chapter_id"]:
-        raise EvidenceChapterMismatchError(
-            rule_id=request.rule_id,
-            rule_chapter_id=rule_row["chapter_id"],
-            request_chapter_id=request.chapter_id,
+class ComplianceService:
+    def __init__(self, compliance_repo, roster_service, mutations_callable) -> None:
+        self._compliance_repo = compliance_repo
+        self._roster_service = roster_service
+        self._mutations_callable = mutations_callable
+
+    def _get_rule_read_unchecked(self, *, rule_id: UUID) -> ComplianceRuleRead:
+        row = self._compliance_repo.get_rule(rule_id)
+        if row is None:
+            raise ComplianceRuleNotFoundError(rule_id)
+        return _rule_from_row(row)
+
+    def _get_evidence_submission_unchecked(
+        self,
+        *,
+        evidence_id: UUID,
+    ) -> EvidenceSubmissionRead:
+        row = self._compliance_repo.get_evidence(evidence_id)
+        if row is None:
+            raise EvidenceSubmissionNotFoundError(evidence_id)
+        return _evidence_from_row(row)
+
+    def create_rule(
+        self,
+        request: ComplianceRuleCreate,
+        *,
+        actor: ActorIdentity,
+    ) -> tuple[ComplianceRuleRead, MutationResult]:
+        db = self._compliance_repo.db
+        _require_scoped_authority(
+            "compliance_rule.write",
+            scope_kind="chapter",
+            scope_id=request.chapter_id,
+            actor=actor,
+            db=db,
         )
 
-    _require_scoped_authority(
-        "compliance_evidence.submit",
-        scope_kind="chapter",
-        scope_id=rule_row["chapter_id"],
-        actor=actor,
-        db=db,
-    )
+        rule_id = uuid4()
+        request_payload = request.model_dump(mode="json")
 
-    submitted_by_member_id = _resolve_submitted_by(db, request=request, actor=actor)
+        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+            self._compliance_repo._insert_rule_on(
+                connection,
+                row={
+                    "id": rule_id,
+                    "chapter_id": request.chapter_id,
+                    "name": request.name,
+                    "cadence_kind": request.cadence_kind,
+                    "cadence_params": request.cadence_params,
+                    "evaluation_window_days": request.evaluation_window_days,
+                    "evidence_requirements": [
+                        requirement.model_dump(mode="json")
+                        for requirement in request.evidence_requirements
+                    ],
+                    "consequence_kind": request.consequence_kind,
+                    "consequence_params": request.consequence_params,
+                    "active": True,
+                    "archived_at": None,
+                },
+            )
+            return StateChangeDraft(
+                change_type=AUDIT_CHANGE_TYPE["rule_created"],
+                payload_json={
+                    "rule_id": str(rule_id),
+                    **request_payload,
+                    "active": True,
+                    "archived_at": None,
+                },
+            )
 
-    evidence_id = uuid4()
-    request_payload = {
-        **request.model_dump(mode="json"),
-        "submitted_by_member_id": submitted_by_member_id,
-    }
+        try:
+            result = self._mutations_callable(
+                connection=None,
+                aggregate_type="compliance_rule",
+                aggregate_id=str(rule_id),
+                request=_make_request(
+                    expected_version=0,
+                    actor=actor,
+                    request_surface="api:/api/v1/compliance/rules",
+                ),
+                action_type=AUDIT_ACTION_TYPE["rule_create"],
+                action_payload=request_payload,
+                payload_allowlist=set(RULE_CREATE_PAYLOAD_ALLOWLIST),
+                mutate_projection=mutate_projection,
+                scope_kind="chapter",
+                scope_id=request.chapter_id,
+            )
+        except errors.UniqueViolation as error:
+            raise _duplicate_rule_error(
+                error,
+                chapter_id=request.chapter_id,
+                name=request.name,
+            ) from error
+        return self._get_rule_read_unchecked(rule_id=rule_id), result
 
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        compliance_repo.insert_evidence(
+    def update_rule(
+        self,
+        rule_id: UUID,
+        request: ComplianceRuleUpdate,
+        *,
+        expected_version: int,
+        actor: ActorIdentity,
+    ) -> tuple[ComplianceRuleRead, MutationResult]:
+        db = self._compliance_repo.db
+        current_row = self._compliance_repo.get_rule(rule_id)
+        if current_row is None:
+            raise ComplianceRuleNotFoundError(rule_id)
+
+        current = _rule_from_row(current_row)
+        _require_scoped_authority(
+            "compliance_rule.write",
+            scope_kind="chapter",
+            scope_id=current.chapter_id,
+            actor=actor,
+            db=db,
+        )
+
+        patch = request.model_dump(mode="python", exclude_unset=True)
+        if not patch:
+            raise ComplianceRulePatchEmptyError()
+        if patch.get("active") is False:
+            patch["archived_at"] = datetime.now(tz=UTC)
+        elif patch.get("active") is True:
+            patch["archived_at"] = None
+        updated = validated_update(current, patch)
+        action_payload = request.model_dump(mode="json", exclude_unset=True)
+
+        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+            updated_count = self._compliance_repo._update_rule_row_on(
+                connection,
+                rule_id=rule_id,
+                row=updated.model_dump(mode="python"),
+            )
+            if updated_count != 1:
+                raise ComplianceRuleNotFoundError(rule_id)
+            return StateChangeDraft(
+                change_type=AUDIT_CHANGE_TYPE["rule_updated"],
+                payload_json=updated.model_dump(mode="json"),
+            )
+
+        try:
+            result = self._mutations_callable(
+                connection=None,
+                aggregate_type="compliance_rule",
+                aggregate_id=str(rule_id),
+                request=_make_request(
+                    expected_version=expected_version,
+                    actor=actor,
+                    request_surface=f"api:/api/v1/compliance/rules/{rule_id}",
+                ),
+                action_type=AUDIT_ACTION_TYPE["rule_update"],
+                action_payload=action_payload,
+                payload_allowlist=set(RULE_UPDATE_PAYLOAD_ALLOWLIST),
+                mutate_projection=mutate_projection,
+                scope_kind="chapter",
+                scope_id=current.chapter_id,
+            )
+        except errors.UniqueViolation as error:
+            raise _duplicate_rule_error(
+                error,
+                chapter_id=current.chapter_id,
+                name=updated.name,
+            ) from error
+        return self._get_rule_read_unchecked(rule_id=rule_id), result
+
+    def get_rule_read(
+        self,
+        *,
+        rule_id: UUID,
+        actor: ActorIdentity,
+    ) -> ComplianceRuleRead:
+        db = self._compliance_repo.db
+        row = self._compliance_repo.get_rule(rule_id)
+        if row is None:
+            raise ComplianceRuleNotFoundError(rule_id)
+        _require_scoped_authority(
+            "compliance_rule.read",
+            scope_kind="chapter",
+            scope_id=row["chapter_id"],
+            actor=actor,
+            db=db,
+        )
+        return _rule_from_row(row)
+
+    def list_rules(
+        self,
+        *,
+        chapter_id: str,
+        active_only: bool,
+        actor: ActorIdentity,
+    ) -> list[ComplianceRuleRead]:
+        _require_scoped_authority(
+            "compliance_rule.read",
+            scope_kind="chapter",
+            scope_id=chapter_id,
+            actor=actor,
+            db=self._compliance_repo.db,
+        )
+        rows = self._compliance_repo.list_rules_by_chapter(
+            chapter_id=chapter_id,
+            active_only=active_only,
+        )
+        return [_rule_from_row(row) for row in rows]
+
+    def submit_evidence(
+        self,
+        request: EvidenceSubmissionCreate,
+        *,
+        actor: ActorIdentity,
+    ) -> tuple[EvidenceSubmissionRead, MutationResult]:
+        db = self._compliance_repo.db
+        rule_row = self._compliance_repo.get_rule(request.rule_id)
+        if rule_row is None:
+            raise ComplianceRuleNotFoundError(request.rule_id)
+        if request.chapter_id != rule_row["chapter_id"]:
+            raise EvidenceChapterMismatchError(
+                rule_id=request.rule_id,
+                rule_chapter_id=rule_row["chapter_id"],
+                request_chapter_id=request.chapter_id,
+            )
+
+        _require_scoped_authority(
+            "compliance_evidence.submit",
+            scope_kind="chapter",
+            scope_id=rule_row["chapter_id"],
+            actor=actor,
+            db=db,
+        )
+
+        submitted_by_member_id = _resolve_submitted_by(
+            db,
+            request=request,
+            actor=actor,
+        )
+
+        evidence_id = uuid4()
+        request_payload = {
+            **request.model_dump(mode="json"),
+            "submitted_by_member_id": submitted_by_member_id,
+        }
+
+        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+            self._compliance_repo._insert_evidence_on(
+                connection,
+                row={
+                    "id": evidence_id,
+                    "rule_id": request.rule_id,
+                    "member_id": request.member_id,
+                    "chapter_id": rule_row["chapter_id"],
+                    "attachment_ref": request.attachment_ref,
+                    "raw_text": None,
+                    "extracted_fields": None,
+                    "extracted_fields_corrected": None,
+                    "extraction_status": "pending",
+                    "extraction_confidence": None,
+                    "extraction_error": None,
+                    "submitted_by_member_id": submitted_by_member_id,
+                    "corrected_by_member_id": None,
+                    "corrected_at": None,
+                    "correction_reason": None,
+                },
+            )
+            return StateChangeDraft(
+                change_type=AUDIT_CHANGE_TYPE["evidence_submitted"],
+                payload_json={
+                    **request_payload,
+                    "evidence_id": str(evidence_id),
+                    "chapter_id": rule_row["chapter_id"],
+                    "extraction_status": "pending",
+                },
+            )
+
+        result = self._mutations_callable(
+            connection=None,
+            aggregate_type="evidence_submission",
+            aggregate_id=str(evidence_id),
+            request=_make_request(
+                expected_version=0,
+                actor=actor,
+                request_surface="api:/api/v1/compliance/evidence",
+            ),
+            action_type=AUDIT_ACTION_TYPE["evidence_submit"],
+            action_payload={
+                **request_payload,
+                "chapter_id": rule_row["chapter_id"],
+            },
+            payload_allowlist=set(EVIDENCE_SUBMIT_PAYLOAD_ALLOWLIST),
+            mutate_projection=mutate_projection,
+            scope_kind="chapter",
+            scope_id=rule_row["chapter_id"],
+        )
+        return self._get_evidence_submission_unchecked(evidence_id=evidence_id), result
+
+    def get_evidence_submission(
+        self,
+        *,
+        evidence_id: UUID,
+        actor: ActorIdentity,
+    ) -> EvidenceSubmissionRead:
+        row = self._compliance_repo.get_evidence(evidence_id)
+        if row is None:
+            raise EvidenceSubmissionNotFoundError(evidence_id)
+        _require_scoped_authority(
+            "compliance_evidence.read",
+            scope_kind="chapter",
+            scope_id=row["chapter_id"],
+            actor=actor,
+            db=self._compliance_repo.db,
+        )
+        return _evidence_from_row(row)
+
+    def _insert_evaluation_row(
+        self,
+        connection: Connection[Any],
+        *,
+        evaluation_id: UUID,
+        rule: dict[str, Any],
+        member_id: str,
+        period_start: date,
+        period_end: date,
+        result: str,
+        consequence_applied: str,
+        review_status: str,
+        evidence_ids: list[UUID],
+    ) -> dict[str, Any] | None:
+        return self._compliance_repo._insert_evaluation_if_absent_on(
             connection,
             row={
-                "id": evidence_id,
-                "rule_id": request.rule_id,
-                "member_id": request.member_id,
-                "chapter_id": rule_row["chapter_id"],
-                "attachment_ref": request.attachment_ref,
-                "raw_text": None,
-                "extracted_fields": None,
-                "extracted_fields_corrected": None,
-                "extraction_status": "pending",
-                "extraction_confidence": None,
-                "extraction_error": None,
-                "submitted_by_member_id": submitted_by_member_id,
-                "corrected_by_member_id": None,
-                "corrected_at": None,
-                "correction_reason": None,
-            },
-        )
-        return StateChangeDraft(
-            change_type=AUDIT_CHANGE_TYPE["evidence_submitted"],
-            payload_json={
-                **request_payload,
-                "evidence_id": str(evidence_id),
-                "chapter_id": rule_row["chapter_id"],
-                "extraction_status": "pending",
+                "id": evaluation_id,
+                "rule_id": rule["id"],
+                "rule_version": int(rule["version"]),
+                "chapter_id": rule["chapter_id"],
+                "member_id": member_id,
+                "period_start": period_start,
+                "period_end": period_end,
+                "result": result,
+                "consequence_applied": consequence_applied,
+                "review_status": review_status,
+                "reviewer_id": None,
+                "review_reason": None,
+                "reviewed_at": None,
+                "evidence_ids": [str(evidence_id) for evidence_id in evidence_ids],
             },
         )
 
-    result = mutate_entity(
-        db=db,
-        aggregate_type="evidence_submission",
-        aggregate_id=str(evidence_id),
-        request=_make_request(
-            expected_version=0,
-            actor=actor,
-            request_surface="api:/api/v1/compliance/evidence",
-        ),
-        action_type=AUDIT_ACTION_TYPE["evidence_submit"],
-        action_payload={
-            **request_payload,
-            "chapter_id": rule_row["chapter_id"],
-        },
-        payload_allowlist=set(EVIDENCE_SUBMIT_PAYLOAD_ALLOWLIST),
-        mutate_projection=mutate_projection,
-        scope_kind="chapter",
-        scope_id=rule_row["chapter_id"],
-    )
-    return _get_evidence_submission_unchecked(db, evidence_id=evidence_id), result
-
-
-def get_evidence_submission(
-    db: PostgresDatabase,
-    *,
-    evidence_id: UUID,
-    actor: ActorIdentity,
-) -> EvidenceSubmissionRead:
-    with db.connection() as connection:
-        row = compliance_repo.get_evidence(connection, evidence_id)
-    if row is None:
-        raise EvidenceSubmissionNotFoundError(evidence_id)
-    _require_scoped_authority(
-        "compliance_evidence.read",
-        scope_kind="chapter",
-        scope_id=row["chapter_id"],
-        actor=actor,
-        db=db,
-    )
-    return _evidence_from_row(row)
-
-
-def _insert_evaluation_row(
-    connection: Connection[Any],
-    *,
-    evaluation_id: UUID,
-    rule: dict[str, Any],
-    member_id: str,
-    period_start: date,
-    period_end: date,
-    result: str,
-    consequence_applied: str,
-    review_status: str,
-    evidence_ids: list[UUID],
-) -> dict[str, Any] | None:
-    return compliance_repo.insert_evaluation_if_absent(
-        connection,
-        row={
-            "id": evaluation_id,
-            "rule_id": rule["id"],
-            "rule_version": int(rule["version"]),
-            "chapter_id": rule["chapter_id"],
-            "member_id": member_id,
-            "period_start": period_start,
-            "period_end": period_end,
-            "result": result,
-            "consequence_applied": consequence_applied,
-            "review_status": review_status,
-            "reviewer_id": None,
-            "review_reason": None,
-            "reviewed_at": None,
-            "evidence_ids": [str(evidence_id) for evidence_id in evidence_ids],
-        },
-    )
-
-
-def _evaluate_member_rule(
-    db: PostgresDatabase,
-    *,
-    rule: dict[str, Any],
-    member: dict[str, Any],
-    period_start: date,
-    period_end: date,
-    actor: ActorIdentity,
-    originating_actor: ActorIdentity,
-) -> ComplianceEvaluationRead | None:
-    evaluation_id = uuid4()
-    with db.transaction() as connection:
-        evidence_rows = compliance_repo.list_evidence_for_rule_period(
+    def _evaluate_member_rule_on(
+        self,
+        connection: Connection[Any],
+        *,
+        rule: dict[str, Any],
+        member: dict[str, Any],
+        period_start: date,
+        period_end: date,
+        now: datetime,
+        actor: ActorIdentity,
+        originating_actor: ActorIdentity,
+        source: str,
+    ) -> ComplianceEvaluationRead | None:
+        _ = (now, source)
+        evaluation_id = uuid4()
+        evidence_rows = self._compliance_repo._list_evidence_for_rule_period_on(
             connection,
             rule_id=rule["id"],
             member_id=member["member_id"],
@@ -682,7 +679,8 @@ def _evaluate_member_rule(
             period_end=period_end,
         )
         result, evidence_ids = _compute_rule_result(
-            rule=rule, evidence_rows=evidence_rows
+            rule=rule,
+            evidence_rows=evidence_rows,
         )
         consequence_applied, review_status = _compute_consequence_shape(
             rule=rule,
@@ -691,14 +689,8 @@ def _evaluate_member_rule(
 
         roster_entry = None
         if consequence_applied == "under_review_applied":
-            roster_service = RosterService(
-                roster_repo=RosterRepository(db),
-                members_repo=MembersRepository(db),
-                deferred_effects_repo=DeferredEffectsRepository(db),
-                mutations_callable=partial(mutate_entity, db=db),
-            )
             try:
-                roster_entry, _etag = roster_service._get_roster_entry_on(
+                roster_entry, _etag = self._roster_service._get_roster_entry_on(
                     connection,
                     member["id"],
                 )
@@ -712,7 +704,7 @@ def _evaluate_member_rule(
                 review_status = "not_required"
                 roster_entry = None
 
-        inserted_row = _insert_evaluation_row(
+        inserted_row = self._insert_evaluation_row(
             connection,
             evaluation_id=evaluation_id,
             rule=rule,
@@ -728,7 +720,7 @@ def _evaluate_member_rule(
             return None
 
         if consequence_applied == "under_review_applied" and roster_entry is not None:
-            roster_service._transition_roster_entry_on(
+            self._roster_service._transition_roster_entry_on(
                 connection,
                 roster_entry.id,
                 RosterEntryTransitionRequest(
@@ -741,8 +733,7 @@ def _evaluate_member_rule(
                 expected_version=roster_entry.version,
             )
 
-        mutate_entity(
-            db=db,
+        self._mutations_callable(
             connection=connection,
             aggregate_type="compliance_evaluation",
             aggregate_id=str(evaluation_id),
@@ -785,93 +776,109 @@ def _evaluate_member_rule(
             scope_id=rule["chapter_id"],
         )
 
-        evaluation_row = compliance_repo.get_evaluation(connection, evaluation_id)
+        evaluation_row = self._compliance_repo._get_evaluation_on(
+            connection,
+            evaluation_id,
+        )
         if evaluation_row is None:
             raise ComplianceEvaluationNotFoundError(evaluation_id)
         return _evaluation_from_row(evaluation_row)
 
-
-def run_scheduled_compliance_evaluations(
-    db: PostgresDatabase,
-    *,
-    now: datetime,
-    actor: ActorIdentity,
-    originating_actor: ActorIdentity | None = None,
-    source: str = "worker_sweep",
-) -> list[ComplianceEvaluationRead]:
-    created: list[ComplianceEvaluationRead] = []
-    effective_originating_actor = (
-        actor if originating_actor is None else originating_actor
-    )
-
-    with db.connection() as connection:
-        rules = compliance_repo.list_active_rules(connection)
-
-    for rule in rules:
-        try:
-            period_start, period_end = _compute_period(
-                cadence_kind=rule["cadence_kind"],
-                cadence_params=dict(rule["cadence_params"]),
-                evaluation_window_days=int(rule["evaluation_window_days"]),
+    def run_scheduled_compliance_evaluations(
+        self,
+        *,
+        now: datetime,
+        actor: ActorIdentity,
+        originating_actor: ActorIdentity | None = None,
+        source: str = "worker_sweep",
+    ) -> list[ComplianceEvaluationRead]:
+        ambient = (
+            use_audit_context(resolve_register_correlation(None, allow_new_root=True))
+            if get_current_audit_context() is None
+            else nullcontext()
+        )
+        with ambient:
+            return self._run_scheduled_compliance_evaluations(
                 now=now,
+                actor=actor,
+                originating_actor=originating_actor,
+                source=source,
             )
-            with db.connection() as connection:
-                members = compliance_repo.list_current_roster_members_by_chapter(
-                    connection,
+
+    def _run_scheduled_compliance_evaluations(
+        self,
+        *,
+        now: datetime,
+        actor: ActorIdentity,
+        originating_actor: ActorIdentity | None,
+        source: str,
+    ) -> list[ComplianceEvaluationRead]:
+        created: list[ComplianceEvaluationRead] = []
+        effective_originating_actor = (
+            actor if originating_actor is None else originating_actor
+        )
+        rules = self._compliance_repo.list_active_rules()
+
+        for rule in rules:
+            try:
+                period_start, period_end = _compute_period(
+                    cadence_kind=rule["cadence_kind"],
+                    cadence_params=dict(rule["cadence_params"]),
+                    evaluation_window_days=int(rule["evaluation_window_days"]),
+                    now=now,
+                )
+                members = self._compliance_repo.list_current_roster_members_by_chapter(
                     chapter_id=rule["chapter_id"],
                     limit=None,
                 )
-        except Exception:
-            logger.exception(
-                "compliance evaluation failed during rule setup rule=%s source=%s",
-                rule["id"],
-                source,
-            )
-            continue
-
-        for member in members:
-            try:
-                evaluation = _evaluate_member_rule(
-                    db,
-                    rule=rule,
-                    member=member,
-                    period_start=period_start,
-                    period_end=period_end,
-                    actor=actor,
-                    originating_actor=effective_originating_actor,
-                )
-            except InvalidRosterStatusTransitionError:
-                logger.debug(
-                    "compliance evaluation skipped invalid roster transition rule=%s member=%s",
-                    rule["id"],
-                    member["member_id"],
-                )
-                continue
             except Exception:
                 logger.exception(
-                    "compliance evaluation failed rule=%s member=%s source=%s",
+                    "compliance evaluation failed during rule setup rule=%s source=%s",
                     rule["id"],
-                    member["member_id"],
                     source,
                 )
                 continue
 
-            if evaluation is not None:
-                created.append(evaluation)
+            for member in members:
+                try:
+                    with self._compliance_repo.db.transaction() as connection:
+                        evaluation = self._evaluate_member_rule_on(
+                            connection,
+                            rule=rule,
+                            member=member,
+                            period_start=period_start,
+                            period_end=period_end,
+                            now=now,
+                            actor=actor,
+                            originating_actor=effective_originating_actor,
+                            source=source,
+                        )
+                except InvalidRosterStatusTransitionError:
+                    logger.debug(
+                        "compliance evaluation skipped invalid roster transition rule=%s member=%s",
+                        rule["id"],
+                        member["member_id"],
+                    )
+                    continue
+                except Exception:
+                    logger.exception(
+                        "compliance evaluation failed rule=%s member=%s source=%s",
+                        rule["id"],
+                        member["member_id"],
+                        source,
+                    )
+                    continue
 
-    return created
+                if evaluation is not None:
+                    created.append(evaluation)
+
+        return created
 
 
 __all__ = [
     "AUDIT_ACTION_TYPE",
     "AUDIT_CHANGE_TYPE",
     "COMPLIANCE_EVALUATOR_ACTOR_ID",
+    "ComplianceService",
     "compliance_evaluator_actor",
-    "create_rule",
-    "get_evidence_submission",
-    "get_rule_read",
-    "list_rules",
-    "run_scheduled_compliance_evaluations",
-    "submit_evidence",
-    "update_rule",
 ]
