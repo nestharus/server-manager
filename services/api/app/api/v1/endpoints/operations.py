@@ -4,12 +4,14 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Literal
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-from app.api.v1.endpoints.permissions._shared import get_db, raise_known_permission_error
+from app.api.v1.endpoints.permissions._shared import raise_known_permission_error
 from app.contracts.actor import ActorIdentity
 from app.contracts.read_models import OperationalOverviewRead
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
 from app.services.read_models import (
@@ -55,9 +57,10 @@ def _operational_overview_query(
 
 
 @router.get("/overview", response_model=OperationalOverviewRead)
+@inject
 def get_operational_overview_endpoint(
     query: OperationalOverviewQuery = Depends(_operational_overview_query),
-    db: PostgresDatabase = Depends(get_db),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> OperationalOverviewRead:
     try:

@@ -484,7 +484,7 @@ async def test_submit_snapshot_records_run_failed_on_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC3 (D4): if the diff/insert raises, the run is advanced to failed and the error bubbles."""
-    from app.repositories import permissions as permission_repo
+    from app.repositories.permissions import PermissionsRepository
 
     _grant(
         governance_db,
@@ -495,11 +495,11 @@ async def test_submit_snapshot_records_run_failed_on_error(
     )
     run = await _create_run(migrated_async_client)
 
-    def _raise(*args: object, **kwargs: object) -> list[UUID]:
+    def failing_batch(*args: object, **kwargs: object) -> list[UUID]:
         raise RuntimeError("forced diff failure")
 
     monkeypatch.setattr(
-        permission_repo, "insert_permission_drift_batch", _raise,
+        PermissionsRepository, "_insert_permission_drift_batch_on", failing_batch,
     )
 
     # Starlette's ServerErrorMiddleware produces a 500 body but re-raises the
