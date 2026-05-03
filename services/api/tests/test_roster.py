@@ -18,6 +18,7 @@ from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.roster import RosterEntryTransitionRequest
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
+from app.repositories.deferred_effects import DeferredEffectsRepository
 from app.repositories.members import MembersRepository
 from app.repositories.roster import RosterRepository
 from app.services.mutations import mutate_entity
@@ -43,6 +44,7 @@ def _roster_service(db: PostgresDatabase) -> RosterService:
     return RosterService(
         roster_repo=RosterRepository(db),
         members_repo=MembersRepository(db),
+        deferred_effects_repo=DeferredEffectsRepository(db),
         mutations_callable=partial(mutate_entity, db=db),
     )
 
@@ -62,7 +64,9 @@ def _seed_grant(
     grantee_id: str = "operator",
     scope_kind: str = "chapter",
     scope_id: str | None = "ch-1",
-    permissions: frozenset[str] = frozenset({"roster.read", "roster.write", "roster.remove"}),
+    permissions: frozenset[str] = frozenset(
+        {"roster.read", "roster.write", "roster.remove"}
+    ),
 ) -> None:
     with use_audit_context(_audit_context()):
         grant_authority(
@@ -151,7 +155,14 @@ def _seed_chapter_and_roles(
                 template_id,
                 Jsonb({"role_structure": [{"name": "member"}, {"name": "officer"}]}),
                 Jsonb({}),
-                Jsonb({"role_ids": {"member": "discord-role-1", "officer": "discord-role-2"}}),
+                Jsonb(
+                    {
+                        "role_ids": {
+                            "member": "discord-role-1",
+                            "officer": "discord-role-2",
+                        }
+                    }
+                ),
             ),
         )
         conn.execute(
@@ -675,7 +686,9 @@ def test_sync_failure_enqueues_deferred_effect_atomically(
     assert status == HTTPStatus.OK
     transition_id = _latest_transition_id(governance_dsn, entry["id"])
 
-    body, next_etag, status = _record_sync_failure(client, entry["id"], etag, transition_id)
+    body, next_etag, status = _record_sync_failure(
+        client, entry["id"], etag, transition_id
+    )
 
     assert status == HTTPStatus.OK
     assert body["version"] == 3
@@ -701,7 +714,9 @@ def test_sync_failure_enqueues_deferred_effect_atomically(
     assert effect["effect_type"] == "roster_sync_retry"
     assert effect["consequence_level"] == "consequential"
     assert effect["precondition_state"] == "unchecked"
-    assert effect["idempotency_key"] == f"roster_sync_retry:{entry['id']}:{transition_id}"
+    assert (
+        effect["idempotency_key"] == f"roster_sync_retry:{entry['id']}:{transition_id}"
+    )
     assert head["current_seq"] == 3
 
 

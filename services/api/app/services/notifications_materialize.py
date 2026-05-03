@@ -16,13 +16,9 @@ from app.contracts.notifications import (
     TemplateRenderError,
 )
 from app.contracts.scheduler import DeferredEffectCreate
-from app.repositories.db import PostgresDatabase
-from app.repositories.deferred_effects import enqueue_effect
-from app.repositories.notification_events import fetch_notification_event
-from app.repositories.notifications import (
-    insert_notification_envelope_on_conflict_do_nothing,
-    list_enabled_rules_for_event,
-)
+from app.repositories.deferred_effects import DeferredEffectsRepository
+from app.repositories.notification_events import NotificationEventsRepository
+from app.repositories.notifications import NotificationsRepository
 from app.services.scheduler import DEFAULT_MAX_ATTEMPTS
 
 
@@ -186,14 +182,18 @@ def _resolve_destination(
                 rule.recipients_json.get("channel_id_payload_key"),
             )
         else:
-            destination = str(rule.recipients_json.get("designated_channel_id", "")).strip()
+            destination = str(
+                rule.recipients_json.get("designated_channel_id", "")
+            ).strip()
         if not destination:
             return None, "destination_missing"
         return destination, None
     return None, "thread_channel_out_of_scope"
 
 
-def _template_context(event: NotificationEventRead, rule: NotificationRuleRead) -> dict[str, str]:
+def _template_context(
+    event: NotificationEventRead, rule: NotificationRuleRead
+) -> dict[str, str]:
     context = {
         "event_id": str(event.id),
         "event_type": event.event_type,
@@ -291,112 +291,138 @@ def _envelope_from_row(row: dict[str, Any]) -> NotificationEnvelopeRead:
     return NotificationEnvelopeRead.model_validate(row)
 
 
-def materialize_event(
-    db: PostgresDatabase,
-    event_id: UUID,
-    *,
-    worker_id: str = "notification-dispatcher",
-) -> NotificationMaterializationResult:
-    created_count = 0
-    skipped_count = 0
-    delivery_effect_count = 0
-    envelope_ids: list[UUID] = []
+class NotificationsMaterializeService:
+    def __init__(
+        self,
+        notifications_repo: NotificationsRepository,
+        notification_events_repo: NotificationEventsRepository,
+        deferred_effects_repo: DeferredEffectsRepository,
+        mutations_callable,
+    ) -> None:
+        self._notifications_repo = notifications_repo
+        self._notification_events_repo = notification_events_repo
+        self._deferred_effects_repo = deferred_effects_repo
+        self._mutations_callable = mutations_callable
 
-    with db.transaction() as connection:
-        event_row = fetch_notification_event(connection, event_id)
-        if event_row is None:
-            raise LookupError(f"notification event {event_id} was not found")
-        event = _event_from_row(event_row)
-        candidate_rules = [
-            _rule_from_row(row)
-            for row in list_enabled_rules_for_event(connection, event_row=event_row)
-        ]
-        for rule in candidate_rules:
-            if not rule.enabled or not _trigger_matches(rule, event):
-                continue
-            rendered_title = ""
-            rendered_body = ""
-            rendered_embed_json: dict[str, Any] | None = None
-            render_error: str | None = None
-            try:
-                rendered_title, rendered_body, rendered_embed_json = _render_template(
-                    rule,
-                    event,
+    def materialize_event(
+        self,
+        event_id: UUID,
+        *,
+        worker_id: str = "notification-dispatcher",
+    ) -> NotificationMaterializationResult:
+        created_count = 0
+        skipped_count = 0
+        delivery_effect_count = 0
+        envelope_ids: list[UUID] = []
+
+        with self._notifications_repo.db.transaction() as connection:
+            event_row = self._notification_events_repo._fetch_notification_event_on(
+                connection, event_id
+            )
+            if event_row is None:
+                raise LookupError(f"notification event {event_id} was not found")
+            event = _event_from_row(event_row)
+            candidate_rules = [
+                _rule_from_row(row)
+                for row in self._notifications_repo._list_enabled_rules_for_event_on(
+                    connection, event_row=event_row
                 )
-            except TemplateRenderError:
-                render_error = "template_missing_key"
-            destination_channel_id, destination_error = _resolve_destination(rule, event)
-            payload_requirement_error = _payload_requirement_error(rule, event)
-            for recipient in _resolve_recipients(rule, event):
-                reason = (
-                    recipient["reason"]
-                    or destination_error
-                    or payload_requirement_error
-                    or render_error
-                )
-                status = "skipped" if reason is not None else "pending"
-                now = datetime.now(UTC)
-                inserted = insert_notification_envelope_on_conflict_do_nothing(
-                    connection,
-                    row={
-                        "id": uuid4(),
-                        "rule_id": rule.id,
-                        "rule_version": rule.version,
-                        "source_event_id": event.id,
-                        "root_correlation_id": event.correlation_id,
-                        "causation_id": event.causation_id,
-                        "grouping": rule.grouping,
-                        "recipient_key": recipient["recipient_key"],
-                        "recipient_discord_id": recipient["recipient_discord_id"],
-                        "recipient_display": recipient["recipient_display"],
-                        "channel": rule.channel,
-                        "destination_channel_id": destination_channel_id,
-                        "template_snapshot_json": deepcopy(rule.template_json),
-                        "rendered_title": rendered_title,
-                        "rendered_body": rendered_body,
-                        "rendered_embed_json": rendered_embed_json,
-                        "actionable": rule.actionable,
-                        "delivery_status": status,
-                        "claimed_by": None,
-                        "claimed_at": None,
-                        "lease_until": None,
-                        "attempts": 0,
-                        "max_attempts": DEFAULT_MAX_ATTEMPTS,
-                        "last_error_json": None if reason is None else {"reason": reason},
-                        "discord_message_id": None,
-                        "delivered_at": None,
-                        "created_at": now,
-                        "updated_at": now,
-                    },
-                )
-                if inserted is None:
+            ]
+            for rule in candidate_rules:
+                if not rule.enabled or not _trigger_matches(rule, event):
                     continue
-                created_count += 1
-                envelope = _envelope_from_row(inserted)
-                envelope_ids.append(envelope.id)
-                if envelope.delivery_status == "skipped":
-                    skipped_count += 1
-                    continue
-                enqueue_effect(
-                    connection,
-                    effect=DeferredEffectCreate(
-                        subsystem="notifications",
-                        effect_type="notifications_deliver",
-                        idempotency_key=f"notifications:deliver:{envelope.id}",
-                        payload_json={"envelope_id": str(envelope.id)},
-                        consequence_level="safe",
+                rendered_title = ""
+                rendered_body = ""
+                rendered_embed_json: dict[str, Any] | None = None
+                render_error: str | None = None
+                try:
+                    rendered_title, rendered_body, rendered_embed_json = (
+                        _render_template(
+                            rule,
+                            event,
+                        )
+                    )
+                except TemplateRenderError:
+                    render_error = "template_missing_key"
+                destination_channel_id, destination_error = _resolve_destination(
+                    rule, event
+                )
+                payload_requirement_error = _payload_requirement_error(rule, event)
+                for recipient in _resolve_recipients(rule, event):
+                    reason = (
+                        recipient["reason"]
+                        or destination_error
+                        or payload_requirement_error
+                        or render_error
+                    )
+                    status = "skipped" if reason is not None else "pending"
+                    now = datetime.now(UTC)
+                    inserted = self._notifications_repo._insert_notification_envelope_on_conflict_do_nothing_on(
+                        connection,
+                        row={
+                            "id": uuid4(),
+                            "rule_id": rule.id,
+                            "rule_version": rule.version,
+                            "source_event_id": event.id,
+                            "root_correlation_id": event.correlation_id,
+                            "causation_id": event.causation_id,
+                            "grouping": rule.grouping,
+                            "recipient_key": recipient["recipient_key"],
+                            "recipient_discord_id": recipient["recipient_discord_id"],
+                            "recipient_display": recipient["recipient_display"],
+                            "channel": rule.channel,
+                            "destination_channel_id": destination_channel_id,
+                            "template_snapshot_json": deepcopy(rule.template_json),
+                            "rendered_title": rendered_title,
+                            "rendered_body": rendered_body,
+                            "rendered_embed_json": rendered_embed_json,
+                            "actionable": rule.actionable,
+                            "delivery_status": status,
+                            "claimed_by": None,
+                            "claimed_at": None,
+                            "lease_until": None,
+                            "attempts": 0,
+                            "max_attempts": DEFAULT_MAX_ATTEMPTS,
+                            "last_error_json": None
+                            if reason is None
+                            else {"reason": reason},
+                            "discord_message_id": None,
+                            "delivered_at": None,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    if inserted is None:
+                        continue
+                    created_count += 1
+                    envelope = _envelope_from_row(inserted)
+                    envelope_ids.append(envelope.id)
+                    if envelope.delivery_status == "skipped":
+                        skipped_count += 1
+                        continue
+                    self._deferred_effects_repo._enqueue_effect_on(
+                        connection,
+                        effect=DeferredEffectCreate(
+                            subsystem="notifications",
+                            effect_type="notifications_deliver",
+                            idempotency_key=f"notifications:deliver:{envelope.id}",
+                            payload_json={"envelope_id": str(envelope.id)},
+                            consequence_level="safe",
+                            correlation_id=event.correlation_id,
+                            causation_id=event.causation_id,
+                        ),
                         correlation_id=event.correlation_id,
-                        causation_id=event.causation_id,
-                    ),
-                    correlation_id=event.correlation_id,
-                    max_attempts=DEFAULT_MAX_ATTEMPTS,
-                )
-                delivery_effect_count += 1
+                        max_attempts=DEFAULT_MAX_ATTEMPTS,
+                    )
+                    delivery_effect_count += 1
 
-    return NotificationMaterializationResult(
-        event_id=event_id,
-        created_count=created_count,
-        skipped_count=skipped_count,
-        delivery_effect_count=delivery_effect_count,
-        envelope_ids=envelope_ids,
-    )
+        return NotificationMaterializationResult(
+            event_id=event_id,
+            created_count=created_count,
+            skipped_count=skipped_count,
+            delivery_effect_count=delivery_effect_count,
+            envelope_ids=envelope_ids,
+        )
+
+
+__all__ = ["NotificationsMaterializeService"]

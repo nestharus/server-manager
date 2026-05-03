@@ -6,7 +6,7 @@ audit context), and D10 (Python-dict handler registry). Tests fail now;
 pass once the scheduler service, repository, migration, and handler
 registry land.
 
-Worker behavior is exercised through ``SchedulerLoop._tick()`` — the
+Worker behavior is exercised through ``SchedulerService._tick()`` — the
 single-tick seam called by ``run()`` on each poll interval — instead of
 spinning up the asyncio supervision loop.
 """
@@ -32,14 +32,12 @@ from app.contracts.scheduler import (
 )
 from app.core.context import resolve_register_correlation, use_audit_context
 from app.repositories.db import PostgresDatabase
+from app.repositories.scheduler import SchedulerRepository
 from app.services.scheduler import (
     DEFAULT_MAX_ATTEMPTS,
     LEASE_SECONDS,
     POLL_INTERVAL_SECONDS,
-    SchedulerLoop,
-    extend_lease,
-    read_scheduled_job,
-    register_scheduled_job,
+    SchedulerService,
     register_scheduler_handler,
 )
 
@@ -146,6 +144,18 @@ def _make_create(
     return ScheduledJobCreate.model_validate(kwargs)
 
 
+def _scheduler_service(
+    db: PostgresDatabase,
+    *,
+    worker_id: str = "test-scheduler",
+) -> SchedulerService:
+    return SchedulerService(
+        scheduler_repo=SchedulerRepository(db),
+        db=db,
+        worker_id=worker_id,
+    )
+
+
 @pytest.fixture()
 def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
     db = PostgresDatabase(dsn=governance_dsn)
@@ -209,7 +219,7 @@ def test_register_scheduled_job_persists_row(
     request = _make_create(job_key=job_key, subsystem="persist-sub")
 
     with use_audit_context(_make_audit_context()):
-        read = register_scheduled_job(governance_db, request)
+        read = _scheduler_service(governance_db).register_scheduled_job(request)
 
     assert isinstance(read, ScheduledJobRead)
     assert read.job_key == job_key
@@ -238,8 +248,8 @@ def test_register_scheduled_job_is_idempotent_by_job_key(
     )
 
     with use_audit_context(_make_audit_context()):
-        first = register_scheduled_job(governance_db, first_request)
-        second = register_scheduled_job(governance_db, second_request)
+        first = _scheduler_service(governance_db).register_scheduled_job(first_request)
+        second = _scheduler_service(governance_db).register_scheduled_job(second_request)
 
     assert first.job_key == second.job_key == job_key
     assert _count_jobs(governance_dsn, job_key) == 1
@@ -261,7 +271,7 @@ def test_register_scheduled_job_without_correlation_warns(
 
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="app.core.context"):
-        read = register_scheduled_job(governance_db, request)
+        read = _scheduler_service(governance_db).register_scheduled_job(request)
 
     assert any(
         record.levelno == logging.WARNING for record in caplog.records
@@ -287,7 +297,7 @@ def test_register_scheduled_job_with_explicit_correlation_uses_it(
     job_key = _unique_job_key("explicit")
     request = _make_create(job_key=job_key, correlation_id=explicit)
 
-    read = register_scheduled_job(governance_db, request)
+    read = _scheduler_service(governance_db).register_scheduled_job(request)
 
     assert read.correlation_id == explicit
 
@@ -310,7 +320,7 @@ def test_register_scheduled_job_inherits_contextvar_correlation(
     request = _make_create(job_key=job_key)
 
     with use_audit_context(ctx):
-        read = register_scheduled_job(governance_db, request)
+        read = _scheduler_service(governance_db).register_scheduled_job(request)
 
     assert read.correlation_id == ctx_correlation
 
@@ -336,14 +346,14 @@ def test_scheduled_job_survives_restart(governance_dsn: str) -> None:
     db = PostgresDatabase(dsn=governance_dsn)
     try:
         with use_audit_context(_make_audit_context()):
-            register_scheduled_job(db, request)
+            _scheduler_service(db).register_scheduled_job(request)
     finally:
         db.close()
 
     # Simulate process restart: fresh pool, same DSN.
     fresh_db = PostgresDatabase(dsn=governance_dsn)
     try:
-        reloaded = read_scheduled_job(fresh_db, job_key)
+        reloaded = _scheduler_service(fresh_db).read_scheduled_job(job_key)
     finally:
         fresh_db.close()
 
@@ -366,7 +376,7 @@ def test_scheduled_job_stable_identity_across_runs(
     first_request = _make_create(job_key=job_key, next_run_at=first_next)
 
     with use_audit_context(_make_audit_context()):
-        first = register_scheduled_job(governance_db, first_request)
+        first = _scheduler_service(governance_db).register_scheduled_job(first_request)
 
     # Simulate an execution that left the row in ``completed`` state.
     _mark_job_completed_directly(governance_dsn, job_key)
@@ -375,7 +385,7 @@ def test_scheduled_job_stable_identity_across_runs(
     second_request = _make_create(job_key=job_key, next_run_at=second_next)
 
     with use_audit_context(_make_audit_context()):
-        second = register_scheduled_job(governance_db, second_request)
+        second = _scheduler_service(governance_db).register_scheduled_job(second_request)
 
     # Same logical row, same identity.
     assert first.job_key == second.job_key
@@ -449,7 +459,7 @@ def test_extend_lease_pushes_lease_until_forward(
     job_key = _unique_job_key("lease")
     request = _make_create(job_key=job_key)
     with use_audit_context(_make_audit_context()):
-        register_scheduled_job(governance_db, request)
+        _scheduler_service(governance_db).register_scheduled_job(request)
 
     initial_lease = datetime.now(tz=UTC) + timedelta(seconds=10)
     _set_job_claim(
@@ -459,7 +469,7 @@ def test_extend_lease_pushes_lease_until_forward(
         lease_until=initial_lease,
     )
 
-    extend_lease(governance_db, job_key, extra_seconds=300)
+    _scheduler_service(governance_db).extend_lease(job_key, extra_seconds=300)
 
     row = _fetch_job_row(governance_dsn, job_key)
     assert row is not None
@@ -485,8 +495,7 @@ def test_claim_due_scheduled_jobs_skips_leased_rows(
 
     due = datetime.now(tz=UTC) - timedelta(seconds=1)
     with use_audit_context(_make_audit_context()):
-        register_scheduled_job(
-            governance_db,
+        _scheduler_service(governance_db).register_scheduled_job(
             _make_create(
                 job_key=job_key, handler_name=handler_name, next_run_at=due
             ),
@@ -503,7 +512,7 @@ def test_claim_due_scheduled_jobs_skips_leased_rows(
 
     # worker-2 tick — must NOT execute a live-leased row.
     async def _run_worker_2() -> None:
-        loop = SchedulerLoop(governance_db, worker_id="worker-2")
+        loop = _scheduler_service(governance_db, worker_id="worker-2")
         await loop._tick()
 
     asyncio.run(_run_worker_2())

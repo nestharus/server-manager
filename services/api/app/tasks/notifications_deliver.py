@@ -6,9 +6,10 @@ from uuid import UUID
 from app.contracts.notifications import NotificationDeliveryResult
 from app.contracts.scheduler import DeferredEffectRead
 from app.repositories.db import PostgresDatabase
+from app.repositories.notifications import NotificationsRepository
 from app.services.notifications_delivery import (
     NotificationDeliveryPort,
-    deliver_envelope,
+    NotificationsDeliveryService,
 )
 from app.services.scheduler import register_scheduler_handler
 
@@ -48,8 +49,8 @@ def get_delivery_port() -> NotificationDeliveryPort:
 @register_scheduler_handler("notifications_deliver")
 def deliver_notification(effect: DeferredEffectRead) -> NotificationDeliveryResult:
     envelope_id = UUID(str(effect.payload_json["envelope_id"]))
-    return deliver_envelope(
-        get_delivery_db(),
-        envelope_id,
+    db = get_delivery_db()
+    return NotificationsDeliveryService(
+        notifications_repo=NotificationsRepository(db),
         delivery_port=get_delivery_port(),
-    )
+    ).deliver_envelope(envelope_id)
