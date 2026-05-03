@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from functools import partial
 from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4
@@ -21,12 +22,9 @@ from app.contracts.application_messages import (
 )
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.application_messages import (
-    append_application_message,
-    read_application_messages,
-)
 from app.services.authority import grant_authority
 from app.services.members import create_or_get_member
+from app.services.mutations import mutate_entity
 
 
 FORMS_URL = "/api/v1/application-forms"
@@ -205,6 +203,18 @@ def _append_request(
     )
 
 
+def _messages_service(db: PostgresDatabase):
+    from app.repositories.applications import ApplicationsRepository
+    from app.repositories.application_messages import ApplicationMessagesRepository
+    from app.services.application_messages import ApplicationMessagesService
+
+    return ApplicationMessagesService(
+        applications_repo=ApplicationsRepository(db),
+        application_messages_repo=ApplicationMessagesRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
 def _append(
     db: PostgresDatabase,
     *,
@@ -215,8 +225,7 @@ def _append(
     client_message_id: str | None = None,
 ) -> tuple[Any, bool]:
     with use_audit_context(_audit_context()):
-        return append_application_message(
-            db,
+        return _messages_service(db).append_application_message(
             application_id=UUID(application_id),
             request=_append_request(
                 author_actor_id=author_actor_id,
@@ -511,14 +520,13 @@ async def test_read_messages_filters_by_viewer_identity_and_officer_authority(
         body_markdown="Applicant-visible third",
     )
 
-    applicant_messages = read_application_messages(
-        governance_db,
+    service = _messages_service(governance_db)
+    applicant_messages = service.read_application_messages(
         application_id=UUID(application["id"]),
         viewer_actor_kind="user",
         viewer_actor_id=applicant_id,
     )
-    officer_messages = read_application_messages(
-        governance_db,
+    officer_messages = service.read_application_messages(
         application_id=UUID(application["id"]),
         viewer_actor_kind="user",
         viewer_actor_id=officer_id,
@@ -536,8 +544,7 @@ async def test_read_messages_filters_by_viewer_identity_and_officer_authority(
     ]
     assert [message.message_seq for message in officer_messages] == [1, 2, 3]
     with pytest.raises(ApplicationMessageAppendForbiddenError):
-        read_application_messages(
-            governance_db,
+        service.read_application_messages(
             application_id=UUID(application["id"]),
             viewer_actor_kind="user",
             viewer_actor_id=stranger_id,

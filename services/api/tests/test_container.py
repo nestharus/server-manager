@@ -186,6 +186,53 @@ def test_container_resolves_permission_factories(test_settings):
         container.shutdown_resources()
 
 
+def test_container_resolves_application_factories(test_settings):
+    """TG-4: Container resolves application repos and services as
+    Factory instances (post-142d shape) plus infra.s3_client and
+    application_notification_emitter."""
+    from app.repositories.applications import ApplicationsRepository
+    from app.repositories.application_messages import ApplicationMessagesRepository
+    from app.repositories.forms import FormsRepository
+    from app.repositories.public_chapters import PublicChaptersRepository
+    from app.services.applications import ApplicationsService
+    from app.services.application_messages import ApplicationMessagesService
+    from app.services.application_transcript import ApplicationTranscriptService
+    from app.services.forms import FormsService
+    from app.services.public_chapters import PublicChaptersService
+    from app.services.file_upload import FileUploadService
+
+    container = ApiContainer(settings=test_settings)
+    container.init_resources()
+    try:
+        # 4 repos
+        assert isinstance(container.repos.applications(), ApplicationsRepository)
+        assert isinstance(
+            container.repos.application_messages(),
+            ApplicationMessagesRepository,
+        )
+        assert isinstance(container.repos.forms(), FormsRepository)
+        assert isinstance(container.repos.public_chapters(), PublicChaptersRepository)
+        # 6 services
+        assert isinstance(container.services.applications(), ApplicationsService)
+        assert isinstance(
+            container.services.application_messages(),
+            ApplicationMessagesService,
+        )
+        assert isinstance(
+            container.services.application_transcript(),
+            ApplicationTranscriptService,
+        )
+        assert isinstance(container.services.forms(), FormsService)
+        assert isinstance(container.services.public_chapters(), PublicChaptersService)
+        assert isinstance(container.services.file_upload(), FileUploadService)
+        # infra.s3_client present
+        assert container.infra.s3_client() is not None
+        # application_notification_emitter callable
+        assert callable(container.services.application_notification_emitter)
+    finally:
+        container.shutdown_resources()
+
+
 def test_container_missing_settings_raises():
     with pytest.raises(Exception, match=r"Dependency|defined"):
         ApiContainer().core.settings()

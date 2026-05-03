@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4
@@ -20,10 +21,9 @@ from app.contracts.authority import DuplicateActiveGrantError
 from app.contracts.members import MemberCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.application_messages import append_application_message
-from app.services.application_transcript import read_application_transcript
 from app.services.authority import grant_authority
 from app.services.members import create_or_get_member
+from app.services.mutations import mutate_entity
 
 
 FORMS_URL = "/api/v1/application-forms"
@@ -180,6 +180,28 @@ def _append_request(
     )
 
 
+def _messages_service(db: PostgresDatabase):
+    from app.repositories.applications import ApplicationsRepository
+    from app.repositories.application_messages import ApplicationMessagesRepository
+    from app.services.application_messages import ApplicationMessagesService
+
+    return ApplicationMessagesService(
+        applications_repo=ApplicationsRepository(db),
+        application_messages_repo=ApplicationMessagesRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
+def _transcript_service(db: PostgresDatabase):
+    from app.repositories.applications import ApplicationsRepository
+    from app.services.application_transcript import ApplicationTranscriptService
+
+    return ApplicationTranscriptService(
+        applications_repo=ApplicationsRepository(db),
+        application_messages_service=_messages_service(db),
+    )
+
+
 def _append_message(
     db: PostgresDatabase,
     *,
@@ -189,8 +211,7 @@ def _append_message(
     body_markdown: str,
 ) -> None:
     with use_audit_context(_audit_context()):
-        append_application_message(
-            db,
+        _messages_service(db).append_application_message(
             application_id=UUID(application_id),
             request=_append_request(
                 author_actor_id=author_actor_id,
@@ -328,8 +349,7 @@ async def test_applicant_transcript_includes_state_changes_and_applicant_visible
         governance_dsn,
     )
 
-    transcript = read_application_transcript(
-        governance_db,
+    transcript = _transcript_service(governance_db).read_application_transcript(
         application_id=UUID(seed["application_id"]),
         viewer_actor_kind="user",
         viewer_actor_id=seed["applicant_id"],
@@ -367,8 +387,7 @@ async def test_officer_transcript_includes_state_changes_and_both_message_visibi
         governance_dsn,
     )
 
-    transcript = read_application_transcript(
-        governance_db,
+    transcript = _transcript_service(governance_db).read_application_transcript(
         application_id=UUID(seed["application_id"]),
         viewer_actor_kind="user",
         viewer_actor_id=seed["officer_id"],
@@ -406,8 +425,7 @@ async def test_stranger_transcript_reuses_application_message_forbidden_error(
     )
 
     with pytest.raises(ApplicationMessageAppendForbiddenError):
-        read_application_transcript(
-            governance_db,
+        _transcript_service(governance_db).read_application_transcript(
             application_id=UUID(seed["application_id"]),
             viewer_actor_kind="user",
             viewer_actor_id=seed["stranger_id"],
@@ -463,8 +481,7 @@ async def test_transcript_chronologically_interleaves_state_changes_and_messages
         },
     )
 
-    transcript = read_application_transcript(
-        governance_db,
+    transcript = _transcript_service(governance_db).read_application_transcript(
         application_id=UUID(application_id),
         viewer_actor_kind="user",
         viewer_actor_id=applicant_id,
