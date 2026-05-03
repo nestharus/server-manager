@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
+from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
@@ -19,7 +20,6 @@ from app.contracts.chapter_templates import (
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from app.services.authority import grant_authority
-from app.services.chapter_templates import create_chapter_template, patch_chapter_template
 
 
 TEMPLATES_URL = "/api/v1/chapter-templates"
@@ -56,6 +56,14 @@ def _seed_template_grants(db: PostgresDatabase) -> None:
             predecessor_grant_id=None,
             actor=("user", "admin"),
         )
+
+
+def _chapter_templates_service(app: Any) -> Any:
+    from app.services.chapter_templates import ChapterTemplatesService
+
+    service = app.state.container.services.chapter_templates()
+    assert isinstance(service, ChapterTemplatesService)
+    return service
 
 
 def _template_payload(**overrides: object) -> dict[str, object]:
@@ -154,18 +162,21 @@ def test_patch_chapter_template_stale_expected_version_returns_412(
 
 
 def test_patch_race_one_accepted_one_412_no_integrityerror(
+    app: Any,
     governance_db: PostgresDatabase,
 ) -> None:
     actor = ActorIdentity(actor_kind="user", actor_id="operator")
     request = ChapterTemplateCreate.model_validate(_template_payload())
     with use_audit_context(_audit_context()):
-        created, _ = create_chapter_template(governance_db, request, actor)
+        created, _ = _chapter_templates_service(app).create_chapter_template(
+            request,
+            actor,
+        )
 
     def patch(name: str) -> str:
         try:
             with use_audit_context(_audit_context()):
-                patch_chapter_template(
-                    governance_db,
+                _chapter_templates_service(app).patch_chapter_template(
                     created.id,
                     ChapterTemplatePatch(expected_current_version=1, name=name),
                     actor,
@@ -178,5 +189,4 @@ def test_patch_race_one_accepted_one_412_no_integrityerror(
         results = sorted(executor.map(patch, ["v2-a", "v2-b"]))
 
     assert results == ["accepted", "stale"]
-
 

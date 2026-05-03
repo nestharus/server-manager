@@ -29,10 +29,6 @@ from app.contracts.chapter_templates import (
 )
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.chapter_templates import (
-    create_chapter_template,
-    read_chapter_template,
-)
 
 
 def _make_audit_context() -> AuditContextRead:
@@ -93,6 +89,14 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         yield db
     finally:
         db.close()
+
+
+def _chapter_templates_service(app: Any) -> Any:
+    from app.services.chapter_templates import ChapterTemplatesService
+
+    service = app.state.container.services.chapter_templates()
+    assert isinstance(service, ChapterTemplatesService)
+    return service
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +216,7 @@ def test_default_intent_spec_temporary_requires_expires_in_days() -> None:
 
 
 def test_create_chapter_template_persists_row(
+    app: Any,
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
@@ -221,7 +226,7 @@ def test_create_chapter_template_persists_row(
     request = ChapterTemplateCreate.model_validate(_template_create_kwargs())
 
     with use_audit_context(_make_audit_context()):
-        create_chapter_template(governance_db, request)
+        _chapter_templates_service(app).create_chapter_template(request)
 
     with psycopg.connect(governance_dsn, row_factory=dict_row) as conn:
         rows = conn.execute(
@@ -249,6 +254,18 @@ def test_chapter_template_is_immutable() -> None:
 
     import app.services.chapter_templates as svc
 
+    assert not hasattr(svc, "create_chapter_template"), (
+        "chapter templates must expose ChapterTemplatesService methods "
+        "instead of module-level command functions"
+    )
+    assert not hasattr(svc, "read_chapter_template"), (
+        "chapter templates must expose ChapterTemplatesService methods "
+        "instead of module-level command functions"
+    )
+    assert not hasattr(svc, "patch_chapter_template"), (
+        "chapter templates must expose ChapterTemplatesService methods "
+        "instead of module-level command functions"
+    )
     assert not hasattr(svc, "update_chapter_template"), (
         "chapter templates must be immutable in SLICE-003 "
         "(see proposal §3 WU-007A)"
@@ -256,6 +273,7 @@ def test_chapter_template_is_immutable() -> None:
 
 
 def test_template_schema_version_matches_current(
+    app: Any,
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
@@ -265,7 +283,7 @@ def test_template_schema_version_matches_current(
 
     request = ChapterTemplateCreate.model_validate(_template_create_kwargs())
     with use_audit_context(_make_audit_context()):
-        create_chapter_template(governance_db, request)
+        _chapter_templates_service(app).create_chapter_template(request)
 
     with psycopg.connect(governance_dsn, row_factory=dict_row) as conn:
         row = conn.execute(
@@ -276,6 +294,7 @@ def test_template_schema_version_matches_current(
 
 
 def test_read_template_with_stale_schema_raises(
+    app: Any,
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
@@ -308,4 +327,4 @@ def test_read_template_with_stale_schema_raises(
         )
 
     with pytest.raises(TemplateSchemaVersionMismatchError):
-        read_chapter_template(governance_db, stale_id)
+        _chapter_templates_service(app).read_chapter_template(stale_id)
