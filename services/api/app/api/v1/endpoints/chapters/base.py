@@ -5,6 +5,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.contracts.actor import ActorIdentity
@@ -23,14 +24,10 @@ from app.contracts.chapters import (
     InvalidChapterTransitionError,
 )
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority, get_current_actor
 from app.repositories.db import PostgresDatabase
-from app.services.chapters import (
-    create_chapter as create_chapter_service,
-    patch_chapter_discord_resources,
-    read_chapter as read_chapter_service,
-    transition_chapter,
-)
+from app.services.chapters import ChaptersService
 
 router = APIRouter(prefix="/api/v1/chapters")
 
@@ -47,11 +44,15 @@ def parse_if_match(request: Request) -> int:
             detail="If-Match header required",
         )
     if not (if_match.startswith('"') and if_match.endswith('"')):
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="invalid If-Match")
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST, detail="invalid If-Match"
+        )
     try:
         return int(if_match.strip('"'))
     except ValueError as error:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="invalid If-Match") from error
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST, detail="invalid If-Match"
+        ) from error
 
 
 def set_etag(response: Response, etag: str) -> None:
@@ -59,8 +60,13 @@ def set_etag(response: Response, etag: str) -> None:
 
 
 def raise_for_chapter_error(error: Exception) -> None:
-    if isinstance(error, (ChapterNotFoundError, ChapterTemplateNotFoundError, MissingAggregateError)):
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="not found") from error
+    if isinstance(
+        error,
+        (ChapterNotFoundError, ChapterTemplateNotFoundError, MissingAggregateError),
+    ):
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail="not found"
+        ) from error
     if isinstance(error, StaleMutationError):
         raise HTTPException(
             status_code=HTTPStatus.PRECONDITION_FAILED,
@@ -122,14 +128,15 @@ def raise_for_chapter_error(error: Exception) -> None:
     status_code=HTTPStatus.CREATED,
     dependencies=[Depends(RequireAuthority("chapter.write", "global"))],
 )
+@inject
 def create_chapter(
     chapter: ChapterCreate,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChaptersService = Depends(Provide[ApiContainer.services.chapters]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterRead:
     try:
-        read, result = create_chapter_service(db, chapter, actor)
+        read, result = service.create_chapter(chapter, actor)
     except Exception as error:
         raise_for_chapter_error(error)
     set_etag(response, result.etag)
@@ -141,13 +148,14 @@ def create_chapter(
     response_model=ChapterRead,
     dependencies=[Depends(RequireAuthority("chapter.read", "global"))],
 )
+@inject
 def get_chapter(
     chapter_id: UUID,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChaptersService = Depends(Provide[ApiContainer.services.chapters]),
 ) -> ChapterRead:
     try:
-        read, etag = read_chapter_service(db, str(chapter_id))
+        read, etag = service.read_chapter(str(chapter_id))
     except Exception as error:
         raise_for_chapter_error(error)
     set_etag(response, etag)
@@ -159,18 +167,18 @@ def get_chapter(
     response_model=ChapterRead,
     dependencies=[Depends(RequireAuthority("chapter.write", "global"))],
 )
+@inject
 def transition_chapter_endpoint(
     chapter_id: UUID,
     transition: ChapterTransitionRequest,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChaptersService = Depends(Provide[ApiContainer.services.chapters]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterRead:
     expected_version = parse_if_match(request)
     try:
-        read, result = transition_chapter(
-            db,
+        read, result = service.transition_chapter(
             str(chapter_id),
             transition,
             actor,
@@ -187,18 +195,18 @@ def transition_chapter_endpoint(
     response_model=ChapterRead,
     dependencies=[Depends(RequireAuthority("chapter.write", "global"))],
 )
+@inject
 def patch_chapter_discord_resources_endpoint(
     chapter_id: UUID,
     resources: ChapterResourcesPatchRequest,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChaptersService = Depends(Provide[ApiContainer.services.chapters]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterRead:
     expected_version = parse_if_match(request)
     try:
-        read, result = patch_chapter_discord_resources(
-            db,
+        read, result = service.patch_chapter_discord_resources(
             str(chapter_id),
             resources,
             actor,

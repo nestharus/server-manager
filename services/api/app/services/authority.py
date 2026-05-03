@@ -38,7 +38,7 @@ from app.repositories.authority import (
     list_grants,
     update_revoked_with_reason,
 )
-from app.repositories.chapter_roles import list_succession_triggering_roles
+from app.repositories.chapter_roles import ChapterRolesRepository
 from app.repositories.db import PostgresDatabase
 from app.repositories.members import fetch_member_by_discord_id, fetch_member_by_id
 from app.repositories.mutations import get_head_for_update
@@ -333,7 +333,9 @@ def revoke_authority(
         aggregate_id=str(grant_id),
         request=_make_request(
             expected_version=(
-                int(row["current_seq"]) if expected_version is None else expected_version
+                int(row["current_seq"])
+                if expected_version is None
+                else expected_version
             ),
             actor=actor,
             request_surface="service:authority.revoke",
@@ -510,8 +512,12 @@ def compute_succession_plan(
         db=db,
     )
 
+    chapter_roles_repo = ChapterRolesRepository(db)
     with db.connection() as connection:
-        roles = list_succession_triggering_roles(connection, chapter_id=chapter_id)
+        roles = chapter_roles_repo._list_succession_triggering_roles_on(
+            connection,
+            chapter_id=chapter_id,
+        )
         holders = {
             row["role_id"]: row
             for row in list_latest_role_holders(
@@ -555,7 +561,9 @@ def compute_succession_plan(
             scope_kind="chapter",
             scope_id=chapter_id,
         )
-        application_rows = ApplicationsRepository(db)._list_open_applications_for_owner_ids_on(
+        application_rows = ApplicationsRepository(
+            db
+        )._list_open_applications_for_owner_ids_on(
             connection,
             owner_ids=application_owner_ids,
             states=sorted(OPEN_APPLICATION_STATES),
@@ -632,9 +640,7 @@ def transfer_authority_grant(
         )
         if existing_successor is not None:
             if existing_successor["grantee_id"] == successor_id:
-                successor_row = _fetch_grant_row(
-                    connection, existing_successor["id"]
-                )
+                successor_row = _fetch_grant_row(connection, existing_successor["id"])
                 successor_version = int(successor_row["current_seq"])
                 return (
                     _row_to_read(successor_row),

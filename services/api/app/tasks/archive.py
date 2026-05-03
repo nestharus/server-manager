@@ -15,7 +15,11 @@ from app.core.context import use_audit_context
 from app.core.settings import Settings
 from app.repositories.application_messages import ApplicationMessagesRepository
 from app.repositories.applications import ApplicationsRepository
+from app.repositories.archive_queries import ArchiveQueriesRepository
+from app.repositories.archive_runs import ArchiveRunsRepository
 from app.repositories.authority import fetch_grant
+from app.repositories.chapter_transitions import ChapterTransitionsRepository
+from app.repositories.chapters import ChaptersRepository
 from app.repositories.db import PostgresDatabase
 from app.repositories.deferred_effects import (
     fetch_deferred_effect,
@@ -36,12 +40,7 @@ from app.services.chapters import (
     ARCHIVE_EFFECT_DEFERRED_EFFECT_CANCEL,
     ARCHIVE_EFFECT_TICKET_CLOSE,
     AuthorityDenied,
-    archive_status,
-    enqueue_missing_archive_effects,
-    ensure_actor_has,
-    finalize_archive_run,
-    list_active_archive_runs,
-    record_archive_manual_review_items,
+    ChaptersService,
 )
 from app.services.scheduler import register_scheduler_handler
 from app.services.file_upload import FileUploadService, build_s3_client
@@ -108,6 +107,16 @@ def _build_applications_service(
     )
 
 
+def _build_chapters_service(db: PostgresDatabase) -> ChaptersService:
+    return ChaptersService(
+        chapters_repo=ChaptersRepository(db=db),
+        chapter_transitions_repo=ChapterTransitionsRepository(db=db),
+        archive_queries_repo=ArchiveQueriesRepository(db=db),
+        archive_runs_repo=ArchiveRunsRepository(db=db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
 def _audit_context(row: dict[str, Any]) -> AuditContextRead:
     return AuditContextRead(
         correlation_id=row["correlation_id"],
@@ -120,7 +129,11 @@ def _audit_context(row: dict[str, Any]) -> AuditContextRead:
 
 
 def _terminal_states(state_machine: dict[str, Any]) -> set[str]:
-    return {str(state["key"]) for state in state_machine.get("states", []) if state.get("terminal")}
+    return {
+        str(state["key"])
+        for state in state_machine.get("states", [])
+        if state.get("terminal")
+    }
 
 
 def _edge_value(edge: dict[str, Any], key: str) -> Any:
@@ -141,9 +154,9 @@ def _find_close_edge(ticket_row: dict[str, Any]) -> dict[str, Any] | None:
         and str(_edge_value(edge, "to")) in terminals
         and str(edge.get("action")) in {"auto_close", "close"}
     ]
-    return next((edge for edge in edges if edge.get("action") == "auto_close"), None) or (
-        edges[0] if edges else None
-    )
+    return next(
+        (edge for edge in edges if edge.get("action") == "auto_close"), None
+    ) or (edges[0] if edges else None)
 
 
 def _manual_item(
@@ -180,8 +193,11 @@ def _skip_effect(connection, effect_id: UUID, reason: str) -> None:
     )
 
 
-def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any]) -> None:
+def _validate_archive_effects(
+    db: PostgresDatabase, archive_run: dict[str, Any]
+) -> None:
     applications_repo, _applications_service = _build_applications_service(db)
+    chapters_service = _build_chapters_service(db)
     tickets_repo = TicketsRepository(db)
     with db.transaction() as connection:
         effects = list_archive_effects(
@@ -202,7 +218,10 @@ def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any])
                     connection,
                     application_id=UUID(target_id),
                 )
-                if application is None or application["state"] not in _PENDING_APPLICATION_STATES:
+                if (
+                    application is None
+                    or application["state"] not in _PENDING_APPLICATION_STATES
+                ):
                     _skip_effect(connection, effect["id"], "already_resolved")
                 elif (
                     int(application["version"]) == expected_version
@@ -226,7 +245,10 @@ def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any])
                         )
                     )
                     _skip_effect(connection, effect["id"], "manual_review_required")
-                elif int(ticket["version"]) == expected_version and ticket["state"] == expected_state:
+                elif (
+                    int(ticket["version"]) == expected_version
+                    and ticket["state"] == expected_state
+                ):
                     _mark_valid(connection, effect["id"])
                 else:
                     _skip_effect(connection, effect["id"], "stale_precondition")
@@ -265,8 +287,7 @@ def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any])
                     )
                     _skip_effect(connection, effect["id"], "manual_review_required")
         if manual_items:
-            record_archive_manual_review_items(
-                db,
+            chapters_service.record_archive_manual_review_items(
                 archive_run_id=archive_run["id"],
                 items=manual_items,
             )
@@ -274,22 +295,29 @@ def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any])
 
 def archive_worker_tick() -> list[Any]:
     db = get_archive_db()
+    chapters_service = _build_chapters_service(db)
     statuses = []
-    for archive_run in list_active_archive_runs(db):
+    for archive_run in chapters_service.list_active_archive_runs():
         try:
             with use_audit_context(_audit_context(archive_run)):
-                enqueue_missing_archive_effects(db, archive_run=archive_run)
+                chapters_service.enqueue_missing_archive_effects(
+                    archive_run=archive_run
+                )
                 _validate_archive_effects(db, archive_run)
-                enqueue_missing_archive_effects(db, archive_run=archive_run)
-                finalized = finalize_archive_run(
-                    db,
+                chapters_service.enqueue_missing_archive_effects(
+                    archive_run=archive_run
+                )
+                finalized = chapters_service.finalize_archive_run(
                     archive_run=archive_run,
                     actor=ARCHIVE_WORKER_ACTOR,
                 )
                 statuses.append(
                     finalized
                     if finalized is not None
-                    else archive_status(db, archive_run["chapter_id"], ARCHIVE_WORKER_ACTOR)
+                    else chapters_service.archive_status(
+                        archive_run["chapter_id"],
+                        ARCHIVE_WORKER_ACTOR,
+                    )
                 )
         except StaleMutationError:
             continue
@@ -297,8 +325,8 @@ def archive_worker_tick() -> list[Any]:
 
 
 def _record_authority_denied(effect: DeferredEffectRead, permission: str) -> None:
-    record_archive_manual_review_items(
-        get_archive_db(),
+    chapters_service = _build_chapters_service(get_archive_db())
+    chapters_service.record_archive_manual_review_items(
         archive_run_id=UUID(str(effect.payload_json["archive_run_id"])),
         items=[
             _manual_item(
@@ -315,11 +343,11 @@ def _record_authority_denied(effect: DeferredEffectRead, permission: str) -> Non
 def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
     db = get_archive_db()
     applications_repo, applications_service = _build_applications_service(db)
+    chapters_service = _build_chapters_service(db)
     payload = effect.payload_json
     permission = "application.withdraw"
     try:
-        ensure_actor_has(
-            db=db,
+        chapters_service.ensure_actor_has(
             permission=permission,
             scope_kind="chapter",
             scope_id=str(payload["chapter_id"]),
@@ -334,7 +362,10 @@ def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
             connection,
             application_id=UUID(str(payload["target_id"])),
         )
-        if application is None or application["state"] not in _PENDING_APPLICATION_STATES:
+        if (
+            application is None
+            or application["state"] not in _PENDING_APPLICATION_STATES
+        ):
             return
         applications_service._transition_application_on(
             connection=connection,
@@ -352,11 +383,11 @@ def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
 def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
     db = get_archive_db()
     tickets_repo = TicketsRepository(db)
+    chapters_service = _build_chapters_service(db)
     payload = effect.payload_json
     permission = "ticket.transition"
     try:
-        ensure_actor_has(
-            db=db,
+        chapters_service.ensure_actor_has(
             permission=permission,
             scope_kind="chapter",
             scope_id=str(payload["chapter_id"]),
@@ -367,13 +398,14 @@ def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
         return
 
     with db.connection() as connection:
-        ticket = tickets_repo._get_ticket_on(connection, UUID(str(payload["target_id"])))
+        ticket = tickets_repo._get_ticket_on(
+            connection, UUID(str(payload["target_id"]))
+        )
     if ticket is None or ticket["terminal_at"] is not None:
         return
     close_edge = _find_close_edge(ticket)
     if close_edge is None:
-        record_archive_manual_review_items(
-            db,
+        chapters_service.record_archive_manual_review_items(
             archive_run_id=UUID(str(payload["archive_run_id"])),
             items=[
                 _manual_item(
@@ -403,11 +435,11 @@ def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
 @register_scheduler_handler(ARCHIVE_EFFECT_AUTHORITY_REVOKE)
 def handle_archive_authority_revoke(effect: DeferredEffectRead) -> None:
     db = get_archive_db()
+    chapters_service = _build_chapters_service(db)
     payload = effect.payload_json
     permission = "authority.revoke"
     try:
-        ensure_actor_has(
-            db=db,
+        chapters_service.ensure_actor_has(
             permission=permission,
             scope_kind="chapter",
             scope_id=str(payload["chapter_id"]),

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -19,7 +20,7 @@ from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.chapter_roles import ChapterRoleCreate, ChapterRoleRead
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.chapter_roles import create_chapter_role
+from app.services.mutations import mutate_entity
 
 
 def _make_audit_context() -> AuditContextRead:
@@ -47,6 +48,16 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         yield db
     finally:
         db.close()
+
+
+def _chapter_roles_service(db: PostgresDatabase) -> Any:
+    from app.repositories.chapter_roles import ChapterRolesRepository
+    from app.services.chapter_roles import ChapterRolesService
+
+    return ChapterRolesService(
+        chapter_roles_repo=ChapterRolesRepository(db=db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -92,9 +103,10 @@ def test_chapter_role_ordinal_unique_per_chapter(
     constraint must live at the DB level so concurrent writes can't
     race past a service-only check."""
 
+    service = _chapter_roles_service(governance_db)
     first = ChapterRoleCreate.model_validate(_role_create_kwargs())
     with use_audit_context(_make_audit_context()):
-        create_chapter_role(governance_db, first)
+        service.create_chapter_role(first)
 
     second = ChapterRoleCreate.model_validate(
         _role_create_kwargs(name="alt-lead")
@@ -102,7 +114,7 @@ def test_chapter_role_ordinal_unique_per_chapter(
 
     with use_audit_context(_make_audit_context()):
         with pytest.raises(psycopg.errors.UniqueViolation):
-            create_chapter_role(governance_db, second)
+            service.create_chapter_role(second)
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +134,7 @@ def test_chapter_role_template_fk_optional(
     )
 
     with use_audit_context(_make_audit_context()):
-        create_chapter_role(governance_db, request)
+        _chapter_roles_service(governance_db).create_chapter_role(request)
 
     with psycopg.connect(governance_dsn, row_factory=dict_row) as conn:
         rows = conn.execute(
@@ -144,4 +156,4 @@ def test_chapter_role_template_fk_enforced_when_set(
 
     with use_audit_context(_make_audit_context()):
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
-            create_chapter_role(governance_db, request)
+            _chapter_roles_service(governance_db).create_chapter_role(request)

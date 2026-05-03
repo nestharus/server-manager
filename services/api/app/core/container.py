@@ -9,14 +9,8 @@ from app.infrastructure.authz import CedarAuthorizationClient
 from app.infrastructure.ocr import StubOcrProvider
 from app.repositories import _claim as claim_repo
 from app.repositories import activity as activity_repo
-from app.repositories import archive_queries as archive_queries_repo
-from app.repositories import archive_runs as archive_runs_repo
 from app.repositories import audit as audit_repo
 from app.repositories import authority as authority_repo
-from app.repositories import chapter_roles as chapter_roles_repo
-from app.repositories import chapter_templates as chapter_templates_repo
-from app.repositories import chapter_transitions as chapter_transitions_repo
-from app.repositories import chapters as chapters_repo
 from app.repositories import compliance as compliance_repo
 from app.repositories import deferred_effects as deferred_effects_repo
 from app.repositories import members as members_repo
@@ -38,20 +32,22 @@ from app.repositories.tickets import TicketsRepository
 from app.repositories.permissions import PermissionsRepository
 from app.repositories import trust as trust_repo
 from app.repositories import web as web_repo
+from app.repositories.archive_queries import ArchiveQueriesRepository
+from app.repositories.archive_runs import ArchiveRunsRepository
+from app.repositories.chapter_roles import ChapterRolesRepository
+from app.repositories.chapter_templates import ChapterTemplatesRepository
+from app.repositories.chapter_transitions import ChapterTransitionsRepository
+from app.repositories.chapters import ChaptersRepository
 from app.repositories.db import PostgresDatabase
 from app.services import applicant_discord_auth as applicant_discord_auth_service
 from app.services import (
-    application_public_submit_notifications
-    as application_public_submit_notifications_service,
+    application_public_submit_notifications as application_public_submit_notifications_service,
 )
 from app.services import audit as audit_service
 from app.services import audit_overrides as audit_overrides_service
 from app.services import audit_queries as audit_queries_service
 from app.services import authority as authority_service
 from app.services import authorization as authorization_service
-from app.services import chapter_roles as chapter_roles_service
-from app.services import chapter_templates as chapter_templates_service
-from app.services import chapters as chapters_service
 from app.services import compliance as compliance_service
 from app.services import compliance_corrections as compliance_corrections_service
 from app.services import compliance_extraction as compliance_extraction_service
@@ -61,7 +57,9 @@ from app.services import form_visibility as form_visibility_service
 from app.services import (
     leadership_handoff_applications as leadership_handoff_applications_service,
 )
-from app.services import leadership_handoff_tickets as leadership_handoff_tickets_service
+from app.services import (
+    leadership_handoff_tickets as leadership_handoff_tickets_service,
+)
 from app.services import members as members_service
 from app.services import mutations as mutations_service
 from app.services import notification_events as notification_events_service
@@ -71,6 +69,9 @@ from app.services import notifications_materialize as notifications_materialize_
 from app.services.application_messages import ApplicationMessagesService
 from app.services.application_transcript import ApplicationTranscriptService
 from app.services.applications import ApplicationsService
+from app.services.chapter_roles import ChapterRolesService
+from app.services.chapter_templates import ChapterTemplatesService
+from app.services.chapters import ChaptersService
 from app.services.file_upload import FileUploadService, build_s3_client
 from app.services.forms import FormsService
 from app.services.notifications import emit_application_public_submitted_event
@@ -132,14 +133,14 @@ class ReposContainer(containers.DeclarativeContainer):
     activity = providers.Object(activity_repo)
     application_messages = providers.Factory(ApplicationMessagesRepository, db=db)
     applications = providers.Factory(ApplicationsRepository, db=db)
-    archive_queries = providers.Object(archive_queries_repo)
-    archive_runs = providers.Object(archive_runs_repo)
+    archive_queries = providers.Factory(ArchiveQueriesRepository, db=db)
+    archive_runs = providers.Factory(ArchiveRunsRepository, db=db)
     audit = providers.Object(audit_repo)
     authority = providers.Object(authority_repo)
-    chapter_roles = providers.Object(chapter_roles_repo)
-    chapter_templates = providers.Object(chapter_templates_repo)
-    chapter_transitions = providers.Object(chapter_transitions_repo)
-    chapters = providers.Object(chapters_repo)
+    chapter_roles = providers.Factory(ChapterRolesRepository, db=db)
+    chapter_templates = providers.Factory(ChapterTemplatesRepository, db=db)
+    chapter_transitions = providers.Factory(ChapterTransitionsRepository, db=db)
+    chapters = providers.Factory(ChaptersRepository, db=db)
     compliance = providers.Object(compliance_repo)
     deferred_effects = providers.Object(deferred_effects_repo)
     forms = providers.Factory(FormsRepository, db=db)
@@ -215,9 +216,24 @@ class ServicesContainer(containers.DeclarativeContainer):
     audit_queries = providers.Object(audit_queries_service)
     authority = providers.Object(authority_service)
     authorization = providers.Object(authorization_service)
-    chapter_roles = providers.Object(chapter_roles_service)
-    chapter_templates = providers.Object(chapter_templates_service)
-    chapters = providers.Object(chapters_service)
+    chapter_roles = providers.Factory(
+        ChapterRolesService,
+        chapter_roles_repo=repos.chapter_roles,
+        mutations_callable=mutations_callable.provider,
+    )
+    chapter_templates = providers.Factory(
+        ChapterTemplatesService,
+        chapter_templates_repo=repos.chapter_templates,
+        mutations_callable=mutations_callable.provider,
+    )
+    chapters = providers.Factory(
+        ChaptersService,
+        chapters_repo=repos.chapters,
+        chapter_transitions_repo=repos.chapter_transitions,
+        archive_queries_repo=repos.archive_queries,
+        archive_runs_repo=repos.archive_runs,
+        mutations_callable=mutations_callable.provider,
+    )
     compliance = providers.Object(compliance_service)
     compliance_corrections = providers.Object(compliance_corrections_service)
     compliance_extraction = providers.Object(compliance_extraction_service)
@@ -281,7 +297,9 @@ class TasksContainer(containers.DeclarativeContainer):
     permission_expiry = providers.Object(permission_expiry_task_module)
     read_models = providers.Object(read_models_task_module)
     ticket_sla = providers.Object(ticket_sla_task_module)
-    scheduler_loop = providers.Singleton(build_scheduler_loop, db, worker_id="api:primary")
+    scheduler_loop = providers.Singleton(
+        build_scheduler_loop, db, worker_id="api:primary"
+    )
     configure_task_runtime = providers.Object(configure_task_runtime)
 
 
