@@ -3,18 +3,19 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.ticket_messages import TicketMessageListRead
 from app.contracts.tickets import TicketRead
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
-from app.services.ticket_messages import read_ticket_messages
-from app.services.tickets import read_ticket
+from app.services.ticket_messages import TicketMessagesService
+from app.services.tickets import TicketsService
 
 from ._shared import (
-    get_db,
     raise_known_ticket_error,
     require_authority_for_grantee,
     set_etag,
@@ -24,9 +25,10 @@ from ._shared import (
 router = APIRouter(prefix="/api/v1/tickets")
 
 
+@inject
 def _require_ticket_read(
     *,
-    db: PostgresDatabase,
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity,
     ticket: TicketRead,
 ) -> bool:
@@ -59,14 +61,16 @@ def _require_ticket_read(
 
 
 @router.get("/{ticket_id}", response_model=TicketRead)
+@inject
 def get_ticket_endpoint(
     ticket_id: UUID,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: TicketsService = Depends(Provide[ApiContainer.services.tickets]),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> TicketRead:
     try:
-        ticket, etag = read_ticket(db, ticket_id=ticket_id)
+        ticket, etag = service.read_ticket(ticket_id=ticket_id)
     except Exception as error:
         raise_known_ticket_error(error)
     _require_ticket_read(db=db, actor=actor, ticket=ticket)
@@ -75,18 +79,23 @@ def get_ticket_endpoint(
 
 
 @router.get("/{ticket_id}/messages", response_model=TicketMessageListRead)
+@inject
 def list_ticket_messages_endpoint(
     ticket_id: UUID,
-    db: PostgresDatabase = Depends(get_db),
+    tickets_service: TicketsService = Depends(Provide[ApiContainer.services.tickets]),
+    ticket_messages_service: TicketMessagesService = Depends(
+        Provide[ApiContainer.services.ticket_messages],
+    ),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> TicketMessageListRead:
     try:
-        ticket, _etag = read_ticket(db, ticket_id=ticket_id)
+        ticket, _etag = tickets_service.read_ticket(ticket_id=ticket_id)
     except Exception as error:
         raise_known_ticket_error(error)
     reporter_access = _require_ticket_read(db=db, actor=actor, ticket=ticket)
     try:
-        messages = read_ticket_messages(db, ticket_id=ticket.id)
+        messages = ticket_messages_service.read_ticket_messages(ticket_id=ticket.id)
     except Exception as error:
         raise_known_ticket_error(error)
     if reporter_access:

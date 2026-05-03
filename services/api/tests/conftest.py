@@ -311,6 +311,19 @@ def app(test_settings: Settings) -> FastAPI:
 
 
 @pytest.fixture()
+def ticket_app_with_overrides(test_settings: Settings) -> Iterator[tuple[FastAPI, object]]:
+    """Build an app where ticket repos/services can be overridden
+    via container.repos.tickets.override(...) etc.
+    """
+    app = create_api_app(settings=test_settings)
+    container = app.state.container
+    try:
+        yield app, container
+    finally:
+        container.shutdown_resources()
+
+
+@pytest.fixture()
 def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as c:
         yield c
