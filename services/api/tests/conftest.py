@@ -145,6 +145,33 @@ def monkeypatch_session() -> Iterator[MonkeyPatch]:
     monkeypatch.undo()
 
 
+@pytest.fixture
+def override_provider():
+    """Context manager fixture for safe container provider override."""
+    from contextlib import contextmanager
+
+    overrides = []
+
+    @contextmanager
+    def _override(provider, value):
+        from dependency_injector import providers
+
+        provider.override(providers.Object(value))
+        overrides.append(provider)
+        try:
+            yield
+        finally:
+            provider.reset_override()
+
+    yield _override
+
+    for p in overrides:
+        try:
+            p.reset_override()
+        except Exception:
+            pass
+
+
 def _normalize_postgres_url(url: str) -> str:
     return url.replace("+psycopg2", "").replace("+psycopg", "")
 

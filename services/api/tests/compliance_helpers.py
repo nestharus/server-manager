@@ -299,10 +299,8 @@ def latest_action(dsn: str, *, action_type: str) -> dict[str, Any]:
 
 
 def set_ocr_provider(app: FastAPI, provider: Any) -> None:
-    app.state.ocr_provider = provider
-    container = getattr(app.state, "container", None)
-    if container is not None:
-        container.infra.ocr_provider.override(providers.Object(provider))
+    container = app.state.container
+    container.infra.ocr_provider.override(providers.Object(provider))
 
 
 class StaticOcrProvider:

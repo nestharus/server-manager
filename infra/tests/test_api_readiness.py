@@ -4,7 +4,7 @@ Tests fail now and pass after the SLICE-006 code agent implements:
 - `ServiceReadinessRead`, `DependencyStatusRead` in `app.contracts.runtime`
 - `GET /api/v1/ready` returning `ServiceReadinessRead` with `database`,
   `migrations`, `scheduler` probes
-- `SchedulerLoop.is_running` and `app.state.scheduler_loop`
+- `SchedulerLoop.is_running` and `app.state.container.tasks.scheduler_loop()`
 
 These tests rely on the API conftest fixtures (`migrated_async_client`,
 `app`) being available under `infra/tests/`; the code agent wires that up.
@@ -51,7 +51,7 @@ async def test_ready_endpoint_not_ready_when_scheduler_stopped(
     migrated_async_client: httpx.AsyncClient,
     app: FastAPI,
 ) -> None:
-    await app.state.scheduler_loop.stop()
+    await app.state.container.tasks.scheduler_loop().stop()
 
     response = await migrated_async_client.get("/api/v1/ready")
 
@@ -84,7 +84,7 @@ async def test_ready_endpoint_not_ready_when_migrations_missing(
     def _no_revision() -> str:
         return ""
 
-    monkeypatch.setattr(app.state.db, "current_revision", _no_revision)
+    monkeypatch.setattr(app.state.container.core.db(), "current_revision", _no_revision)
 
     response = await migrated_async_client.get("/api/v1/ready")
 

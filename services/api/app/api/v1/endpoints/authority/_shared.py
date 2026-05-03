@@ -4,7 +4,8 @@ from http import HTTPStatus
 from typing import NoReturn
 from uuid import UUID
 
-from fastapi import HTTPException, Request, Response
+from dependency_injector.wiring import Provide, inject
+from fastapi import Depends, HTTPException, Request, Response
 
 from app.contracts.authority import (
     AuthorityErrorBody,
@@ -14,12 +15,16 @@ from app.contracts.authority import (
     InvalidHolderIdError,
 )
 from app.contracts.mutations import StaleMutationError
+from app.core.container import ApiContainer
 from app.repositories.db import PostgresDatabase
 from app.services.read_models import CursorNotSeededError
 
 
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
+@inject
+def get_db(
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
+) -> PostgresDatabase:
+    return db
 
 
 def parse_if_match_strong(request: Request) -> int:

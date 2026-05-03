@@ -3,7 +3,8 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import NoReturn
 
-from fastapi import HTTPException, Request, Response
+from dependency_injector.wiring import Provide, inject
+from fastapi import Depends, HTTPException, Request, Response
 
 from app.contracts.compliance import (
     ComplianceEvaluationNotFoundError,
@@ -17,6 +18,7 @@ from app.contracts.compliance import (
 )
 from app.contracts.compliance_corrections import CorrectionNotPermittedStatusError
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
+from app.core.container import ApiContainer
 from app.infrastructure.ocr import OcrProvider, OcrProviderNotConfiguredError
 from app.repositories.db import PostgresDatabase
 
@@ -24,12 +26,18 @@ from app.repositories.db import PostgresDatabase
 MIN_STRONG_ETAG_LENGTH = 3
 
 
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
+@inject
+def get_db(
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
+) -> PostgresDatabase:
+    return db
 
 
-def get_ocr_provider(request: Request) -> OcrProvider:
-    return request.app.state.ocr_provider
+@inject
+def get_ocr_provider(
+    ocr_provider: OcrProvider = Depends(Provide[ApiContainer.infra.ocr_provider]),
+) -> OcrProvider:
+    return ocr_provider
 
 
 def parse_if_match_strong(request: Request) -> int:

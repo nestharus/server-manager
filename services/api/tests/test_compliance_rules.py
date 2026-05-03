@@ -20,7 +20,7 @@ def test_create_rule_persists_contract_fields(
     governance_dsn: str,
 ) -> None:
     """AC1: creating a compliance rule persists cadence, evidence requirements, and consequence policy."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(
         db,
         grantee_id="operator",
@@ -48,7 +48,7 @@ def test_update_rule_uses_occ_and_advances_version(
     app: FastAPI,
 ) -> None:
     """AC1: updating a compliance rule requires a strong If-Match and advances the version on success."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(
         db,
         grantee_id="operator",
@@ -73,7 +73,7 @@ def test_duplicate_active_rule_name_conflicts(
     app: FastAPI,
 ) -> None:
     """AC1: a second active rule with the same chapter/name pair is rejected."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(
         db,
         grantee_id="operator",
@@ -105,7 +105,7 @@ def test_archive_allows_name_reuse(
     app: FastAPI,
 ) -> None:
     """AC1: archiving a rule frees the chapter/name slot so a replacement rule can be created."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(
         db,
         grantee_id="operator",
@@ -131,7 +131,7 @@ def test_list_rules_is_chapter_scoped(
     app: FastAPI,
 ) -> None:
     """AC1: listing rules returns only the authorized chapter scope."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(
         db,
         grantee_id="operator",

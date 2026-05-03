@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import partial
 from http import HTTPStatus
@@ -159,10 +160,10 @@ def public_form(governance_db: PostgresDatabase) -> None:
 
 
 @pytest.fixture()
-def allowed_public_route(app: FastAPI) -> FakeCedarAuthorizer:
+def allowed_public_route(app: FastAPI, override_provider) -> Iterator[FakeCedarAuthorizer]:
     authorizer = FakeCedarAuthorizer(decision="Allow")
-    app.state.cedar_authorizer = authorizer
-    return authorizer
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        yield authorizer
 
 
 async def _post_public_application(

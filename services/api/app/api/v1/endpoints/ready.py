@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from dependency_injector.wiring import Provide, inject
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from app.contracts.runtime import DependencyStatusRead, ServiceReadinessRead
+from app.core.container import ApiContainer
+from app.repositories.db import PostgresDatabase
+from app.services.scheduler import SchedulerService
 
 
 router = APIRouter(prefix="/api/v1/ready")
 
 
-def _database_status(request: Request) -> DependencyStatusRead:
-    database = request.app.state.db
+def _database_status(database: PostgresDatabase) -> DependencyStatusRead:
     try:
         with database.connection():
             pass
@@ -23,8 +26,7 @@ def _database_status(request: Request) -> DependencyStatusRead:
     return DependencyStatusRead(name="database", status="ok")
 
 
-def _migration_status(request: Request) -> DependencyStatusRead:
-    database = request.app.state.db
+def _migration_status(database: PostgresDatabase) -> DependencyStatusRead:
     try:
         revision = database.current_revision()
     except Exception as error:
@@ -42,8 +44,7 @@ def _migration_status(request: Request) -> DependencyStatusRead:
     return DependencyStatusRead(name="migrations", status="ok")
 
 
-def _scheduler_status(request: Request) -> DependencyStatusRead:
-    scheduler_loop = request.app.state.scheduler_loop
+def _scheduler_status(scheduler_loop: SchedulerService) -> DependencyStatusRead:
     if scheduler_loop.is_running:
         return DependencyStatusRead(name="scheduler", status="ok")
     return DependencyStatusRead(
@@ -54,11 +55,15 @@ def _scheduler_status(request: Request) -> DependencyStatusRead:
 
 
 @router.get("", response_model=ServiceReadinessRead)
-def readiness(request: Request) -> JSONResponse:
+@inject
+def readiness(
+    database: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
+    scheduler_loop: SchedulerService = Depends(Provide[ApiContainer.tasks.scheduler_loop]),
+) -> JSONResponse:
     dependencies = [
-        _database_status(request),
-        _migration_status(request),
-        _scheduler_status(request),
+        _database_status(database),
+        _migration_status(database),
+        _scheduler_status(scheduler_loop),
     ]
     ready = all(dependency.status == "ok" for dependency in dependencies)
     payload = ServiceReadinessRead(

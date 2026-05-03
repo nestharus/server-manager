@@ -110,7 +110,7 @@ def test_create_api_app_loads_settings_when_none(
     app = create_api_app()
 
     assert isinstance(app, FastAPI)
-    assert isinstance(app.state.settings, Settings)
+    assert isinstance(app.state.container.core.settings(), Settings)
 
 
 def test_create_api_app_raises_settings_construction_error_without_env(

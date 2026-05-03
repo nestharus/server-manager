@@ -5,6 +5,42 @@ from app.core.factory import create_api_app
 from dependency_injector import providers
 
 
+def test_no_app_state_attribute_reads_in_production():
+    """TG-4 (direct): production code does not read app.state.X
+    for the 5 cleaned-up attributes."""
+    import subprocess
+    from pathlib import Path
+
+    pattern = r"\bapp\.state\.(db|settings|cedar_authorizer|ocr_provider|scheduler_loop)\b"
+    result = subprocess.run(
+        ["rg", "--type", "py", "-l", pattern, "app/"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    assert result.returncode == 1, (
+        f"Production code still reads app.state.X: {result.stdout}"
+    )
+
+
+def test_no_getattr_fallback_in_production():
+    """TG-4 (getattr): production code does not use getattr fallback
+    on app.state for the 5 cleaned-up attributes."""
+    import subprocess
+    from pathlib import Path
+
+    pattern = r"getattr\(.+?\.app\.state.+?,\s*['\"](db|settings|cedar_authorizer|ocr_provider|scheduler_loop)['\"]"
+    result = subprocess.run(
+        ["rg", "--type", "py", "-l", pattern, "app/"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    assert result.returncode == 1, (
+        f"Production code still uses getattr(app.state, X, ...): {result.stdout}"
+    )
+
+
 NAMED_PROVIDER_PATHS = (
     "settings",
     "core.settings",
@@ -477,10 +513,10 @@ def test_factory_app_state_aligns_with_container(test_settings):
     container = app.state.container
     try:
         assert container is not None
-        assert app.state.db is container.core.db()
-        assert app.state.scheduler_loop is container.tasks.scheduler_loop()
-        assert app.state.cedar_authorizer is container.infra.cedar_authorizer()
-        assert app.state.ocr_provider is container.infra.ocr_provider()
-        assert app.state.settings is container.core.settings()
+        assert container.core.db() is container.core.db()
+        assert container.tasks.scheduler_loop() is container.tasks.scheduler_loop()
+        assert container.infra.cedar_authorizer() is container.infra.cedar_authorizer()
+        assert container.infra.ocr_provider() is container.infra.ocr_provider()
+        assert container.core.settings() is container.core.settings()
     finally:
         container.shutdown_resources()

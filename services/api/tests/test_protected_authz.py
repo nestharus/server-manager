@@ -55,15 +55,16 @@ class FakeCedarAuthorizer:
 async def test_protected_authz_allows_pomerium_identity(
     app: FastAPI,
     async_client: AsyncClient,
+    override_provider,
 ) -> None:
     case = _case("allowed_identity")
     authorizer = FakeCedarAuthorizer(decision=case["cedar_decision"])
-    app.state.cedar_authorizer = authorizer
 
-    response = await async_client.get(
-        "/api/v1/protected/authz-proof",
-        headers=case["headers"],
-    )
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        response = await async_client.get(
+            "/api/v1/protected/authz-proof",
+            headers=case["headers"],
+        )
 
     assert response.status_code == case["expected_status"]
     assert response.json() == case["expected_response"]
@@ -75,13 +76,15 @@ async def test_protected_authz_allows_pomerium_identity(
 async def test_protected_authz_rejects_missing_identity(
     app: FastAPI,
     async_client: AsyncClient,
+    override_provider,
 ) -> None:
     case = _case("missing_identity")
-    app.state.cedar_authorizer = FakeCedarAuthorizer(
+    authorizer = FakeCedarAuthorizer(
         error=AssertionError("authorizer should not be called without identity")
     )
 
-    response = await async_client.get("/api/v1/protected/authz-proof")
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        response = await async_client.get("/api/v1/protected/authz-proof")
 
     assert response.status_code == case["expected_status"]
     assert response.json()["code"] == case["expected_error_code"]
@@ -90,15 +93,16 @@ async def test_protected_authz_rejects_missing_identity(
 async def test_protected_authz_rejects_cedar_deny(
     app: FastAPI,
     async_client: AsyncClient,
+    override_provider,
 ) -> None:
     case = _case("denied_identity")
     authorizer = FakeCedarAuthorizer(decision=case["cedar_decision"])
-    app.state.cedar_authorizer = authorizer
 
-    response = await async_client.get(
-        "/api/v1/protected/authz-proof",
-        headers=case["headers"],
-    )
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        response = await async_client.get(
+            "/api/v1/protected/authz-proof",
+            headers=case["headers"],
+        )
 
     assert response.status_code == case["expected_status"]
     assert response.json()["code"] == case["expected_error_code"]
@@ -110,17 +114,18 @@ async def test_protected_authz_rejects_cedar_deny(
 async def test_protected_authz_reports_cedar_unavailable(
     app: FastAPI,
     async_client: AsyncClient,
+    override_provider,
 ) -> None:
     case = _case("policy_engine_unavailable")
     authorizer = FakeCedarAuthorizer(
         error=CedarAuthorizationUnavailableError("connection refused")
     )
-    app.state.cedar_authorizer = authorizer
 
-    response = await async_client.get(
-        "/api/v1/protected/authz-proof",
-        headers=case["headers"],
-    )
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        response = await async_client.get(
+            "/api/v1/protected/authz-proof",
+            headers=case["headers"],
+        )
 
     assert response.status_code == case["expected_status"]
     assert response.json()["code"] == case["expected_error_code"]

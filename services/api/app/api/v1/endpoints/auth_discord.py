@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, HTTPException, Query, Request
+from dependency_injector.wiring import Provide, inject
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
+from app.core.container import ApiContainer
 from app.core.settings import Settings
 from app.services import applicant_discord_auth
 from app.services.applicant_discord_auth import ApplicantAuthError, ApplicantReceiptError
@@ -14,11 +16,12 @@ router = APIRouter(prefix="/auth/discord", tags=["applicant-discord-auth"])
 
 
 @router.get("/start")
+@inject
 def start_discord_auth(
     request: Request,
     return_to: Annotated[str, Query()] = "/applications",
+    settings: Settings = Depends(Provide[ApiContainer.core.settings]),
 ) -> RedirectResponse:
-    settings: Settings = request.app.state.settings
     flow = applicant_discord_auth.create_auth_flow(
         redirect_uri=settings.applicant_discord_redirect_uri,
         return_to=return_to,
@@ -33,10 +36,12 @@ def start_discord_auth(
 
 
 @router.get("/callback")
+@inject
 def discord_auth_callback(
     request: Request,
     code: Annotated[str | None, Query()] = None,
     state: Annotated[str | None, Query()] = None,
+    settings: Settings = Depends(Provide[ApiContainer.core.settings]),
 ) -> RedirectResponse:
     if not code or not state:
         raise HTTPException(status_code=400, detail="code and state are required")
@@ -45,7 +50,6 @@ def discord_auth_callback(
     if flow is None:
         raise HTTPException(status_code=400, detail="invalid state")
 
-    settings: Settings = request.app.state.settings
     client_secret = settings.applicant_oidc_client_secret.get_secret_value()
     signing_key = settings.applicant_receipt_signing_key.get_secret_value()
 
@@ -86,14 +90,15 @@ def discord_auth_callback(
 
 
 @router.get("/me")
+@inject
 def me(
     request: Request,
     applicant_receipt: Annotated[str | None, Cookie()] = None,
+    settings: Settings = Depends(Provide[ApiContainer.core.settings]),
 ) -> dict[str, str]:
     if not applicant_receipt:
         raise HTTPException(status_code=401, detail="authentication required")
 
-    settings: Settings = request.app.state.settings
     try:
         payload = applicant_discord_auth.verify_applicant_receipt_jwt(
             applicant_receipt,

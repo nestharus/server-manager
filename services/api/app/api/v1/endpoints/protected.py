@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.contracts.authz import AuthzErrorDetail, ProtectedAuthzRead
+from app.core.container import ApiContainer
 from app.infrastructure.authz import (
     CedarAuthorizationClient,
     CedarAuthorizationRequest,
@@ -35,17 +37,13 @@ def get_pomerium_identity(request: Request) -> str:
     )
 
 
-def get_cedar_authorizer(request: Request) -> CedarAuthorizationClient:
-    authorizer = getattr(request.app.state, "cedar_authorizer", None)
-    if authorizer is None:
-        raise HTTPException(
-            status_code=503,
-            detail=AuthzErrorDetail(
-                code="cedar_unavailable",
-                message="Cedar authorizer is not configured",
-            ).model_dump(),
-        )
-    return authorizer
+@inject
+def get_cedar_authorizer(
+    cedar_authorizer: CedarAuthorizationClient = Depends(
+        Provide[ApiContainer.infra.cedar_authorizer]
+    ),
+) -> CedarAuthorizationClient:
+    return cedar_authorizer
 
 
 @router.get("/authz-proof", response_model=ProtectedAuthzRead)

@@ -45,7 +45,7 @@ async def test_migrated_async_client_runs_migrations(
     migrated_async_client: httpx.AsyncClient,
     app: FastAPI,
 ) -> None:
-    revision = app.state.db.current_revision()
+    revision = app.state.container.core.db().current_revision()
 
     assert isinstance(revision, str)
     assert revision
