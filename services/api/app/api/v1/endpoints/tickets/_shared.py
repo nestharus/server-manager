@@ -29,8 +29,9 @@ from app.contracts.tickets import (
     TicketTransitionResolutionRequiredError,
 )
 from app.core.dependencies import get_current_actor
+from app.repositories.authority import AuthorityRepository
 from app.repositories.db import PostgresDatabase
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import current_time, evaluate, _row_to_read
 
 MIN_STRONG_ETAG_LENGTH = 3
 
@@ -97,7 +98,16 @@ def require_authority_for_grantee(
         scope_id=scope_id,
         permission=permission,
     )
-    grants = list_grants_for_grantee(db, grantee_id=grantee_id)
+    authority_repo = AuthorityRepository(db)
+    grants = [
+        _row_to_read(row)
+        for row in authority_repo.list_grants(
+            grantee_id=grantee_id,
+            include_revoked=True,
+            limit=None,
+            after_id=None,
+        )
+    ]
     decision = evaluate(requirement=requirement, grants=grants, at=current_time())
     if not decision.allowed:
         raise HTTPException(

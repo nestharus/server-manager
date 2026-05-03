@@ -7,10 +7,14 @@ from typing import Any
 
 import psycopg
 import pytest
+import httpx
+from dependency_injector import providers
 from httpx import AsyncClient
 from psycopg.rows import dict_row
 
 from app.contracts.trust import InvalidTrustPolicyError, TrustProfileRead
+from app.core.factory import create_api_app
+from app.core.settings import Settings
 from app.repositories.db import PostgresDatabase
 from app.services.trust import compute_score
 
@@ -207,19 +211,20 @@ async def test_recompute_produces_new_profile_version(
 
 @pytest.mark.asyncio
 async def test_recompute_returns_409_on_stale_conflict_after_retry(
-    migrated_async_client: AsyncClient,
+    test_settings: Settings,
+    migrated_postgres_db: str,  # noqa: ARG001 -- forces migrations before app use
     governance_db: PostgresDatabase,
     governance_dsn: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC trust recompute; D8 returns conflict after retrying stale mutations."""
     actor_id = "recompute-conflict"
     seed_trust_policy_version(governance_dsn, version_number=1)
-    member_id = await _setup_recompute_member(migrated_async_client, governance_db, actor_id=actor_id)
+    calls: list[dict[str, object]] = []
 
     def stale_mutation(**_kwargs: object) -> object:
         from app.contracts.mutations import StaleMutationError
 
+        calls.append(dict(_kwargs))
         raise StaleMutationError(
             aggregate_type="trust_profile",
             aggregate_id=member_id,
@@ -227,14 +232,30 @@ async def test_recompute_returns_409_on_stale_conflict_after_retry(
             current_version=1,
         )
 
-    monkeypatch.setattr("app.services.trust.mutate_entity", stale_mutation)
-    response = await migrated_async_client.post(
-        TRUST_RECOMPUTE_URL.format(member_id=member_id),
-        headers=actor_headers(actor_id=actor_id),
-    )
+    app = create_api_app(settings=test_settings)
+    container = app.state.container
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            member_id = await _setup_recompute_member(
+                client,
+                governance_db,
+                actor_id=actor_id,
+            )
+            container.services.mutations_callable.override(
+                providers.Object(stale_mutation),
+            )
+            response = await client.post(
+                TRUST_RECOMPUTE_URL.format(member_id=member_id),
+                headers=actor_headers(actor_id=actor_id),
+            )
 
     assert response.status_code == HTTPStatus.CONFLICT, response.text
     assert response.json()["code"] == "trust_recompute_conflict"
+    assert calls != []
 
 
 @pytest.mark.asyncio

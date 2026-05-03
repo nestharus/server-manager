@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from http import HTTPStatus
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from dependency_injector.wiring import Provide, inject
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.mutations import StaleMutationError
@@ -16,16 +17,12 @@ from app.contracts.policies import (
     PolicyVersionRead,
 )
 from app.contracts.scope import ScopeKind
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority, get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.policies import confirm, get_current_policy_version, preview
+from app.services.policies import PoliciesService
 
 
 router = APIRouter(prefix="/api/v1/policies")
-
-
-def _db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
 
 
 def _error_body(
@@ -44,24 +41,26 @@ def _error_body(
 
 
 @router.post("/preview", response_model=PolicyPreviewRead)
+@inject
 def preview_policy(
     body: PolicyPreviewRequest,
-    request: Request,
+    service: PoliciesService = Depends(Provide[ApiContainer.services.policies]),
     _decision=Depends(RequireAuthority("policy.write", "global")),
 ) -> PolicyPreviewRead:
-    return preview(_db(request), body)
+    return service.preview(body)
 
 
 @router.post("/confirm", response_model=PolicyVersionRead, status_code=HTTPStatus.CREATED)
+@inject
 def confirm_policy(
     body: PolicyConfirmRequest,
-    request: Request,
     response: Response,
+    service: PoliciesService = Depends(Provide[ApiContainer.services.policies]),
     _decision=Depends(RequireAuthority("policy.write", "global")),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> PolicyVersionRead:
     try:
-        created, etag = confirm(_db(request), body, actor=actor)
+        created, etag = service.confirm(body, actor=actor)
     except PolicyPreviewTokenMismatchError as error:
         raise HTTPException(
             status_code=HTTPStatus.PRECONDITION_FAILED,
@@ -86,17 +85,17 @@ def confirm_policy(
 
 
 @router.get("/{policy_type}/current", response_model=PolicyVersionRead)
+@inject
 def get_current_policy(
     policy_type: str,
-    request: Request,
     response: Response,
     scope_kind: ScopeKind = Query(),
     scope_id: str | None = Query(default=None),
+    service: PoliciesService = Depends(Provide[ApiContainer.services.policies]),
     _decision=Depends(RequireAuthority("policy.read", "global")),
 ) -> PolicyVersionRead:
     try:
-        current, etag = get_current_policy_version(
-            _db(request),
+        current, etag = service.get_current_policy_version(
             policy_type=policy_type,
             scope_kind=scope_kind,
             scope_id=scope_id,

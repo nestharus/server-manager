@@ -19,18 +19,9 @@ from app.contracts.members import (
     MemberStatusPatch,
 )
 from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
-from app.repositories.db import PostgresDatabase
-from app.repositories.members import (
-    _fetch_member_by_id_for_update,
-    _insert_member,
-    _insert_member_on_discord_conflict_do_nothing,
-    _update_member_status,
-    fetch_member_by_discord_id,
-    fetch_member_by_id,
-)
 from app.core.context import get_current_audit_context, use_audit_context
+from app.repositories.members import MembersRepository
 from app.services.applicant_discord_auth import DISCORD_SNOWFLAKE_RE
-from app.services.mutations import mutate_entity
 
 
 VALID_TRANSITIONS = {
@@ -104,85 +95,26 @@ def _member_from_row(row: dict[str, Any]) -> MemberRead:
     )
 
 
-def _fetch_member_row(connection: Connection[Any], member_id: UUID) -> dict[str, Any]:
-    row = fetch_member_by_id(connection, member_id)
+def _fetch_member_row(
+    members_repo: MembersRepository,
+    connection: Connection[Any],
+    member_id: UUID,
+) -> dict[str, Any]:
+    row = members_repo._fetch_member_by_id_on(connection, member_id)
     if row is None:
         raise MemberNotFoundError(member_id=member_id)
     return row
 
 
 def _fetch_member_row_by_discord_id(
+    members_repo: MembersRepository,
     connection: Connection[Any],
     discord_user_id: str,
 ) -> dict[str, Any]:
-    row = fetch_member_by_discord_id(connection, discord_user_id)
+    row = members_repo._fetch_member_by_discord_id_on(connection, discord_user_id)
     if row is None:
         raise MemberNotFoundError(discord_user_id=discord_user_id)
     return row
-
-
-def create_or_get_member(
-    db: PostgresDatabase,
-    request: MemberCreate,
-    actor: ActorIdentity,
-) -> tuple[MemberRead, MutationResult | None, bool]:
-    with db.connection() as connection:
-        existing = fetch_member_by_discord_id(connection, request.discord_user_id)
-    if existing is not None:
-        return _member_from_row(existing), None, False
-
-    member_id = uuid4()
-
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        _insert_member(
-            connection,
-            row={
-                "id": member_id,
-                "discord_user_id": request.discord_user_id,
-                "joined_at": request.joined_at,
-                "status": "active",
-            },
-        )
-        return StateChangeDraft(
-            change_type="member.created",
-            payload_json={
-                "member_id": str(member_id),
-                "discord_user_id": request.discord_user_id,
-                "joined_at": request.joined_at.isoformat(),
-                "status": "active",
-                "originating_actor_kind": request.originating_actor_kind,
-                "originating_actor_id": request.originating_actor_id,
-            },
-        )
-
-    try:
-        result = mutate_entity(
-            db=db,
-            aggregate_type="member",
-            aggregate_id=str(member_id),
-            request=_make_request(
-                expected_version=0,
-                actor=actor,
-                request_surface="api:/api/v1/members",
-            ),
-            action_type="member.create",
-            action_payload=request.model_dump(mode="json"),
-            payload_allowlist=set(request.model_dump(mode="json").keys()),
-            mutate_projection=mutate_projection,
-            scope_kind="global",
-            scope_id=None,
-        )
-    except errors.UniqueViolation:
-        with db.connection() as connection:
-            existing = _fetch_member_row_by_discord_id(
-                connection,
-                request.discord_user_id,
-            )
-        return _member_from_row(existing), None, False
-
-    with db.connection() as connection:
-        row = _fetch_member_row(connection, member_id)
-    return _member_from_row(row), result, True
 
 
 def _require_real_discord_member(row: dict[str, Any]) -> MemberRead:
@@ -193,183 +125,266 @@ def _require_real_discord_member(row: dict[str, Any]) -> MemberRead:
     return _member_from_row(row)
 
 
-async def resolve_or_create_real_discord_member(
-    db: PostgresDatabase,
-    *,
-    discord_user_id: str,
-    originating_actor: ActorIdentity | None = None,
-    request_surface: str | None = None,
-) -> MemberRead:
-    if not DISCORD_SNOWFLAKE_RE.match(discord_user_id):
-        raise ValueError("invalid Discord snowflake")
-    resolved_actor = originating_actor or APPLICANT_RECEIPT_MEMBER_ACTOR
-    resolved_surface = request_surface or "api:/api/v1/public/applications"
+class MembersService:
+    def __init__(
+        self,
+        members_repo: MembersRepository,
+        mutations_callable,
+    ) -> None:
+        self._members_repo = members_repo
+        self._mutations_callable = mutations_callable
 
-    def resolve_or_create() -> MemberRead:
-        with db.connection() as connection:
-            existing = fetch_member_by_discord_id(connection, discord_user_id)
+    def create_or_get_member(
+        self,
+        request: MemberCreate,
+        actor: ActorIdentity,
+    ) -> tuple[MemberRead, MutationResult | None, bool]:
+        existing = self._members_repo.fetch_member_by_discord_id(
+            request.discord_user_id,
+        )
         if existing is not None:
-            return _require_real_discord_member(existing)
+            return _member_from_row(existing), None, False
 
         member_id = uuid4()
-        joined_at = datetime.now(UTC)
-        action_payload = {
-            "discord_user_id": discord_user_id,
-            "joined_at": joined_at.isoformat(),
-            "originating_actor_kind": resolved_actor.actor_kind,
-            "originating_actor_id": resolved_actor.actor_id,
-        }
 
         def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-            inserted = _insert_member_on_discord_conflict_do_nothing(
+            self._members_repo._insert_member_on(
                 connection,
                 row={
                     "id": member_id,
-                    "discord_user_id": discord_user_id,
-                    "joined_at": joined_at,
+                    "discord_user_id": request.discord_user_id,
+                    "joined_at": request.joined_at,
                     "status": "active",
                 },
             )
-            if not inserted:
-                raise DiscordMemberRaceLost()
             return StateChangeDraft(
                 change_type="member.created",
                 payload_json={
                     "member_id": str(member_id),
-                    "discord_user_id": discord_user_id,
-                    "joined_at": joined_at.isoformat(),
+                    "discord_user_id": request.discord_user_id,
+                    "joined_at": request.joined_at.isoformat(),
                     "status": "active",
-                    "originating_actor_kind": resolved_actor.actor_kind,
-                    "originating_actor_id": resolved_actor.actor_id,
+                    "originating_actor_kind": request.originating_actor_kind,
+                    "originating_actor_id": request.originating_actor_id,
                 },
             )
 
         try:
-            mutate_entity(
-                db=db,
+            result = self._mutations_callable(
                 aggregate_type="member",
                 aggregate_id=str(member_id),
                 request=_make_request(
                     expected_version=0,
-                    actor=resolved_actor,
-                    request_surface=resolved_surface,
+                    actor=actor,
+                    request_surface="api:/api/v1/members",
                 ),
                 action_type="member.create",
-                action_payload=action_payload,
-                payload_allowlist=set(action_payload.keys()),
+                action_payload=request.model_dump(mode="json"),
+                payload_allowlist=set(request.model_dump(mode="json").keys()),
                 mutate_projection=mutate_projection,
                 scope_kind="global",
                 scope_id=None,
             )
-        except DiscordMemberRaceLost:
-            with db.connection() as connection:
-                existing = _fetch_member_row_by_discord_id(connection, discord_user_id)
-            return _require_real_discord_member(existing)
+        except errors.UniqueViolation:
+            with self._members_repo.db.connection() as connection:
+                existing = _fetch_member_row_by_discord_id(
+                    self._members_repo,
+                    connection,
+                    request.discord_user_id,
+                )
+            return _member_from_row(existing), None, False
 
-        with db.connection() as connection:
-            row = _fetch_member_row(connection, member_id)
-        return _require_real_discord_member(row)
+        with self._members_repo.db.connection() as connection:
+            row = _fetch_member_row(self._members_repo, connection, member_id)
+        return _member_from_row(row), result, True
 
-    if get_current_audit_context() is None:
-        with use_audit_context(_generated_audit_context()):
-            return resolve_or_create()
-    return resolve_or_create()
+    async def resolve_or_create_real_discord_member(
+        self,
+        *,
+        discord_user_id: str,
+        originating_actor: ActorIdentity | None = None,
+        request_surface: str | None = None,
+    ) -> MemberRead:
+        if not DISCORD_SNOWFLAKE_RE.match(discord_user_id):
+            raise ValueError("invalid Discord snowflake")
+        resolved_actor = originating_actor or APPLICANT_RECEIPT_MEMBER_ACTOR
+        resolved_surface = request_surface or "api:/api/v1/public/applications"
 
+        def resolve_or_create() -> MemberRead:
+            existing = self._members_repo.fetch_member_by_discord_id(discord_user_id)
+            if existing is not None:
+                return _require_real_discord_member(existing)
 
-def get_member_by_id(
-    db: PostgresDatabase,
-    member_id: UUID,
-) -> tuple[MemberRead, str]:
-    with db.connection() as connection:
-        read = _member_from_row(_fetch_member_row(connection, member_id))
-    return read, f'"{read.version}"'
+            member_id = uuid4()
+            joined_at = datetime.now(UTC)
+            action_payload = {
+                "discord_user_id": discord_user_id,
+                "joined_at": joined_at.isoformat(),
+                "originating_actor_kind": resolved_actor.actor_kind,
+                "originating_actor_id": resolved_actor.actor_id,
+            }
 
+            def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+                inserted = (
+                    self._members_repo._insert_member_on_discord_conflict_do_nothing_on(
+                        connection,
+                        row={
+                            "id": member_id,
+                            "discord_user_id": discord_user_id,
+                            "joined_at": joined_at,
+                            "status": "active",
+                        },
+                    )
+                )
+                if not inserted:
+                    raise DiscordMemberRaceLost()
+                return StateChangeDraft(
+                    change_type="member.created",
+                    payload_json={
+                        "member_id": str(member_id),
+                        "discord_user_id": discord_user_id,
+                        "joined_at": joined_at.isoformat(),
+                        "status": "active",
+                        "originating_actor_kind": resolved_actor.actor_kind,
+                        "originating_actor_id": resolved_actor.actor_id,
+                    },
+                )
 
-def get_member_by_discord_id(
-    db: PostgresDatabase,
-    discord_user_id: str,
-) -> tuple[MemberRead, str]:
-    with db.connection() as connection:
-        read = _member_from_row(
-            _fetch_member_row_by_discord_id(connection, discord_user_id)
-        )
-    return read, f'"{read.version}"'
+            try:
+                self._mutations_callable(
+                    aggregate_type="member",
+                    aggregate_id=str(member_id),
+                    request=_make_request(
+                        expected_version=0,
+                        actor=resolved_actor,
+                        request_surface=resolved_surface,
+                    ),
+                    action_type="member.create",
+                    action_payload=action_payload,
+                    payload_allowlist=set(action_payload.keys()),
+                    mutate_projection=mutate_projection,
+                    scope_kind="global",
+                    scope_id=None,
+                )
+            except DiscordMemberRaceLost:
+                with self._members_repo.db.connection() as connection:
+                    existing = _fetch_member_row_by_discord_id(
+                        self._members_repo,
+                        connection,
+                        discord_user_id,
+                    )
+                return _require_real_discord_member(existing)
 
+            with self._members_repo.db.connection() as connection:
+                row = _fetch_member_row(self._members_repo, connection, member_id)
+            return _require_real_discord_member(row)
 
-def patch_member_status(
-    db: PostgresDatabase,
-    member_id: UUID,
-    request: MemberStatusPatch,
-    actor: ActorIdentity,
-    expected_version: int,
-) -> tuple[MemberRead, MutationResult]:
-    with db.connection() as connection:
-        _fetch_member_row(connection, member_id)
+        if get_current_audit_context() is None:
+            with use_audit_context(_generated_audit_context()):
+                return resolve_or_create()
+        return resolve_or_create()
 
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        row = _fetch_member_by_id_for_update(connection, member_id)
-        if row is None:
-            raise MemberNotFoundError(member_id=member_id)
-        if is_synthetic_member(row):
-            raise HTTPException(
-                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-                detail={
-                    "code": "member_status_synthetic_not_allowed",
-                    "message": "Synthetic public-intake member status cannot be mutated.",
+    def get_member_by_id(self, member_id: UUID) -> tuple[MemberRead, str]:
+        with self._members_repo.db.connection() as connection:
+            read = _member_from_row(
+                _fetch_member_row(self._members_repo, connection, member_id)
+            )
+        return read, f'"{read.version}"'
+
+    def get_member_by_discord_id(
+        self,
+        discord_user_id: str,
+    ) -> tuple[MemberRead, str]:
+        with self._members_repo.db.connection() as connection:
+            read = _member_from_row(
+                _fetch_member_row_by_discord_id(
+                    self._members_repo,
+                    connection,
+                    discord_user_id,
+                )
+            )
+        return read, f'"{read.version}"'
+
+    def patch_member_status(
+        self,
+        member_id: UUID,
+        request: MemberStatusPatch,
+        actor: ActorIdentity,
+        expected_version: int,
+    ) -> tuple[MemberRead, MutationResult]:
+        with self._members_repo.db.connection() as connection:
+            _fetch_member_row(self._members_repo, connection, member_id)
+
+        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+            row = self._members_repo._fetch_member_by_id_for_update_on(
+                connection,
+                member_id,
+            )
+            if row is None:
+                raise MemberNotFoundError(member_id=member_id)
+            if is_synthetic_member(row):
+                raise HTTPException(
+                    status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "member_status_synthetic_not_allowed",
+                        "message": (
+                            "Synthetic public-intake member status cannot be mutated."
+                        ),
+                    },
+                )
+            from_status = row["status"]
+            to_status = request.status
+            if (
+                from_status == to_status
+                or (from_status, to_status) not in VALID_TRANSITIONS
+            ):
+                raise InvalidMemberStatusTransitionError(from_status, to_status)
+
+            self._members_repo._update_member_status_on(
+                connection,
+                member_id=member_id,
+                status=to_status,
+            )
+            return StateChangeDraft(
+                change_type="member.status_changed",
+                payload_json={
+                    "member_id": str(member_id),
+                    "from_status": from_status,
+                    "to_status": to_status,
+                    "reason": request.reason,
+                    "originating_actor_kind": request.originating_actor_kind,
+                    "originating_actor_id": request.originating_actor_id,
+                },
+                diff_json={
+                    "status": {"old": from_status, "new": to_status},
                 },
             )
-        from_status = row["status"]
-        to_status = request.status
-        if from_status == to_status or (from_status, to_status) not in VALID_TRANSITIONS:
-            raise InvalidMemberStatusTransitionError(from_status, to_status)
 
-        _update_member_status(
-            connection,
-            member_id=member_id,
-            status=to_status,
+        result = self._mutations_callable(
+            aggregate_type="member",
+            aggregate_id=str(member_id),
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface=f"api:/api/v1/members/{member_id}/status",
+                reason_text=request.reason,
+            ),
+            action_type="member.status.patch",
+            action_payload=request.model_dump(mode="json"),
+            payload_allowlist=set(request.model_dump(mode="json").keys()),
+            mutate_projection=mutate_projection,
+            scope_kind="global",
+            scope_id=None,
         )
-        return StateChangeDraft(
-            change_type="member.status_changed",
-            payload_json={
-                "member_id": str(member_id),
-                "from_status": from_status,
-                "to_status": to_status,
-                "reason": request.reason,
-                "originating_actor_kind": request.originating_actor_kind,
-                "originating_actor_id": request.originating_actor_id,
-            },
-            diff_json={
-                "status": {"old": from_status, "new": to_status},
-            },
-        )
-
-    result = mutate_entity(
-        db=db,
-        aggregate_type="member",
-        aggregate_id=str(member_id),
-        request=_make_request(
-            expected_version=expected_version,
-            actor=actor,
-            request_surface=f"api:/api/v1/members/{member_id}/status",
-            reason_text=request.reason,
-        ),
-        action_type="member.status.patch",
-        action_payload=request.model_dump(mode="json"),
-        payload_allowlist=set(request.model_dump(mode="json").keys()),
-        mutate_projection=mutate_projection,
-        scope_kind="global",
-        scope_id=None,
-    )
-    with db.connection() as connection:
-        read = _member_from_row(_fetch_member_row(connection, member_id))
-    return read, result
+        with self._members_repo.db.connection() as connection:
+            read = _member_from_row(
+                _fetch_member_row(self._members_repo, connection, member_id)
+            )
+        return read, result
 
 
 __all__ = [
-    "create_or_get_member",
-    "get_member_by_discord_id",
-    "get_member_by_id",
-    "is_synthetic_member",
+    "MembersService",
     "NonDiscordMemberError",
-    "patch_member_status",
+    "is_synthetic_member",
 ]

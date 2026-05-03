@@ -270,6 +270,53 @@ def test_container_resolves_chapter_factories(test_settings):
         container.shutdown_resources()
 
 
+def test_container_resolves_authority_factories(test_settings):
+    """TG-4: Container resolves authority/members/policies/trust/
+    roster repos and services as Factory instances (post-142f shape)."""
+    from app.repositories.authority import AuthorityRepository
+    from app.repositories.members import MembersRepository
+    from app.repositories.policies import PoliciesRepository
+    from app.repositories.roster import RosterRepository
+    from app.repositories.trust import TrustRepository
+    from app.services.authority import AuthorityService
+    from app.services.leadership_handoff_applications import (
+        LeadershipHandoffApplicationsService,
+    )
+    from app.services.leadership_handoff_tickets import (
+        LeadershipHandoffTicketsService,
+    )
+    from app.services.members import MembersService
+    from app.services.policies import PoliciesService
+    from app.services.roster import RosterService
+    from app.services.trust import TrustService
+
+    container = ApiContainer(settings=test_settings)
+    container.init_resources()
+    try:
+        # 5 repos
+        assert isinstance(container.repos.authority(), AuthorityRepository)
+        assert isinstance(container.repos.members(), MembersRepository)
+        assert isinstance(container.repos.policies(), PoliciesRepository)
+        assert isinstance(container.repos.roster(), RosterRepository)
+        assert isinstance(container.repos.trust(), TrustRepository)
+        # 7 services
+        assert isinstance(container.services.authority(), AuthorityService)
+        assert isinstance(
+            container.services.leadership_handoff_applications(),
+            LeadershipHandoffApplicationsService,
+        )
+        assert isinstance(
+            container.services.leadership_handoff_tickets(),
+            LeadershipHandoffTicketsService,
+        )
+        assert isinstance(container.services.members(), MembersService)
+        assert isinstance(container.services.policies(), PoliciesService)
+        assert isinstance(container.services.roster(), RosterService)
+        assert isinstance(container.services.trust(), TrustService)
+    finally:
+        container.shutdown_resources()
+
+
 def test_container_missing_settings_raises():
     with pytest.raises(Exception, match=r"Dependency|defined"):
         ApiContainer().core.settings()

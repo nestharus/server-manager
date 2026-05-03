@@ -10,27 +10,27 @@ from app.infrastructure.ocr import StubOcrProvider
 from app.repositories import _claim as claim_repo
 from app.repositories import activity as activity_repo
 from app.repositories import audit as audit_repo
-from app.repositories import authority as authority_repo
 from app.repositories import compliance as compliance_repo
 from app.repositories import deferred_effects as deferred_effects_repo
-from app.repositories import members as members_repo
 from app.repositories import mutations as mutations_repo
 from app.repositories import notification_events as notification_events_repo
 from app.repositories import notifications as notifications_repo
-from app.repositories import policies as policies_repo
 from app.repositories import read_models as read_models_repo
-from app.repositories import roster as roster_repo
 from app.repositories import scheduler as scheduler_repo
 from app.repositories.application_messages import ApplicationMessagesRepository
 from app.repositories.applications import ApplicationsRepository
+from app.repositories.authority import AuthorityRepository
 from app.repositories.forms import FormsRepository
+from app.repositories.members import MembersRepository
+from app.repositories.policies import PoliciesRepository
 from app.repositories.public_chapters import PublicChaptersRepository
+from app.repositories.roster import RosterRepository
 from app.repositories.ticket_categories import TicketCategoriesRepository
 from app.repositories.ticket_messages import TicketMessagesRepository
 from app.repositories.ticket_sla import TicketSlaRepository
 from app.repositories.tickets import TicketsRepository
 from app.repositories.permissions import PermissionsRepository
-from app.repositories import trust as trust_repo
+from app.repositories.trust import TrustRepository
 from app.repositories import web as web_repo
 from app.repositories.archive_queries import ArchiveQueriesRepository
 from app.repositories.archive_runs import ArchiveRunsRepository
@@ -46,7 +46,6 @@ from app.services import (
 from app.services import audit as audit_service
 from app.services import audit_overrides as audit_overrides_service
 from app.services import audit_queries as audit_queries_service
-from app.services import authority as authority_service
 from app.services import authorization as authorization_service
 from app.services import compliance as compliance_service
 from app.services import compliance_corrections as compliance_corrections_service
@@ -54,13 +53,6 @@ from app.services import compliance_extraction as compliance_extraction_service
 from app.services import compliance_review as compliance_review_service
 from app.services import deferred_effects as deferred_effects_service
 from app.services import form_visibility as form_visibility_service
-from app.services import (
-    leadership_handoff_applications as leadership_handoff_applications_service,
-)
-from app.services import (
-    leadership_handoff_tickets as leadership_handoff_tickets_service,
-)
-from app.services import members as members_service
 from app.services import mutations as mutations_service
 from app.services import notification_events as notification_events_service
 from app.services import notifications as notifications_service
@@ -69,21 +61,25 @@ from app.services import notifications_materialize as notifications_materialize_
 from app.services.application_messages import ApplicationMessagesService
 from app.services.application_transcript import ApplicationTranscriptService
 from app.services.applications import ApplicationsService
+from app.services.authority import AuthorityService
 from app.services.chapter_roles import ChapterRolesService
 from app.services.chapter_templates import ChapterTemplatesService
 from app.services.chapters import ChaptersService
 from app.services.file_upload import FileUploadService, build_s3_client
 from app.services.forms import FormsService
+from app.services.leadership_handoff_applications import LeadershipHandoffApplicationsService
+from app.services.leadership_handoff_tickets import LeadershipHandoffTicketsService
+from app.services.members import MembersService
 from app.services.notifications import emit_application_public_submitted_event
 from app.services.permission_reconciliation import PermissionReconciliationService
 from app.services.permissions import PermissionsService
-from app.services import policies as policies_service
+from app.services.policies import PoliciesService
 from app.services.public_chapters import PublicChaptersService
 from app.services import read_models as read_models_service
-from app.services import roster as roster_service
+from app.services.roster import RosterService
 from app.services import scheduler as scheduler_service
 from app.services import ticket_categories as ticket_categories_service
-from app.services import trust as trust_service
+from app.services.trust import TrustService
 from app.services import web as web_service
 from app.services.mutations import mutate_entity
 from app.services.ticket_messages import TicketMessagesService
@@ -136,7 +132,7 @@ class ReposContainer(containers.DeclarativeContainer):
     archive_queries = providers.Factory(ArchiveQueriesRepository, db=db)
     archive_runs = providers.Factory(ArchiveRunsRepository, db=db)
     audit = providers.Object(audit_repo)
-    authority = providers.Object(authority_repo)
+    authority = providers.Factory(AuthorityRepository, db=db)
     chapter_roles = providers.Factory(ChapterRolesRepository, db=db)
     chapter_templates = providers.Factory(ChapterTemplatesRepository, db=db)
     chapter_transitions = providers.Factory(ChapterTransitionsRepository, db=db)
@@ -144,21 +140,21 @@ class ReposContainer(containers.DeclarativeContainer):
     compliance = providers.Object(compliance_repo)
     deferred_effects = providers.Object(deferred_effects_repo)
     forms = providers.Factory(FormsRepository, db=db)
-    members = providers.Object(members_repo)
+    members = providers.Factory(MembersRepository, db=db)
     mutations = providers.Object(mutations_repo)
     notification_events = providers.Object(notification_events_repo)
     notifications = providers.Object(notifications_repo)
     permissions = providers.Factory(PermissionsRepository, db=db)
-    policies = providers.Object(policies_repo)
+    policies = providers.Factory(PoliciesRepository, db=db)
     public_chapters = providers.Factory(PublicChaptersRepository, db=db)
     read_models = providers.Object(read_models_repo)
-    roster = providers.Object(roster_repo)
+    roster = providers.Factory(RosterRepository, db=db)
     scheduler = providers.Object(scheduler_repo)
     ticket_categories = providers.Factory(TicketCategoriesRepository, db=db)
     ticket_messages = providers.Factory(TicketMessagesRepository, db=db)
     ticket_sla = providers.Factory(TicketSlaRepository, db=db)
     tickets = providers.Factory(TicketsRepository, db=db)
-    trust = providers.Object(trust_repo)
+    trust = providers.Factory(TrustRepository, db=db)
     web = providers.Object(web_repo)
 
 
@@ -207,6 +203,7 @@ class ServicesContainer(containers.DeclarativeContainer):
         application_messages_repo=repos.application_messages,
         forms_repo=repos.forms,
         public_chapters_repo=repos.public_chapters,
+        members_repo=repos.members,
         file_upload_service=file_upload,
         mutations_callable=mutations_callable.provider,
         notification_emitter=application_notification_emitter.provider,
@@ -214,7 +211,16 @@ class ServicesContainer(containers.DeclarativeContainer):
     audit = providers.Object(audit_service)
     audit_overrides = providers.Object(audit_overrides_service)
     audit_queries = providers.Object(audit_queries_service)
-    authority = providers.Object(authority_service)
+    authority = providers.Factory(
+        AuthorityService,
+        authority_repo=repos.authority,
+        members_repo=repos.members,
+        roster_repo=repos.roster,
+        chapter_roles_repo=repos.chapter_roles,
+        applications_repo=repos.applications,
+        tickets_repo=repos.tickets,
+        mutations_callable=mutations_callable.provider,
+    )
     authorization = providers.Object(authorization_service)
     chapter_roles = providers.Factory(
         ChapterRolesService,
@@ -240,11 +246,11 @@ class ServicesContainer(containers.DeclarativeContainer):
     compliance_review = providers.Object(compliance_review_service)
     deferred_effects = providers.Object(deferred_effects_service)
     form_visibility = providers.Object(form_visibility_service)
-    leadership_handoff_applications = providers.Object(
-        leadership_handoff_applications_service,
+    members = providers.Factory(
+        MembersService,
+        members_repo=repos.members,
+        mutations_callable=mutations_callable.provider,
     )
-    leadership_handoff_tickets = providers.Object(leadership_handoff_tickets_service)
-    members = providers.Object(members_service)
     mutations = providers.Object(mutations_service)
     notification_events = providers.Object(notification_events_service)
     notifications = providers.Object(notifications_service)
@@ -260,9 +266,18 @@ class ServicesContainer(containers.DeclarativeContainer):
         permissions_repo=repos.permissions,
         mutations_callable=mutations_callable.provider,
     )
-    policies = providers.Object(policies_service)
+    policies = providers.Factory(
+        PoliciesService,
+        policies_repo=repos.policies,
+        mutations_callable=mutations_callable.provider,
+    )
     read_models = providers.Object(read_models_service)
-    roster = providers.Object(roster_service)
+    roster = providers.Factory(
+        RosterService,
+        roster_repo=repos.roster,
+        members_repo=repos.members,
+        mutations_callable=mutations_callable.provider,
+    )
     scheduler = providers.Object(scheduler_service)
     ticket_categories = providers.Object(ticket_categories_service)
     ticket_messages = providers.Factory(
@@ -278,13 +293,29 @@ class ServicesContainer(containers.DeclarativeContainer):
         ticket_messages_service=ticket_messages,
         mutations_callable=mutations_callable.provider,
     )
+    leadership_handoff_applications = providers.Factory(
+        LeadershipHandoffApplicationsService,
+        applications_service=applications,
+        authority_service=authority,
+    )
+    leadership_handoff_tickets = providers.Factory(
+        LeadershipHandoffTicketsService,
+        tickets_service=tickets,
+        authority_service=authority,
+    )
     ticket_sla = providers.Factory(
         TicketSlaService,
         ticket_sla_repo=repos.ticket_sla,
         tickets_service=tickets,
         notification_events_module=providers.Object(notification_events_service),
     )
-    trust = providers.Object(trust_service)
+    trust = providers.Factory(
+        TrustService,
+        trust_repo=repos.trust,
+        members_repo=repos.members,
+        policies_repo=repos.policies,
+        mutations_callable=mutations_callable.provider,
+    )
     web = providers.Object(web_service)
 
 

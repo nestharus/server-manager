@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from http import HTTPStatus
 
-from fastapi import HTTPException, Request, Response
+from fastapi import HTTPException, Response
 
 from app.contracts.actor import ActorIdentity
-from app.contracts.authority import AuthorityDecisionRead, AuthorityRequirement
 from app.contracts.members import MemberNotFoundError
 from app.contracts.trust import (
     InvalidTrustPolicyError,
@@ -15,12 +14,7 @@ from app.contracts.trust import (
     TrustProfileNotFoundError,
     TrustRecomputeConflictError,
 )
-from app.repositories.db import PostgresDatabase
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
-
-
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
+from app.services.authority import AuthorityService
 
 
 def set_etag(response: Response, etag: str) -> None:
@@ -29,29 +23,27 @@ def set_etag(response: Response, etag: str) -> None:
 
 def require_authority(
     *,
-    db: PostgresDatabase,
+    authority_service: AuthorityService,
     actor: ActorIdentity,
     permission: str,
     scope_kind: str,
     scope_id: str | None,
-) -> AuthorityDecisionRead:
-    requirement = AuthorityRequirement(
-        scope_kind=scope_kind,
-        scope_id=scope_id,
-        permission=permission,
-    )
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
-    decision = evaluate(requirement=requirement, grants=grants, at=current_time())
-    if not decision.allowed:
+) -> None:
+    try:
+        authority_service.require_scoped_authority(
+            permission,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            actor=actor,
+        )
+    except PermissionError as error:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
             detail={
                 "code": "authority_decision_denied",
                 "message": "authority requirement denied",
-                "decision": decision.model_dump(mode="json"),
             },
-        )
-    return decision
+        ) from error
 
 
 def raise_for_trust_error(error: Exception) -> None:
@@ -95,4 +87,3 @@ def raise_for_trust_error(error: Exception) -> None:
             },
         ) from error
     raise error
-

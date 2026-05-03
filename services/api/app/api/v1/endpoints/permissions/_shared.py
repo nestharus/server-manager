@@ -18,8 +18,9 @@ from app.contracts.permissions import (
     RenewalExpiresAtInPastError,
 )
 from app.core.container import ApiContainer
+from app.repositories.authority import AuthorityRepository
 from app.repositories.db import PostgresDatabase
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import current_time, evaluate, _row_to_read
 from app.services.permission_reconciliation import (
     ReconciliationRunConflictError,
     ReconciliationRunNotFoundError,
@@ -77,7 +78,16 @@ def require_scoped(
     permission: str,
     db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
 ) -> None:
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
+    authority_repo = AuthorityRepository(db)
+    grants = [
+        _row_to_read(row)
+        for row in authority_repo.list_grants(
+            grantee_id=actor.actor_id,
+            include_revoked=True,
+            limit=None,
+            after_id=None,
+        )
+    ]
     decision = evaluate(
         requirement=AuthorityRequirement(
             scope_kind=scope_kind,  # type: ignore[arg-type]

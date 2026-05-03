@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -29,13 +30,19 @@ from app.contracts.authority import (
     GrantAlreadyRevokedError,
 )
 from app.core.context import use_audit_context
+from app.repositories.applications import ApplicationsRepository
+from app.repositories.authority import AuthorityRepository
+from app.repositories.chapter_roles import ChapterRolesRepository
 from app.repositories.db import PostgresDatabase
+from app.repositories.members import MembersRepository
+from app.repositories.roster import RosterRepository
+from app.repositories.tickets import TicketsRepository
 from app.services.authority import (
+    AuthorityService,
     current_time,
     evaluate,
-    grant_authority,
-    revoke_authority,
 )
+from app.services.mutations import mutate_entity
 
 
 ACTOR = ("user", "admin")
@@ -81,6 +88,18 @@ def _make_grant(
     )
 
 
+def _authority_service(db: PostgresDatabase) -> AuthorityService:
+    return AuthorityService(
+        authority_repo=AuthorityRepository(db),
+        members_repo=MembersRepository(db),
+        roster_repo=RosterRepository(db),
+        chapter_roles_repo=ChapterRolesRepository(db),
+        applications_repo=ApplicationsRepository(db),
+        tickets_repo=TicketsRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
 @pytest.fixture()
 def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
     db = PostgresDatabase(dsn=governance_dsn)
@@ -102,9 +121,9 @@ def test_grant_authority_creates_persisted_row_with_scope_and_permissions(
     """``grant_authority()`` must persist a row whose scope, permission set,
     and predecessor link match the call arguments exactly."""
 
+    service = _authority_service(governance_db)
     with use_audit_context(_make_audit_context()):
-        grant = grant_authority(
-            db=governance_db,
+        grant = service.grant_authority(
             grantee_id="u1",
             scope_kind="chapter",
             scope_id="ch-1",
@@ -263,9 +282,9 @@ def test_revoke_authority_second_call_raises_grant_already_revoked_error(
     second revoke call sees a zero rowcount and must raise
     ``GrantAlreadyRevokedError``."""
 
+    service = _authority_service(governance_db)
     with use_audit_context(_make_audit_context()):
-        grant_authority(
-            db=governance_db,
+        service.grant_authority(
             grantee_id="u1",
             scope_kind="chapter",
             scope_id="ch-1",
@@ -280,8 +299,7 @@ def test_revoke_authority_second_call_raises_grant_already_revoked_error(
     grant_id: UUID = rows[0]["id"]
 
     with use_audit_context(_make_audit_context()):
-        revoke_authority(
-            db=governance_db,
+        service.revoke_authority(
             grant_id=grant_id,
             actor=ACTOR,
             revoked_by="admin",
@@ -289,8 +307,7 @@ def test_revoke_authority_second_call_raises_grant_already_revoked_error(
         )
 
         with pytest.raises(GrantAlreadyRevokedError):
-            revoke_authority(
-                db=governance_db,
+            service.revoke_authority(
                 grant_id=grant_id,
                 actor=ACTOR,
                 revoked_by="admin",

@@ -1,25 +1,23 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from http import HTTPStatus
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import HTTPException
 from psycopg import Connection
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.authority import (
     AuthorityDecisionRead,
-    AuthorityGrantTransferRequest,
     AuthorityGrantListRead,
     AuthorityGrantRead,
+    AuthorityGrantTransferRequest,
     AuthorityRequirement,
-    DepartingRoleEntry,
     DenialReason,
+    DepartingRoleEntry,
     DuplicateActiveGrantError,
-    GrantAlreadyTransferredError,
     GrantAlreadyRevokedError,
+    GrantAlreadyTransferredError,
     InvalidHolderIdError,
     PendingApplicationRef,
     PendingTicketRef,
@@ -28,24 +26,18 @@ from app.contracts.authority import (
 )
 from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
 from app.repositories.applications import ApplicationsRepository
-from app.repositories.authority import (
-    fetch_grants_by_ids,
-    fetch_grant,
-    find_active_duplicate_grant_for_update,
-    find_successor_grant,
-    insert_grant,
-    list_active_grants_for_grantee_ids,
-    list_grants,
-    update_revoked_with_reason,
-)
+from app.repositories.authority import AuthorityRepository
 from app.repositories.chapter_roles import ChapterRolesRepository
-from app.repositories.db import PostgresDatabase
-from app.repositories.members import fetch_member_by_discord_id, fetch_member_by_id
+from app.repositories.members import MembersRepository
 from app.repositories.mutations import get_head_for_update
-from app.repositories.roster import list_latest_role_holders
+from app.repositories.roster import RosterRepository
 from app.repositories.tickets import TicketsRepository
-from app.services.members import is_synthetic_member
-from app.services.mutations import _format_etag, mutate_entity
+from app.services._helpers.authority import (
+    _collect_actor_grant_aliases,
+    _collect_member_aliases,
+    _require_scoped_authority,
+)
+from app.services.mutations import _format_etag
 
 OPEN_APPLICATION_STATES = frozenset(
     {
@@ -78,16 +70,6 @@ def _make_request(
     )
 
 
-def _fetch_grant_row(
-    connection: Connection[Any],
-    grant_id: UUID,
-) -> dict[str, Any]:
-    row = fetch_grant(connection, grant_id=grant_id)
-    if row is None:
-        raise LookupError(f"authority grant {grant_id} was not found")
-    return row
-
-
 def _row_to_read(row: dict[str, Any]) -> AuthorityGrantRead:
     return AuthorityGrantRead(
         id=row["id"],
@@ -101,27 +83,6 @@ def _row_to_read(row: dict[str, Any]) -> AuthorityGrantRead:
         revocation_reason=row.get("revocation_reason"),
         predecessor_grant_id=row["predecessor_grant_id"],
     )
-
-
-def _find_active_duplicate_grant(
-    connection: Connection[Any],
-    *,
-    grantee_id: str,
-    scope_kind: str,
-    scope_id: str | None,
-    permissions: frozenset[str],
-) -> AuthorityGrantRead | None:
-    row = find_active_duplicate_grant_for_update(
-        connection,
-        grantee_id=grantee_id,
-        scope_kind=scope_kind,
-        scope_id=scope_id,
-        permissions=permissions,
-        at=current_time(),
-    )
-    if row is None:
-        return None
-    return _row_to_read(row)
 
 
 def _normalize_nonblank_text(value: str, *, field_name: str) -> str:
@@ -140,217 +101,6 @@ def _normalize_holder_id(value: str, *, field_name: str) -> str:
         if holder_id.isdigit():
             return holder_id
     raise InvalidHolderIdError(f"{field_name} must be a UUID or Discord ID string")
-
-
-def _resolve_member_aliases(
-    connection: Connection[Any],
-    member_id: str,
-    *,
-    synthetic_policy: Literal["allow", "omit", "reject"] = "allow",
-) -> tuple[set[str], set[UUID]]:
-    canonical = _normalize_holder_id(member_id, field_name="holder_id")
-    text_aliases = {canonical}
-    uuid_aliases: set[UUID] = set()
-
-    try:
-        member_uuid = UUID(canonical)
-    except ValueError:
-        member_row = fetch_member_by_discord_id(connection, canonical)
-        if member_row is not None:
-            uuid_aliases.add(member_row["id"])
-            text_aliases.add(str(member_row["id"]))
-    else:
-        uuid_aliases.add(member_uuid)
-        member_row = fetch_member_by_id(connection, member_uuid)
-        if member_row is not None:
-            if is_synthetic_member(member_row):
-                if synthetic_policy == "omit":
-                    return set(), set()
-                if synthetic_policy == "reject":
-                    raise HTTPException(
-                        status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-                        detail={
-                            "code": "leadership_alias_synthetic_not_allowed",
-                            "message": (
-                                "Synthetic public-intake members cannot be leaders "
-                                "or alias targets."
-                            ),
-                        },
-                    )
-            text_aliases.add(member_row["discord_user_id"])
-
-    return text_aliases, uuid_aliases
-
-
-def _collect_member_aliases(
-    connection: Connection[Any],
-    member_ids: list[str],
-    *,
-    synthetic_policy: Literal["allow", "omit", "reject"] = "allow",
-) -> tuple[list[str], list[UUID]]:
-    text_aliases: set[str] = set()
-    uuid_aliases: set[UUID] = set()
-    for member_id in member_ids:
-        member_text_aliases, member_uuid_aliases = _resolve_member_aliases(
-            connection,
-            member_id,
-            synthetic_policy=synthetic_policy,
-        )
-        text_aliases.update(member_text_aliases)
-        uuid_aliases.update(member_uuid_aliases)
-    return sorted(text_aliases), sorted(uuid_aliases, key=str)
-
-
-def grant_authority(
-    db: PostgresDatabase,
-    *,
-    grantee_id: str,
-    scope_kind: str,
-    scope_id: str | None,
-    permissions: frozenset[str],
-    expires_at: datetime | None,
-    predecessor_grant_id: UUID | None,
-    actor: tuple[str, str],
-    connection: Connection[Any] | None = None,
-) -> AuthorityGrantRead:
-    grant_id = uuid4()
-    if connection is None:
-        with db.transaction() as transaction_connection:
-            return grant_authority(
-                db,
-                grantee_id=grantee_id,
-                scope_kind=scope_kind,
-                scope_id=scope_id,
-                permissions=permissions,
-                expires_at=expires_at,
-                predecessor_grant_id=predecessor_grant_id,
-                actor=actor,
-                connection=transaction_connection,
-            )
-
-    duplicate = _find_active_duplicate_grant(
-        connection,
-        grantee_id=grantee_id,
-        scope_kind=scope_kind,
-        scope_id=scope_id,
-        permissions=permissions,
-    )
-    if duplicate is not None:
-        raise DuplicateActiveGrantError(duplicate.id)
-
-    def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
-        insert_grant(
-            active_connection,
-            grant_row={
-                "id": grant_id,
-                "grantee_id": grantee_id,
-                "scope_kind": scope_kind,
-                "scope_id": scope_id,
-                "permissions": permissions,
-                "expires_at": expires_at,
-                "revoked_at": None,
-                "revoked_by": None,
-                "revocation_reason": None,
-                "predecessor_grant_id": predecessor_grant_id,
-            },
-        )
-        return StateChangeDraft(
-            change_type="authority_grant.created",
-            payload_json={
-                "grant_id": str(grant_id),
-                "grantee_id": grantee_id,
-                "scope_kind": scope_kind,
-                "scope_id": scope_id,
-                "permissions": sorted(permissions),
-                "expires_at": None if expires_at is None else expires_at.isoformat(),
-                "predecessor_grant_id": (
-                    None if predecessor_grant_id is None else str(predecessor_grant_id)
-                ),
-            },
-        )
-
-    mutate_entity(
-        db=db,
-        connection=connection,
-        aggregate_type="authority_grant",
-        aggregate_id=str(grant_id),
-        request=_make_request(
-            expected_version=0,
-            actor=actor,
-            request_surface="service:authority.grant",
-        ),
-        action_type="authority.grant",
-        action_payload={},
-        payload_allowlist=None,
-        mutate_projection=mutate_projection,
-        scope_kind=scope_kind,
-        scope_id=scope_id,
-    )
-    return _row_to_read(_fetch_grant_row(connection, grant_id))
-
-
-def revoke_authority(
-    db: PostgresDatabase,
-    *,
-    grant_id: UUID,
-    actor: tuple[str, str],
-    revoked_by: str,
-    reason: str,
-    expected_version: int | None = None,
-    connection: Connection[Any] | None = None,
-) -> AuthorityGrantRead:
-    if connection is None:
-        with db.connection() as read_connection:
-            row = _fetch_grant_row(read_connection, grant_id)
-    else:
-        row = _fetch_grant_row(connection, grant_id)
-    revoked_at = current_time()
-
-    def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
-        updated = update_revoked_with_reason(
-            active_connection,
-            grant_id=grant_id,
-            revoked_at=revoked_at,
-            revoked_by=revoked_by,
-            revocation_reason=reason,
-        )
-        if updated != 1:
-            raise GrantAlreadyRevokedError(grant_id)
-        return StateChangeDraft(
-            change_type="authority_grant.revoked",
-            payload_json={
-                "grant_id": str(grant_id),
-                "revoked_at": revoked_at.isoformat(),
-                "revoked_by": revoked_by,
-                "revocation_reason": reason,
-            },
-        )
-
-    mutate_entity(
-        db=db,
-        connection=connection,
-        aggregate_type="authority_grant",
-        aggregate_id=str(grant_id),
-        request=_make_request(
-            expected_version=(
-                int(row["current_seq"])
-                if expected_version is None
-                else expected_version
-            ),
-            actor=actor,
-            request_surface="service:authority.revoke",
-        ),
-        action_type="authority.revoke",
-        action_payload={},
-        payload_allowlist=None,
-        mutate_projection=mutate_projection,
-        scope_kind=row["scope_kind"],
-        scope_id=row["scope_id"],
-    )
-    if connection is None:
-        read, _etag = get_authority_grant(db, grant_id=grant_id)
-        return read
-    return _row_to_read(_fetch_grant_row(connection, grant_id))
 
 
 def evaluate(
@@ -406,76 +156,266 @@ def evaluate(
     )
 
 
-def _collect_actor_grant_aliases(
-    connection: Connection[Any],
-    actor_id: str,
-) -> list[str]:
-    """Return every grantee_id alias an actor's grants could be stored under.
+class AuthorityService:
+    def __init__(
+        self,
+        authority_repo: AuthorityRepository,
+        members_repo: MembersRepository,
+        roster_repo: RosterRepository,
+        chapter_roles_repo: ChapterRolesRepository,
+        applications_repo: ApplicationsRepository,
+        tickets_repo: TicketsRepository,
+        mutations_callable,
+    ) -> None:
+        self._authority_repo = authority_repo
+        self._members_repo = members_repo
+        self._roster_repo = roster_repo
+        self._chapter_roles_repo = chapter_roles_repo
+        self._applications_repo = applications_repo
+        self._tickets_repo = tickets_repo
+        self._mutations_callable = mutations_callable
 
-    Actors authenticate with either a member UUID, a Discord numeric ID, or a
-    service/admin handle that does not correspond to a member row. Grants may
-    have been written under any alias, so we merge all of them before
-    evaluating permissions.
-    """
-    try:
-        text_aliases, _ = _collect_member_aliases(connection, [actor_id])
-    except InvalidHolderIdError:
-        return [actor_id]
-    if actor_id in text_aliases:
-        return list(text_aliases)
-    return [actor_id, *text_aliases]
+    def _fetch_grant_row_on(
+        self,
+        connection: Connection[Any],
+        grant_id: UUID,
+    ) -> dict[str, Any]:
+        row = self._authority_repo._fetch_grant_on(connection, grant_id=grant_id)
+        if row is None:
+            raise LookupError(f"authority grant {grant_id} was not found")
+        return row
 
-
-def _require_scoped_authority(
-    permission: str,
-    *,
-    scope_kind: str,
-    scope_id: str | None,
-    actor: ActorIdentity,
-    db: PostgresDatabase,
-) -> None:
-    with db.connection() as connection:
-        aliases = _collect_actor_grant_aliases(connection, actor.actor_id)
-        seen_ids: set[UUID] = set()
-        grants: list[AuthorityGrantRead] = []
-        for alias in aliases:
-            for row in list_grants(
-                connection,
-                grantee_id=alias,
-                include_revoked=True,
-                limit=None,
-                after_id=None,
-            ):
-                if row["id"] in seen_ids:
-                    continue
-                seen_ids.add(row["id"])
-                grants.append(_row_to_read(row))
-    decision = evaluate(
-        requirement=AuthorityRequirement(
-            scope_kind=scope_kind,  # type: ignore[arg-type]
-            scope_id=scope_id,
-            permission=permission,
-        ),
-        grants=grants,
-        at=current_time(),
-    )
-    if not decision.allowed:
-        raise PermissionError("authority requirement denied")
-
-
-def list_authority_grants(
-    db: PostgresDatabase,
-    *,
-    grantee_id: str,
-    scope_kind: str | None = None,
-    scope_id: str | None = None,
-    include_revoked: bool = False,
-    limit: int = 50,
-    after_id: UUID | None = None,
-) -> AuthorityGrantListRead:
-    with db.connection() as connection:
-        rows = list_grants(
+    def _find_active_duplicate_grant_on(
+        self,
+        connection: Connection[Any],
+        *,
+        grantee_id: str,
+        scope_kind: str,
+        scope_id: str | None,
+        permissions: frozenset[str],
+    ) -> AuthorityGrantRead | None:
+        row = self._authority_repo._find_active_duplicate_grant_for_update_on(
             connection,
+            grantee_id=grantee_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            permissions=permissions,
+            at=current_time(),
+        )
+        if row is None:
+            return None
+        return _row_to_read(row)
+
+    def _collect_actor_grant_aliases_on(
+        self,
+        connection: Connection[Any],
+        actor_id: str,
+    ) -> list[str]:
+        return _collect_actor_grant_aliases(
+            members_repo=self._members_repo,
+            connection=connection,
+            actor_id=actor_id,
+        )
+
+    def grant_authority(
+        self,
+        *,
+        grantee_id: str,
+        scope_kind: str,
+        scope_id: str | None,
+        permissions: frozenset[str],
+        expires_at: datetime | None,
+        predecessor_grant_id: UUID | None,
+        actor: tuple[str, str],
+    ) -> AuthorityGrantRead:
+        with self._authority_repo.db.transaction() as connection:
+            return self._grant_authority_on(
+                connection,
+                grantee_id=grantee_id,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+                permissions=permissions,
+                expires_at=expires_at,
+                predecessor_grant_id=predecessor_grant_id,
+                actor=actor,
+            )
+
+    def _grant_authority_on(
+        self,
+        connection: Connection[Any],
+        *,
+        grantee_id: str,
+        scope_kind: str,
+        scope_id: str | None,
+        permissions: frozenset[str],
+        expires_at: datetime | None,
+        predecessor_grant_id: UUID | None,
+        actor: tuple[str, str],
+    ) -> AuthorityGrantRead:
+        grant_id = uuid4()
+        duplicate = self._find_active_duplicate_grant_on(
+            connection,
+            grantee_id=grantee_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            permissions=permissions,
+        )
+        if duplicate is not None:
+            raise DuplicateActiveGrantError(duplicate.id)
+
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            self._authority_repo._insert_grant_on(
+                active_connection,
+                grant_row={
+                    "id": grant_id,
+                    "grantee_id": grantee_id,
+                    "scope_kind": scope_kind,
+                    "scope_id": scope_id,
+                    "permissions": permissions,
+                    "expires_at": expires_at,
+                    "revoked_at": None,
+                    "revoked_by": None,
+                    "revocation_reason": None,
+                    "predecessor_grant_id": predecessor_grant_id,
+                },
+            )
+            return StateChangeDraft(
+                change_type="authority_grant.created",
+                payload_json={
+                    "grant_id": str(grant_id),
+                    "grantee_id": grantee_id,
+                    "scope_kind": scope_kind,
+                    "scope_id": scope_id,
+                    "permissions": sorted(permissions),
+                    "expires_at": None if expires_at is None else expires_at.isoformat(),
+                    "predecessor_grant_id": (
+                        None
+                        if predecessor_grant_id is None
+                        else str(predecessor_grant_id)
+                    ),
+                },
+            )
+
+        self._mutations_callable(
+            connection=connection,
+            aggregate_type="authority_grant",
+            aggregate_id=str(grant_id),
+            request=_make_request(
+                expected_version=0,
+                actor=actor,
+                request_surface="service:authority.grant",
+            ),
+            action_type="authority.grant",
+            action_payload={},
+            payload_allowlist=None,
+            mutate_projection=mutate_projection,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
+        return _row_to_read(self._fetch_grant_row_on(connection, grant_id))
+
+    def revoke_authority(
+        self,
+        *,
+        grant_id: UUID,
+        actor: tuple[str, str],
+        revoked_by: str,
+        reason: str,
+        expected_version: int | None = None,
+    ) -> AuthorityGrantRead:
+        with self._authority_repo.db.transaction() as connection:
+            return self._revoke_authority_on(
+                connection,
+                grant_id=grant_id,
+                actor=actor,
+                revoked_by=revoked_by,
+                reason=reason,
+                expected_version=expected_version,
+            )
+
+    def _revoke_authority_on(
+        self,
+        connection: Connection[Any],
+        *,
+        grant_id: UUID,
+        actor: tuple[str, str],
+        revoked_by: str,
+        reason: str,
+        expected_version: int | None = None,
+    ) -> AuthorityGrantRead:
+        row = self._fetch_grant_row_on(connection, grant_id)
+        revoked_at = current_time()
+
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            updated = self._authority_repo._update_revoked_with_reason_on(
+                active_connection,
+                grant_id=grant_id,
+                revoked_at=revoked_at,
+                revoked_by=revoked_by,
+                revocation_reason=reason,
+            )
+            if updated != 1:
+                raise GrantAlreadyRevokedError(grant_id)
+            return StateChangeDraft(
+                change_type="authority_grant.revoked",
+                payload_json={
+                    "grant_id": str(grant_id),
+                    "revoked_at": revoked_at.isoformat(),
+                    "revoked_by": revoked_by,
+                    "revocation_reason": reason,
+                },
+            )
+
+        self._mutations_callable(
+            connection=connection,
+            aggregate_type="authority_grant",
+            aggregate_id=str(grant_id),
+            request=_make_request(
+                expected_version=(
+                    int(row["current_seq"])
+                    if expected_version is None
+                    else expected_version
+                ),
+                actor=actor,
+                request_surface="service:authority.revoke",
+            ),
+            action_type="authority.revoke",
+            action_payload={},
+            payload_allowlist=None,
+            mutate_projection=mutate_projection,
+            scope_kind=row["scope_kind"],
+            scope_id=row["scope_id"],
+        )
+        return _row_to_read(self._fetch_grant_row_on(connection, grant_id))
+
+    def require_scoped_authority(
+        self,
+        permission: str,
+        *,
+        scope_kind: str,
+        scope_id: str | None,
+        actor: ActorIdentity,
+    ) -> None:
+        _require_scoped_authority(
+            authority_repo=self._authority_repo,
+            members_repo=self._members_repo,
+            permission=permission,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            actor=actor,
+        )
+
+    def list_authority_grants(
+        self,
+        *,
+        grantee_id: str,
+        scope_kind: str | None = None,
+        scope_id: str | None = None,
+        include_revoked: bool = False,
+        limit: int = 50,
+        after_id: UUID | None = None,
+    ) -> AuthorityGrantListRead:
+        rows = self._authority_repo.list_grants(
             grantee_id=grantee_id,
             scope_kind=scope_kind,
             scope_id=scope_id,
@@ -483,44 +423,55 @@ def list_authority_grants(
             limit=limit + 1,
             after_id=after_id,
         )
-    items = [_row_to_read(row) for row in rows[:limit]]
-    next_cursor = items[-1].id if len(rows) > limit and items else None
-    return AuthorityGrantListRead(items=items, next_cursor=next_cursor)
+        items = [_row_to_read(row) for row in rows[:limit]]
+        next_cursor = items[-1].id if len(rows) > limit and items else None
+        return AuthorityGrantListRead(items=items, next_cursor=next_cursor)
 
+    def get_authority_grant(
+        self,
+        *,
+        grant_id: UUID,
+    ) -> tuple[AuthorityGrantRead, str]:
+        with self._authority_repo.db.connection() as connection:
+            row = self._fetch_grant_row_on(connection, grant_id)
+        return _row_to_read(row), _format_etag(int(row["current_seq"]))
 
-def get_authority_grant(
-    db: PostgresDatabase,
-    *,
-    grant_id: UUID,
-) -> tuple[AuthorityGrantRead, str]:
-    with db.connection() as connection:
-        row = _fetch_grant_row(connection, grant_id)
-    return _row_to_read(row), _format_etag(int(row["current_seq"]))
+    def compute_succession_plan(
+        self,
+        *,
+        chapter_id: str,
+        actor: ActorIdentity,
+    ) -> SuccessionPlanRead:
+        with self._authority_repo.db.connection() as connection:
+            return self._compute_succession_plan_on(
+                connection,
+                chapter_id=chapter_id,
+                actor=actor,
+            )
 
-
-def compute_succession_plan(
-    db: PostgresDatabase,
-    *,
-    chapter_id: str,
-    actor: ActorIdentity,
-) -> SuccessionPlanRead:
-    _require_scoped_authority(
-        "succession_plan.read",
-        scope_kind="chapter",
-        scope_id=chapter_id,
-        actor=actor,
-        db=db,
-    )
-
-    chapter_roles_repo = ChapterRolesRepository(db)
-    with db.connection() as connection:
-        roles = chapter_roles_repo._list_succession_triggering_roles_on(
+    def _compute_succession_plan_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+        actor: ActorIdentity,
+    ) -> SuccessionPlanRead:
+        _require_scoped_authority(
+            authority_repo=self._authority_repo,
+            members_repo=self._members_repo,
+            permission="succession_plan.read",
+            scope_kind="chapter",
+            scope_id=chapter_id,
+            actor=actor,
+            connection=connection,
+        )
+        roles = self._chapter_roles_repo._list_succession_triggering_roles_on(
             connection,
             chapter_id=chapter_id,
         )
         holders = {
             row["role_id"]: row
-            for row in list_latest_role_holders(
+            for row in self._roster_repo._list_latest_role_holders_on(
                 connection,
                 chapter_id=chapter_id,
                 role_ids=[row["id"] for row in roles],
@@ -551,162 +502,165 @@ def compute_succession_plan(
             )
 
         grant_aliases, application_owner_ids = _collect_member_aliases(
-            connection,
-            holder_ids,
+            members_repo=self._members_repo,
+            connection=connection,
+            member_ids=holder_ids,
             synthetic_policy="omit",
         )
-        grant_rows = list_active_grants_for_grantee_ids(
+        grant_rows = self._authority_repo._list_active_grants_for_grantee_ids_on(
             connection,
             grantee_ids=grant_aliases,
             scope_kind="chapter",
             scope_id=chapter_id,
         )
-        application_rows = ApplicationsRepository(
-            db
-        )._list_open_applications_for_owner_ids_on(
-            connection,
-            owner_ids=application_owner_ids,
-            states=sorted(OPEN_APPLICATION_STATES),
-            scope_kind="chapter",
-            scope_id=chapter_id,
+        application_rows = (
+            self._applications_repo._list_open_applications_for_owner_ids_on(
+                connection,
+                owner_ids=application_owner_ids,
+                states=sorted(OPEN_APPLICATION_STATES),
+                scope_kind="chapter",
+                scope_id=chapter_id,
+            )
         )
-        ticket_rows = TicketsRepository(db)._list_open_tickets_for_owner_ids_on(
+        ticket_rows = self._tickets_repo._list_open_tickets_for_owner_ids_on(
             connection,
             owner_ids=grant_aliases,
             scope_kind="chapter",
             scope_id=chapter_id,
         )
 
-    return SuccessionPlanRead(
-        chapter_id=chapter_id,
-        generated_at=current_time(),
-        departing_roles=departing_roles,
-        affected_grants=[_row_to_read(row) for row in grant_rows],
-        pending_applications=[
-            PendingApplicationRef(
-                application_id=row["id"],
-                owner_id=str(row["owner_id"]),
-                state=str(row["state"]),
-            )
-            for row in application_rows
-        ],
-        pending_tickets=[
-            PendingTicketRef(
-                ticket_id=row["id"],
-                owner_id=str(row["owner_id"]),
-                state=str(row["state"]),
-            )
-            for row in ticket_rows
-        ],
-        successor_designated=False,
-        successor_member_id=None,
-    )
-
-
-def transfer_authority_grant(
-    db: PostgresDatabase,
-    *,
-    grant_id: UUID,
-    expected_version: int,
-    request: AuthorityGrantTransferRequest,
-    actor: ActorIdentity,
-) -> tuple[AuthorityGrantRead, MutationResult, bool]:
-    successor_id = _normalize_holder_id(
-        request.successor_id,
-        field_name="successor_id",
-    )
-    _normalize_nonblank_text(request.reason, field_name="reason")
-
-    with db.connection() as connection:
-        predecessor = _fetch_grant_row(connection, grant_id)
-
-    _require_scoped_authority(
-        "authority_grant.transfer",
-        scope_kind=predecessor["scope_kind"],
-        scope_id=predecessor["scope_id"],
-        actor=actor,
-        db=db,
-    )
-
-    with db.transaction() as connection:
-        get_head_for_update(
-            connection,
-            aggregate_type="authority_grant",
-            aggregate_id=str(grant_id),
-        )
-        existing_successor = find_successor_grant(
-            connection,
-            predecessor_grant_id=grant_id,
-        )
-        if existing_successor is not None:
-            if existing_successor["grantee_id"] == successor_id:
-                successor_row = _fetch_grant_row(connection, existing_successor["id"])
-                successor_version = int(successor_row["current_seq"])
-                return (
-                    _row_to_read(successor_row),
-                    MutationResult(
-                        version=successor_version,
-                        etag=_format_etag(successor_version),
-                    ),
-                    False,
+        return SuccessionPlanRead(
+            chapter_id=chapter_id,
+            generated_at=current_time(),
+            departing_roles=departing_roles,
+            affected_grants=[_row_to_read(row) for row in grant_rows],
+            pending_applications=[
+                PendingApplicationRef(
+                    application_id=row["id"],
+                    owner_id=str(row["owner_id"]),
+                    state=str(row["state"]),
                 )
-            raise GrantAlreadyTransferredError(existing_successor["id"])
-        if predecessor["revoked_at"] is not None:
-            raise GrantAlreadyRevokedError(grant_id)
+                for row in application_rows
+            ],
+            pending_tickets=[
+                PendingTicketRef(
+                    ticket_id=row["id"],
+                    owner_id=str(row["owner_id"]),
+                    state=str(row["state"]),
+                )
+                for row in ticket_rows
+            ],
+            successor_designated=False,
+            successor_member_id=None,
+        )
 
-        successor = grant_authority(
-            db,
-            grantee_id=successor_id,
+    def transfer_authority_grant(
+        self,
+        *,
+        grant_id: UUID,
+        expected_version: int,
+        request: AuthorityGrantTransferRequest,
+        actor: ActorIdentity,
+    ) -> tuple[AuthorityGrantRead, MutationResult, bool]:
+        successor_id = _normalize_holder_id(
+            request.successor_id,
+            field_name="successor_id",
+        )
+        _normalize_nonblank_text(request.reason, field_name="reason")
+
+        with self._authority_repo.db.connection() as connection:
+            predecessor = self._fetch_grant_row_on(connection, grant_id)
+
+        self.require_scoped_authority(
+            "authority_grant.transfer",
             scope_kind=predecessor["scope_kind"],
             scope_id=predecessor["scope_id"],
-            permissions=frozenset(predecessor["permissions"]),
-            expires_at=predecessor["expires_at"],
-            predecessor_grant_id=grant_id,
-            actor=(actor.actor_kind, actor.actor_id),
-            connection=connection,
-        )
-        revoke_authority(
-            db,
-            grant_id=grant_id,
-            actor=(actor.actor_kind, actor.actor_id),
-            revoked_by=actor.actor_id,
-            reason=SUCCESSION_TRANSFER_REVOCATION_REASON,
-            expected_version=expected_version,
-            connection=connection,
-        )
-        successor_row = _fetch_grant_row(connection, successor.id)
-        successor_version = int(successor_row["current_seq"])
-        return (
-            successor,
-            MutationResult(
-                version=successor_version,
-                etag=_format_etag(successor_version),
-            ),
-            True,
+            actor=actor,
         )
 
+        with self._authority_repo.db.transaction() as connection:
+            get_head_for_update(
+                connection,
+                aggregate_type="authority_grant",
+                aggregate_id=str(grant_id),
+            )
+            existing_successor = self._authority_repo._find_successor_grant_on(
+                connection,
+                predecessor_grant_id=grant_id,
+            )
+            if existing_successor is not None:
+                if existing_successor["grantee_id"] == successor_id:
+                    successor_row = self._fetch_grant_row_on(
+                        connection,
+                        existing_successor["id"],
+                    )
+                    successor_version = int(successor_row["current_seq"])
+                    return (
+                        _row_to_read(successor_row),
+                        MutationResult(
+                            version=successor_version,
+                            etag=_format_etag(successor_version),
+                        ),
+                        False,
+                    )
+                raise GrantAlreadyTransferredError(existing_successor["id"])
+            if predecessor["revoked_at"] is not None:
+                raise GrantAlreadyRevokedError(grant_id)
 
-def list_grants_for_grantee(
-    db: PostgresDatabase,
-    *,
-    grantee_id: str,
-) -> list[AuthorityGrantRead]:
-    with db.connection() as connection:
-        rows = list_grants(
-            connection,
+            successor = self._grant_authority_on(
+                connection,
+                grantee_id=successor_id,
+                scope_kind=predecessor["scope_kind"],
+                scope_id=predecessor["scope_id"],
+                permissions=frozenset(predecessor["permissions"]),
+                expires_at=predecessor["expires_at"],
+                predecessor_grant_id=grant_id,
+                actor=(actor.actor_kind, actor.actor_id),
+            )
+            self._revoke_authority_on(
+                connection,
+                grant_id=grant_id,
+                actor=(actor.actor_kind, actor.actor_id),
+                revoked_by=actor.actor_id,
+                reason=SUCCESSION_TRANSFER_REVOCATION_REASON,
+                expected_version=expected_version,
+            )
+            successor_row = self._fetch_grant_row_on(connection, successor.id)
+            successor_version = int(successor_row["current_seq"])
+            return (
+                successor,
+                MutationResult(
+                    version=successor_version,
+                    etag=_format_etag(successor_version),
+                ),
+                True,
+            )
+
+    def list_grants_for_grantee(
+        self,
+        *,
+        grantee_id: str,
+    ) -> list[AuthorityGrantRead]:
+        rows = self._authority_repo.list_grants(
             grantee_id=grantee_id,
             include_revoked=True,
             limit=None,
             after_id=None,
         )
-    return [_row_to_read(row) for row in rows]
+        return [_row_to_read(row) for row in rows]
+
+    def get_authority_grants_by_ids(
+        self,
+        *,
+        grant_ids: list[UUID],
+    ) -> list[AuthorityGrantRead]:
+        rows = self._authority_repo.fetch_grants_by_ids(grant_ids=grant_ids)
+        return [_row_to_read(row) for row in rows]
 
 
-def get_authority_grants_by_ids(
-    db: PostgresDatabase,
-    *,
-    grant_ids: list[UUID],
-) -> list[AuthorityGrantRead]:
-    with db.connection() as connection:
-        rows = fetch_grants_by_ids(connection, grant_ids=grant_ids)
-    return [_row_to_read(row) for row in rows]
+__all__ = [
+    "OPEN_APPLICATION_STATES",
+    "AuthorityService",
+    "current_time",
+    "evaluate",
+]

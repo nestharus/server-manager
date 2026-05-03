@@ -41,11 +41,12 @@ from app.contracts.scope import ScopeKind
 from app.core.context import get_current_audit_context, use_audit_context
 from app.repositories.archive_queries import ArchiveQueriesRepository, CountAndSamples
 from app.repositories.archive_runs import ArchiveRunsRepository
+from app.repositories.authority import AuthorityRepository
 from app.repositories.chapter_templates import ChapterTemplatesRepository
 from app.repositories.chapter_transitions import ChapterTransitionsRepository
 from app.repositories.chapters import ChaptersRepository
 from app.repositories.deferred_effects import enqueue_effect, list_archive_effects
-from app.services.authority import current_time, evaluate, list_grants_for_grantee
+from app.services.authority import current_time, evaluate, _row_to_read
 from app.services.scheduler import DEFAULT_MAX_ATTEMPTS
 
 
@@ -634,9 +635,16 @@ class ChaptersService:
         scope_id: str | None,
         actor: ActorIdentity,
     ) -> None:
-        grants = list_grants_for_grantee(
-            self._chapters_repo.db, grantee_id=actor.actor_id
-        )
+        authority_repo = AuthorityRepository(self._chapters_repo.db)
+        grants = [
+            _row_to_read(row)
+            for row in authority_repo.list_grants(
+                grantee_id=actor.actor_id,
+                include_revoked=True,
+                limit=None,
+                after_id=None,
+            )
+        ]
         decision = evaluate(
             requirement=AuthorityRequirement(
                 permission=permission,

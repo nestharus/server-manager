@@ -32,9 +32,8 @@ from app.repositories.db import PostgresDatabase
 from app.services.authority import (
     current_time,
     evaluate,
-    grant_authority,
-    revoke_authority,
 )
+from tests._authority_helpers import grant_authority, revoke_authority
 
 
 TEST_ROUTE_CHAPTER = "/_test/authority/chapters/{chapter_id}/manage"

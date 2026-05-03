@@ -5,6 +5,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.contracts.actor import ActorIdentity
@@ -16,22 +17,12 @@ from app.contracts.members import (
     MemberStatusPatch,
 )
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority, get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.members import (
-    create_or_get_member as create_or_get_member_service,
-    get_member_by_discord_id as get_member_by_discord_id_service,
-    get_member_by_id as get_member_by_id_service,
-    patch_member_status as patch_member_status_service,
-)
+from app.services.members import MembersService
 
 
 router = APIRouter(prefix="/api/v1/members")
-
-
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
-
 
 def _parse_if_match(request: Request) -> int:
     if_match = request.headers.get("if-match")
@@ -92,14 +83,15 @@ def _raise_for_member_error(error: Exception) -> None:
     status_code=HTTPStatus.CREATED,
     dependencies=[Depends(RequireAuthority("member.write", "global"))],
 )
+@inject
 def create_member(
     member: MemberCreate,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: MembersService = Depends(Provide[ApiContainer.services.members]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> MemberRead:
     try:
-        read, result, created = create_or_get_member_service(db, member, actor)
+        read, result, created = service.create_or_get_member(member, actor)
     except Exception as error:
         _raise_for_member_error(error)
 
@@ -114,13 +106,14 @@ def create_member(
     response_model=MemberRead,
     dependencies=[Depends(RequireAuthority("member.read", "global"))],
 )
+@inject
 def get_member_by_discord_id(
     discord_user_id: str,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: MembersService = Depends(Provide[ApiContainer.services.members]),
 ) -> MemberRead:
     try:
-        read, etag = get_member_by_discord_id_service(db, discord_user_id)
+        read, etag = service.get_member_by_discord_id(discord_user_id)
     except Exception as error:
         _raise_for_member_error(error)
     _set_etag(response, etag)
@@ -132,13 +125,14 @@ def get_member_by_discord_id(
     response_model=MemberRead,
     dependencies=[Depends(RequireAuthority("member.read", "global"))],
 )
+@inject
 def get_member_by_id(
     member_id: UUID,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: MembersService = Depends(Provide[ApiContainer.services.members]),
 ) -> MemberRead:
     try:
-        read, etag = get_member_by_id_service(db, member_id)
+        read, etag = service.get_member_by_id(member_id)
     except Exception as error:
         _raise_for_member_error(error)
     _set_etag(response, etag)
@@ -150,18 +144,18 @@ def get_member_by_id(
     response_model=MemberRead,
     dependencies=[Depends(RequireAuthority("member.write", "global"))],
 )
+@inject
 def patch_member_status(
     member_id: UUID,
     patch: MemberStatusPatch,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: MembersService = Depends(Provide[ApiContainer.services.members]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> MemberRead:
     expected_version = _parse_if_match(request)
     try:
-        read, result = patch_member_status_service(
-            db,
+        read, result = service.patch_member_status(
             member_id,
             patch,
             actor,

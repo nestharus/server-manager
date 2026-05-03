@@ -5,18 +5,16 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Response
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.trust import TrustProfileRead, TrustSignalsInput
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority, get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.trust import (
-    compute_trust as compute_trust_service,
-    get_trust_profile as get_trust_profile_service,
-)
+from app.services.trust import TrustService
 
-from ._shared import get_db, raise_for_trust_error, set_etag
+from ._shared import raise_for_trust_error, set_etag
 
 
 router = APIRouter(prefix="/api/v1/trust")
@@ -28,15 +26,16 @@ router = APIRouter(prefix="/api/v1/trust")
     status_code=HTTPStatus.CREATED,
     dependencies=[Depends(RequireAuthority("trust.write", "global"))],
 )
+@inject
 def compute_trust(
     member_id: UUID,
     signals: TrustSignalsInput,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: TrustService = Depends(Provide[ApiContainer.services.trust]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> TrustProfileRead:
     try:
-        read, result, created = compute_trust_service(db, member_id, signals, actor)
+        read, result, created = service.compute_trust(member_id, signals, actor)
     except Exception as error:
         raise_for_trust_error(error)
 
@@ -51,15 +50,15 @@ def compute_trust(
     response_model=TrustProfileRead,
     dependencies=[Depends(RequireAuthority("trust.read", "global"))],
 )
+@inject
 def get_trust_profile(
     member_id: UUID,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: TrustService = Depends(Provide[ApiContainer.services.trust]),
 ) -> TrustProfileRead:
     try:
-        read, etag = get_trust_profile_service(db, member_id)
+        read, etag = service.get_trust_profile(member_id)
     except Exception as error:
         raise_for_trust_error(error)
     set_etag(response, etag)
     return read
-

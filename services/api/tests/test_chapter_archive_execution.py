@@ -8,7 +8,7 @@ from psycopg.rows import dict_row
 
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.authority import grant_authority
+from tests._authority_helpers import grant_authority
 from app.services.deferred_effects import deferred_effect_worker_tick
 from app.tasks.archive import archive_worker_tick, configure_archive_worker
 
