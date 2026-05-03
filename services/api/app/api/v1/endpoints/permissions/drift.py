@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.contracts.actor import ActorIdentity
@@ -12,16 +13,12 @@ from app.contracts.permissions import (
     PermissionDriftStatus,
     PermissionIntentScopeKind,
 )
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
-from app.services.permissions import (
-    list_permission_drift,
-    read_permission_drift,
-    resolve_permission_drift,
-)
+from app.services.permissions import PermissionsService
 
 from ._shared import (
-    get_db,
     parse_if_match_strong,
     raise_known_permission_error,
     require_scoped,
@@ -33,6 +30,7 @@ router = APIRouter(prefix="/api/v1/permission-drift")
 
 
 @router.get("", response_model=list[PermissionDriftRead])
+@inject
 def list_drift_endpoint(
     scope_kind: PermissionIntentScopeKind = Query(...),
     status: list[PermissionDriftStatus] | None = Query(default=None),
@@ -40,7 +38,8 @@ def list_drift_endpoint(
     role_id: str | None = Query(default=None),
     reconciliation_run_id: UUID | None = Query(default=None),
     has_intent: bool | None = Query(default=None),
-    db: PostgresDatabase = Depends(get_db),
+    service: PermissionsService = Depends(Provide[ApiContainer.services.permissions]),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> list[PermissionDriftRead]:
     if scope_kind == "chapter" and scope_id is None:
@@ -61,10 +60,9 @@ def list_drift_endpoint(
         )
     try:
         require_scoped(
-            actor, db, scope_kind, scope_id, "permission_drift.read",
+            actor, scope_kind, scope_id, "permission_drift.read", db=db,
         )
-        return list_permission_drift(
-            db,
+        return service.list_permission_drift(
             actor=actor,
             scope_kind=scope_kind,
             scope_id=scope_id,
@@ -78,23 +76,25 @@ def list_drift_endpoint(
 
 
 @router.post("/{drift_id}/resolve", response_model=PermissionDriftRead)
+@inject
 def resolve_drift_endpoint(
     drift_id: UUID,
     body: PermissionDriftResolutionRequest,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: PermissionsService = Depends(Provide[ApiContainer.services.permissions]),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> PermissionDriftRead:
     expected_version = parse_if_match_strong(request)
     try:
-        current = read_permission_drift(db, drift_id)
+        current = service.read_permission_drift(drift_id)
         require_scoped(
-            actor, db, current.scope_kind, current.scope_id,
+            actor, current.scope_kind, current.scope_id,
             "permission_drift.write",
+            db=db,
         )
-        read, result = resolve_permission_drift(
-            db,
+        read, result = service.resolve_permission_drift(
             drift_id=drift_id,
             request=body,
             expected_version=expected_version,

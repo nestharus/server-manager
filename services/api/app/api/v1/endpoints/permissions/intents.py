@@ -4,6 +4,7 @@ from http import HTTPStatus
 from typing import Annotated, Any
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import Field
 
@@ -17,17 +18,12 @@ from app.contracts.permissions import (
     PermissionIntentScopeKind,
     PermissionIntentUpdate,
 )
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
-from app.services.permissions import (
-    create_permission_intent,
-    list_permission_intents,
-    read_permission_intent,
-    update_permission_intent,
-)
+from app.services.permissions import PermissionsService
 
 from ._shared import (
-    get_db,
     parse_if_match_strong,
     raise_known_permission_error,
     require_scoped,
@@ -54,18 +50,21 @@ router = APIRouter(prefix="/api/v1/permission-intents")
     status_code=HTTPStatus.CREATED,
     response_model=PermissionIntentReadResponse,
 )
+@inject
 def create_intent_endpoint(
     body: PermissionIntentCreateBody,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: PermissionsService = Depends(Provide[ApiContainer.services.permissions]),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> Any:
     try:
         require_scoped(
-            actor, db, body.scope_kind, body.scope_id,
+            actor, body.scope_kind, body.scope_id,
             "permission_intent.write",
+            db=db,
         )
-        read, result = create_permission_intent(db, body, actor=actor)
+        read, result = service.create_permission_intent(body, actor=actor)
     except Exception as error:
         raise_known_permission_error(error)
     set_etag(response, result.etag)
@@ -73,23 +72,25 @@ def create_intent_endpoint(
 
 
 @router.patch("/{intent_id}", response_model=PermissionIntentReadResponse)
+@inject
 def patch_intent_endpoint(
     intent_id: UUID,
     body: PermissionIntentUpdate,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: PermissionsService = Depends(Provide[ApiContainer.services.permissions]),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> Any:
     expected_version = parse_if_match_strong(request)
     try:
-        current = read_permission_intent(db, intent_id)
+        current = service.read_permission_intent(intent_id)
         require_scoped(
-            actor, db, current.scope_kind, current.scope_id,
+            actor, current.scope_kind, current.scope_id,
             "permission_intent.write",
+            db=db,
         )
-        read, result = update_permission_intent(
-            db,
+        read, result = service.update_permission_intent(
             intent_id,
             expected_version=expected_version,
             patch=body.model_dump(mode="python", exclude_unset=True),
@@ -102,6 +103,7 @@ def patch_intent_endpoint(
 
 
 @router.get("", response_model=list[PermissionIntentReadResponse])
+@inject
 def list_intents_endpoint(
     scope_kind: PermissionIntentScopeKind,
     scope_id: str | None = Query(default=None),
@@ -110,12 +112,11 @@ def list_intents_endpoint(
     kind: PermissionIntentKind | None = Query(default=None),
     temporary: bool | None = Query(default=None),
     include_expired: bool = Query(default=False),
-    db: PostgresDatabase = Depends(get_db),
+    service: PermissionsService = Depends(Provide[ApiContainer.services.permissions]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> list[Any]:
     try:
-        return list_permission_intents(
-            db,
+        return service.list_permission_intents(
             actor=actor,
             scope_kind=scope_kind,
             scope_id=scope_id,

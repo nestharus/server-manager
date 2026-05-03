@@ -22,8 +22,6 @@ from app.repositories.db import PostgresDatabase
 from app.services.authority import grant_authority
 from app.services.permissions import (
     DRIFT_RESOLUTION_CHANGE_TYPE,
-    create_permission_drift,
-    create_permission_intent,
 )
 
 
@@ -69,6 +67,7 @@ def _grant(
 
 def _seed_intent(
     db: PostgresDatabase,
+    app: Any,
     *,
     actor_id: str = "intent-seeder",
     role_id: str = "role-1",
@@ -93,8 +92,11 @@ def _seed_intent(
         expires_at=None,
     )
     with use_audit_context(_audit_context()):
-        intent, result = create_permission_intent(
-            db,
+        from app.services.permissions import PermissionsService
+
+        permissions_service = app.state.container.services.permissions()
+        assert isinstance(permissions_service, PermissionsService)
+        intent, result = permissions_service.create_permission_intent(
             create_request,
             actor=ActorIdentity(actor_kind="user", actor_id=actor_id),
         )
@@ -103,6 +105,7 @@ def _seed_intent(
 
 def _seed_drift(
     db: PostgresDatabase,
+    app: Any,
     *,
     actor_id: str = "operator",
     drift_id: UUID | None = None,
@@ -145,8 +148,11 @@ def _seed_drift(
 
     drift = PermissionDriftRead.model_validate(model_kwargs)
     with use_audit_context(_audit_context()):
-        create_permission_drift(
-            db,
+        from app.services.permissions import PermissionsService
+
+        permissions_service = app.state.container.services.permissions()
+        assert isinstance(permissions_service, PermissionsService)
+        permissions_service.create_permission_drift(
             request=drift,
             actor=ActorIdentity(actor_kind="service", actor_id=actor_id),
         )
@@ -185,6 +191,7 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
 async def test_list_drift_returns_intent_linked_and_orphaned_rows(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2 (D6): list returns both intent-linked and orphaned drift rows."""
     _grant(
@@ -194,15 +201,17 @@ async def test_list_drift_returns_intent_linked_and_orphaned_rows(
     )
     linked_intent_id, linked_intent_version = _seed_intent(
         governance_db,
+        app,
         role_id="linked-role",
     )
     _seed_drift(
         governance_db,
+        app,
         permission_intent_id=linked_intent_id,
         intent_version=linked_intent_version,
         role_id="linked-role",
     )
-    _seed_drift(governance_db, role_id="orphan-role")
+    _seed_drift(governance_db, app, role_id="orphan-role")
 
     response = await migrated_async_client.get(
         DRIFT_URL,
@@ -261,6 +270,7 @@ async def test_list_drift_chapter_scope_requires_scope_id(
 async def test_list_drift_has_intent_filter(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2: has_intent filter narrows the list."""
     _grant(
@@ -270,15 +280,17 @@ async def test_list_drift_has_intent_filter(
     )
     linked_intent_id, linked_intent_version = _seed_intent(
         governance_db,
+        app,
         role_id="linked-role",
     )
     _seed_drift(
         governance_db,
+        app,
         permission_intent_id=linked_intent_id,
         intent_version=linked_intent_version,
         role_id="linked-role",
     )
-    _seed_drift(governance_db, role_id="orphan-role")
+    _seed_drift(governance_db, app, role_id="orphan-role")
 
     response_with = await migrated_async_client.get(
         DRIFT_URL,
@@ -303,6 +315,7 @@ async def test_list_drift_has_intent_filter(
 async def test_resolve_drift_detected_to_acknowledged_with_if_match(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2 (D5): detected -> acknowledged advances version and records
     the operator who acknowledged (CodeRabbit MAJOR 1: acknowledge is a
@@ -314,7 +327,7 @@ async def test_resolve_drift_detected_to_acknowledged_with_if_match(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
 
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
@@ -335,6 +348,7 @@ async def test_resolve_drift_detected_to_acknowledged_with_if_match(
 async def test_resolve_drift_returns_post_mutation_state(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """CodeRabbit CRITICAL 1: response body must reflect post-update status
     (status=reconciled, resolution metadata populated), not the pre-update
@@ -346,7 +360,7 @@ async def test_resolve_drift_returns_post_mutation_state(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
 
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
@@ -371,6 +385,7 @@ async def test_resolve_drift_returns_post_mutation_state(
 async def test_resolve_drift_acknowledged_to_reconciled_populates_resolved_fields(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2 (D5): terminal resolution populates resolved_by/resolved_at/reason."""
     _grant(
@@ -380,7 +395,7 @@ async def test_resolve_drift_acknowledged_to_reconciled_populates_resolved_field
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
     ack = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
         json={"action": "acknowledge", "reason": "reviewing"},
@@ -407,6 +422,7 @@ async def test_resolve_drift_acknowledged_to_reconciled_populates_resolved_field
 async def test_resolve_drift_detected_to_accepted_skips_acknowledged(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2 (D5): detected -> accepted is a valid direct edge."""
     _grant(
@@ -416,7 +432,7 @@ async def test_resolve_drift_detected_to_accepted_skips_acknowledged(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
 
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
@@ -435,6 +451,7 @@ async def test_resolve_drift_detected_to_accepted_skips_acknowledged(
 async def test_resolve_drift_stale_if_match_returns_412(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2: PATCH with stale If-Match returns 412."""
     _grant(
@@ -444,7 +461,7 @@ async def test_resolve_drift_stale_if_match_returns_412(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
 
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
@@ -459,6 +476,7 @@ async def test_resolve_drift_stale_if_match_returns_412(
 async def test_resolve_drift_user_actor_cannot_spoof_resolved_by_fields(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2 (D6): user actor cannot override resolved_by via the request body."""
     _grant(
@@ -468,7 +486,7 @@ async def test_resolve_drift_user_actor_cannot_spoof_resolved_by_fields(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
 
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
@@ -491,6 +509,7 @@ async def test_resolve_drift_user_actor_cannot_spoof_resolved_by_fields(
 async def test_resolve_drift_service_actor_sets_resolved_by_from_body(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2 (D6): service actor honors resolved_by_* from the body."""
     _grant(
@@ -500,7 +519,7 @@ async def test_resolve_drift_service_actor_sets_resolved_by_from_body(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
 
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
@@ -523,6 +542,7 @@ async def test_resolve_drift_service_actor_sets_resolved_by_from_body(
 async def test_resolve_drift_terminal_status_returns_409(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2 (D5): resolving a terminal drift returns 409 invalid_drift_transition."""
     _grant(
@@ -532,7 +552,7 @@ async def test_resolve_drift_terminal_status_returns_409(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
     first = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
         json={"action": "accept", "reason": "accepted"},
@@ -553,6 +573,7 @@ async def test_resolve_drift_terminal_status_returns_409(
 async def test_resolve_drift_invalid_transition_returns_409(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC2 (D5): acknowledge -> acknowledge is not a valid transition."""
     _grant(
@@ -562,7 +583,7 @@ async def test_resolve_drift_invalid_transition_returns_409(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
     ack = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
         json={"action": "acknowledge", "reason": "first"},
@@ -592,6 +613,7 @@ async def test_resolve_drift_accept_emits_correct_change_type(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    app: Any,
     action: str,
     expected_change_type: str,
 ) -> None:
@@ -609,7 +631,7 @@ async def test_resolve_drift_accept_emits_correct_change_type(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
         json={"action": action, "reason": f"via {action}"},
@@ -628,6 +650,7 @@ async def test_resolve_drift_accept_emits_correct_change_type(
 async def test_resolve_drift_rejects_whitespace_only_reason(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """CodeRabbit MAJOR 1: whitespace-only reason returns 422 before the write."""
     _grant(
@@ -637,7 +660,7 @@ async def test_resolve_drift_rejects_whitespace_only_reason(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
 
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
@@ -651,6 +674,7 @@ async def test_resolve_drift_rejects_whitespace_only_reason(
 async def test_resolve_drift_rejects_blank_resolved_by_id(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """CodeRabbit MAJOR 3: whitespace-only resolved_by_id returns 422."""
     _grant(
@@ -660,7 +684,7 @@ async def test_resolve_drift_rejects_blank_resolved_by_id(
             {"permission_drift.read", "permission_drift.write"}
         ),
     )
-    drift_id = _seed_drift(governance_db)
+    drift_id = _seed_drift(governance_db, app)
 
     response = await migrated_async_client.post(
         f"{DRIFT_URL}/{drift_id}/resolve",
