@@ -22,21 +22,6 @@ from app.services.roster import RosterService
 
 logger = logging.getLogger(__name__)
 
-_DB: PostgresDatabase | None = None
-
-
-def configure_compliance_worker(*, db: PostgresDatabase) -> None:
-    global _DB
-    _DB = db
-
-
-def get_compliance_db() -> PostgresDatabase:
-    global _DB
-    if _DB is None:
-        _DB = PostgresDatabase()
-    return _DB
-
-
 def _root_audit_context() -> AuditContextRead:
     correlation_id = uuid4()
     return AuditContextRead(
@@ -50,7 +35,7 @@ def _root_audit_context() -> AuditContextRead:
 
 
 def compliance_evaluation_worker_tick(
-    db: PostgresDatabase | None = None,
+    db: PostgresDatabase,
     *,
     now: datetime | None = None,
 ):
@@ -62,7 +47,7 @@ def compliance_evaluation_worker_tick(
     )
     with ambient:
         try:
-            task_db = get_compliance_db() if db is None else db
+            task_db = db
             mutations_callable = partial(mutate_entity, db=task_db)
             compliance_repo = ComplianceRepository(db=task_db)
             roster_service = RosterService(
@@ -91,4 +76,4 @@ def compliance_evaluation_worker_tick(
             return None
 
 
-__all__ = ["compliance_evaluation_worker_tick", "configure_compliance_worker"]
+__all__ = ["compliance_evaluation_worker_tick"]

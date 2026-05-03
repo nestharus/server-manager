@@ -92,7 +92,6 @@ NAMED_PROVIDER_PATHS = (
     "tasks.read_models",
     "tasks.ticket_sla",
     "tasks.scheduler_loop",
-    "tasks.configure_task_runtime",
 )
 
 
@@ -297,6 +296,47 @@ def test_container_resolves_compliance_factories(test_settings):
         assert isinstance(container.services.compliance_review(), ComplianceReviewService)
     finally:
         container.shutdown_resources()
+
+
+def test_container_resolves_leaf_factories(test_settings):
+    """TG-3: Container resolves web/audit repos and 4 services as
+    Factory instances (post-142i shape)."""
+    from app.repositories.web import WebRepository
+    from app.repositories.audit import AuditRepository
+    from app.services.web import WebService
+    from app.services.audit import AuditService
+    from app.services.audit_overrides import AuditOverridesService
+    from app.services.audit_queries import AuditQueriesService
+
+    container = ApiContainer(settings=test_settings)
+    container.init_resources()
+    try:
+        assert isinstance(container.repos.web(), WebRepository)
+        assert isinstance(container.repos.audit(), AuditRepository)
+        assert isinstance(container.services.web(), WebService)
+        assert isinstance(container.services.audit(), AuditService)
+        assert isinstance(container.services.audit_overrides(), AuditOverridesService)
+        assert isinstance(container.services.audit_queries(), AuditQueriesService)
+    finally:
+        container.shutdown_resources()
+
+
+def test_no_task_module_globals():
+    """TG-5: Anti-pattern grep — task modules have no _DB/configure_*/get_*_db."""
+    from pathlib import Path
+    import subprocess
+
+    pattern = r"^(_DB|configure_[a-z_]+\(|get_[a-z_]+_db\()"
+    result = subprocess.run(
+        ["rg", "-l", "--type", "py", pattern, "app/tasks/"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    forbidden_files = result.stdout.splitlines()
+    assert not forbidden_files, (
+        f"Task modules still have removed globals: {forbidden_files}"
+    )
 
 
 def test_no_production_imports_compliance_free_functions(tmp_path):

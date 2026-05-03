@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from app.contracts.web import AdminChapterListRead, AdminChapterSummaryRead
-from app.repositories.db import PostgresDatabase
-from app.repositories.web import list_admin_chapters
+from app.repositories.web import WebRepository
 
 
-def list_web_admin_chapters(db: PostgresDatabase) -> AdminChapterListRead:
-    with db.connection() as connection:
-        rows = list_admin_chapters(connection)
-    return AdminChapterListRead(
-        chapters=[AdminChapterSummaryRead.model_validate(row) for row in rows],
-    )
+class WebService:
+    def __init__(self, web_repo: WebRepository, mutations_callable) -> None:
+        self._web_repo = web_repo
+        self._mutations_callable = mutations_callable
+
+    def list_web_admin_chapters(self) -> AdminChapterListRead:
+        rows = self._web_repo.list_admin_chapters()
+        return AdminChapterListRead(
+            chapters=[AdminChapterSummaryRead.model_validate(row) for row in rows],
+        )
