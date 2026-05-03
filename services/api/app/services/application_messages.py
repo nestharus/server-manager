@@ -16,14 +16,8 @@ from app.contracts.application_messages import (
 from app.contracts.applications import ApplicationNotFoundError
 from app.contracts.authority import AuthorityRequirement
 from app.core.context import MissingCorrelationContextError, get_current_audit_context
-from app.repositories.application_messages import (
-    find_application_message_by_client_message_id,
-    get_application_message,
-    insert_application_message,
-    list_application_messages,
-    next_application_message_seq,
-)
-from app.repositories.applications import get_application, get_application_for_update
+from app.repositories.application_messages import ApplicationMessagesRepository
+from app.repositories.applications import ApplicationsRepository
 from app.repositories.db import PostgresDatabase
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
 
@@ -82,25 +76,47 @@ def _assert_officer_authority(
         )
 
 
-def append_application_message(
-    db: PostgresDatabase,
-    *,
-    application_id: UUID,
-    request: ApplicationMessageAppendRequest,
-    connection: Connection[Any] | None = None,
-) -> tuple[ApplicationMessageRead, bool]:
-    def _append(active_connection: Connection[Any]) -> tuple[ApplicationMessageRead, bool]:
+class ApplicationMessagesService:
+    def __init__(
+        self,
+        applications_repo: ApplicationsRepository,
+        application_messages_repo: ApplicationMessagesRepository,
+        mutations_callable,
+    ) -> None:
+        self._applications_repo = applications_repo
+        self._application_messages_repo = application_messages_repo
+        self._mutations_callable = mutations_callable
+
+    def append_application_message(
+        self,
+        *,
+        application_id: UUID,
+        request: ApplicationMessageAppendRequest,
+    ) -> tuple[ApplicationMessageRead, bool]:
+        with self._applications_repo.db.transaction() as connection:
+            return self._append_application_message_on(
+                connection,
+                application_id=application_id,
+                request=request,
+            )
+
+    def _append_application_message_on(
+        self,
+        connection: Connection[Any],
+        application_id: UUID,
+        request: ApplicationMessageAppendRequest,
+    ) -> tuple[ApplicationMessageRead, bool]:
         if request.client_message_id:
-            existing = find_application_message_by_client_message_id(
-                active_connection,
+            existing = self._application_messages_repo._find_application_message_by_client_message_id_on(
+                connection,
                 application_id=application_id,
                 client_message_id=request.client_message_id,
             )
             if existing is not None:
                 return _message_from_row(existing), False
 
-        application_row = get_application_for_update(
-            active_connection,
+        application_row = self._applications_repo._get_application_for_update_on(
+            connection,
             application_id=application_id,
         )
         if application_row is None:
@@ -119,7 +135,7 @@ def append_application_message(
                 )
         else:
             _assert_officer_authority(
-                db,
+                self._applications_repo.db,
                 application_row=application_row,
                 author_actor_id=request.author_actor_id,
             )
@@ -129,13 +145,13 @@ def append_application_message(
             raise MissingCorrelationContextError()
 
         message_id = uuid4()
-        insert_application_message(
-            active_connection,
+        self._application_messages_repo._insert_application_message_on(
+            connection,
             row={
                 "id": message_id,
                 "application_id": application_id,
-                "message_seq": next_application_message_seq(
-                    active_connection,
+                "message_seq": self._application_messages_repo._next_application_message_seq_on(
+                    connection,
                     application_id=application_id,
                 ),
                 "author_actor_kind": request.author_actor_kind,
@@ -147,63 +163,57 @@ def append_application_message(
                 "causation_id": ctx.causation_id,
             },
         )
-        row = get_application_message(active_connection, message_id)
+        row = self._application_messages_repo._get_application_message_on(
+            connection,
+            message_id,
+        )
         if row is None:
             raise RuntimeError("application message insert did not return a readable row")
         return _message_from_row(row), True
 
-    if connection is not None:
-        return _append(connection)
-    with db.transaction() as active_connection:
-        return _append(active_connection)
-
-
-def read_application_messages(
-    db: PostgresDatabase,
-    *,
-    application_id: UUID,
-    viewer_actor_kind: str,
-    viewer_actor_id: str,
-) -> list[ApplicationMessageRead]:
-    with db.connection() as connection:
-        application_row = get_application(
-            connection,
-            application_id=application_id,
-        )
-        if application_row is None:
-            raise ApplicationNotFoundError(application_id)
-
-        applicant_id = str(application_row["applicant_id"])
-        is_applicant_viewer = (
-            viewer_actor_kind == "user" and viewer_actor_id == applicant_id
-        )
-        can_view_officer_only = _has_officer_authority(
-            db,
-            application_row=application_row,
-            actor_id=viewer_actor_id,
-        )
-        if not is_applicant_viewer and not can_view_officer_only:
-            raise ApplicationMessageForbiddenError(
-                "application.message authority denied"
-            )
-
-        messages = [
-            _message_from_row(row)
-            for row in list_application_messages(
+    def read_application_messages(
+        self,
+        *,
+        application_id: UUID,
+        viewer_actor_kind: str,
+        viewer_actor_id: str,
+    ) -> list[ApplicationMessageRead]:
+        with self._applications_repo.db.connection() as connection:
+            application_row = self._applications_repo._get_application_on(
                 connection,
                 application_id=application_id,
             )
-        ]
-        if is_applicant_viewer and not can_view_officer_only:
-            return [
-                message
-                for message in messages
-                if message.visibility == "applicant_visible"
+            if application_row is None:
+                raise ApplicationNotFoundError(application_id)
+
+            applicant_id = str(application_row["applicant_id"])
+            is_applicant_viewer = (
+                viewer_actor_kind == "user" and viewer_actor_id == applicant_id
+            )
+            can_view_officer_only = _has_officer_authority(
+                self._applications_repo.db,
+                application_row=application_row,
+                actor_id=viewer_actor_id,
+            )
+            if not is_applicant_viewer and not can_view_officer_only:
+                raise ApplicationMessageForbiddenError(
+                    "application.message authority denied"
+                )
+
+            messages = [
+                _message_from_row(row)
+                for row in self._application_messages_repo._list_application_messages_on(
+                    connection,
+                    application_id=application_id,
+                )
             ]
-        return messages
+            if is_applicant_viewer and not can_view_officer_only:
+                return [
+                    message
+                    for message in messages
+                    if message.visibility == "applicant_visible"
+                ]
+            return messages
 
 
-__all__ = [
-    "append_application_message",
-    "read_application_messages",
-]
+__all__ = ["ApplicationMessagesService"]

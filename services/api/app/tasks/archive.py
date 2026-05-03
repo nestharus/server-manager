@@ -12,7 +12,9 @@ from app.contracts.mutations import StaleMutationError
 from app.contracts.scheduler import DeferredEffectRead
 from app.contracts.tickets import TicketTransitionRequest
 from app.core.context import use_audit_context
-from app.repositories.applications import get_application
+from app.core.settings import Settings
+from app.repositories.application_messages import ApplicationMessagesRepository
+from app.repositories.applications import ApplicationsRepository
 from app.repositories.authority import fetch_grant
 from app.repositories.db import PostgresDatabase
 from app.repositories.deferred_effects import (
@@ -24,7 +26,9 @@ from app.repositories.deferred_effects import (
 from app.repositories.ticket_categories import TicketCategoriesRepository
 from app.repositories.ticket_messages import TicketMessagesRepository
 from app.repositories.tickets import TicketsRepository
-from app.services.applications import transition_application
+from app.repositories.forms import FormsRepository
+from app.repositories.public_chapters import PublicChaptersRepository
+from app.services.applications import ApplicationsService
 from app.services.authority import current_time, revoke_authority
 from app.services.chapters import (
     ARCHIVE_EFFECT_APPLICATION_WITHDRAW,
@@ -40,6 +44,7 @@ from app.services.chapters import (
     record_archive_manual_review_items,
 )
 from app.services.scheduler import register_scheduler_handler
+from app.services.file_upload import FileUploadService, build_s3_client
 from app.services.mutations import mutate_entity
 from app.services.ticket_messages import TicketMessagesService
 from app.services.tickets import TicketsService
@@ -81,6 +86,25 @@ def _build_tickets_service(db: PostgresDatabase) -> TicketsService:
         ticket_messages_repo=ticket_messages_repo,
         ticket_messages_service=ticket_messages_service,
         mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
+def _build_applications_service(
+    db: PostgresDatabase,
+) -> tuple[ApplicationsRepository, ApplicationsService]:
+    settings = Settings()
+    applications_repo = ApplicationsRepository(db)
+    return applications_repo, ApplicationsService(
+        applications_repo=applications_repo,
+        application_messages_repo=ApplicationMessagesRepository(db),
+        forms_repo=FormsRepository(db),
+        public_chapters_repo=PublicChaptersRepository(db),
+        file_upload_service=FileUploadService(
+            s3_client=build_s3_client(settings),
+            settings=settings,
+        ),
+        mutations_callable=partial(mutate_entity, db=db),
+        notification_emitter=None,  # archive does not trigger public submit
     )
 
 
@@ -157,6 +181,7 @@ def _skip_effect(connection, effect_id: UUID, reason: str) -> None:
 
 
 def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any]) -> None:
+    applications_repo, _applications_service = _build_applications_service(db)
     tickets_repo = TicketsRepository(db)
     with db.transaction() as connection:
         effects = list_archive_effects(
@@ -173,7 +198,10 @@ def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any])
             expected_state = payload.get("expected_state")
 
             if target_kind == "application":
-                application = get_application(connection, application_id=UUID(target_id))
+                application = applications_repo._get_application_on(
+                    connection,
+                    application_id=UUID(target_id),
+                )
                 if application is None or application["state"] not in _PENDING_APPLICATION_STATES:
                     _skip_effect(connection, effect["id"], "already_resolved")
                 elif (
@@ -286,6 +314,7 @@ def _record_authority_denied(effect: DeferredEffectRead, permission: str) -> Non
 @register_scheduler_handler(ARCHIVE_EFFECT_APPLICATION_WITHDRAW)
 def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
     db = get_archive_db()
+    applications_repo, applications_service = _build_applications_service(db)
     payload = effect.payload_json
     permission = "application.withdraw"
     try:
@@ -300,20 +329,23 @@ def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
         _record_authority_denied(effect, permission)
         return
 
-    with db.connection() as connection:
-        application = get_application(connection, application_id=UUID(str(payload["target_id"])))
-    if application is None or application["state"] not in _PENDING_APPLICATION_STATES:
-        return
-    transition_application(
-        db,
-        UUID(str(payload["target_id"])),
-        int(payload["expected_version"]),
-        ApplicationTransitionRequest(
-            action="withdraw",
-            notes=f"chapter archived: {payload['archive_reason']}",
-        ),
-        ARCHIVE_WORKER_ACTOR,
-    )
+    with db.transaction() as connection:
+        application = applications_repo._get_application_on(
+            connection,
+            application_id=UUID(str(payload["target_id"])),
+        )
+        if application is None or application["state"] not in _PENDING_APPLICATION_STATES:
+            return
+        applications_service._transition_application_on(
+            connection=connection,
+            application_id=UUID(str(payload["target_id"])),
+            expected_version=int(payload["expected_version"]),
+            request=ApplicationTransitionRequest(
+                action="withdraw",
+                notes=f"chapter archived: {payload['archive_reason']}",
+            ),
+            actor=ARCHIVE_WORKER_ACTOR,
+        )
 
 
 @register_scheduler_handler(ARCHIVE_EFFECT_TICKET_CLOSE)

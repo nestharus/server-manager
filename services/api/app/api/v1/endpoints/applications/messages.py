@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.contracts.actor import ActorIdentity
@@ -14,14 +15,9 @@ from app.contracts.application_messages import (
     ApplicationMessageVisibilityError,
 )
 from app.contracts.applications import ApplicationNotFoundError
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.application_messages import (
-    append_application_message,
-    read_application_messages,
-)
-
-from ._shared import get_db
+from app.services.application_messages import ApplicationMessagesService
 
 
 router = APIRouter(prefix="/api/v1/applications")
@@ -51,11 +47,14 @@ def _raise_application_message_error(error: Exception) -> None:
     response_model=ApplicationMessageRead,
     status_code=HTTPStatus.CREATED,
 )
+@inject
 def append_application_message_endpoint(
     application_id: UUID,
     body: ApplicationMessageAppendRequest,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ApplicationMessagesService = Depends(
+        Provide[ApiContainer.services.application_messages]
+    ),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ApplicationMessageRead:
     actor_scoped_body = body.model_copy(
@@ -65,8 +64,7 @@ def append_application_message_endpoint(
         }
     )
     try:
-        read, created = append_application_message(
-            db,
+        read, created = service.append_application_message(
             application_id=application_id,
             request=actor_scoped_body,
         )
@@ -80,14 +78,16 @@ def append_application_message_endpoint(
     "/{application_id}/messages",
     response_model=ApplicationMessageListRead,
 )
+@inject
 def list_application_messages_endpoint(
     application_id: UUID,
-    db: PostgresDatabase = Depends(get_db),
+    service: ApplicationMessagesService = Depends(
+        Provide[ApiContainer.services.application_messages]
+    ),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ApplicationMessageListRead:
     try:
-        items = read_application_messages(
-            db,
+        items = service.read_application_messages(
             application_id=application_id,
             viewer_actor_kind=actor.actor_kind,
             viewer_actor_id=actor.actor_id,

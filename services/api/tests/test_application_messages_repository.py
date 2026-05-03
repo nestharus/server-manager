@@ -13,12 +13,6 @@ from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.members import MemberCreate
 from app.core.context import use_audit_context
-from app.repositories.application_messages import (
-    find_application_message_by_client_message_id,
-    insert_application_message,
-    list_application_messages,
-    next_application_message_seq,
-)
 from app.repositories.db import PostgresDatabase
 from app.services.authority import grant_authority
 from app.services.members import create_or_get_member
@@ -145,6 +139,12 @@ def _row(
     }
 
 
+def _messages_repo(db: PostgresDatabase):
+    from app.repositories.application_messages import ApplicationMessagesRepository
+
+    return ApplicationMessagesRepository(db)
+
+
 @pytest.fixture()
 def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
     db = PostgresDatabase(dsn=governance_dsn)
@@ -163,17 +163,18 @@ async def test_next_application_message_seq_advances_after_insert(
     level=repository; source=.tmp/init-131/phase6/step6a-contract.md#C3.
     """
     application = await _create_application(migrated_async_client, governance_db)
+    repo = _messages_repo(governance_db)
 
     with governance_db.connection() as connection:
-        assert next_application_message_seq(
+        assert repo._next_application_message_seq_on(
             connection,
             application_id=UUID(application["id"]),
         ) == 1
-        insert_application_message(
+        repo._insert_application_message_on(
             connection,
             row=_row(application_id=application["id"], message_seq=1),
         )
-        assert next_application_message_seq(
+        assert repo._next_application_message_seq_on(
             connection,
             application_id=UUID(application["id"]),
         ) == 2
@@ -188,17 +189,18 @@ async def test_find_application_message_by_client_message_id_returns_hit_or_none
     level=repository; source=.tmp/init-131/phase6/step6a-contract.md#C3.
     """
     application = await _create_application(migrated_async_client, governance_db)
+    repo = _messages_repo(governance_db)
 
     with governance_db.connection() as connection:
         assert (
-            find_application_message_by_client_message_id(
+            repo._find_application_message_by_client_message_id_on(
                 connection,
                 application_id=UUID(application["id"]),
                 client_message_id="missing-client-message",
             )
             is None
         )
-        insert_application_message(
+        repo._insert_application_message_on(
             connection,
             row=_row(
                 application_id=application["id"],
@@ -206,7 +208,7 @@ async def test_find_application_message_by_client_message_id_returns_hit_or_none
                 client_message_id="client-message-1",
             ),
         )
-        found = find_application_message_by_client_message_id(
+        found = repo._find_application_message_by_client_message_id_on(
             connection,
             application_id=UUID(application["id"]),
             client_message_id="client-message-1",
@@ -226,9 +228,10 @@ async def test_list_application_messages_orders_by_message_seq_ascending(
     level=repository; source=.tmp/init-131/phase6/step6a-contract.md#C3.
     """
     application = await _create_application(migrated_async_client, governance_db)
+    repo = _messages_repo(governance_db)
 
     with governance_db.connection() as connection:
-        insert_application_message(
+        repo._insert_application_message_on(
             connection,
             row=_row(
                 application_id=application["id"],
@@ -236,7 +239,7 @@ async def test_list_application_messages_orders_by_message_seq_ascending(
                 body_markdown="Second message",
             ),
         )
-        insert_application_message(
+        repo._insert_application_message_on(
             connection,
             row=_row(
                 application_id=application["id"],
@@ -244,7 +247,7 @@ async def test_list_application_messages_orders_by_message_seq_ascending(
                 body_markdown="First message",
             ),
         )
-        rows = list_application_messages(
+        rows = repo._list_application_messages_on(
             connection,
             application_id=UUID(application["id"]),
         )

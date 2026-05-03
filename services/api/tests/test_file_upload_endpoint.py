@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import importlib
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Any
+from uuid import uuid4
 
 import pytest
+from dependency_injector import providers
 from fastapi import FastAPI
 from httpx import AsyncClient, Response
 
@@ -74,10 +75,42 @@ async def _post_upload_url(
     return await client.post(UPLOAD_URL, json=body, cookies=cookies)
 
 
-def _patch_presigned_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    file_upload = importlib.import_module("app.services.file_upload")
+class FakeFileUploadService:
+    def __init__(self, *, presign) -> None:
+        self._presign = presign
 
-    def fake_generate_presigned_put_url(
+    def validate_upload_request(
+        self,
+        *,
+        fields,
+        request,
+        visibility,
+    ):
+        field = next((candidate for candidate in fields if candidate.id == request.field_id), None)
+        assert field is not None
+        assert visibility.get(request.field_id, False)
+        assert request.content_type in field.accept
+        assert 0 < request.size_bytes <= field.max_size_bytes
+        return field, uuid4()
+
+    def generate_presigned_put_url(
+        self,
+        *,
+        object_key: str,
+        content_type: str,
+        size_bytes: int,
+        expires_in_seconds: int = 600,
+    ) -> tuple[str, datetime]:
+        return self._presign(
+            object_key=object_key,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            expires_in_seconds=expires_in_seconds,
+        )
+
+
+def _patch_presigned_url(app: FastAPI) -> None:
+    def fake_url(
         *,
         object_key: str,
         content_type: str,
@@ -91,10 +124,8 @@ def _patch_presigned_url(monkeypatch: pytest.MonkeyPatch) -> None:
             datetime.now(UTC) + timedelta(seconds=expires_in_seconds),
         )
 
-    monkeypatch.setattr(
-        file_upload,
-        "generate_presigned_put_url",
-        fake_generate_presigned_put_url,
+    app.state.container.services.file_upload.override(
+        providers.Object(FakeFileUploadService(presign=fake_url)),
     )
 
 
@@ -146,7 +177,7 @@ async def test_upload_url_public_intake_authority_required(
 async def test_upload_url_accepts_content_type_in_field_accept_and_returns_contract_body(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-2;
     named_risk=upload_url_receipt_required_and_strict_validation_and_signed_params;
@@ -154,7 +185,7 @@ async def test_upload_url_accepts_content_type_in_field_accept_and_returns_contr
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-2.
     """
     form_id = seed_global_file_field_form(governance_db)
-    _patch_presigned_url(monkeypatch)
+    _patch_presigned_url(app)
 
     response = await _post_upload_url(
         migrated_async_client,
@@ -223,7 +254,7 @@ async def test_upload_url_rejects_size_above_field_max(
 async def test_upload_url_signed_params_include_content_length(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     """Risk annotation: group=TG-2;
     named_risk=upload_url_receipt_required_and_strict_validation_and_signed_params;
@@ -231,7 +262,6 @@ async def test_upload_url_signed_params_include_content_length(
     source=.tmp/init-137-file-upload/phase6/step6a-contract.md#TG-2-F2.
     """
     form_id = seed_global_file_field_form(governance_db)
-    file_upload = importlib.import_module("app.services.file_upload")
     captured: dict[str, Any] = {}
 
     class FakeS3Client:
@@ -246,18 +276,7 @@ async def test_upload_url_signed_params_include_content_length(
             captured["ExpiresIn"] = ExpiresIn
             return "https://uploads.test.local/presigned"
 
-    monkeypatch.setattr(
-        file_upload,
-        "build_s3_client",
-        lambda *args, **kwargs: FakeS3Client(),
-        raising=False,
-    )
-    if hasattr(file_upload, "boto3"):
-        monkeypatch.setattr(
-            file_upload.boto3,
-            "client",
-            lambda *args, **kwargs: FakeS3Client(),
-        )
+    app.state.container.infra.s3_client.override(providers.Object(FakeS3Client()))
 
     response = await _post_upload_url(
         migrated_async_client,

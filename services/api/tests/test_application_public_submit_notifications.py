@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import importlib
 from datetime import UTC, datetime
+from functools import partial
 from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from dependency_injector import providers
 from fastapi import FastAPI
 from httpx import AsyncClient
 
 from app.contracts.applications import ApplicationRead, PublicApplicationSubmission
 from app.repositories.db import PostgresDatabase
+from app.services.mutations import mutate_entity
 
 from .public_intake_fixtures import (
     APPLICANT_DISCORD_USER_ID,
@@ -121,6 +124,29 @@ def _assert_tg1_component() -> None:
         named_risk="public_submit_notification_emit_contract",
         level="component",
         source=".tmp/init-134/phase6/step6a-contract.md#TG-1",
+    )
+
+
+class FakeFileUploadService:
+    def head_object(self, object_key: str) -> tuple[int, str]:
+        raise AssertionError(f"unexpected file HEAD for {object_key}")
+
+
+def _applications_service(db: PostgresDatabase, notification_emitter):
+    from app.repositories.applications import ApplicationsRepository
+    from app.repositories.application_messages import ApplicationMessagesRepository
+    from app.repositories.forms import FormsRepository
+    from app.repositories.public_chapters import PublicChaptersRepository
+    from app.services.applications import ApplicationsService
+
+    return ApplicationsService(
+        applications_repo=ApplicationsRepository(db),
+        application_messages_repo=ApplicationMessagesRepository(db),
+        forms_repo=FormsRepository(db),
+        public_chapters_repo=PublicChaptersRepository(db),
+        file_upload_service=FakeFileUploadService(),
+        mutations_callable=partial(mutate_entity, db=db),
+        notification_emitter=notification_emitter,
     )
 
 
@@ -354,20 +380,24 @@ async def test_submit_emits_with_recipient_discord_user_id_from_receipt(
 async def test_submit_does_not_5xx_when_emit_raises(
     migrated_async_client: AsyncClient,
     governance_dsn: str,
-    monkeypatch: pytest.MonkeyPatch,
+    app: FastAPI,
 ) -> None:
     _assert_tg1_component()
-    applications_module = importlib.import_module("app.services.applications")
 
-    def boom(*_args: Any, **_kwargs: Any) -> None:
+    def fake_emitter(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("notification emit unavailable")
 
-    monkeypatch.setattr(applications_module, "emit_application_public_submitted_event", boom)
-
-    response = await _post_public_application(
-        migrated_async_client,
-        client_application_id="init-134-emit-raises",
+    container = app.state.container
+    container.services.application_notification_emitter.override(
+        providers.Object(fake_emitter),
     )
+    try:
+        response = await _post_public_application(
+            migrated_async_client,
+            client_application_id="init-134-emit-raises",
+        )
+    finally:
+        container.services.application_notification_emitter.reset_override()
 
     assert response.status_code == HTTPStatus.CREATED, response.text
     application_id = UUID(response.json()["application_id"])
@@ -405,18 +435,19 @@ async def test_submit_idempotent_emit_via_event_key(
     governance_dsn: str,
 ) -> None:
     _assert_tg1_component()
-    service = importlib.import_module("app.services.applications").submit_public_application_with_receipt
+    service = _applications_service(
+        governance_db,
+        notification_emitter=lambda **_kwargs: None,
+    ).submit_public_application_with_receipt
     submission = PublicApplicationSubmission.model_validate(
         public_application_payload(client_application_id="init-134-idempotent")
     )
 
     first_application_id = await service(
-        governance_db,
         submission,
         discord_user_id=APPLICANT_DISCORD_USER_ID,
     )
     second_application_id = await service(
-        governance_db,
         submission,
         discord_user_id=APPLICANT_DISCORD_USER_ID,
     )
