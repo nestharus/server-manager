@@ -6,6 +6,8 @@ from typing import Any
 from psycopg import Connection
 from psycopg.rows import dict_row
 
+from app.repositories.db import PostgresDatabase
+
 
 @dataclass(frozen=True)
 class CountAndSamples:
@@ -34,223 +36,355 @@ def _count_and_samples(
     )
 
 
-def list_pending_applications_for_chapter(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-    sample_limit: int,
-) -> CountAndSamples:
-    predicate = """
-        FROM applications
-        WHERE state IN ('submitted','queued','claimed','in_review')
-          AND target_scope_kind = 'chapter'
-          AND target_scope_id = %s
-    """
-    return _count_and_samples(
-        connection,
-        count_sql="SELECT COUNT(*)::int AS count " + predicate,
-        sample_sql="SELECT id " + predicate + " ORDER BY created_at ASC, id ASC LIMIT %s",
-        params=(chapter_id,),
-        sample_limit=sample_limit,
-    )
+class ArchiveQueriesRepository:
+    def __init__(self, db: PostgresDatabase) -> None:
+        self.db = db
 
+    def list_pending_applications_for_chapter(
+        self,
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        with self.db.connection() as connection:
+            return self._list_pending_applications_for_chapter_on(
+                connection,
+                chapter_id=chapter_id,
+                sample_limit=sample_limit,
+            )
 
-def list_open_tickets_for_chapter(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-    sample_limit: int,
-) -> CountAndSamples:
-    predicate = """
-        FROM tickets
-        WHERE terminal_at IS NULL
-          AND category_snapshot #>> '{routing_scope,scope_kind}' = 'chapter'
-          AND category_snapshot #>> '{routing_scope,scope_id}' = %s
-    """
-    return _count_and_samples(
-        connection,
-        count_sql="SELECT COUNT(*)::int AS count " + predicate,
-        sample_sql="SELECT id " + predicate + " ORDER BY created_at ASC, id ASC LIMIT %s",
-        params=(chapter_id,),
-        sample_limit=sample_limit,
-    )
+    def _list_pending_applications_for_chapter_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        predicate = """
+            FROM applications
+            WHERE state IN ('submitted','queued','claimed','in_review')
+              AND target_scope_kind = 'chapter'
+              AND target_scope_id = %s
+        """
+        return _count_and_samples(
+            connection,
+            count_sql="SELECT COUNT(*)::int AS count " + predicate,
+            sample_sql="SELECT id "
+            + predicate
+            + " ORDER BY created_at ASC, id ASC LIMIT %s",
+            params=(chapter_id,),
+            sample_limit=sample_limit,
+        )
 
+    def list_open_tickets_for_chapter(
+        self,
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        with self.db.connection() as connection:
+            return self._list_open_tickets_for_chapter_on(
+                connection,
+                chapter_id=chapter_id,
+                sample_limit=sample_limit,
+            )
 
-def list_active_authority_grants_for_chapter(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-    sample_limit: int,
-) -> CountAndSamples:
-    predicate = """
-        FROM authority_grants
-        WHERE scope_kind = 'chapter'
-          AND scope_id = %s
-          AND revoked_at IS NULL
-          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-    """
-    return _count_and_samples(
-        connection,
-        count_sql="SELECT COUNT(*)::int AS count " + predicate,
-        sample_sql="SELECT id " + predicate + " ORDER BY created_at ASC, id ASC LIMIT %s",
-        params=(chapter_id,),
-        sample_limit=sample_limit,
-    )
+    def _list_open_tickets_for_chapter_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        predicate = """
+            FROM tickets
+            WHERE terminal_at IS NULL
+              AND category_snapshot #>> '{routing_scope,scope_kind}' = 'chapter'
+              AND category_snapshot #>> '{routing_scope,scope_id}' = %s
+        """
+        return _count_and_samples(
+            connection,
+            count_sql="SELECT COUNT(*)::int AS count " + predicate,
+            sample_sql="SELECT id "
+            + predicate
+            + " ORDER BY created_at ASC, id ASC LIMIT %s",
+            params=(chapter_id,),
+            sample_limit=sample_limit,
+        )
 
+    def list_active_authority_grants_for_chapter(
+        self,
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        with self.db.connection() as connection:
+            return self._list_active_authority_grants_for_chapter_on(
+                connection,
+                chapter_id=chapter_id,
+                sample_limit=sample_limit,
+            )
 
-def list_unresolved_deferred_effects_for_chapter(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-    sample_limit: int,
-) -> CountAndSamples:
-    predicate = """
-        FROM deferred_effects
-        WHERE status IN ('queued','claimed','failed')
-          AND payload_json->>'chapter_id' = %s
-    """
-    return _count_and_samples(
-        connection,
-        count_sql="SELECT COUNT(*)::int AS count " + predicate,
-        sample_sql="SELECT id " + predicate + " ORDER BY created_at ASC, id ASC LIMIT %s",
-        params=(chapter_id,),
-        sample_limit=sample_limit,
-    )
+    def _list_active_authority_grants_for_chapter_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        predicate = """
+            FROM authority_grants
+            WHERE scope_kind = 'chapter'
+              AND scope_id = %s
+              AND revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+        """
+        return _count_and_samples(
+            connection,
+            count_sql="SELECT COUNT(*)::int AS count " + predicate,
+            sample_sql="SELECT id "
+            + predicate
+            + " ORDER BY created_at ASC, id ASC LIMIT %s",
+            params=(chapter_id,),
+            sample_limit=sample_limit,
+        )
 
+    def list_unresolved_deferred_effects_for_chapter(
+        self,
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        with self.db.connection() as connection:
+            return self._list_unresolved_deferred_effects_for_chapter_on(
+                connection,
+                chapter_id=chapter_id,
+                sample_limit=sample_limit,
+            )
 
-def list_active_roster_entries_for_chapter(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-    sample_limit: int,
-) -> CountAndSamples:
-    predicate = """
-        FROM roster_entries
-        WHERE chapter_id = %s
-          AND status != 'removed'
-    """
-    return _count_and_samples(
-        connection,
-        count_sql="SELECT COUNT(*)::int AS count " + predicate,
-        sample_sql="SELECT id " + predicate + " ORDER BY created_at ASC, id ASC LIMIT %s",
-        params=(chapter_id,),
-        sample_limit=sample_limit,
-    )
-
-
-def list_chapter_roles_for_plan(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-    sample_limit: int,
-) -> CountAndSamples:
-    predicate = "FROM chapter_roles WHERE chapter_id = %s"
-    return _count_and_samples(
-        connection,
-        count_sql="SELECT COUNT(*)::int AS count " + predicate,
-        sample_sql="SELECT id " + predicate + " ORDER BY ordinal ASC, id ASC LIMIT %s",
-        params=(chapter_id,),
-        sample_limit=sample_limit,
-    )
-
-
-def iter_pending_applications_for_archive(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-) -> list[dict[str, Any]]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            """
-            SELECT a.id, a.state, h.current_seq AS version
-            FROM applications AS a
-            JOIN aggregate_heads AS h
-              ON h.aggregate_type = 'application'
-             AND h.aggregate_id = a.id::text
-            WHERE a.state IN ('submitted','queued','claimed','in_review')
-              AND a.target_scope_kind = 'chapter'
-              AND a.target_scope_id = %s
-            ORDER BY a.created_at ASC, a.id ASC
-            """,
-            (chapter_id,),
-        ).fetchall()
-
-
-def iter_open_tickets_for_archive(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-) -> list[dict[str, Any]]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            """
-            SELECT t.id, t.state, t.category_snapshot, h.current_seq AS version
-            FROM tickets AS t
-            JOIN aggregate_heads AS h
-              ON h.aggregate_type = 'ticket'
-             AND h.aggregate_id = t.id::text
-            WHERE t.terminal_at IS NULL
-              AND t.category_snapshot #>> '{routing_scope,scope_kind}' = 'chapter'
-              AND t.category_snapshot #>> '{routing_scope,scope_id}' = %s
-            ORDER BY t.created_at ASC, t.id ASC
-            """,
-            (chapter_id,),
-        ).fetchall()
-
-
-def iter_active_grants_for_archive(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-) -> list[dict[str, Any]]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            """
-            SELECT g.id, g.permissions, h.current_seq AS version
-            FROM authority_grants AS g
-            JOIN aggregate_heads AS h
-              ON h.aggregate_type = 'authority_grant'
-             AND h.aggregate_id = g.id::text
-            WHERE g.scope_kind = 'chapter'
-              AND g.scope_id = %s
-              AND g.revoked_at IS NULL
-              AND (g.expires_at IS NULL OR g.expires_at > CURRENT_TIMESTAMP)
-            ORDER BY g.created_at ASC, g.id ASC
-            """,
-            (chapter_id,),
-        ).fetchall()
-
-
-def iter_unresolved_chapter_effects_for_archive(
-    connection: Connection[Any],
-    *,
-    chapter_id: str,
-    exclude_archive_run_id: str,
-) -> list[dict[str, Any]]:
-    with connection.cursor(row_factory=dict_row) as cursor:
-        return cursor.execute(
-            """
-            SELECT id, status, precondition_state, attempts
+    def _list_unresolved_deferred_effects_for_chapter_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        predicate = """
             FROM deferred_effects
             WHERE status IN ('queued','claimed','failed')
               AND payload_json->>'chapter_id' = %s
-              AND COALESCE(payload_json->>'archive_run_id', '') <> %s
-            ORDER BY created_at ASC, id ASC
-            """,
-            (chapter_id, exclude_archive_run_id),
-        ).fetchall()
+        """
+        return _count_and_samples(
+            connection,
+            count_sql="SELECT COUNT(*)::int AS count " + predicate,
+            sample_sql="SELECT id "
+            + predicate
+            + " ORDER BY created_at ASC, id ASC LIMIT %s",
+            params=(chapter_id,),
+            sample_limit=sample_limit,
+        )
+
+    def list_active_roster_entries_for_chapter(
+        self,
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        with self.db.connection() as connection:
+            return self._list_active_roster_entries_for_chapter_on(
+                connection,
+                chapter_id=chapter_id,
+                sample_limit=sample_limit,
+            )
+
+    def _list_active_roster_entries_for_chapter_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        predicate = """
+            FROM roster_entries
+            WHERE chapter_id = %s
+              AND status != 'removed'
+        """
+        return _count_and_samples(
+            connection,
+            count_sql="SELECT COUNT(*)::int AS count " + predicate,
+            sample_sql="SELECT id "
+            + predicate
+            + " ORDER BY created_at ASC, id ASC LIMIT %s",
+            params=(chapter_id,),
+            sample_limit=sample_limit,
+        )
+
+    def list_chapter_roles_for_plan(
+        self,
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        with self.db.connection() as connection:
+            return self._list_chapter_roles_for_plan_on(
+                connection,
+                chapter_id=chapter_id,
+                sample_limit=sample_limit,
+            )
+
+    def _list_chapter_roles_for_plan_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+        sample_limit: int,
+    ) -> CountAndSamples:
+        predicate = "FROM chapter_roles WHERE chapter_id = %s"
+        return _count_and_samples(
+            connection,
+            count_sql="SELECT COUNT(*)::int AS count " + predicate,
+            sample_sql="SELECT id "
+            + predicate
+            + " ORDER BY ordinal ASC, id ASC LIMIT %s",
+            params=(chapter_id,),
+            sample_limit=sample_limit,
+        )
+
+    def iter_pending_applications_for_archive(
+        self,
+        *,
+        chapter_id: str,
+    ) -> list[dict[str, Any]]:
+        with self.db.connection() as connection:
+            return self._iter_pending_applications_for_archive_on(
+                connection,
+                chapter_id=chapter_id,
+            )
+
+    def _iter_pending_applications_for_archive_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+    ) -> list[dict[str, Any]]:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                """
+                SELECT a.id, a.state, h.current_seq AS version
+                FROM applications AS a
+                JOIN aggregate_heads AS h
+                  ON h.aggregate_type = 'application'
+                 AND h.aggregate_id = a.id::text
+                WHERE a.state IN ('submitted','queued','claimed','in_review')
+                  AND a.target_scope_kind = 'chapter'
+                  AND a.target_scope_id = %s
+                ORDER BY a.created_at ASC, a.id ASC
+                """,
+                (chapter_id,),
+            ).fetchall()
+
+    def iter_open_tickets_for_archive(
+        self,
+        *,
+        chapter_id: str,
+    ) -> list[dict[str, Any]]:
+        with self.db.connection() as connection:
+            return self._iter_open_tickets_for_archive_on(
+                connection,
+                chapter_id=chapter_id,
+            )
+
+    def _iter_open_tickets_for_archive_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+    ) -> list[dict[str, Any]]:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                """
+                SELECT t.id, t.state, t.category_snapshot, h.current_seq AS version
+                FROM tickets AS t
+                JOIN aggregate_heads AS h
+                  ON h.aggregate_type = 'ticket'
+                 AND h.aggregate_id = t.id::text
+                WHERE t.terminal_at IS NULL
+                  AND t.category_snapshot #>> '{routing_scope,scope_kind}' = 'chapter'
+                  AND t.category_snapshot #>> '{routing_scope,scope_id}' = %s
+                ORDER BY t.created_at ASC, t.id ASC
+                """,
+                (chapter_id,),
+            ).fetchall()
+
+    def iter_active_grants_for_archive(
+        self,
+        *,
+        chapter_id: str,
+    ) -> list[dict[str, Any]]:
+        with self.db.connection() as connection:
+            return self._iter_active_grants_for_archive_on(
+                connection,
+                chapter_id=chapter_id,
+            )
+
+    def _iter_active_grants_for_archive_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+    ) -> list[dict[str, Any]]:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                """
+                SELECT g.id, g.permissions, h.current_seq AS version
+                FROM authority_grants AS g
+                JOIN aggregate_heads AS h
+                  ON h.aggregate_type = 'authority_grant'
+                 AND h.aggregate_id = g.id::text
+                WHERE g.scope_kind = 'chapter'
+                  AND g.scope_id = %s
+                  AND g.revoked_at IS NULL
+                  AND (g.expires_at IS NULL OR g.expires_at > CURRENT_TIMESTAMP)
+                ORDER BY g.created_at ASC, g.id ASC
+                """,
+                (chapter_id,),
+            ).fetchall()
+
+    def iter_unresolved_chapter_effects_for_archive(
+        self,
+        *,
+        chapter_id: str,
+        exclude_archive_run_id: str,
+    ) -> list[dict[str, Any]]:
+        with self.db.connection() as connection:
+            return self._iter_unresolved_chapter_effects_for_archive_on(
+                connection,
+                chapter_id=chapter_id,
+                exclude_archive_run_id=exclude_archive_run_id,
+            )
+
+    def _iter_unresolved_chapter_effects_for_archive_on(
+        self,
+        connection: Connection[Any],
+        *,
+        chapter_id: str,
+        exclude_archive_run_id: str,
+    ) -> list[dict[str, Any]]:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            return cursor.execute(
+                """
+                SELECT id, status, precondition_state, attempts
+                FROM deferred_effects
+                WHERE status IN ('queued','claimed','failed')
+                  AND payload_json->>'chapter_id' = %s
+                  AND COALESCE(payload_json->>'archive_run_id', '') <> %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (chapter_id, exclude_archive_run_id),
+            ).fetchall()
 
 
 __all__ = [
+    "ArchiveQueriesRepository",
     "CountAndSamples",
-    "iter_active_grants_for_archive",
-    "iter_open_tickets_for_archive",
-    "iter_pending_applications_for_archive",
-    "iter_unresolved_chapter_effects_for_archive",
-    "list_active_authority_grants_for_chapter",
-    "list_active_roster_entries_for_chapter",
-    "list_chapter_roles_for_plan",
-    "list_open_tickets_for_chapter",
-    "list_pending_applications_for_chapter",
-    "list_unresolved_deferred_effects_for_chapter",
 ]

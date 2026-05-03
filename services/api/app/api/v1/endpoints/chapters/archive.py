@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Request, Response
 
 from app.api.v1.endpoints.chapters.base import (
-    get_db,
     parse_if_match,
     raise_for_chapter_error,
     set_etag,
@@ -16,13 +16,9 @@ from app.contracts.chapters import (
     ChapterArchivePlanRead,
     ChapterArchiveStatusRead,
 )
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority, get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.chapters import (
-    archive_status as archive_status_service,
-    build_archive_plan,
-    execute_archive,
-)
+from app.services.chapters import ChaptersService
 
 router = APIRouter(prefix="/api/v1/chapters")
 
@@ -34,13 +30,14 @@ router = APIRouter(prefix="/api/v1/chapters")
         Depends(RequireAuthority("chapter.archive_plan.read", "chapter", "chapter_id"))
     ],
 )
+@inject
 def archive_plan(
     chapter_id: UUID,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChaptersService = Depends(Provide[ApiContainer.services.chapters]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterArchivePlanRead:
     try:
-        return build_archive_plan(db, str(chapter_id), actor)
+        return service.build_archive_plan(str(chapter_id), actor)
     except Exception as error:
         raise_for_chapter_error(error)
 
@@ -52,13 +49,14 @@ def archive_plan(
         Depends(RequireAuthority("chapter.archive_plan.read", "chapter", "chapter_id"))
     ],
 )
+@inject
 def archive_status(
     chapter_id: UUID,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChaptersService = Depends(Provide[ApiContainer.services.chapters]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterArchiveStatusRead:
     try:
-        return archive_status_service(db, str(chapter_id), actor)
+        return service.archive_status(str(chapter_id), actor)
     except Exception as error:
         raise_for_chapter_error(error)
 
@@ -66,20 +64,22 @@ def archive_status(
 @router.post(
     "/{chapter_id}/archive-execute",
     response_model=ChapterArchiveStatusRead,
-    dependencies=[Depends(RequireAuthority("chapter.archive", "chapter", "chapter_id"))],
+    dependencies=[
+        Depends(RequireAuthority("chapter.archive", "chapter", "chapter_id"))
+    ],
 )
+@inject
 def archive_execute(
     chapter_id: UUID,
     archive_request: ChapterArchiveExecuteRequest,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChaptersService = Depends(Provide[ApiContainer.services.chapters]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterArchiveStatusRead:
     expected_version = parse_if_match(request)
     try:
-        status, result = execute_archive(
-            db,
+        status, result = service.execute_archive(
             str(chapter_id),
             expected_version,
             archive_request,

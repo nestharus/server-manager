@@ -233,6 +233,43 @@ def test_container_resolves_application_factories(test_settings):
         container.shutdown_resources()
 
 
+def test_container_resolves_chapter_factories(test_settings):
+    """TG-4: Container resolves chapter repos and services as Factory
+    instances (post-142e shape)."""
+    from app.repositories.chapters import ChaptersRepository
+    from app.repositories.chapter_roles import ChapterRolesRepository
+    from app.repositories.chapter_templates import ChapterTemplatesRepository
+    from app.repositories.chapter_transitions import ChapterTransitionsRepository
+    from app.repositories.archive_queries import ArchiveQueriesRepository
+    from app.repositories.archive_runs import ArchiveRunsRepository
+    from app.services.chapters import ChaptersService
+    from app.services.chapter_templates import ChapterTemplatesService
+    from app.services.chapter_roles import ChapterRolesService
+
+    container = ApiContainer(settings=test_settings)
+    container.init_resources()
+    try:
+        # 6 repos
+        assert isinstance(container.repos.chapters(), ChaptersRepository)
+        assert isinstance(container.repos.chapter_roles(), ChapterRolesRepository)
+        assert isinstance(container.repos.chapter_templates(), ChapterTemplatesRepository)
+        assert isinstance(
+            container.repos.chapter_transitions(),
+            ChapterTransitionsRepository,
+        )
+        assert isinstance(container.repos.archive_queries(), ArchiveQueriesRepository)
+        assert isinstance(container.repos.archive_runs(), ArchiveRunsRepository)
+        # 3 services
+        assert isinstance(container.services.chapters(), ChaptersService)
+        assert isinstance(
+            container.services.chapter_templates(),
+            ChapterTemplatesService,
+        )
+        assert isinstance(container.services.chapter_roles(), ChapterRolesService)
+    finally:
+        container.shutdown_resources()
+
+
 def test_container_missing_settings_raises():
     with pytest.raises(Exception, match=r"Dependency|defined"):
         ApiContainer().core.settings()

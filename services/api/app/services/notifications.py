@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import nullcontext
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,7 +17,7 @@ from app.contracts.notifications import (
     NotificationRuleRead,
 )
 from app.core.settings import Settings
-from app.repositories.chapters import fetch_chapter
+from app.repositories.chapters import ChaptersRepository
 from app.repositories.db import PostgresDatabase
 from app.repositories.notifications import (
     fetch_notification_rule,
@@ -119,11 +118,14 @@ def emit_application_public_submitted_event(
 
     try:
         if scope_kind == "chapter" and scope_id is not None:
-            connection_context = (
-                nullcontext(connection) if connection is not None else db.connection()
-            )
-            with connection_context as active_connection:
-                chapter = fetch_chapter(active_connection, scope_id)
+            chapters_repo = ChaptersRepository(db)
+            if connection is not None:
+                chapter = chapters_repo._fetch_chapter_on(
+                    connection,
+                    chapter_id=scope_id,
+                )
+            else:
+                chapter = chapters_repo.fetch_chapter(chapter_id=scope_id)
             if chapter is not None:
                 chapter_discord_resources = chapter["discord_resources"]
 
@@ -249,7 +251,9 @@ def patch_notification_rule(
         locked_row = fetch_notification_rule_for_update(connection, rule_id)
         if locked_row is None:
             raise NotificationRuleNotFoundError(rule_id)
-        updated_row = update_notification_rule(connection, rule_id=rule_id, patch_row=merged)
+        updated_row = update_notification_rule(
+            connection, rule_id=rule_id, patch_row=merged
+        )
         if updated_row is None:
             raise NotificationRuleNotFoundError(rule_id)
         updated_read = NotificationRuleRead(
@@ -277,7 +281,9 @@ def patch_notification_rule(
             request_surface=f"api:/api/v1/notification-rules/{rule_id}",
         ),
         action_type="notification_rule.patch",
-        action_payload=NotificationRuleCreate.model_validate(merged).model_dump(mode="json"),
+        action_payload=NotificationRuleCreate.model_validate(merged).model_dump(
+            mode="json"
+        ),
         payload_allowlist=RULE_PAYLOAD_FIELDS,
         mutate_projection=mutate_projection,
         scope_kind=merged["scope_kind"],

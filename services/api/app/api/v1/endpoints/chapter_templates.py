@@ -5,7 +5,8 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from dependency_injector.wiring import Provide, inject
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.chapter_templates import (
@@ -16,24 +17,18 @@ from app.contracts.chapter_templates import (
     StaleTemplateVersionError,
     TemplateSchemaVersionMismatchError,
 )
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority, get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.chapter_templates import (
-    create_chapter_template,
-    patch_chapter_template,
-    read_chapter_template,
-)
+from app.services.chapter_templates import ChapterTemplatesService
 
 router = APIRouter(prefix="/api/v1/chapter-templates")
 
 
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
-
-
 def _raise_for_template_error(error: Exception) -> None:
     if isinstance(error, ChapterTemplateNotFoundError):
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="not found") from error
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail="not found"
+        ) from error
     if isinstance(error, StaleTemplateVersionError):
         raise HTTPException(
             status_code=HTTPStatus.PRECONDITION_FAILED,
@@ -60,14 +55,17 @@ def _raise_for_template_error(error: Exception) -> None:
     status_code=HTTPStatus.CREATED,
     dependencies=[Depends(RequireAuthority("chapter_template.write", "global"))],
 )
+@inject
 def create_chapter_template_endpoint(
     template: ChapterTemplateCreate,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChapterTemplatesService = Depends(
+        Provide[ApiContainer.services.chapter_templates]
+    ),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterTemplateRead:
     try:
-        read, result = create_chapter_template(db, template, actor)
+        read, result = service.create_chapter_template(template, actor)
     except Exception as error:
         _raise_for_template_error(error)
     response.headers["etag"] = result.etag
@@ -79,12 +77,15 @@ def create_chapter_template_endpoint(
     response_model=ChapterTemplateRead,
     dependencies=[Depends(RequireAuthority("chapter_template.read", "global"))],
 )
+@inject
 def get_chapter_template(
     template_id: UUID,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChapterTemplatesService = Depends(
+        Provide[ApiContainer.services.chapter_templates]
+    ),
 ) -> ChapterTemplateRead:
     try:
-        return read_chapter_template(db, template_id)
+        return service.read_chapter_template(template_id)
     except Exception as error:
         _raise_for_template_error(error)
 
@@ -94,15 +95,18 @@ def get_chapter_template(
     response_model=ChapterTemplateRead,
     dependencies=[Depends(RequireAuthority("chapter_template.write", "global"))],
 )
+@inject
 def patch_chapter_template_endpoint(
     template_id: UUID,
     patch: ChapterTemplatePatch,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ChapterTemplatesService = Depends(
+        Provide[ApiContainer.services.chapter_templates]
+    ),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ChapterTemplateRead:
     try:
-        read, result = patch_chapter_template(db, template_id, patch, actor)
+        read, result = service.patch_chapter_template(template_id, patch, actor)
     except Exception as error:
         _raise_for_template_error(error)
     response.headers["etag"] = result.etag
