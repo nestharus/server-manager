@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
@@ -52,17 +53,17 @@ def public_form(governance_db: PostgresDatabase) -> None:
 
 
 @pytest.fixture()
-def allowed_public_route(app: FastAPI) -> FakeCedarAuthorizer:
+def allowed_public_route(app: FastAPI, override_provider) -> Iterator[FakeCedarAuthorizer]:
     authorizer = FakeCedarAuthorizer(decision="Allow")
-    app.state.cedar_authorizer = authorizer
-    return authorizer
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        yield authorizer
 
 
 @pytest.fixture()
-def denied_public_route(app: FastAPI) -> FakeCedarAuthorizer:
+def denied_public_route(app: FastAPI, override_provider) -> Iterator[FakeCedarAuthorizer]:
     authorizer = FakeCedarAuthorizer(decision="Deny")
-    app.state.cedar_authorizer = authorizer
-    return authorizer
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        yield authorizer
 
 
 @pytest.fixture()

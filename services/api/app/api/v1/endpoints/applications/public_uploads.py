@@ -3,7 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.contracts.applications import (
     FileUploadUrlRequest,
@@ -11,10 +11,9 @@ from app.contracts.applications import (
     FormDefinitionNotFoundError,
 )
 from app.core.container import ApiContainer
-from app.services.applicant_discord_auth import (
-    DiscordIdentity,
-    verify_applicant_receipt,
-)
+from app.core.settings import Settings
+from app.infrastructure.authz import CedarAuthorizationClient
+from app.services.applicant_discord_auth import verify_applicant_receipt
 from app.services.applications import _APPLICATION_FORM_FIELD_ADAPTER
 from app.services.authorization import authorize_public_intake
 from app.services.file_upload import FileUploadService, build_object_key
@@ -35,13 +34,21 @@ router = APIRouter(prefix="/api/v1/public/applications")
 @inject
 async def request_upload_url_endpoint(
     body: FileUploadUrlRequest,
-    identity: DiscordIdentity = Depends(verify_applicant_receipt),
+    request: Request,
+    settings: Settings = Depends(Provide[ApiContainer.core.settings]),
+    cedar_authorizer: CedarAuthorizationClient = Depends(
+        Provide[ApiContainer.infra.cedar_authorizer]
+    ),
     forms_service: FormsService = Depends(Provide[ApiContainer.services.forms]),
     file_upload_service: FileUploadService = Depends(
         Provide[ApiContainer.services.file_upload]
     ),
-    _authz: None = Depends(authorize_public_intake),
 ) -> FileUploadUrlResponse:
+    identity = verify_applicant_receipt(
+        request,
+        signing_key=settings.applicant_receipt_signing_key.get_secret_value(),
+    )
+    await authorize_public_intake(request, cedar_authorizer, settings)
     del identity
     try:
         form_row = forms_service.get_form_by_id(body.form_definition_id)

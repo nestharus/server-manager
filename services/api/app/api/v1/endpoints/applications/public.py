@@ -3,17 +3,16 @@ from __future__ import annotations
 from http import HTTPStatus
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.contracts.applications import (
     PublicApplicationSubmission,
     PublicApplicationSubmissionReceipt,
 )
 from app.core.container import ApiContainer
-from app.services.applicant_discord_auth import (
-    DiscordIdentity,
-    verify_applicant_receipt,
-)
+from app.core.settings import Settings
+from app.infrastructure.authz import CedarAuthorizationClient
+from app.services.applicant_discord_auth import verify_applicant_receipt
 from app.services.applications import ApplicationsService
 from app.services.authorization import authorize_public_intake
 
@@ -31,10 +30,18 @@ router = APIRouter(prefix="/api/v1/public/applications")
 @inject
 async def submit_public_application_endpoint(
     body: PublicApplicationSubmission,
-    identity: DiscordIdentity = Depends(verify_applicant_receipt),
+    request: Request,
+    settings: Settings = Depends(Provide[ApiContainer.core.settings]),
+    cedar_authorizer: CedarAuthorizationClient = Depends(
+        Provide[ApiContainer.infra.cedar_authorizer]
+    ),
     service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
-    _authz: None = Depends(authorize_public_intake),
 ) -> PublicApplicationSubmissionReceipt:
+    identity = verify_applicant_receipt(
+        request,
+        signing_key=settings.applicant_receipt_signing_key.get_secret_value(),
+    )
+    await authorize_public_intake(request, cedar_authorizer, settings)
     try:
         application_id = await service.submit_public_application_with_receipt(
             body,

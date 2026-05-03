@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import Any
@@ -46,10 +47,10 @@ class FakeCedarAuthorizer:
 
 
 @pytest.fixture()
-def allowed_public_route(app: FastAPI) -> FakeCedarAuthorizer:
+def allowed_public_route(app: FastAPI, override_provider) -> Iterator[FakeCedarAuthorizer]:
     authorizer = FakeCedarAuthorizer(decision="Allow")
-    app.state.cedar_authorizer = authorizer
-    return authorizer
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        yield authorizer
 
 
 async def _post_public_application(

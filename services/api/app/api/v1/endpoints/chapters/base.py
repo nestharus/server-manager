@@ -32,8 +32,11 @@ from app.services.chapters import ChaptersService
 router = APIRouter(prefix="/api/v1/chapters")
 
 
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
+@inject
+def get_db(
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
+) -> PostgresDatabase:
+    return db
 
 
 def parse_if_match(request: Request) -> int:

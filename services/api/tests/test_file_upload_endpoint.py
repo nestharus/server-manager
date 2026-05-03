@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -43,17 +44,17 @@ class FakeCedarAuthorizer:
 
 
 @pytest.fixture()
-def allowed_public_route(app: FastAPI) -> FakeCedarAuthorizer:
+def allowed_public_route(app: FastAPI, override_provider) -> Iterator[FakeCedarAuthorizer]:
     authorizer = FakeCedarAuthorizer(decision="Allow")
-    app.state.cedar_authorizer = authorizer
-    return authorizer
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        yield authorizer
 
 
 @pytest.fixture()
-def denied_public_route(app: FastAPI) -> FakeCedarAuthorizer:
+def denied_public_route(app: FastAPI, override_provider) -> Iterator[FakeCedarAuthorizer]:
     authorizer = FakeCedarAuthorizer(decision="Deny")
-    app.state.cedar_authorizer = authorizer
-    return authorizer
+    with override_provider(app.state.container.infra.cedar_authorizer, authorizer):
+        yield authorizer
 
 
 def _valid_body(form_id: str) -> dict[str, Any]:

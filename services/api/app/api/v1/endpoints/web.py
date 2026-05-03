@@ -57,8 +57,11 @@ from app.services.web import WebService
 router = APIRouter(prefix="/api/v1/web")
 
 
-def _db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
+@inject
+def _db(
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
+) -> PostgresDatabase:
+    return db
 
 
 @router.get("/admin/chapters", response_model=AdminChapterListRead)

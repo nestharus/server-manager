@@ -46,8 +46,6 @@ def create_api_app(
     container.init_resources()
 
     resolved_db = container.core.db()
-    resolved_cedar_authorizer = container.infra.cedar_authorizer()
-    resolved_ocr_provider = container.infra.ocr_provider()
     scheduler_loop = container.tasks.scheduler_loop()
 
     @asynccontextmanager
@@ -88,6 +86,12 @@ def create_api_app(
     app.state.container = container
     container.wire(
         modules=[
+            "app.api.v1.endpoints.health",
+            "app.api.v1.endpoints.metrics",
+            "app.api.v1.endpoints.auth_discord",
+            "app.api.v1.endpoints.ready",
+            "app.api.v1.endpoints.system",
+            "app.api.v1.endpoints.protected",
             "app.api.v1.endpoints.operations",
             "app.api.v1.endpoints.permissions._shared",
             "app.api.v1.endpoints.permissions.drift",
@@ -112,6 +116,7 @@ def create_api_app(
             "app.api.v1.endpoints.chapters.archive",
             "app.api.v1.endpoints.chapters.base",
             "app.api.v1.endpoints.chapters.governance",
+            "app.api.v1.endpoints.authority._shared",
             "app.api.v1.endpoints.authority.handoff_applications",
             "app.api.v1.endpoints.authority.handoff_tickets",
             "app.api.v1.endpoints.authority.leadership_context",
@@ -138,11 +143,6 @@ def create_api_app(
             "app.api.v1.endpoints.tickets.transitions",
         ],
     )
-    app.state.settings = resolved_settings
-    app.state.db = resolved_db
-    app.state.cedar_authorizer = resolved_cedar_authorizer
-    app.state.ocr_provider = resolved_ocr_provider
-    app.state.scheduler_loop = scheduler_loop
 
     app.include_router(v1_router)
     return app

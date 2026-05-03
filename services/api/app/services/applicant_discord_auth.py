@@ -222,11 +222,13 @@ def verify_applicant_receipt(
     if not cookie:
         _raise_applicant_receipt_required()
 
-    settings = request.app.state.settings
+    if signing_key is None:
+        raise TypeError("signing_key is required when verifying a request receipt")
+
     try:
         payload = verify_applicant_receipt_jwt(
             cookie,
-            signing_key=settings.applicant_receipt_signing_key.get_secret_value(),
+            signing_key=signing_key,
             now=now,
         )
     except ApplicantReceiptError as exc:

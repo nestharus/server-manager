@@ -23,7 +23,7 @@ pytestmark = pytest.mark.usefixtures("governance_dsn")
 
 
 def _seed_completed_evidence(client: TestClient, app: FastAPI) -> tuple[dict, str]:
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit", "compliance_evidence.extract", "compliance_evidence.correct"}))
     rule, _rule_etag = create_rule_http(client)
@@ -63,7 +63,7 @@ def test_correction_rejects_pending_status(
     app: FastAPI,
 ) -> None:
     """AC3: evidence cannot be corrected while extraction is still pending."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit", "compliance_evidence.correct"}))
     rule, _rule_etag = create_rule_http(client)
@@ -101,7 +101,7 @@ def test_correction_requires_authority(
     app: FastAPI,
 ) -> None:
     """AC3: correction is denied without compliance_evidence.correct authority."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit", "compliance_evidence.extract"}))
     rule, _rule_etag = create_rule_http(client)

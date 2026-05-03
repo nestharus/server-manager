@@ -53,7 +53,12 @@ def wrong_key_receipt() -> str:
     return applicant_receipt_token(signing_key="wrong-test-signing-key-minimum-length")
 
 
-def _request_with_cookie(receipt: str | None, settings) -> Request:
+@pytest.fixture()
+def receipt_signing_key(test_settings) -> str:
+    return test_settings.applicant_receipt_signing_key.get_secret_value()
+
+
+def _request_with_cookie(receipt: str | None) -> Request:
     headers: list[tuple[bytes, bytes]] = []
     if receipt is not None:
         headers.append((b"cookie", f"applicant_receipt={receipt}".encode("ascii")))
@@ -62,34 +67,34 @@ def _request_with_cookie(receipt: str | None, settings) -> Request:
         "method": "POST",
         "path": "/api/v1/public/applications",
         "headers": headers,
-        "app": SimpleNamespace(state=SimpleNamespace(settings=settings)),
+        "app": SimpleNamespace(),
     }
     return Request(scope)
 
 
 @pytest.fixture()
-def valid_receipt_request(valid_receipt: str, test_settings) -> Request:
-    return _request_with_cookie(valid_receipt, test_settings)
+def valid_receipt_request(valid_receipt: str) -> Request:
+    return _request_with_cookie(valid_receipt)
 
 
 @pytest.fixture()
-def missing_receipt_request(test_settings) -> Request:
-    return _request_with_cookie(None, test_settings)
+def missing_receipt_request() -> Request:
+    return _request_with_cookie(None)
 
 
 @pytest.fixture()
-def tampered_receipt_request(tampered_receipt: str, test_settings) -> Request:
-    return _request_with_cookie(tampered_receipt, test_settings)
+def tampered_receipt_request(tampered_receipt: str) -> Request:
+    return _request_with_cookie(tampered_receipt)
 
 
 @pytest.fixture()
-def expired_receipt_request(expired_receipt: str, test_settings) -> Request:
-    return _request_with_cookie(expired_receipt, test_settings)
+def expired_receipt_request(expired_receipt: str) -> Request:
+    return _request_with_cookie(expired_receipt)
 
 
 @pytest.fixture()
-def wrong_key_receipt_request(wrong_key_receipt: str, test_settings) -> Request:
-    return _request_with_cookie(wrong_key_receipt, test_settings)
+def wrong_key_receipt_request(wrong_key_receipt: str) -> Request:
+    return _request_with_cookie(wrong_key_receipt)
 
 
 def _assert_receipt_required(error: HTTPException) -> None:
@@ -103,6 +108,7 @@ def test_verify_applicant_receipt_returns_discord_identity(
     receipt_dependency,
     discord_identity_type,
     valid_receipt_request: Request,
+    receipt_signing_key: str,
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=valid_receipt_identity_not_extracted;
     level=unit; source=.tmp/init-128/phase6/step6a-contract.md#C2.
@@ -114,7 +120,7 @@ def test_verify_applicant_receipt_returns_discord_identity(
         source=".tmp/init-128/phase6/step6a-contract.md#C2",
     )
 
-    identity = receipt_dependency(valid_receipt_request)
+    identity = receipt_dependency(valid_receipt_request, signing_key=receipt_signing_key)
 
     assert isinstance(identity, discord_identity_type)
     assert identity.discord_user_id == APPLICANT_DISCORD_USER_ID
@@ -133,6 +139,7 @@ def test_verify_applicant_receipt_rejects_missing_or_invalid_receipts(
     request: pytest.FixtureRequest,
     receipt_dependency,
     request_fixture: str,
+    receipt_signing_key: str,
 ) -> None:
     """Risk annotation: group=TG-1; named_risk=missing_or_invalid_receipt_accepted;
     level=unit; source=.tmp/init-128/phase6/step6a-contract.md#C2.
@@ -146,6 +153,6 @@ def test_verify_applicant_receipt_rejects_missing_or_invalid_receipts(
     receipt_request = request.getfixturevalue(request_fixture)
 
     with pytest.raises(HTTPException) as exc_info:
-        receipt_dependency(receipt_request)
+        receipt_dependency(receipt_request, signing_key=receipt_signing_key)
 
     _assert_receipt_required(exc_info.value)

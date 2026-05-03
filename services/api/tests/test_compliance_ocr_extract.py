@@ -25,7 +25,7 @@ pytestmark = pytest.mark.usefixtures("governance_dsn")
 
 
 def _seed_pending_evidence(client: TestClient, app: FastAPI) -> dict:
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit", "compliance_evidence.extract"}))
     rule, _rule_etag = create_rule_http(client)
@@ -94,7 +94,7 @@ def test_extract_is_repeatable_without_overwriting_correction_overlay(
 ) -> None:
     """AC2: repeated extraction updates OCR output but keeps any officer correction overlay intact."""
     evidence = _seed_pending_evidence(client, app)
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.correct"}))
     set_ocr_provider(app, StaticOcrProvider(raw_text="first", extracted_fields={"attendance": False}))
     first = client.post(

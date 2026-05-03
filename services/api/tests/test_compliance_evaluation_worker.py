@@ -38,7 +38,7 @@ def _seed_member_rule(
     consequence_params: dict | None = None,
     evidence_requirements: list[dict] | None = None,
 ) -> dict:
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     roles = seed_chapter_and_roles(db)
     grant(db, grantee_id="operator", permissions=frozenset({"roster.write", "roster.read", "roster.remove"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
@@ -100,7 +100,7 @@ def test_worker_inserts_one_evaluation_for_member_rule_period(
     """AC4: a worker tick inserts at most one evaluation for a member/rule/period tuple."""
     _seed_member_rule(client, app)
 
-    result = compliance_evaluation_worker_tick(app.state.db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
+    result = compliance_evaluation_worker_tick(app.state.container.core.db(), now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
     rows = fetch_all(governance_dsn, "SELECT * FROM compliance_evaluations", ())
 
     assert result is not None
@@ -116,8 +116,8 @@ def test_worker_is_idempotent_on_repeat_tick(
     """AC4: rerunning the worker for the same period does not create duplicate evaluations."""
     _seed_member_rule(client, app)
 
-    first = compliance_evaluation_worker_tick(app.state.db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
-    second = compliance_evaluation_worker_tick(app.state.db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
+    first = compliance_evaluation_worker_tick(app.state.container.core.db(), now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
+    second = compliance_evaluation_worker_tick(app.state.container.core.db(), now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
     rows = fetch_all(governance_dsn, "SELECT * FROM compliance_evaluations", ())
 
     assert first is not None
@@ -131,7 +131,7 @@ def test_worker_routes_under_review_through_roster_service(
     governance_dsn: str,
 ) -> None:
     """AC4: an auto-applied violation routes the consequence through roster transition audit instead of raw SQL."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     seeded = _seed_member_rule(
         client,
         app,
@@ -156,7 +156,7 @@ def test_worker_records_review_queue_for_review_consequence(
     app: FastAPI,
 ) -> None:
     """AC4: a violation under review-only policy records review_queued without mutating roster state."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     seeded = _seed_member_rule(client, app, consequence_kind="review")
     evidence = seed_evidence(app, rule_id=seeded["rule"].id)
     _mark_evidence_completed(db, evidence_id=evidence.id, extracted_fields={"attendance": False})
@@ -176,7 +176,7 @@ def test_worker_records_insufficient_evidence_without_consequence(
     """AC4: when no evidence exists, the worker records insufficient_evidence and no roster consequence."""
     _seed_member_rule(client, app, consequence_kind="under_review", consequence_params={"auto_apply": True})
 
-    result = compliance_evaluation_worker_tick(app.state.db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
+    result = compliance_evaluation_worker_tick(app.state.container.core.db(), now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
 
     assert result is not None
     assert result[0].result == "insufficient_evidence"
@@ -191,7 +191,7 @@ def test_worker_installs_root_audit_context(
     """AC4: the worker creates audit rows under the compliance-evaluator service actor even without ambient context."""
     _seed_member_rule(client, app)
 
-    compliance_evaluation_worker_tick(app.state.db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
+    compliance_evaluation_worker_tick(app.state.container.core.db(), now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
     action = latest_action(governance_dsn, action_type="compliance_evaluation.create")
 
     assert action["actor_kind"] == "service"
@@ -207,7 +207,7 @@ def test_worker_evaluates_evidence_in_shared_transaction(
     """Evidence read and evaluation insert must run on the same connection (same tx)."""
     from app.repositories.compliance import ComplianceRepository
 
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     seeded = _seed_member_rule(
         client,
         app,
@@ -257,7 +257,7 @@ def test_worker_reloads_roster_status_in_tx(
     """AC4: roster status is re-read inside the per-member tx so a concurrent transition suppresses auto-apply."""
     from app.repositories.compliance import ComplianceRepository
 
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     seeded = _seed_member_rule(
         client,
         app,
@@ -299,7 +299,7 @@ def test_correction_merges_with_ocr_fields(
     app: FastAPI,
 ) -> None:
     """Corrected fields overlay OCR output — untouched requirement types remain visible during evaluation."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     seeded = _seed_member_rule(
         client,
         app,
@@ -330,7 +330,7 @@ def test_manual_run_preserves_operator_attribution_on_roster_transition(
     governance_dsn: str,
 ) -> None:
     """AC4: manual /evaluations/run uses the service actor for writes while recording the operator as the originating actor."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     seeded = _seed_member_rule(
         client,
         app,

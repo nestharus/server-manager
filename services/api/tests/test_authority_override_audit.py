@@ -84,7 +84,7 @@ async def override_client(
     app: FastAPI = create_api_app(settings=test_settings)
     app.include_router(_build_router())
 
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     transport = httpx.ASGITransport(app=app)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(

@@ -35,7 +35,7 @@ def _seed_pending_review_evaluation(
     *,
     member_id: str = "member-1",
 ) -> dict:
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     roles = seed_chapter_and_roles(db)
     grant(db, grantee_id="operator", permissions=frozenset({"roster.write", "roster.read", "roster.remove"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
@@ -61,7 +61,7 @@ def test_get_evaluation_returns_read_model(
     app: FastAPI,
 ) -> None:
     """AC4: reading a compliance evaluation returns the populated review model with an ETag."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evaluation.read"}))
     seeded = _seed_pending_review_evaluation(client, app)
 
@@ -80,7 +80,7 @@ def test_review_approve_updates_reviewer_fields(
     app: FastAPI,
 ) -> None:
     """AC4: approving a pending evaluation records the reviewer, reason, and approved status."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evaluation.review"}))
     seeded = _seed_pending_review_evaluation(client, app)
 
@@ -102,7 +102,7 @@ def test_review_override_to_violation_applies_under_review(
     governance_dsn: str,
 ) -> None:
     """AC4: overriding a pending evaluation to violation can advance the consequence through the roster service path."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evaluation.review"}))
     seeded = _seed_pending_review_evaluation(client, app)
 
@@ -133,7 +133,7 @@ def test_review_requires_current_etag(
     app: FastAPI,
 ) -> None:
     """AC4: reviewing an evaluation rejects stale If-Match versions."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evaluation.review"}))
     seeded = _seed_pending_review_evaluation(client, app)
 
@@ -170,7 +170,7 @@ def _seed_pending_violation_under_review(
     *,
     member_id: str = "member-1",
 ) -> dict:
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     roles = seed_chapter_and_roles(db)
     grant(db, grantee_id="operator", permissions=frozenset({"roster.write", "roster.read", "roster.remove"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
@@ -218,7 +218,7 @@ def test_review_approve_of_under_review_violation_applies_consequence(
     governance_dsn: str,
 ) -> None:
     """Approving a pending under_review violation must resolve consequence to under_review_applied and transition roster."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evaluation.review"}))
     seeded = _seed_pending_violation_under_review(client, app)
 

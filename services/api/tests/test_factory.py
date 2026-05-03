@@ -63,7 +63,7 @@ def test_create_api_app_with_provided_settings_uses_same_object_and_skips_settin
 
     app = create_api_app(settings=settings)
 
-    assert app.state.settings is settings
+    assert app.state.container.core.settings() is settings
 
 
 def test_create_api_app_sets_title_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,7 +101,7 @@ def test_create_api_app_stores_used_settings_on_app_state(
 
     app = create_api_app(settings=settings)
 
-    assert app.state.settings is settings
+    assert app.state.container.core.settings() is settings
 
 
 def test_create_api_app_without_env_vars_raises_settings_construction_error(

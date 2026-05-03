@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from dependency_injector.wiring import Provide, inject
+from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
+
+from app.core.container import ApiContainer
+from app.core.settings import Settings
 
 
 router = APIRouter(prefix="/api/v1/metrics")
@@ -17,8 +21,10 @@ def _label_value(value: str) -> str:
 
 
 @router.get("", response_class=PlainTextResponse)
-def metrics(request: Request) -> PlainTextResponse:
-    settings = request.app.state.settings
+@inject
+def metrics(
+    settings: Settings = Depends(Provide[ApiContainer.core.settings]),
+) -> PlainTextResponse:
     info_labels = (
         'service="server-manager-api",'
         f'version="{_label_value(settings.app_version)}",'

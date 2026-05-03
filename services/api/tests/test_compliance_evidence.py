@@ -19,7 +19,7 @@ def test_submit_creates_pending_evidence_row(
     app: FastAPI,
 ) -> None:
     """AC2: submitting evidence stores the attachment first and returns a pending extraction state."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit"}))
 
@@ -39,7 +39,7 @@ def test_submit_rejects_chapter_mismatch_with_rule(
     app: FastAPI,
 ) -> None:
     """AC2: evidence.chapter_id must match the owning rule chapter instead of trusting the request body."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit"}))
 
@@ -64,7 +64,7 @@ def test_submit_requires_evidence_submit_authority(
     app: FastAPI,
 ) -> None:
     """AC2: evidence submission is denied without compliance_evidence.submit authority."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
 
     rule, _etag = create_rule_http(client)
@@ -89,7 +89,7 @@ def test_submit_audit_uses_actor_identity_not_request_body(
     governance_dsn: str,
 ) -> None:
     """AC2: the audit/request payload derives submitted_by_member_id from the authenticated actor, not the body."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit"}))
 
@@ -112,7 +112,7 @@ def test_get_evidence_returns_current_version_etag(
     app: FastAPI,
 ) -> None:
     """AC2: reading evidence returns the current version as a strong ETag."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write", "compliance_evidence.read"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit"}))
 
@@ -133,7 +133,7 @@ def test_staff_can_submit_evidence_on_behalf_of_member(
     app: FastAPI,
 ) -> None:
     """Service actors may attribute a submission to a different member (staff-on-behalf)."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="bot-ingester", permissions=frozenset({"compliance_evidence.submit"}))
 
@@ -159,7 +159,7 @@ def test_user_cannot_spoof_submitted_by_member_id(
     app: FastAPI,
 ) -> None:
     """User actors cannot attribute submissions to a different member."""
-    db: PostgresDatabase = app.state.db
+    db: PostgresDatabase = app.state.container.core.db()
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_rule.write"}))
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit"}))
 
