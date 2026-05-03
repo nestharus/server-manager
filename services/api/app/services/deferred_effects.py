@@ -18,6 +18,7 @@ from app.services.scheduler import (
     CLAIM_BATCH_SIZE,
     DEFAULT_MAX_ATTEMPTS,
     LEASE_SECONDS,
+    _invoke_handler_with_db,
     _lookup_handler,
 )
 
@@ -175,7 +176,7 @@ class DeferredEffectsService:
                         effect.correlation_id, effect.causation_id
                     )
                 ):
-                    result = handler(effect)
+                    result = _invoke_handler_with_db(handler, effect, db=db)
                     if inspect.isawaitable(result):
                         asyncio.run(result)
             except Exception as error:

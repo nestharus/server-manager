@@ -14,7 +14,7 @@ from functools import partial
 from app.repositories.deferred_effects import DeferredEffectsRepository
 from app.services.deferred_effects import DeferredEffectsService
 from app.services.mutations import mutate_entity
-from app.tasks.archive import archive_worker_tick, configure_archive_worker
+from app.tasks.archive import archive_worker_tick
 
 from .chapter_governance_helpers import (
     ACTOR_HEADERS,
@@ -61,7 +61,7 @@ def test_archive_execute_is_idempotent_and_preserves_correlation_chain(
     governance_db: PostgresDatabase,
 ) -> None:
     """AC4/D15: archive execute is duplicate-safe and tags all effects with one chain."""
-    configure_archive_worker(db=governance_db)
+    archive_worker_tick(db=governance_db)
     seed_operator_and_archiver_grants(governance_db)
     chapter, etag = create_active_chapter(client)
     chapter_id = str(chapter["id"])
@@ -133,7 +133,7 @@ def test_archive_worker_regenerates_stale_effects_and_finalizes_when_clear(
     governance_db: PostgresDatabase,
 ) -> None:
     """AC2/AC4: stale effects are replaced and archive finalizes only after work is done."""
-    configure_archive_worker(db=governance_db)
+    archive_worker_tick(db=governance_db)
     seed_operator_and_archiver_grants(governance_db)
     chapter, etag = create_active_chapter(client)
     chapter_id = str(chapter["id"])
@@ -169,7 +169,7 @@ def test_archive_worker_regenerates_stale_effects_and_finalizes_when_clear(
             (application_id,),
         )
 
-    archive_worker_tick()
+    archive_worker_tick(db=governance_db)
     effects_after_validation = _archive_effects(governance_db, archive_run_id)
     assert any(
         effect["payload_json"]["target_id"] == application_id
@@ -187,12 +187,12 @@ def test_archive_worker_regenerates_stale_effects_and_finalizes_when_clear(
         deferred_effects_repo=DeferredEffectsRepository(governance_db),
         mutations_callable=partial(mutate_entity, db=governance_db),
     ).deferred_effect_worker_tick(worker_id="archive-test")
-    archive_worker_tick()
+    archive_worker_tick(db=governance_db)
     DeferredEffectsService(
         deferred_effects_repo=DeferredEffectsRepository(governance_db),
         mutations_callable=partial(mutate_entity, db=governance_db),
     ).deferred_effect_worker_tick(worker_id="archive-test")
-    archive_worker_tick()
+    archive_worker_tick(db=governance_db)
 
     status = client.get(
         f"{CHAPTERS_URL}/{chapter_id}/archive-status",

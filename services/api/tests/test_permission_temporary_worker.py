@@ -167,7 +167,7 @@ def test_worker_creates_drift_sets_expired_at_and_installs_root_audit_context(
         expires_at=now - timedelta(minutes=5),
     )
 
-    result = permission_expiry_worker_tick(now=now)
+    result = permission_expiry_worker_tick(db=governance_db, now=now)
 
     assert result is not None
     assert result.inspected_count == 1
@@ -231,8 +231,8 @@ def test_worker_rerun_is_idempotent(
         expires_at=now - timedelta(minutes=5),
     )
 
-    first = permission_expiry_worker_tick(now=now)
-    second = permission_expiry_worker_tick(now=now)
+    first = permission_expiry_worker_tick(db=governance_db, now=now)
+    second = permission_expiry_worker_tick(db=governance_db, now=now)
 
     assert first is not None
     assert second is not None
@@ -263,7 +263,7 @@ def test_worker_ignores_non_temporary_and_future_intents(
         expires_at=now + timedelta(minutes=5),
     )
 
-    result = permission_expiry_worker_tick(now=now)
+    result = permission_expiry_worker_tick(db=governance_db, now=now)
 
     assert result is not None
     assert result.expired_count == 0
@@ -296,7 +296,7 @@ async def test_expiry_drift_is_discoverable_via_get_permission_drift(
         role_id="discoverable-role",
         expires_at=now - timedelta(minutes=5),
     )
-    result = permission_expiry_worker_tick(now=now)
+    result = permission_expiry_worker_tick(db=governance_db, now=now)
     assert result is not None
 
     response = await migrated_async_client.get(
@@ -384,7 +384,7 @@ def test_expire_and_drift_are_atomic_when_drift_creation_fails(
 
     monkeypatch.setattr(PermissionsService, "_create_expiry_drift_on", _boom)
 
-    result = permission_expiry_worker_tick(now=now)
+    result = permission_expiry_worker_tick(db=governance_db, now=now)
 
     assert result is not None
     assert result.expired_count == 0
@@ -402,8 +402,9 @@ def test_scheduler_invokes_permission_expiry_worker_on_interval(
     calls: list[datetime] = []
 
     def _permission_expiry_tick(
-        *, now: datetime, batch_size: int | None = None
+        db: PostgresDatabase, *, now: datetime, batch_size: int | None = None
     ) -> None:
+        assert db is governance_db
         assert batch_size is None
         calls.append(now)
 
@@ -411,8 +412,14 @@ def test_scheduler_invokes_permission_expiry_worker_on_interval(
         "app.tasks.permission_expiry.permission_expiry_worker_tick",
         _permission_expiry_tick,
     )
-    monkeypatch.setattr("app.tasks.archive.archive_worker_tick", lambda: None)
-    monkeypatch.setattr("app.tasks.ticket_sla.ticket_sla_worker_tick", lambda: [])
+    monkeypatch.setattr(
+        "app.tasks.archive.archive_worker_tick",
+        lambda db: None,
+    )
+    monkeypatch.setattr(
+        "app.tasks.ticket_sla.ticket_sla_worker_tick",
+        lambda db: [],
+    )
     monkeypatch.setattr(
         "app.tasks.read_models.read_model_worker_tick",
         lambda *_args, **_kwargs: None,

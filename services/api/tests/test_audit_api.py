@@ -37,8 +37,7 @@ from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from app.services.audit_queries import (
     AuditChainTooLargeError,  # noqa: F401 — imported to pin error-contract name
-    get_audit_entries_by_correlation,  # noqa: F401 — imported to pin service symbol
-    get_audit_entry_chain,  # noqa: F401 — imported to pin service symbol
+    AuditQueriesService,  # noqa: F401 — imported to pin service symbol
 )
 from tests._authority_helpers import grant_authority
 from app.services.mutations import mutate_entity

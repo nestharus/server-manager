@@ -24,21 +24,6 @@ logger = logging.getLogger(__name__)
 
 PERMISSION_EXPIRY_BATCH_SIZE: int = 50
 
-_DB: PostgresDatabase | None = None
-
-
-def configure_permission_expiry(*, db: PostgresDatabase) -> None:
-    global _DB
-    _DB = db
-
-
-def get_permission_expiry_db() -> PostgresDatabase:
-    global _DB
-    if _DB is None:
-        _DB = PostgresDatabase()
-    return _DB
-
-
 def _expirer_service_actor() -> ActorIdentity:
     return ActorIdentity(actor_kind="service", actor_id=PERMISSION_EXPIRER_ACTOR_ID)
 
@@ -56,6 +41,7 @@ def _root_audit_context() -> AuditContextRead:
 
 
 def permission_expiry_worker_tick(
+    db: PostgresDatabase,
     *,
     now: datetime | None = None,
     batch_size: int | None = None,
@@ -68,7 +54,7 @@ def permission_expiry_worker_tick(
     )
     with ambient:
         try:
-            task_db = get_permission_expiry_db()
+            task_db = db
             repo = PermissionsRepository(db=task_db)
             service = PermissionsService(
                 permissions_repo=repo,

@@ -15,7 +15,7 @@ from app.contracts.scope import ScopeKind
 from app.core.container import ApiContainer
 from app.core.context import get_current_actor as _get_current_actor
 from app.repositories.authority import AuthorityRepository
-from app.services.audit_overrides import record_authority_override
+from app.services.audit_overrides import AuditOverridesService
 from app.services.authority import current_time, evaluate, _row_to_read
 
 
@@ -75,6 +75,9 @@ class _RequireAuthority:
         authority_repo: AuthorityRepository = Depends(
             Provide[ApiContainer.repos.authority]
         ),
+        audit_overrides_service: AuditOverridesService = Depends(
+            Provide[ApiContainer.services.audit_overrides]
+        ),
     ) -> AuthorityDecisionRead:
         actor = get_current_actor()
         scope_id = None
@@ -129,8 +132,7 @@ class _RequireAuthority:
                 decision=decision,
             )
 
-        record_authority_override(
-            authority_repo.db,
+        audit_overrides_service.record_authority_override(
             actor=actor,
             requirement=requirement,
             reason=override_reason,
