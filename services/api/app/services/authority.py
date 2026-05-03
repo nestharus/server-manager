@@ -43,7 +43,7 @@ from app.repositories.db import PostgresDatabase
 from app.repositories.members import fetch_member_by_discord_id, fetch_member_by_id
 from app.repositories.mutations import get_head_for_update
 from app.repositories.roster import list_latest_role_holders
-from app.repositories.tickets import list_open_tickets_for_owner_ids
+from app.repositories.tickets import TicketsRepository
 from app.services.members import is_synthetic_member
 from app.services.mutations import _format_etag, mutate_entity
 
@@ -562,7 +562,7 @@ def compute_succession_plan(
             scope_kind="chapter",
             scope_id=chapter_id,
         )
-        ticket_rows = list_open_tickets_for_owner_ids(
+        ticket_rows = TicketsRepository(db)._list_open_tickets_for_owner_ids_on(
             connection,
             owner_ids=grant_aliases,
             scope_kind="chapter",

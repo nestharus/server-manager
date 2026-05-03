@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from uuid import UUID
 
@@ -20,7 +21,9 @@ from app.repositories.deferred_effects import (
     mark_unclaimed_deferred_effect_skipped,
     update_precondition_state,
 )
-from app.repositories.tickets import get_ticket
+from app.repositories.ticket_categories import TicketCategoriesRepository
+from app.repositories.ticket_messages import TicketMessagesRepository
+from app.repositories.tickets import TicketsRepository
 from app.services.applications import transition_application
 from app.services.authority import current_time, revoke_authority
 from app.services.chapters import (
@@ -37,7 +40,9 @@ from app.services.chapters import (
     record_archive_manual_review_items,
 )
 from app.services.scheduler import register_scheduler_handler
-from app.services.tickets import transition_ticket
+from app.services.mutations import mutate_entity
+from app.services.ticket_messages import TicketMessagesService
+from app.services.tickets import TicketsService
 
 
 CHAPTER_ARCHIVER_ID = "chapter-archiver"
@@ -61,6 +66,22 @@ def get_archive_db() -> PostgresDatabase:
     if _DB is None:
         _DB = PostgresDatabase()
     return _DB
+
+
+def _build_tickets_service(db: PostgresDatabase) -> TicketsService:
+    tickets_repo = TicketsRepository(db)
+    ticket_messages_repo = TicketMessagesRepository(db)
+    ticket_messages_service = TicketMessagesService(
+        tickets_repo=tickets_repo,
+        ticket_messages_repo=ticket_messages_repo,
+    )
+    return TicketsService(
+        tickets_repo=tickets_repo,
+        ticket_categories_repo=TicketCategoriesRepository(db),
+        ticket_messages_repo=ticket_messages_repo,
+        ticket_messages_service=ticket_messages_service,
+        mutations_callable=partial(mutate_entity, db=db),
+    )
 
 
 def _audit_context(row: dict[str, Any]) -> AuditContextRead:
@@ -136,6 +157,7 @@ def _skip_effect(connection, effect_id: UUID, reason: str) -> None:
 
 
 def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any]) -> None:
+    tickets_repo = TicketsRepository(db)
     with db.transaction() as connection:
         effects = list_archive_effects(
             connection,
@@ -162,7 +184,7 @@ def _validate_archive_effects(db: PostgresDatabase, archive_run: dict[str, Any])
                 else:
                     _skip_effect(connection, effect["id"], "stale_precondition")
             elif target_kind == "ticket":
-                ticket = get_ticket(connection, UUID(target_id))
+                ticket = tickets_repo._get_ticket_on(connection, UUID(target_id))
                 if ticket is None or ticket["terminal_at"] is not None:
                     _skip_effect(connection, effect["id"], "already_resolved")
                     continue
@@ -297,6 +319,7 @@ def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
 @register_scheduler_handler(ARCHIVE_EFFECT_TICKET_CLOSE)
 def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
     db = get_archive_db()
+    tickets_repo = TicketsRepository(db)
     payload = effect.payload_json
     permission = "ticket.transition"
     try:
@@ -312,7 +335,7 @@ def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
         return
 
     with db.connection() as connection:
-        ticket = get_ticket(connection, UUID(str(payload["target_id"])))
+        ticket = tickets_repo._get_ticket_on(connection, UUID(str(payload["target_id"])))
     if ticket is None or ticket["terminal_at"] is not None:
         return
     close_edge = _find_close_edge(ticket)
@@ -330,8 +353,7 @@ def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
             ],
         )
         return
-    transition_ticket(
-        db,
+    _build_tickets_service(db).transition_ticket(
         UUID(str(payload["target_id"])),
         int(payload["expected_version"]),
         TicketTransitionRequest(

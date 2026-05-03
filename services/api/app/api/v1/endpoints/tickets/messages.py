@@ -3,14 +3,15 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Response
 
 from app.contracts.ticket_messages import TicketMessageAppendRequest, TicketMessageRead
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority
-from app.repositories.db import PostgresDatabase
-from app.services.ticket_messages import append_ticket_message
+from app.services.ticket_messages import TicketMessagesService
 
-from ._shared import get_db, raise_known_ticket_error, service_actor_only
+from ._shared import raise_known_ticket_error, service_actor_only
 
 router = APIRouter(prefix="/api/v1/tickets")
 
@@ -23,15 +24,17 @@ router = APIRouter(prefix="/api/v1/tickets")
         Depends(RequireAuthority("ticket.message.append", "global")),
     ],
 )
+@inject
 def append_ticket_message_endpoint(
     ticket_id: UUID,
     body: TicketMessageAppendRequest,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: TicketMessagesService = Depends(
+        Provide[ApiContainer.services.ticket_messages],
+    ),
 ) -> TicketMessageRead:
     try:
-        read, created = append_ticket_message(
-            db,
+        read, created = service.append_ticket_message(
             ticket_id=ticket_id,
             request=body,
         )

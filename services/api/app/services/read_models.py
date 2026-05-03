@@ -27,7 +27,7 @@ from app.repositories.read_models import (
     load_cursor,
     max_event_id_settled,
 )
-from app.repositories.tickets import list_open_tickets_for_owner_ids
+from app.repositories.tickets import TicketsRepository
 from app.services.authority import OPEN_APPLICATION_STATES, _collect_member_aliases, _require_scoped_authority
 
 
@@ -258,7 +258,8 @@ def read_leadership_context(
             owner_ids=member_uuid_aliases,
             states=sorted(OPEN_APPLICATION_STATES),
         )
-        current_ticket_rows = list_open_tickets_for_owner_ids(
+        tickets_repo = TicketsRepository(db)
+        current_ticket_rows = tickets_repo._list_open_tickets_for_owner_ids_on(
             connection,
             owner_ids=member_text_aliases,
         )
@@ -292,7 +293,7 @@ def read_leadership_context(
                 scope_kind=grant_row["scope_kind"],
                 scope_id=grant_row["scope_id"],
             )
-            pending_ticket_rows = list_open_tickets_for_owner_ids(
+            pending_ticket_rows = tickets_repo._list_open_tickets_for_owner_ids_on(
                 connection,
                 owner_ids=predecessor_text_aliases,
                 scope_kind=grant_row["scope_kind"],

@@ -15,14 +15,8 @@ from app.contracts.ticket_messages import (
 from app.contracts.tickets import TicketNotFoundError
 from app.core.context import MissingCorrelationContextError, get_current_audit_context
 from app.repositories.db import PostgresDatabase
-from app.repositories.ticket_messages import (
-    find_ticket_message_by_client_message_id,
-    get_ticket_message,
-    insert_ticket_message,
-    list_ticket_messages,
-    next_ticket_message_seq,
-)
-from app.repositories.tickets import get_ticket, get_ticket_for_update
+from app.repositories.ticket_messages import TicketMessagesRepository
+from app.repositories.tickets import TicketsRepository
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
 
 
@@ -65,24 +59,45 @@ def _assert_staff_authority(
         raise TicketMessageAppendForbiddenError("ticket.message.staff authority denied")
 
 
-def append_ticket_message(
-    db: PostgresDatabase,
-    *,
-    ticket_id: UUID,
-    request: TicketMessageAppendRequest,
-    connection: Connection[Any] | None = None,
-) -> tuple[TicketMessageRead, bool]:
-    def _append(active_connection: Connection[Any]) -> tuple[TicketMessageRead, bool]:
+class TicketMessagesService:
+    def __init__(
+        self,
+        tickets_repo: TicketsRepository,
+        ticket_messages_repo: TicketMessagesRepository,
+    ) -> None:
+        self.tickets_repo = tickets_repo
+        self.ticket_messages_repo = ticket_messages_repo
+
+    def append_ticket_message(
+        self,
+        *,
+        ticket_id: UUID,
+        request: TicketMessageAppendRequest,
+    ) -> tuple[TicketMessageRead, bool]:
+        with self.tickets_repo.db.transaction() as connection:
+            return self._append_ticket_message_on(
+                connection,
+                ticket_id=ticket_id,
+                request=request,
+            )
+
+    def _append_ticket_message_on(
+        self,
+        connection: Connection[Any],
+        *,
+        ticket_id: UUID,
+        request: TicketMessageAppendRequest,
+    ) -> tuple[TicketMessageRead, bool]:
         if request.client_message_id:
-            existing = find_ticket_message_by_client_message_id(
-                active_connection,
+            existing = self.ticket_messages_repo._find_ticket_message_by_client_message_id_on(
+                connection,
                 ticket_id=ticket_id,
                 client_message_id=request.client_message_id,
             )
             if existing is not None:
                 return _message_from_row(existing), False
 
-        ticket_row = get_ticket_for_update(active_connection, ticket_id)
+        ticket_row = self.tickets_repo._get_ticket_for_update_on(connection, ticket_id)
         if ticket_row is None:
             raise TicketNotFoundError(ticket_id)
 
@@ -99,7 +114,7 @@ def append_ticket_message(
                 )
         else:
             _assert_staff_authority(
-                db,
+                self.tickets_repo.db,
                 ticket_row=ticket_row,
                 author_actor_id=request.author_actor_id,
             )
@@ -109,13 +124,14 @@ def append_ticket_message(
             raise MissingCorrelationContextError()
 
         message_id = uuid4()
-        insert_ticket_message(
-            active_connection,
+        self.ticket_messages_repo._insert_ticket_message_on(
+            connection,
             row={
                 "id": message_id,
                 "ticket_id": ticket_id,
-                "message_seq": next_ticket_message_seq(
-                    active_connection, ticket_id=ticket_id
+                "message_seq": self.ticket_messages_repo._next_ticket_message_seq_on(
+                    connection,
+                    ticket_id=ticket_id,
                 ),
                 "author_actor_kind": request.author_actor_kind,
                 "author_actor_id": request.author_actor_id,
@@ -126,27 +142,28 @@ def append_ticket_message(
                 "causation_id": ctx.causation_id,
             },
         )
-        row = get_ticket_message(active_connection, message_id)
+        row = self.ticket_messages_repo._get_ticket_message_on(connection, message_id)
         if row is None:
             raise RuntimeError("ticket message insert did not return a readable row")
         return _message_from_row(row), True
 
-    if connection is not None:
-        return _append(connection)
-    with db.transaction() as active_connection:
-        return _append(active_connection)
+    def read_ticket_messages(self, *, ticket_id: UUID) -> list[TicketMessageRead]:
+        with self.tickets_repo.db.connection() as connection:
+            return self._read_ticket_messages_on(connection, ticket_id=ticket_id)
 
-
-def read_ticket_messages(
-    db: PostgresDatabase,
-    *,
-    ticket_id: UUID,
-) -> list[TicketMessageRead]:
-    with db.connection() as connection:
-        ticket_row = get_ticket(connection, ticket_id)
+    def _read_ticket_messages_on(
+        self,
+        connection: Connection[Any],
+        *,
+        ticket_id: UUID,
+    ) -> list[TicketMessageRead]:
+        ticket_row = self.tickets_repo._get_ticket_on(connection, ticket_id)
         if ticket_row is None:
             raise TicketNotFoundError(ticket_id)
         return [
             _message_from_row(row)
-            for row in list_ticket_messages(connection, ticket_id=ticket_id)
+            for row in self.ticket_messages_repo._list_ticket_messages_on(
+                connection,
+                ticket_id=ticket_id,
+            )
         ]

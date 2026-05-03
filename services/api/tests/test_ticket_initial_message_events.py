@@ -7,7 +7,8 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from httpx import AsyncClient
+from dependency_injector import providers
+from httpx import ASGITransport, AsyncClient
 from psycopg.rows import dict_row
 
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
@@ -200,10 +201,9 @@ async def test_create_ticket_persists_initial_message_with_shared_correlation_id
 
 @pytest.mark.asyncio
 async def test_initial_message_failure_rolls_back_ticket_create(
-    migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
     governance_dsn: str,
-    monkeypatch: pytest.MonkeyPatch,
+    ticket_app_with_overrides: tuple[Any, Any],
 ) -> None:
     # AC2, D11
     _grant(
@@ -211,19 +211,29 @@ async def test_initial_message_failure_rolls_back_ticket_create(
         actor_id="discord-ticket-bot",
         permissions=frozenset({"ticket.create", "ticket.message.append"}),
     )
-    category = await _create_category(migrated_async_client, governance_db)
 
-    def _boom(*args: Any, **kwargs: Any) -> Any:
-        raise RuntimeError("forced append failure")
+    class FakeMessagesService:
+        def _boom(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("forced append failure")
 
-    monkeypatch.setattr("app.services.tickets.append_ticket_message", _boom)
+        def append_ticket_message(self, *_args: Any, **_kwargs: Any) -> Any:
+            return self._boom(*_args, **_kwargs)
 
-    with pytest.raises(RuntimeError, match="forced append failure"):
-        await migrated_async_client.post(
-            TICKETS_URL,
-            json=_ticket_payload(category["id"]),
-            headers=_headers("service", "discord-ticket-bot"),
-        )
+        def _append_ticket_message_on(self, *_args: Any, **_kwargs: Any) -> Any:
+            return self._boom(*_args, **_kwargs)
+
+    app, container = ticket_app_with_overrides
+    container.services.ticket_messages.override(providers.Object(FakeMessagesService()))
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        category = await _create_category(client, governance_db)
+
+        with pytest.raises(RuntimeError, match="forced append failure"):
+            await client.post(
+                TICKETS_URL,
+                json=_ticket_payload(category["id"]),
+                headers=_headers("service", "discord-ticket-bot"),
+            )
 
     assert _count_rows(governance_dsn, "tickets") == 0
     assert _count_rows(governance_dsn, "ticket_messages") == 0

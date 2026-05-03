@@ -21,11 +21,10 @@ from app.contracts.tickets import (
     TicketTransitionRequest,
 )
 from app.core.context import get_current_audit_context, use_audit_context
-from app.repositories import ticket_sla as ticket_sla_repository
-from app.repositories.db import PostgresDatabase
+from app.repositories.ticket_sla import TicketSlaRepository
 from app.services import notification_events
 from app.services.ticket_categories import find_state_path
-from app.services.tickets import transition_ticket
+from app.services.tickets import TicketsService
 
 logger = logging.getLogger(__name__)
 
@@ -117,20 +116,6 @@ def _trigger_from_row(row: dict[str, Any]) -> SlaTriggerRead:
     )
 
 
-def _derive_state_entered_at(
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-) -> datetime:
-    row = ticket_sla_repository.find_last_transition_to_state(
-        connection,
-        ticket_id=ticket.id,
-        state=ticket.state,
-    )
-    if row is None:
-        return ticket.created_at
-    return row["recorded_at"]
-
-
 def _eligible_thresholds(
     ticket: SlaCandidateTicket,
     *,
@@ -188,378 +173,387 @@ def _notification_payload(
     }
 
 
-def _insert_trigger(
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-    threshold: EligibleThreshold,
-    *,
-    consequence: TicketSlaConsequence,
-    effect_summary: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    return ticket_sla_repository.insert_trigger(
-        connection,
-        row={
-            "id": uuid4(),
-            "ticket_id": ticket.id,
-            "rule_key": threshold.rule_key,
-            "threshold_seconds": threshold.threshold.elapsed_seconds,
-            "consequence": consequence,
-            "target_state": threshold.threshold.target_state,
-            "state": threshold.state,
-            "state_entered_at": threshold.state_entered_at,
-            "elapsed_seconds": threshold.elapsed_seconds,
-            "effect_summary_json": effect_summary or {},
-        },
-    )
+class TicketSlaService:
+    def __init__(
+        self,
+        ticket_sla_repo: TicketSlaRepository,
+        tickets_service: TicketsService,
+        notification_events_module,
+    ) -> None:
+        self.ticket_sla_repo = ticket_sla_repo
+        self.tickets_service = tickets_service
+        self.notification_events_module = notification_events_module
 
-
-def _emit_review_notification(
-    db: PostgresDatabase,
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-    threshold: EligibleThreshold,
-    actor: ActorIdentity,
-    *,
-    trigger_consequence: TicketSlaConsequence,
-    fallback_from: str | None = None,
-    fallback_reason: str | None = None,
-) -> SlaTriggerRead | None:
-    summary = {"result": "flag_for_review"}
-    if fallback_from is not None:
-        summary["fallback_from"] = fallback_from
-    if fallback_reason is not None:
-        summary["fallback_reason"] = fallback_reason
-    row = _insert_trigger(
-        connection,
-        ticket,
-        threshold,
-        consequence=trigger_consequence,
-        effect_summary=summary,
-    )
-    if row is None:
-        return None
-
-    routing_scope = ticket.category_snapshot.routing_scope
-    event = notification_events.emit(
-        db,
-        event=NotificationEventDraft(
-            event_type="ticket.sla.flag_for_review",
-            scope_kind=routing_scope.scope_kind,
-            scope_id=routing_scope.scope_id,
-            payload_json=_notification_payload(
-                ticket,
-                threshold,
-                consequence=trigger_consequence,
-            ),
-        ),
-        actor=actor,
-        connection=connection,
-        payload_allowlist=SLA_NOTIFICATION_PAYLOAD_ALLOWLIST,
-    )
-    updated_summary = {
-        **summary,
-        "notification_event_id": str(event.id),
-    }
-    return _trigger_from_row(
-        ticket_sla_repository.update_trigger_effect_summary(
+    def _derive_state_entered_at(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+    ) -> datetime:
+        row = self.ticket_sla_repo._find_last_transition_to_state_on(
             connection,
-            trigger_id=row["id"],
-            effect_summary_json=updated_summary,
+            ticket_id=ticket.id,
+            state=ticket.state,
         )
-    )
+        if row is None:
+            return ticket.created_at
+        return row["recorded_at"]
 
-
-def _emit_sla_notification(
-    db: PostgresDatabase,
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-    threshold: EligibleThreshold,
-    actor: ActorIdentity,
-    *,
-    consequence: TicketSlaConsequence,
-    event_type: str,
-) -> SlaTriggerRead | None:
-    row = _insert_trigger(
-        connection,
-        ticket,
-        threshold,
-        consequence=consequence,
-        effect_summary={"result": "notification_claimed"},
-    )
-    if row is None:
-        return None
-
-    routing_scope = ticket.category_snapshot.routing_scope
-    event = notification_events.emit(
-        db,
-        event=NotificationEventDraft(
-            event_type=event_type,
-            scope_kind=routing_scope.scope_kind,
-            scope_id=routing_scope.scope_id,
-            payload_json=_notification_payload(ticket, threshold, consequence=consequence),
-        ),
-        actor=actor,
-        connection=connection,
-        payload_allowlist=SLA_NOTIFICATION_PAYLOAD_ALLOWLIST,
-    )
-    return _trigger_from_row(
-        ticket_sla_repository.update_trigger_effect_summary(
+    def _insert_trigger(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+        threshold: EligibleThreshold,
+        *,
+        consequence: TicketSlaConsequence,
+        effect_summary: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return self.ticket_sla_repo._insert_trigger_on(
             connection,
-            trigger_id=row["id"],
-            effect_summary_json={
-                "result": "notification_emitted",
-                "notification_event_id": str(event.id),
+            row={
+                "id": uuid4(),
+                "ticket_id": ticket.id,
+                "rule_key": threshold.rule_key,
+                "threshold_seconds": threshold.threshold.elapsed_seconds,
+                "consequence": consequence,
+                "target_state": threshold.threshold.target_state,
+                "state": threshold.state,
+                "state_entered_at": threshold.state_entered_at,
+                "elapsed_seconds": threshold.elapsed_seconds,
+                "effect_summary_json": effect_summary or {},
             },
         )
-    )
 
-
-def _handle_notify_owner(
-    db: PostgresDatabase,
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-    threshold: EligibleThreshold,
-    actor: ActorIdentity,
-) -> SlaTriggerRead | None:
-    if ticket.owner_id is None:
-        return _emit_review_notification(
-            db,
+    def _emit_review_notification(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+        threshold: EligibleThreshold,
+        actor: ActorIdentity,
+        *,
+        trigger_consequence: TicketSlaConsequence,
+        fallback_from: str | None = None,
+        fallback_reason: str | None = None,
+    ) -> SlaTriggerRead | None:
+        summary = {"result": "flag_for_review"}
+        if fallback_from is not None:
+            summary["fallback_from"] = fallback_from
+        if fallback_reason is not None:
+            summary["fallback_reason"] = fallback_reason
+        row = self._insert_trigger(
             connection,
             ticket,
             threshold,
-            actor,
-            trigger_consequence="notify_owner",
-            fallback_from="notify_owner",
-            fallback_reason="missing_owner",
+            consequence=trigger_consequence,
+            effect_summary=summary,
         )
-    return _emit_sla_notification(
-        db,
-        connection,
-        ticket,
-        threshold,
-        actor,
-        consequence="notify_owner",
-        event_type="ticket.sla.notify_owner",
-    )
+        if row is None:
+            return None
 
-
-def _handle_notify_scope(
-    db: PostgresDatabase,
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-    threshold: EligibleThreshold,
-    actor: ActorIdentity,
-) -> SlaTriggerRead | None:
-    return _emit_sla_notification(
-        db,
-        connection,
-        ticket,
-        threshold,
-        actor,
-        consequence="notify_scope",
-        event_type="ticket.sla.notify_scope",
-    )
-
-
-def _handle_flag_for_review(
-    db: PostgresDatabase,
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-    threshold: EligibleThreshold,
-    actor: ActorIdentity,
-) -> SlaTriggerRead | None:
-    return _emit_review_notification(
-        db,
-        connection,
-        ticket,
-        threshold,
-        actor,
-        trigger_consequence="flag_for_review",
-    )
-
-
-def _handle_auto_escalate(
-    db: PostgresDatabase,
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-    threshold: EligibleThreshold,
-    actor: ActorIdentity,
-) -> SlaTriggerRead | None:
-    target_state = threshold.threshold.target_state
-    if target_state is None:
-        return _emit_review_notification(
-            db,
-            connection,
-            ticket,
-            threshold,
-            actor,
-            trigger_consequence="auto_escalate",
-            fallback_from="auto_escalate",
-            fallback_reason="missing_target_state",
-        )
-
-    path = find_state_path(
-        ticket.category_snapshot.state_machine.model_dump(mode="json", by_alias=True),
-        ticket.state,
-        target_state,
-    )
-    if path is None or len(path) != 1:
-        return _emit_review_notification(
-            db,
-            connection,
-            ticket,
-            threshold,
-            actor,
-            trigger_consequence="auto_escalate",
-            fallback_from="auto_escalate",
-            fallback_reason="no_direct_edge",
-        )
-    edge = path[0]
-    if edge.get("requires_resolution"):
-        return _emit_review_notification(
-            db,
-            connection,
-            ticket,
-            threshold,
-            actor,
-            trigger_consequence="auto_escalate",
-            fallback_from="auto_escalate",
-            fallback_reason="requires_resolution",
-        )
-
-    try:
-        transitioned_ticket, _result = transition_ticket(
-            db,
-            ticket_id=ticket.id,
-            expected_version=ticket.version,
-            request=TicketTransitionRequest(
-                action=edge["action"],
-                to_state=target_state,
-                reason=(
-                    f"SLA threshold {threshold.rule_key}/"
-                    f"{threshold.threshold.elapsed_seconds} exceeded after "
-                    f"{threshold.elapsed_seconds} seconds"
+        routing_scope = ticket.category_snapshot.routing_scope
+        event = self.notification_events_module.emit(
+            self.ticket_sla_repo.db,
+            event=NotificationEventDraft(
+                event_type="ticket.sla.flag_for_review",
+                scope_kind=routing_scope.scope_kind,
+                scope_id=routing_scope.scope_id,
+                payload_json=_notification_payload(
+                    ticket,
+                    threshold,
+                    consequence=trigger_consequence,
                 ),
-                resolution=None,
-                owner_id=None,
-                priority=None,
-                originating_actor_kind=actor.actor_kind,
-                originating_actor_id=actor.actor_id,
             ),
             actor=actor,
             connection=connection,
+            payload_allowlist=SLA_NOTIFICATION_PAYLOAD_ALLOWLIST,
         )
-    except StaleMutationError:
-        logger.info(
-            "ticket SLA auto-escalate skipped stale ticket version",
-            extra={
-                "ticket_id": str(ticket.id),
-                "rule_key": threshold.rule_key,
-                "threshold_seconds": threshold.threshold.elapsed_seconds,
-                "expected_version": ticket.version,
+        updated_summary = {
+            **summary,
+            "notification_event_id": str(event.id),
+        }
+        return _trigger_from_row(
+            self.ticket_sla_repo._update_trigger_effect_summary_on(
+                connection,
+                trigger_id=row["id"],
+                effect_summary_json=updated_summary,
+            )
+        )
+
+    def _emit_sla_notification(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+        threshold: EligibleThreshold,
+        actor: ActorIdentity,
+        *,
+        consequence: TicketSlaConsequence,
+        event_type: str,
+    ) -> SlaTriggerRead | None:
+        row = self._insert_trigger(
+            connection,
+            ticket,
+            threshold,
+            consequence=consequence,
+            effect_summary={"result": "notification_claimed"},
+        )
+        if row is None:
+            return None
+
+        routing_scope = ticket.category_snapshot.routing_scope
+        event = self.notification_events_module.emit(
+            self.ticket_sla_repo.db,
+            event=NotificationEventDraft(
+                event_type=event_type,
+                scope_kind=routing_scope.scope_kind,
+                scope_id=routing_scope.scope_id,
+                payload_json=_notification_payload(ticket, threshold, consequence=consequence),
+            ),
+            actor=actor,
+            connection=connection,
+            payload_allowlist=SLA_NOTIFICATION_PAYLOAD_ALLOWLIST,
+        )
+        return _trigger_from_row(
+            self.ticket_sla_repo._update_trigger_effect_summary_on(
+                connection,
+                trigger_id=row["id"],
+                effect_summary_json={
+                    "result": "notification_emitted",
+                    "notification_event_id": str(event.id),
+                },
+            )
+        )
+
+    def _handle_notify_owner(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+        threshold: EligibleThreshold,
+        actor: ActorIdentity,
+    ) -> SlaTriggerRead | None:
+        if ticket.owner_id is None:
+            return self._emit_review_notification(
+                connection,
+                ticket,
+                threshold,
+                actor,
+                trigger_consequence="notify_owner",
+                fallback_from="notify_owner",
+                fallback_reason="missing_owner",
+            )
+        return self._emit_sla_notification(
+            connection,
+            ticket,
+            threshold,
+            actor,
+            consequence="notify_owner",
+            event_type="ticket.sla.notify_owner",
+        )
+
+    def _handle_notify_scope(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+        threshold: EligibleThreshold,
+        actor: ActorIdentity,
+    ) -> SlaTriggerRead | None:
+        return self._emit_sla_notification(
+            connection,
+            ticket,
+            threshold,
+            actor,
+            consequence="notify_scope",
+            event_type="ticket.sla.notify_scope",
+        )
+
+    def _handle_flag_for_review(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+        threshold: EligibleThreshold,
+        actor: ActorIdentity,
+    ) -> SlaTriggerRead | None:
+        return self._emit_review_notification(
+            connection,
+            ticket,
+            threshold,
+            actor,
+            trigger_consequence="flag_for_review",
+        )
+
+    def _handle_auto_escalate(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+        threshold: EligibleThreshold,
+        actor: ActorIdentity,
+    ) -> SlaTriggerRead | None:
+        target_state = threshold.threshold.target_state
+        if target_state is None:
+            return self._emit_review_notification(
+                connection,
+                ticket,
+                threshold,
+                actor,
+                trigger_consequence="auto_escalate",
+                fallback_from="auto_escalate",
+                fallback_reason="missing_target_state",
+            )
+
+        path = find_state_path(
+            ticket.category_snapshot.state_machine.model_dump(mode="json", by_alias=True),
+            ticket.state,
+            target_state,
+        )
+        if path is None or len(path) != 1:
+            return self._emit_review_notification(
+                connection,
+                ticket,
+                threshold,
+                actor,
+                trigger_consequence="auto_escalate",
+                fallback_from="auto_escalate",
+                fallback_reason="no_direct_edge",
+            )
+        edge = path[0]
+        if edge.get("requires_resolution"):
+            return self._emit_review_notification(
+                connection,
+                ticket,
+                threshold,
+                actor,
+                trigger_consequence="auto_escalate",
+                fallback_from="auto_escalate",
+                fallback_reason="requires_resolution",
+            )
+
+        try:
+            transitioned_ticket, _result = self.tickets_service._transition_ticket_on(
+                connection,
+                ticket.id,
+                ticket.version,
+                TicketTransitionRequest(
+                    action=edge["action"],
+                    to_state=target_state,
+                    reason=(
+                        f"SLA threshold {threshold.rule_key}/"
+                        f"{threshold.threshold.elapsed_seconds} exceeded after "
+                        f"{threshold.elapsed_seconds} seconds"
+                    ),
+                    resolution=None,
+                    owner_id=None,
+                    priority=None,
+                    originating_actor_kind=actor.actor_kind,
+                    originating_actor_id=actor.actor_id,
+                ),
+                actor,
+            )
+        except StaleMutationError:
+            logger.info(
+                "ticket SLA auto-escalate skipped stale ticket version",
+                extra={
+                    "ticket_id": str(ticket.id),
+                    "rule_key": threshold.rule_key,
+                    "threshold_seconds": threshold.threshold.elapsed_seconds,
+                    "expected_version": ticket.version,
+                },
+            )
+            return None
+
+        row = self._insert_trigger(
+            connection,
+            ticket,
+            threshold,
+            consequence="auto_escalate",
+            effect_summary={
+                "result": "transitioned",
+                "ticket_version": transitioned_ticket.version,
+                "action": edge["action"],
+                "to_state": target_state,
             },
         )
-        return None
+        if row is None:
+            return None
+        return _trigger_from_row(row)
 
-    row = _insert_trigger(
-        connection,
-        ticket,
-        threshold,
-        consequence="auto_escalate",
-        effect_summary={
-            "result": "transitioned",
-            "ticket_version": transitioned_ticket.version,
-            "action": edge["action"],
-            "to_state": target_state,
-        },
-    )
-    if row is None:
-        return None
-    return _trigger_from_row(row)
+    def _handle_threshold(
+        self,
+        connection: Connection[Any],
+        ticket: SlaCandidateTicket,
+        threshold: EligibleThreshold,
+        actor: ActorIdentity,
+    ) -> SlaTriggerRead | None:
+        consequence = threshold.threshold.consequence
+        if consequence == "notify_owner":
+            return self._handle_notify_owner(connection, ticket, threshold, actor)
+        if consequence == "notify_scope":
+            return self._handle_notify_scope(connection, ticket, threshold, actor)
+        if consequence == "flag_for_review":
+            return self._handle_flag_for_review(connection, ticket, threshold, actor)
+        if consequence == "auto_escalate":
+            return self._handle_auto_escalate(connection, ticket, threshold, actor)
+        raise ValueError(f"unsupported SLA consequence {consequence}")
 
+    def evaluate_ticket_sla(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+    ) -> list[SlaTriggerRead]:
+        resolved_now = now or datetime.now(tz=UTC)
+        actor = ActorIdentity(actor_kind="service", actor_id=SLA_WORKER_ID)
+        existing_ctx = get_current_audit_context()
+        context = (
+            use_audit_context(_root_audit_context())
+            if existing_ctx is None
+            else nullcontext()
+        )
 
-def _handle_threshold(
-    db: PostgresDatabase,
-    connection: Connection[Any],
-    ticket: SlaCandidateTicket,
-    threshold: EligibleThreshold,
-    actor: ActorIdentity,
-) -> SlaTriggerRead | None:
-    consequence = threshold.threshold.consequence
-    if consequence == "notify_owner":
-        return _handle_notify_owner(db, connection, ticket, threshold, actor)
-    if consequence == "notify_scope":
-        return _handle_notify_scope(db, connection, ticket, threshold, actor)
-    if consequence == "flag_for_review":
-        return _handle_flag_for_review(db, connection, ticket, threshold, actor)
-    if consequence == "auto_escalate":
-        return _handle_auto_escalate(db, connection, ticket, threshold, actor)
-    raise ValueError(f"unsupported SLA consequence {consequence}")
-
-
-def evaluate_ticket_sla(
-    db: PostgresDatabase,
-    *,
-    now: datetime | None = None,
-    limit: int = 100,
-) -> list[SlaTriggerRead]:
-    resolved_now = now or datetime.now(tz=UTC)
-    actor = ActorIdentity(actor_kind="service", actor_id=SLA_WORKER_ID)
-    existing_ctx = get_current_audit_context()
-    context = (
-        use_audit_context(_root_audit_context())
-        if existing_ctx is None
-        else nullcontext()
-    )
-
-    applied: list[SlaTriggerRead] = []
-    with context:
-        with db.transaction() as connection:
-            rows = ticket_sla_repository.find_due_tickets(
-                connection,
-                now=resolved_now,
-                limit=limit,
-            )
-            for row in rows:
-                ticket = _candidate_from_row(row)
-                state_entered_at = _derive_state_entered_at(connection, ticket)
-                thresholds = _eligible_thresholds(
-                    ticket,
-                    state_entered_at=state_entered_at,
+        applied: list[SlaTriggerRead] = []
+        with context:
+            with self.ticket_sla_repo.db.transaction() as connection:
+                rows = self.ticket_sla_repo._find_due_tickets_on(
+                    connection,
                     now=resolved_now,
+                    limit=limit,
                 )
-                existing = {
-                    (trigger["rule_key"], int(trigger["threshold_seconds"]))
-                    for trigger in ticket_sla_repository.get_existing_triggers(
-                        connection,
-                        ticket_id=ticket.id,
-                    )
-                }
-                for threshold in thresholds:
-                    trigger_key = (
-                        threshold.rule_key,
-                        threshold.threshold.elapsed_seconds,
-                    )
-                    if trigger_key in existing:
-                        continue
-                    trigger = _handle_threshold(
-                        db,
-                        connection,
+                for row in rows:
+                    ticket = _candidate_from_row(row)
+                    state_entered_at = self._derive_state_entered_at(connection, ticket)
+                    thresholds = _eligible_thresholds(
                         ticket,
-                        threshold,
-                        actor,
+                        state_entered_at=state_entered_at,
+                        now=resolved_now,
                     )
-                    if trigger is None:
-                        continue
-                    existing.add(trigger_key)
-                    applied.append(trigger)
-                    if trigger.consequence == "auto_escalate":
-                        break
-    return applied
+                    existing = {
+                        (trigger["rule_key"], int(trigger["threshold_seconds"]))
+                        for trigger in self.ticket_sla_repo._get_existing_triggers_on(
+                            connection,
+                            ticket_id=ticket.id,
+                        )
+                    }
+                    for threshold in thresholds:
+                        trigger_key = (
+                            threshold.rule_key,
+                            threshold.threshold.elapsed_seconds,
+                        )
+                        if trigger_key in existing:
+                            continue
+                        trigger = self._handle_threshold(
+                            connection,
+                            ticket,
+                            threshold,
+                            actor,
+                        )
+                        if trigger is None:
+                            continue
+                        existing.add(trigger_key)
+                        applied.append(trigger)
+                        if trigger.consequence == "auto_escalate":
+                            break
+        return applied
 
 
 __all__ = [
     "SLA_NOTIFICATION_PAYLOAD_ALLOWLIST",
     "SLA_WORKER_ID",
-    "evaluate_ticket_sla",
+    "TicketSlaService",
 ]
