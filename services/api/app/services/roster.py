@@ -21,7 +21,7 @@ from app.contracts.roster import (
 )
 from app.contracts.scheduler import DeferredEffectCreate
 from app.core.context import get_current_audit_context
-from app.repositories.deferred_effects import enqueue_effect
+from app.repositories.deferred_effects import DeferredEffectsRepository
 from app.repositories.members import MembersRepository
 from app.repositories.roster import RosterRepository
 from app.services.members import is_synthetic_member
@@ -141,6 +141,7 @@ def _validate_roster_member(
 
 
 def _enqueue_roster_sync_retry(
+    deferred_effects_repo: DeferredEffectsRepository,
     connection: Connection[Any],
     *,
     roster_entry: dict[str, Any],
@@ -173,7 +174,7 @@ def _enqueue_roster_sync_retry(
         correlation_id=ctx.correlation_id,
         causation_id=ctx.causation_id,
     )
-    return enqueue_effect(
+    return deferred_effects_repo._enqueue_effect_on(
         connection,
         effect=effect,
         correlation_id=ctx.correlation_id,
@@ -186,10 +187,12 @@ class RosterService:
         self,
         roster_repo: RosterRepository,
         members_repo: MembersRepository,
+        deferred_effects_repo: DeferredEffectsRepository,
         mutations_callable,
     ) -> None:
         self._roster_repo = roster_repo
         self._members_repo = members_repo
+        self._deferred_effects_repo = deferred_effects_repo
         self._mutations_callable = mutations_callable
 
     def create_roster_entry(
@@ -291,7 +294,9 @@ class RosterService:
         connection: Connection[Any],
         entry_id: UUID,
     ) -> tuple[RosterEntryRead, str]:
-        read = _entry_from_row(_fetch_entry_row(self._roster_repo, connection, entry_id))
+        read = _entry_from_row(
+            _fetch_entry_row(self._roster_repo, connection, entry_id)
+        )
         return read, f'"{read.version}"'
 
     def transition_roster_entry(
@@ -458,11 +463,14 @@ class RosterService:
             if row is None:
                 raise RosterEntryNotFoundError(entry_id)
             effect_row = _enqueue_roster_sync_retry(
+                self._deferred_effects_repo,
                 active_connection,
                 roster_entry=row,
                 request=request,
             )
-            self._roster_repo._touch_roster_entry_on(active_connection, entry_id=entry_id)
+            self._roster_repo._touch_roster_entry_on(
+                active_connection, entry_id=entry_id
+            )
             return StateChangeDraft(
                 change_type="roster_entry.sync_failure_recorded",
                 payload_json={

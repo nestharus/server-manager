@@ -35,10 +35,14 @@ from app.contracts.roster import (
 )
 from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
+from app.repositories.deferred_effects import DeferredEffectsRepository
 from app.repositories.members import MembersRepository
 from app.repositories.roster import RosterRepository
 from app.contracts.authority import InvalidHolderIdError
-from app.services._helpers.authority import _collect_member_aliases, _require_scoped_authority
+from app.services._helpers.authority import (
+    _collect_member_aliases,
+    _require_scoped_authority,
+)
 from app.services.mutations import mutate_entity
 from app.services.roster import RosterService
 
@@ -164,8 +168,13 @@ def _get_evidence_submission_unchecked(
     return _evidence_from_row(row)
 
 
-def _duplicate_rule_error(error: errors.UniqueViolation, *, chapter_id: str, name: str) -> Exception:
-    if getattr(error.diag, "constraint_name", None) == "ux_compliance_rules__chapter_active_name":
+def _duplicate_rule_error(
+    error: errors.UniqueViolation, *, chapter_id: str, name: str
+) -> Exception:
+    if (
+        getattr(error.diag, "constraint_name", None)
+        == "ux_compliance_rules__chapter_active_name"
+    ):
         return DuplicateActiveComplianceRuleError(chapter_id, name)
     return error
 
@@ -672,7 +681,9 @@ def _evaluate_member_rule(
             period_start=period_start,
             period_end=period_end,
         )
-        result, evidence_ids = _compute_rule_result(rule=rule, evidence_rows=evidence_rows)
+        result, evidence_ids = _compute_rule_result(
+            rule=rule, evidence_rows=evidence_rows
+        )
         consequence_applied, review_status = _compute_consequence_shape(
             rule=rule,
             result=result,
@@ -683,6 +694,7 @@ def _evaluate_member_rule(
             roster_service = RosterService(
                 roster_repo=RosterRepository(db),
                 members_repo=MembersRepository(db),
+                deferred_effects_repo=DeferredEffectsRepository(db),
                 mutations_callable=partial(mutate_entity, db=db),
             )
             try:
@@ -692,7 +704,10 @@ def _evaluate_member_rule(
                 )
             except RosterEntryNotFoundError:
                 roster_entry = None
-            if roster_entry is None or roster_entry.status not in _ROSTER_AUTO_APPLY_STATUSES:
+            if (
+                roster_entry is None
+                or roster_entry.status not in _ROSTER_AUTO_APPLY_STATUSES
+            ):
                 consequence_applied = "none"
                 review_status = "not_required"
                 roster_entry = None
@@ -785,7 +800,9 @@ def run_scheduled_compliance_evaluations(
     source: str = "worker_sweep",
 ) -> list[ComplianceEvaluationRead]:
     created: list[ComplianceEvaluationRead] = []
-    effective_originating_actor = actor if originating_actor is None else originating_actor
+    effective_originating_actor = (
+        actor if originating_actor is None else originating_actor
+    )
 
     with db.connection() as connection:
         rules = compliance_repo.list_active_rules(connection)

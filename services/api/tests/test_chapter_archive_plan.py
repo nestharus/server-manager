@@ -10,7 +10,11 @@ from app.contracts.scheduler import DeferredEffectCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from tests._authority_helpers import grant_authority
-from app.services.deferred_effects import enqueue_effect
+from functools import partial
+
+from app.repositories.deferred_effects import DeferredEffectsRepository
+from app.services.deferred_effects import DeferredEffectsService
+from app.services.mutations import mutate_entity
 
 from .chapter_governance_helpers import (
     ACTOR_HEADERS,
@@ -26,7 +30,9 @@ from .chapter_governance_helpers import (
 def _table_counts(db: PostgresDatabase) -> dict[str, int]:
     with db.connection() as connection:
         return {
-            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            table: int(
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            )
             for table in (
                 "activity_actions",
                 "activity_state_changes",
@@ -58,8 +64,10 @@ def test_archive_plan_enumerates_pending_work_without_mutating(
             predecessor_grant_id=None,
             actor=("user", "admin"),
         )
-        effect = enqueue_effect(
-            governance_db,
+        effect = DeferredEffectsService(
+            deferred_effects_repo=DeferredEffectsRepository(governance_db),
+            mutations_callable=partial(mutate_entity, db=governance_db),
+        ).enqueue_effect(
             DeferredEffectCreate(
                 subsystem="chapter_provisioning",
                 effect_type="chapter_provisioning_retry",

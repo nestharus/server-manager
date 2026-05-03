@@ -3,18 +3,24 @@ from __future__ import annotations
 import importlib
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from dependency_injector import providers
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.core.container import ApiContainer
 from app.repositories._claim import claim_due_rows
 from app.repositories.db import PostgresDatabase
-from app.services.deferred_effects import read_degraded_state_summary
-from app.services.notifications_delivery import deliver_envelope
+from app.repositories.deferred_effects import DeferredEffectsRepository
+from app.repositories.notifications import NotificationsRepository
+from app.services.deferred_effects import DeferredEffectsService
+from app.services.mutations import mutate_entity
+from app.services.notifications_delivery import NotificationsDeliveryService
 
 
 @pytest.fixture()
@@ -331,32 +337,30 @@ def _load_delivery_result_type() -> Any:
     pytest.fail("missing NotificationDeliveryResult contract")
 
 
-def _patch_delivery_port(monkeypatch: pytest.MonkeyPatch, port: Any) -> None:
-    patched = False
-    for module_name in ("app.services.notifications_delivery", "app.tasks.notifications_deliver"):
-        try:
-            module = importlib.import_module(module_name)
-        except ModuleNotFoundError:
-            continue
-        for attribute_name in (
-            "delivery_port",
-            "_delivery_port",
-            "DELIVERY_PORT",
-            "get_delivery_port",
-            "_get_delivery_port",
-            "build_delivery_port",
-            "_build_delivery_port",
-        ):
-            if hasattr(module, attribute_name):
-                current = getattr(module, attribute_name)
-                if callable(current):
-                    monkeypatch.setattr(module, attribute_name, lambda *args, **kwargs: port)
-                else:
-                    monkeypatch.setattr(module, attribute_name, port)
-                patched = True
-                break
-    if not patched:
-        pytest.fail("expected an injectable delivery-port seam in notifications delivery code")
+def _delivery_service(
+    db: PostgresDatabase,
+    *,
+    delivery_port: Any,
+) -> NotificationsDeliveryService:
+    service = NotificationsDeliveryService(
+        notifications_repo=NotificationsRepository(db),
+        delivery_port=delivery_port,
+    )
+    container = ApiContainer()
+    container.core.db.override(providers.Object(db))
+    container.services.notifications_delivery.override(providers.Object(service))
+    try:
+        return container.services.notifications_delivery()
+    finally:
+        container.services.notifications_delivery.reset_override()
+        container.core.db.reset_override()
+
+
+def _deferred_effects_service(db: PostgresDatabase) -> DeferredEffectsService:
+    return DeferredEffectsService(
+        deferred_effects_repo=DeferredEffectsRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
 
 
 def _register_delivery_handler() -> None:
@@ -432,8 +436,9 @@ def test_delivery_worker_marks_envelope_delivered_exactly_once(
         delivered_at=datetime.now(UTC),
     )
     port = FakeDeliveryPort(result=result)
-    deliver_envelope(governance_db, envelope_id, delivery_port=port)
-    deliver_envelope(governance_db, envelope_id, delivery_port=port)
+    service = _delivery_service(governance_db, delivery_port=port)
+    service.deliver_envelope(envelope_id)
+    service.deliver_envelope(envelope_id)
 
     envelope = _fetch_envelope(governance_dsn, envelope_id)
     assert len(port.calls) == 1
@@ -453,7 +458,7 @@ def test_discord_delivery_failure_does_not_mutate_rule(
     error_type = _load_delivery_error_type()
     error = error_type("discord rejected send", definitive_failure=True)
     port = FakeDeliveryPort(error=error)
-    deliver_envelope(governance_db, envelope_id, delivery_port=port)
+    _delivery_service(governance_db, delivery_port=port).deliver_envelope(envelope_id)
 
     after_rule = _fetch_rule(governance_dsn, rule_id)
     after_head = _fetch_rule_head(governance_dsn, rule_id)
@@ -472,7 +477,7 @@ def test_retry_attempts_counter_increments_on_failure(
     envelope_id = _insert_envelope(governance_dsn, rule_id=rule_id, attempts=0, max_attempts=2)
     error_type = _load_delivery_error_type()
     port = FakeDeliveryPort(error=error_type("discord unavailable", definitive_failure=True))
-    deliver_envelope(governance_db, envelope_id, delivery_port=port)
+    _delivery_service(governance_db, delivery_port=port).deliver_envelope(envelope_id)
 
     envelope = _fetch_envelope(governance_dsn, envelope_id)
     assert envelope["attempts"] == 1
@@ -494,7 +499,7 @@ def test_degraded_state_summary_counts_stuck_in_flight_envelopes(
         lease_until=datetime.now(UTC) - timedelta(hours=1, minutes=30),
     )
 
-    summaries = read_degraded_state_summary(governance_db)
+    summaries = _deferred_effects_service(governance_db).read_degraded_state_summary()
     notifications_summary = next(
         (summary for summary in summaries if summary.subsystem == "notifications"),
         None,

@@ -68,6 +68,9 @@ class ApplicationScope(_ApplicationModel):
     scope_kind: ScopeKind
     scope_id: str | None = None
 
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
     @model_validator(mode="after")
     def validate_scope_id(self) -> "ApplicationScope":
         if self.scope_kind == "global" and self.scope_id is not None:

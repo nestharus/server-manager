@@ -1,21 +1,28 @@
 from __future__ import annotations
 
-import importlib
 from collections.abc import Iterator
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from dependency_injector import providers
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.notifications import NotificationEventDraft
+from app.core.container import ApiContainer
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.notification_events import emit as emit_notification_event
+from app.repositories.deferred_effects import DeferredEffectsRepository
+from app.repositories.notification_events import NotificationEventsRepository
+from app.repositories.notifications import NotificationsRepository
+from app.services.mutations import mutate_entity
+from app.services.notification_events import NotificationEventsService
+from app.services.notifications_materialize import NotificationsMaterializeService
 
 
 def _make_audit_context(correlation_id: UUID | None = None) -> AuditContextRead:
@@ -43,35 +50,37 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         db.close()
 
 
-def _load_materialize_module() -> Any:
-    try:
-        return importlib.import_module("app.services.notifications_materialize")
-    except ModuleNotFoundError as error:
-        pytest.fail(f"missing SLICE-015 materialization module: {error}")
-
-
-def _load_materialize_event() -> Any:
-    module = _load_materialize_module()
-    try:
-        return getattr(module, "materialize_event")
-    except AttributeError as error:
-        pytest.fail(f"missing materialize_event(db, event_id, worker_id=...) helper: {error}")
-
-
-def _patch_first_available(
+def _notification_events_service(
+    db: PostgresDatabase,
     *,
-    monkeypatch: pytest.MonkeyPatch,
-    module: Any,
-    candidates: tuple[str, ...],
-    replacement: Any,
-) -> None:
-    for name in candidates:
-        if hasattr(module, name):
-            monkeypatch.setattr(module, name, replacement)
-            return
-    pytest.fail(
-        f"expected one of {candidates} on {module.__name__} for injection/rollback testing"
+    deferred_effects_repo: DeferredEffectsRepository | None = None,
+) -> NotificationEventsService:
+    return NotificationEventsService(
+        notification_events_repo=NotificationEventsRepository(db),
+        deferred_effects_repo=deferred_effects_repo or DeferredEffectsRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
     )
+
+
+def _materialize_service(
+    db: PostgresDatabase,
+    *,
+    deferred_effects_repo: DeferredEffectsRepository | None = None,
+) -> NotificationsMaterializeService:
+    service = NotificationsMaterializeService(
+        notifications_repo=NotificationsRepository(db),
+        notification_events_repo=NotificationEventsRepository(db),
+        deferred_effects_repo=deferred_effects_repo or DeferredEffectsRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+    container = ApiContainer()
+    container.core.db.override(providers.Object(db))
+    container.services.notifications_materialize.override(providers.Object(service))
+    try:
+        return container.services.notifications_materialize()
+    finally:
+        container.services.notifications_materialize.reset_override()
+        container.core.db.reset_override()
 
 
 def _insert_rule(
@@ -312,16 +321,14 @@ def test_emit_is_atomic_when_called_with_connection(
     governance_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    notification_events_module = importlib.import_module("app.services.notification_events")
-
     def boom(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("deferred enqueue failed")
 
-    _patch_first_available(
-        monkeypatch=monkeypatch,
-        module=notification_events_module,
-        candidates=("enqueue_effect", "insert_effect", "_enqueue_effect", "_insert_effect"),
-        replacement=boom,
+    deferred_effects_repo = DeferredEffectsRepository(governance_db)
+    monkeypatch.setattr(deferred_effects_repo, "_enqueue_effect_on", boom)
+    notification_events_service = _notification_events_service(
+        governance_db,
+        deferred_effects_repo=deferred_effects_repo,
     )
     draft = NotificationEventDraft(
         event_type="chapter.transition",
@@ -333,11 +340,10 @@ def test_emit_is_atomic_when_called_with_connection(
     with use_audit_context(_make_audit_context()):
         with pytest.raises(RuntimeError, match="deferred enqueue failed"):
             with governance_db.transaction() as connection:
-                emit_notification_event(
-                    db=governance_db,
+                notification_events_service.emit(
+                    connection,
                     event=draft,
                     actor=_service_actor(),
-                    connection=connection,
                 )
 
     with psycopg.connect(governance_dsn) as conn:
@@ -353,23 +359,21 @@ def test_materialize_enqueues_delivery_effects_in_one_transaction(
     governance_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    module = _load_materialize_module()
-    materialize_event = _load_materialize_event()
     rule_id = _insert_rule(governance_dsn)
     event_id = _insert_event(governance_dsn)
 
     def boom(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("delivery enqueue failed")
 
-    _patch_first_available(
-        monkeypatch=monkeypatch,
-        module=module,
-        candidates=("enqueue_effect", "insert_effect", "_enqueue_effect", "_insert_effect"),
-        replacement=boom,
+    deferred_effects_repo = DeferredEffectsRepository(governance_db)
+    monkeypatch.setattr(deferred_effects_repo, "_enqueue_effect_on", boom)
+    service = _materialize_service(
+        governance_db,
+        deferred_effects_repo=deferred_effects_repo,
     )
 
     with pytest.raises(RuntimeError, match="delivery enqueue failed"):
-        materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+        service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     assert _fetch_envelopes(governance_dsn, rule_id=rule_id) == []
     assert _fetch_deferred_effects(governance_dsn, effect_type="notifications_deliver") == []
@@ -379,14 +383,14 @@ def test_per_event_rule_emits_one_envelope_per_event(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     rule_id = _insert_rule(governance_dsn, grouping="per_event")
     correlation_id = uuid4()
     first = _insert_event(governance_dsn, correlation_id=correlation_id)
     second = _insert_event(governance_dsn, correlation_id=correlation_id)
 
-    materialize_event(governance_db, first, worker_id="notification-dispatcher")
-    materialize_event(governance_db, second, worker_id="notification-dispatcher")
+    service.materialize_event(first, worker_id="notification-dispatcher")
+    service.materialize_event(second, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes(governance_dsn, rule_id=rule_id)
     assert len(envelopes) == 2
@@ -398,12 +402,12 @@ def test_per_root_cause_rule_emits_one_envelope_per_root_correlation(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     correlation_id = uuid4()
     rule_id = _insert_rule(governance_dsn, grouping="per_root_cause")
     event_id = _insert_event(governance_dsn, correlation_id=correlation_id)
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes(governance_dsn, rule_id=rule_id)
     assert len(envelopes) == 1
@@ -415,14 +419,14 @@ def test_multiple_events_same_root_correlation_produce_one_envelope(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     rule_id = _insert_rule(governance_dsn, grouping="per_root_cause")
     correlation_id = uuid4()
     first = _insert_event(governance_dsn, correlation_id=correlation_id)
     second = _insert_event(governance_dsn, correlation_id=correlation_id)
 
-    materialize_event(governance_db, first, worker_id="notification-dispatcher")
-    materialize_event(governance_db, second, worker_id="notification-dispatcher")
+    service.materialize_event(first, worker_id="notification-dispatcher")
+    service.materialize_event(second, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes(governance_dsn, rule_id=rule_id)
     assert len(envelopes) == 1
@@ -433,13 +437,13 @@ def test_different_root_correlations_produce_separate_envelopes(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     rule_id = _insert_rule(governance_dsn, grouping="per_root_cause")
     first = _insert_event(governance_dsn, correlation_id=uuid4())
     second = _insert_event(governance_dsn, correlation_id=uuid4())
 
-    materialize_event(governance_db, first, worker_id="notification-dispatcher")
-    materialize_event(governance_db, second, worker_id="notification-dispatcher")
+    service.materialize_event(first, worker_id="notification-dispatcher")
+    service.materialize_event(second, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes(governance_dsn, rule_id=rule_id)
     assert len(envelopes) == 2
@@ -456,12 +460,12 @@ def test_replay_same_event_does_not_create_duplicate_envelopes(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     rule_id = _insert_rule(governance_dsn, grouping="per_event")
     event_id = _insert_event(governance_dsn)
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes(governance_dsn, rule_id=rule_id, source_event_id=event_id)
     delivery_effects = _fetch_deferred_effects(
@@ -476,13 +480,13 @@ def test_materialize_is_idempotent_under_retry(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     rule_id = _insert_rule(governance_dsn, grouping="per_root_cause")
     correlation_id = uuid4()
     event_id = _insert_event(governance_dsn, correlation_id=correlation_id)
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes(governance_dsn, rule_id=rule_id)
     delivery_effects = _fetch_deferred_effects(
@@ -498,14 +502,14 @@ def test_recipient_resolution_at_materialization_time(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     rule_id = _insert_rule(
         governance_dsn,
         recipients_json={"kind": "discord_users", "user_ids": ["1001", "1002"]},
     )
     event_id = _insert_event(governance_dsn)
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
     _update_rule_json(
         governance_dsn,
         rule_id,
@@ -524,7 +528,7 @@ def test_template_rendering_snapshot_isolates_from_later_rule_edits(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     original_template = {
         "title": "Original ${payload_chapter_id}",
         "body": "State ${payload_to_state}",
@@ -532,7 +536,7 @@ def test_template_rendering_snapshot_isolates_from_later_rule_edits(
     rule_id = _insert_rule(governance_dsn, template_json=original_template)
     event_id = _insert_event(governance_dsn)
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
     _update_rule_json(
         governance_dsn,
         rule_id,
@@ -550,11 +554,11 @@ def test_materialize_skips_rules_when_enabled_false(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     rule_id = _insert_rule(governance_dsn, enabled=False)
     event_id = _insert_event(governance_dsn)
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     assert _fetch_envelopes(governance_dsn, rule_id=rule_id) == []
     assert _fetch_deferred_effects(governance_dsn, effect_type="notifications_deliver") == []
@@ -564,7 +568,7 @@ def test_materialize_skips_when_template_missing_key(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     rule_id = _insert_rule(
         governance_dsn,
         template_json={
@@ -574,7 +578,7 @@ def test_materialize_skips_when_template_missing_key(
     )
     event_id = _insert_event(governance_dsn)
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes(governance_dsn, rule_id=rule_id)
     assert len(envelopes) == 1

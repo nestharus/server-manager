@@ -19,7 +19,8 @@ from app.services.read_models import (
     OPERATIONAL_OVERVIEW_PROJECTION_NAME,
     advance_operational_overview_cursor,
 )
-from app.services.scheduler import SchedulerLoop
+from app.repositories.scheduler import SchedulerRepository
+from app.services.scheduler import SchedulerService
 from app.tasks.read_models import read_model_worker_tick
 
 
@@ -83,7 +84,12 @@ def _append_state_change(database_url: str, *, recorded_at: datetime) -> int:
             VALUES (%s, 'read_model_test', %s, 1, 'test.changed', %s, NULL, %s)
             RETURNING id
             """,
-            (int(action_row["id"]), aggregate_id, Jsonb({"aggregate_id": aggregate_id}), recorded_at),
+            (
+                int(action_row["id"]),
+                aggregate_id,
+                Jsonb({"aggregate_id": aggregate_id}),
+                recorded_at,
+            ),
         ).fetchone()
     assert change_row is not None
     return int(change_row["id"])
@@ -162,14 +168,20 @@ def test_projector_resumes_from_persisted_cursor(
 ) -> None:
     """AC1: projector resumes from the persisted cursor and only advances on new settled events."""
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
-    first_id = _append_state_change(governance_dsn, recorded_at=now - timedelta(seconds=30))
-    first = advance_operational_overview_cursor(governance_db, now=now, min_age_seconds=5)
+    first_id = _append_state_change(
+        governance_dsn, recorded_at=now - timedelta(seconds=30)
+    )
+    first = advance_operational_overview_cursor(
+        governance_db, now=now, min_age_seconds=5
+    )
     second = advance_operational_overview_cursor(
         governance_db,
         now=now + timedelta(seconds=1),
         min_age_seconds=0,
     )
-    third_id = _append_state_change(governance_dsn, recorded_at=now - timedelta(seconds=20))
+    third_id = _append_state_change(
+        governance_dsn, recorded_at=now - timedelta(seconds=20)
+    )
     third = advance_operational_overview_cursor(
         governance_db,
         now=now + timedelta(seconds=2),
@@ -245,10 +257,14 @@ def test_read_model_worker_tick_logs_and_swallows_exceptions(
     def _boom(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("worker-failed")
 
-    monkeypatch.setattr("app.tasks.read_models.advance_operational_overview_cursor", _boom)
+    monkeypatch.setattr(
+        "app.tasks.read_models.advance_operational_overview_cursor", _boom
+    )
 
     with caplog.at_level("ERROR", logger="app.tasks.read_models"):
-        result = read_model_worker_tick(governance_db, now=datetime(2026, 4, 21, 12, 0, tzinfo=UTC))
+        result = read_model_worker_tick(
+            governance_db, now=datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
+        )
 
     assert result is None
     assert "read-model worker tick failed" in caplog.text
@@ -264,14 +280,12 @@ def test_scheduler_invokes_read_model_tick_on_interval(
     def _read_model_tick(_db: PostgresDatabase, *, now: datetime) -> None:
         calls.append(now)
 
-    monkeypatch.setattr("app.tasks.read_models.read_model_worker_tick", _read_model_tick)
+    monkeypatch.setattr(
+        "app.tasks.read_models.read_model_worker_tick", _read_model_tick
+    )
     monkeypatch.setattr(
         "app.tasks.archive.archive_worker_tick",
         lambda: None,
-    )
-    monkeypatch.setattr(
-        "app.services.deferred_effects.deferred_effect_worker_tick",
-        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         "app.tasks.ticket_sla.ticket_sla_worker_tick",
@@ -279,7 +293,11 @@ def test_scheduler_invokes_read_model_tick_on_interval(
     )
 
     async def _run() -> None:
-        loop = SchedulerLoop(governance_db, worker_id="worker-read-model")
+        loop = SchedulerService(
+            scheduler_repo=SchedulerRepository(governance_db),
+            db=governance_db,
+            worker_id="worker-read-model",
+        )
         first = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
         second = first + timedelta(seconds=5)
         third = first + timedelta(seconds=11)

@@ -113,6 +113,7 @@ def create_api_app(
             "app.api.v1.endpoints.authority.succession_plan",
             "app.api.v1.endpoints.authority.transfer",
             "app.api.v1.endpoints.members",
+            "app.api.v1.endpoints.notifications",
             "app.api.v1.endpoints.policies",
             "app.api.v1.endpoints.roster",
             "app.api.v1.endpoints.trust._shared",
