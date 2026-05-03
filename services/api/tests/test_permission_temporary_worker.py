@@ -17,7 +17,6 @@ from app.contracts.permissions import GuildRolePermissionIntentCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from app.services.authority import grant_authority
-from app.services.permissions import create_permission_intent, read_permission_drift, read_permission_intent
 from app.services.scheduler import SchedulerLoop
 from app.tasks.permission_expiry import permission_expiry_worker_tick
 
@@ -73,6 +72,7 @@ def _grant_expirer(db: PostgresDatabase) -> None:
 
 def _seed_temporary_intent(
     db: PostgresDatabase,
+    app: Any,
     *,
     actor_id: str | None = None,
     scope_kind: str = "global",
@@ -100,8 +100,11 @@ def _seed_temporary_intent(
         expires_at=expires_at,
     )
     with use_audit_context(_audit_context()):
-        intent, _ = create_permission_intent(
-            db,
+        from app.services.permissions import PermissionsService
+
+        permissions_service = app.state.container.services.permissions()
+        assert isinstance(permissions_service, PermissionsService)
+        intent, _ = permissions_service.create_permission_intent(
             request,
             actor=ActorIdentity(actor_kind="user", actor_id=resolved_actor_id),
         )
@@ -149,12 +152,14 @@ def _fetch_change_types(governance_dsn: str, *, aggregate_id: str) -> list[str]:
 def test_worker_creates_drift_sets_expired_at_and_installs_root_audit_context(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    app: Any,
 ) -> None:
     """AC3: worker stamps expired_at, emits one expiry drift, and succeeds without ambient audit context."""
     _grant_expirer(governance_db)
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     intent = _seed_temporary_intent(
         governance_db,
+        app,
         scope_kind="chapter",
         scope_id="chapter-1",
         role_id="chapter-role",
@@ -167,10 +172,11 @@ def test_worker_creates_drift_sets_expired_at_and_installs_root_audit_context(
     assert result.inspected_count == 1
     assert result.expired_count == 1
     assert result.errored_count == 0
-    expired_intent = read_permission_intent(governance_db, intent.id)
+    permissions_service = app.state.container.services.permissions()
+    expired_intent = permissions_service.read_permission_intent(intent.id)
     assert expired_intent.expired_at == now
 
-    drift = read_permission_drift(governance_db, result.drift_ids[0])
+    drift = permissions_service.read_permission_drift(result.drift_ids[0])
     assert drift.permission_intent_id == intent.id
     assert drift.intent_version == 2
     assert drift.scope_kind == "chapter"
@@ -212,12 +218,14 @@ def test_worker_creates_drift_sets_expired_at_and_installs_root_audit_context(
 def test_worker_rerun_is_idempotent(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    app: Any,
 ) -> None:
     """AC3: rerunning the worker after an expiry creates no duplicate drift rows."""
     _grant_expirer(governance_db)
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     _seed_temporary_intent(
         governance_db,
+        app,
         role_id="idempotent-role",
         expires_at=now - timedelta(minutes=5),
     )
@@ -235,18 +243,21 @@ def test_worker_rerun_is_idempotent(
 def test_worker_ignores_non_temporary_and_future_intents(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    app: Any,
 ) -> None:
     """AC3: worker ignores non-temporary intents and temporary intents whose expires_at is still in the future."""
     _grant_expirer(governance_db)
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     non_temporary = _seed_temporary_intent(
         governance_db,
+        app,
         role_id="non-temp",
         temporary=False,
         expires_at=None,
     )
     future = _seed_temporary_intent(
         governance_db,
+        app,
         role_id="future-temp",
         expires_at=now + timedelta(minutes=5),
     )
@@ -257,14 +268,16 @@ def test_worker_ignores_non_temporary_and_future_intents(
     assert result.expired_count == 0
     assert result.drift_ids == []
     assert _fetch_drift_count(governance_dsn) == 0
-    assert read_permission_intent(governance_db, non_temporary.id).expired_at is None
-    assert read_permission_intent(governance_db, future.id).expired_at is None
+    permissions_service = app.state.container.services.permissions()
+    assert permissions_service.read_permission_intent(non_temporary.id).expired_at is None
+    assert permissions_service.read_permission_intent(future.id).expired_at is None
 
 
 @pytest.mark.asyncio
 async def test_expiry_drift_is_discoverable_via_get_permission_drift(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
+    app: Any,
 ) -> None:
     """AC4: expiry-created drift is discoverable through GET /permission-drift."""
     _grant_expirer(governance_db)
@@ -276,6 +289,7 @@ async def test_expiry_drift_is_discoverable_via_get_permission_drift(
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     _seed_temporary_intent(
         governance_db,
+        app,
         role_id="discoverable-role",
         expires_at=now - timedelta(minutes=5),
     )
@@ -303,6 +317,7 @@ async def test_manual_expire_run_returns_result_and_ignores_spoofed_body(
     migrated_async_client: AsyncClient,
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    app: Any,
 ) -> None:
     """AC3: manual POST /expire/run returns the sweep result and cannot be used to spoof the recorded actor."""
     _grant(
@@ -313,6 +328,7 @@ async def test_manual_expire_run_returns_result_and_ignores_spoofed_body(
     now = datetime.now(UTC)
     _seed_temporary_intent(
         governance_db,
+        app,
         role_id="manual-role",
         expires_at=now - timedelta(minutes=5),
     )
@@ -346,12 +362,16 @@ def test_expire_and_drift_are_atomic_when_drift_creation_fails(
     governance_db: PostgresDatabase,
     governance_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
+    app: Any,
 ) -> None:
     """AC3: if drift creation fails, the worker rolls back the expired_at stamp and leaves no drift row behind."""
+    from app.services.permissions import PermissionsService
+
     _grant_expirer(governance_db)
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     intent = _seed_temporary_intent(
         governance_db,
+        app,
         role_id="atomic-role",
         expires_at=now - timedelta(minutes=5),
     )
@@ -359,14 +379,15 @@ def test_expire_and_drift_are_atomic_when_drift_creation_fails(
     def _boom(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("app.services.permissions._create_expiry_drift", _boom)
+    monkeypatch.setattr(PermissionsService, "_create_expiry_drift_on", _boom)
 
     result = permission_expiry_worker_tick(now=now)
 
     assert result is not None
     assert result.expired_count == 0
     assert result.errored_count == 1
-    assert read_permission_intent(governance_db, intent.id).expired_at is None
+    permissions_service = app.state.container.services.permissions()
+    assert permissions_service.read_permission_intent(intent.id).expired_at is None
     assert _fetch_drift_count(governance_dsn) == 0
 
 

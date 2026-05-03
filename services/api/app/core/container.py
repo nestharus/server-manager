@@ -26,7 +26,6 @@ from app.repositories import members as members_repo
 from app.repositories import mutations as mutations_repo
 from app.repositories import notification_events as notification_events_repo
 from app.repositories import notifications as notifications_repo
-from app.repositories import permissions as permissions_repo
 from app.repositories import policies as policies_repo
 from app.repositories import public_chapters as public_chapters_repo
 from app.repositories import read_models as read_models_repo
@@ -36,6 +35,7 @@ from app.repositories.ticket_categories import TicketCategoriesRepository
 from app.repositories.ticket_messages import TicketMessagesRepository
 from app.repositories.ticket_sla import TicketSlaRepository
 from app.repositories.tickets import TicketsRepository
+from app.repositories.permissions import PermissionsRepository
 from app.repositories import trust as trust_repo
 from app.repositories import web as web_repo
 from app.repositories.db import PostgresDatabase
@@ -73,8 +73,8 @@ from app.services import notification_events as notification_events_service
 from app.services import notifications as notifications_service
 from app.services import notifications_delivery as notifications_delivery_service
 from app.services import notifications_materialize as notifications_materialize_service
-from app.services import permission_reconciliation as permission_reconciliation_service
-from app.services import permissions as permissions_service
+from app.services.permission_reconciliation import PermissionReconciliationService
+from app.services.permissions import PermissionsService
 from app.services import policies as policies_service
 from app.services import public_chapters as public_chapters_service
 from app.services import read_models as read_models_service
@@ -145,7 +145,7 @@ class ReposContainer(containers.DeclarativeContainer):
     mutations = providers.Object(mutations_repo)
     notification_events = providers.Object(notification_events_repo)
     notifications = providers.Object(notifications_repo)
-    permissions = providers.Object(permissions_repo)
+    permissions = providers.Factory(PermissionsRepository, db=db)
     policies = providers.Object(policies_repo)
     public_chapters = providers.Object(public_chapters_repo)
     read_models = providers.Object(read_models_repo)
@@ -196,8 +196,16 @@ class ServicesContainer(containers.DeclarativeContainer):
     notifications = providers.Object(notifications_service)
     notifications_delivery = providers.Object(notifications_delivery_service)
     notifications_materialize = providers.Object(notifications_materialize_service)
-    permission_reconciliation = providers.Object(permission_reconciliation_service)
-    permissions = providers.Object(permissions_service)
+    permission_reconciliation = providers.Factory(
+        PermissionReconciliationService,
+        permissions_repo=repos.permissions,
+        mutations_callable=mutations_callable.provider,
+    )
+    permissions = providers.Factory(
+        PermissionsService,
+        permissions_repo=repos.permissions,
+        mutations_callable=mutations_callable.provider,
+    )
     policies = providers.Object(policies_service)
     public_chapters = providers.Object(public_chapters_service)
     read_models = providers.Object(read_models_service)

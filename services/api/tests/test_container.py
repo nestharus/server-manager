@@ -166,6 +166,26 @@ def test_container_resolves_ticket_factories(test_settings):
         container.shutdown_resources()
 
 
+def test_container_resolves_permission_factories(test_settings):
+    """TG-4: Container resolves permission repo and services as Factory
+    instances (post-142c shape)."""
+    from app.repositories.permissions import PermissionsRepository
+    from app.services.permissions import PermissionsService
+    from app.services.permission_reconciliation import PermissionReconciliationService
+
+    container = ApiContainer(settings=test_settings)
+    container.init_resources()
+    try:
+        assert isinstance(container.repos.permissions(), PermissionsRepository)
+        assert isinstance(container.services.permissions(), PermissionsService)
+        assert isinstance(
+            container.services.permission_reconciliation(),
+            PermissionReconciliationService,
+        )
+    finally:
+        container.shutdown_resources()
+
+
 def test_container_missing_settings_raises():
     with pytest.raises(Exception, match=r"Dependency|defined"):
         ApiContainer().core.settings()
