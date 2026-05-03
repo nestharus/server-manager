@@ -89,6 +89,12 @@ def create_api_app(
     app.state.container = container
     container.wire(
         modules=[
+            "app.api.v1.endpoints.operations",
+            "app.api.v1.endpoints.permissions._shared",
+            "app.api.v1.endpoints.permissions.drift",
+            "app.api.v1.endpoints.permissions.intents",
+            "app.api.v1.endpoints.permissions.reconciliation",
+            "app.api.v1.endpoints.permissions.temporary",
             "app.api.v1.endpoints.tickets.categories",
             "app.api.v1.endpoints.tickets.create",
             "app.api.v1.endpoints.tickets.messages",

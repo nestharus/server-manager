@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from contextlib import nullcontext
 from datetime import UTC, datetime
+from functools import partial
 from uuid import uuid4
 
 from app.contracts.actor import ActorIdentity
@@ -11,9 +12,11 @@ from app.contracts.mutations import StaleMutationError
 from app.contracts.permissions import PermissionExpirySweepResult
 from app.core.context import get_current_audit_context, use_audit_context
 from app.repositories.db import PostgresDatabase
+from app.repositories.permissions import PermissionsRepository
+from app.services.mutations import mutate_entity
 from app.services.permissions import (
     PERMISSION_EXPIRER_ACTOR_ID,
-    expire_temporary_permission_intents,
+    PermissionsService,
 )
 
 
@@ -65,8 +68,13 @@ def permission_expiry_worker_tick(
     )
     with ambient:
         try:
-            return expire_temporary_permission_intents(
-                get_permission_expiry_db(),
+            task_db = get_permission_expiry_db()
+            repo = PermissionsRepository(db=task_db)
+            service = PermissionsService(
+                permissions_repo=repo,
+                mutations_callable=partial(mutate_entity, db=task_db),
+            )
+            return service.expire_temporary_permission_intents(
                 actor=_expirer_service_actor(),
                 now=now or datetime.now(tz=UTC),
                 batch_size=batch_size or PERMISSION_EXPIRY_BATCH_SIZE,

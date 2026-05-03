@@ -3,7 +3,8 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import NoReturn
 
-from fastapi import HTTPException, Request, Response
+from dependency_injector.wiring import Provide, inject
+from fastapi import Depends, HTTPException, Request, Response
 
 from app.contracts.actor import ActorIdentity
 from app.contracts.authority import AuthorityRequirement
@@ -16,6 +17,7 @@ from app.contracts.permissions import (
     PermissionIntentNotFoundError,
     RenewalExpiresAtInPastError,
 )
+from app.core.container import ApiContainer
 from app.repositories.db import PostgresDatabase
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
 from app.services.permission_reconciliation import (
@@ -26,10 +28,6 @@ from app.services.permissions import InvalidDriftTransitionError
 
 
 MIN_STRONG_ETAG_LENGTH = 3
-
-
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
 
 
 def parse_if_match_strong(request: Request) -> int:
@@ -71,12 +69,13 @@ def set_etag(response: Response, etag: str) -> None:
     response.headers["etag"] = etag
 
 
+@inject
 def require_scoped(
     actor: ActorIdentity,
-    db: PostgresDatabase,
     scope_kind: str,
     scope_id: str | None,
     permission: str,
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
 ) -> None:
     grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
     decision = evaluate(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Response
 
 from app.contracts.actor import ActorIdentity
@@ -11,16 +12,12 @@ from app.contracts.permissions import (
     PermissionReconciliationRunRead,
     ReconciliationSnapshotRequest,
 )
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
 from app.repositories.db import PostgresDatabase
-from app.services.permission_reconciliation import (
-    create_reconciliation_run,
-    read_reconciliation_run,
-    submit_reconciliation_snapshot,
-)
+from app.services.permission_reconciliation import PermissionReconciliationService
 
 from ._shared import (
-    get_db,
     raise_known_permission_error,
     require_scoped,
     set_etag,
@@ -35,18 +32,23 @@ router = APIRouter(prefix="/api/v1/permission-reconciliation")
     response_model=PermissionReconciliationRunRead,
     status_code=HTTPStatus.CREATED,
 )
+@inject
 def create_run_endpoint(
     body: PermissionReconciliationRunCreate,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: PermissionReconciliationService = Depends(
+        Provide[ApiContainer.services.permission_reconciliation]
+    ),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> PermissionReconciliationRunRead:
     try:
         require_scoped(
-            actor, db, body.scope_kind, body.scope_id,
+            actor, body.scope_kind, body.scope_id,
             "permission_reconciliation_run.write",
+            db=db,
         )
-        read, result = create_reconciliation_run(db, request=body, actor=actor)
+        read, result = service.create_reconciliation_run(request=body, actor=actor)
     except Exception as error:
         raise_known_permission_error(error)
     set_etag(response, result.etag)
@@ -57,21 +59,26 @@ def create_run_endpoint(
     "/runs/{run_id}/snapshots",
     response_model=PermissionReconciliationRunRead,
 )
+@inject
 def submit_snapshot_endpoint(
     run_id: UUID,
     body: ReconciliationSnapshotRequest,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: PermissionReconciliationService = Depends(
+        Provide[ApiContainer.services.permission_reconciliation]
+    ),
+    db: PostgresDatabase = Depends(Provide[ApiContainer.core.db]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> PermissionReconciliationRunRead:
     try:
-        existing = read_reconciliation_run(db, run_id)
+        existing = service.read_reconciliation_run(run_id)
         require_scoped(
-            actor, db, existing.scope_kind, existing.scope_id,
+            actor, existing.scope_kind, existing.scope_id,
             "permission_reconciliation_run.write",
+            db=db,
         )
-        read, result = submit_reconciliation_snapshot(
-            db, run_id=run_id, entries=list(body.entries), actor=actor,
+        read, result = service.submit_reconciliation_snapshot(
+            run_id=run_id, entries=list(body.entries), actor=actor,
         )
     except Exception as error:
         raise_known_permission_error(error)

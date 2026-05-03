@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -16,10 +17,9 @@ from app.contracts.permissions import (
     PermissionReconciliationRunRead,
     PermissionSnapshotEntry,
 )
-from app.repositories import permissions as permission_repo
 from app.repositories.db import PostgresDatabase
-from app.services.mutations import mutate_entity
-from app.services.permissions import _require_scoped_authority
+from app.repositories.permissions import PermissionsRepository
+from app.services.authority import _require_scoped_authority
 
 
 VALID_RUN_TRANSITIONS: dict[tuple[str, str], str] = {
@@ -132,241 +132,391 @@ def _read_head_version(db: PostgresDatabase, run_id: UUID) -> int:
         raise ReconciliationRunNotFoundError(run_id)
     return int(row[0])
 
+class PermissionReconciliationService:
+    def __init__(
+        self,
+        permissions_repo: PermissionsRepository,
+        mutations_callable: Callable[..., MutationResult],
+    ) -> None:
+        self.permissions_repo = permissions_repo
+        self.mutations_callable = mutations_callable
 
-def create_reconciliation_run(
-    db: PostgresDatabase,
-    *,
-    request: PermissionReconciliationRunCreate,
-    actor: ActorIdentity,
-) -> tuple[PermissionReconciliationRunRead, MutationResult]:
-    _require_scoped_authority(
-        "permission_reconciliation_run.write",
-        scope_kind=request.scope_kind,
-        scope_id=request.scope_id,
-        actor=actor,
-        db=db,
-    )
+    def create_reconciliation_run(
+        self,
+        *,
+        request: PermissionReconciliationRunCreate,
+        actor: ActorIdentity,
+    ) -> tuple[PermissionReconciliationRunRead, MutationResult]:
+        db = self.permissions_repo.db
+        _require_scoped_authority(
+            "permission_reconciliation_run.write",
+            scope_kind=request.scope_kind,
+            scope_id=request.scope_id,
+            actor=actor,
+            db=db,
+        )
 
-    run_id = uuid4()
-    requested_by_kind, requested_by_id = _requested_by(actor, request)
-    aggregate_id = str(run_id)
+        run_id = uuid4()
+        requested_by_kind, requested_by_id = _requested_by(actor, request)
+        aggregate_id = str(run_id)
 
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        permission_repo.insert_reconciliation_run(
-            connection,
-            row={
-                "id": run_id,
+        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+            self.permissions_repo._insert_reconciliation_run_on(
+                connection,
+                row={
+                    "id": run_id,
+                    "scope_kind": request.scope_kind,
+                    "scope_id": request.scope_id,
+                    "requested_by_kind": requested_by_kind,
+                    "requested_by_id": requested_by_id,
+                },
+            )
+            return StateChangeDraft(
+                change_type=RUN_CHANGE_TYPE["create"],
+                payload_json={
+                    "status": "requested",
+                    "scope_kind": request.scope_kind,
+                    "scope_id": request.scope_id,
+                    "requested_by_kind": requested_by_kind,
+                    "requested_by_id": requested_by_id,
+                },
+            )
+
+        result = self.mutations_callable(
+            aggregate_type="permission_reconciliation_run",
+            aggregate_id=aggregate_id,
+            request=_make_request(
+                expected_version=0,
+                actor=actor,
+                request_surface="api:/api/v1/permission-reconciliation/runs",
+            ),
+            action_type=RUN_ACTION_TYPE["create"],
+            action_payload={
                 "scope_kind": request.scope_kind,
                 "scope_id": request.scope_id,
-                "requested_by_kind": requested_by_kind,
-                "requested_by_id": requested_by_id,
+                "originating_actor_kind": request.originating_actor_kind,
+                "originating_actor_id": request.originating_actor_id,
             },
+            payload_allowlist=RUN_CREATE_PAYLOAD_ALLOWLIST,
+            mutate_projection=mutate_projection,
+            scope_kind=request.scope_kind,
+            scope_id=request.scope_id,
         )
-        return StateChangeDraft(
-            change_type=RUN_CHANGE_TYPE["create"],
-            payload_json={
-                "status": "requested",
-                "scope_kind": request.scope_kind,
-                "scope_id": request.scope_id,
-                "requested_by_kind": requested_by_kind,
-                "requested_by_id": requested_by_id,
-            },
-        )
+        return self.read_reconciliation_run(run_id), result
 
-    result = mutate_entity(
-        db=db,
-        aggregate_type="permission_reconciliation_run",
-        aggregate_id=aggregate_id,
-        request=_make_request(
-            expected_version=0,
-            actor=actor,
-            request_surface="api:/api/v1/permission-reconciliation/runs",
-        ),
-        action_type=RUN_ACTION_TYPE["create"],
-        action_payload={
-            "scope_kind": request.scope_kind,
-            "scope_id": request.scope_id,
-            "originating_actor_kind": request.originating_actor_kind,
-            "originating_actor_id": request.originating_actor_id,
-        },
-        payload_allowlist=RUN_CREATE_PAYLOAD_ALLOWLIST,
-        mutate_projection=mutate_projection,
-        scope_kind=request.scope_kind,
-        scope_id=request.scope_id,
-    )
-    return read_reconciliation_run(db, run_id), result
+    def read_reconciliation_run(
+        self,
+        run_id: UUID,
+    ) -> PermissionReconciliationRunRead:
+        with self.permissions_repo.db.connection() as connection:
+            row = self.permissions_repo._fetch_reconciliation_run_on(connection, run_id)
+            if row is None:
+                raise ReconciliationRunNotFoundError(run_id)
+            drift_ids = self.permissions_repo._list_drift_ids_by_run_on(connection, run_id)
+        payload = dict(row)
+        payload["drift_ids"] = drift_ids
+        return PermissionReconciliationRunRead.model_validate(payload)
 
+    def _advance_run_submit_on(
+        self,
+        connection: Connection[Any],
+        *,
+        run_id: UUID,
+        actor: ActorIdentity,
+        entry_count: int,
+        expected_version: int,
+    ) -> None:
+        now = _current_time()
 
-def read_reconciliation_run(
-    db: PostgresDatabase,
-    run_id: UUID,
-) -> PermissionReconciliationRunRead:
-    with db.connection() as connection:
-        row = permission_repo.fetch_reconciliation_run(connection, run_id)
-        if row is None:
-            raise ReconciliationRunNotFoundError(run_id)
-        drift_ids = permission_repo.list_drift_ids_by_run(connection, run_id)
-    payload = dict(row)
-    payload["drift_ids"] = drift_ids
-    return PermissionReconciliationRunRead.model_validate(payload)
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            self.permissions_repo._update_reconciliation_run_status_on(
+                active_connection,
+                run_id=run_id,
+                status="snapshot_submitted",
+                snapshot_submitted_at=now,
+            )
+            return StateChangeDraft(
+                change_type=RUN_CHANGE_TYPE["submit_snapshot"],
+                payload_json={
+                    "status": "snapshot_submitted",
+                    "snapshot_submitted_at": now.isoformat(),
+                    "entry_count": entry_count,
+                },
+                diff_json={"from": "requested", "to": "snapshot_submitted"},
+            )
 
-
-def _advance_run_submit(
-    connection: Connection[Any],
-    *,
-    run_id: UUID,
-    actor: ActorIdentity,
-    entry_count: int,
-    expected_version: int,
-) -> None:
-    now = _current_time()
-
-    def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
-        permission_repo.update_reconciliation_run_status(
-            active_connection,
-            run_id=run_id,
-            status="snapshot_submitted",
-            snapshot_submitted_at=now,
-        )
-        return StateChangeDraft(
-            change_type=RUN_CHANGE_TYPE["submit_snapshot"],
-            payload_json={
-                "status": "snapshot_submitted",
-                "snapshot_submitted_at": now.isoformat(),
-                "entry_count": entry_count,
-            },
-            diff_json={"from": "requested", "to": "snapshot_submitted"},
-        )
-
-    mutate_entity(
-        db=None,  # type: ignore[arg-type]
-        aggregate_type="permission_reconciliation_run",
-        aggregate_id=str(run_id),
-        request=_make_request(
-            expected_version=expected_version,
-            actor=actor,
-            request_surface=(
-                f"api:/api/v1/permission-reconciliation/runs/{run_id}/snapshots"
+        self.mutations_callable(
+            db=None,  # type: ignore[arg-type]
+            aggregate_type="permission_reconciliation_run",
+            aggregate_id=str(run_id),
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface=(
+                    f"api:/api/v1/permission-reconciliation/runs/{run_id}/snapshots"
+                ),
             ),
-        ),
-        action_type=RUN_ACTION_TYPE["submit_snapshot"],
-        action_payload={"entry_count": entry_count},
-        payload_allowlist=RUN_ADVANCE_PAYLOAD_ALLOWLIST["submit_snapshot"],
-        mutate_projection=mutate_projection,
-        scope_kind=None,
-        scope_id=None,
-        connection=connection,
-    )
-
-
-def _advance_run_reconciled(
-    connection: Connection[Any],
-    *,
-    run_id: UUID,
-    actor: ActorIdentity,
-    drift_ids: list[UUID],
-    expected_version: int,
-) -> None:
-    now = _current_time()
-
-    def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
-        permission_repo.update_reconciliation_run_status(
-            active_connection,
-            run_id=run_id,
-            status="reconciled",
-            reconciled_at=now,
-        )
-        return StateChangeDraft(
-            change_type=RUN_CHANGE_TYPE["reconcile"],
-            payload_json={
-                "status": "reconciled",
-                "reconciled_at": now.isoformat(),
-                "drift_count": len(drift_ids),
-                "drift_ids": [str(d) for d in drift_ids],
-            },
-            diff_json={"from": "snapshot_submitted", "to": "reconciled"},
+            action_type=RUN_ACTION_TYPE["submit_snapshot"],
+            action_payload={"entry_count": entry_count},
+            payload_allowlist=RUN_ADVANCE_PAYLOAD_ALLOWLIST["submit_snapshot"],
+            mutate_projection=mutate_projection,
+            scope_kind=None,
+            scope_id=None,
+            connection=connection,
         )
 
-    mutate_entity(
-        db=None,  # type: ignore[arg-type]
-        aggregate_type="permission_reconciliation_run",
-        aggregate_id=str(run_id),
-        request=_make_request(
-            expected_version=expected_version,
-            actor=actor,
-            request_surface=(
-                f"api:/api/v1/permission-reconciliation/runs/{run_id}/snapshots"
+    def _advance_run_reconciled_on(
+        self,
+        connection: Connection[Any],
+        *,
+        run_id: UUID,
+        actor: ActorIdentity,
+        drift_ids: list[UUID],
+        expected_version: int,
+    ) -> None:
+        now = _current_time()
+
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            self.permissions_repo._update_reconciliation_run_status_on(
+                active_connection,
+                run_id=run_id,
+                status="reconciled",
+                reconciled_at=now,
+            )
+            return StateChangeDraft(
+                change_type=RUN_CHANGE_TYPE["reconcile"],
+                payload_json={
+                    "status": "reconciled",
+                    "reconciled_at": now.isoformat(),
+                    "drift_count": len(drift_ids),
+                    "drift_ids": [str(d) for d in drift_ids],
+                },
+                diff_json={"from": "snapshot_submitted", "to": "reconciled"},
+            )
+
+        self.mutations_callable(
+            db=None,  # type: ignore[arg-type]
+            aggregate_type="permission_reconciliation_run",
+            aggregate_id=str(run_id),
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface=(
+                    f"api:/api/v1/permission-reconciliation/runs/{run_id}/snapshots"
+                ),
             ),
-        ),
-        action_type=RUN_ACTION_TYPE["reconcile"],
-        action_payload={"drift_count": len(drift_ids)},
-        payload_allowlist=RUN_ADVANCE_PAYLOAD_ALLOWLIST["reconcile"],
-        mutate_projection=mutate_projection,
-        scope_kind=None,
-        scope_id=None,
-        connection=connection,
-    )
-
-
-def _advance_run_failed(
-    db: PostgresDatabase,
-    *,
-    run_id: UUID,
-    actor: ActorIdentity,
-    failure_reason: str,
-) -> None:
-    now = _current_time()
-    current = read_reconciliation_run(db, run_id)
-    prior_status = current.status
-    if prior_status not in ("requested", "snapshot_submitted"):
-        return
-    expected_version = _read_head_version(db, run_id)
-    snapshot_submitted_override = (
-        now if current.snapshot_submitted_at is None else None
-    )
-
-    def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
-        permission_repo.update_reconciliation_run_status(
-            active_connection,
-            run_id=run_id,
-            status="failed",
-            snapshot_submitted_at=snapshot_submitted_override,
-            failed_at=now,
-            failure_reason=failure_reason,
-        )
-        return StateChangeDraft(
-            change_type=RUN_CHANGE_TYPE["fail"],
-            payload_json={
-                "status": "failed",
-                "failed_at": now.isoformat(),
-                "failure_reason": failure_reason,
-            },
-            diff_json={"from": prior_status, "to": "failed"},
+            action_type=RUN_ACTION_TYPE["reconcile"],
+            action_payload={"drift_count": len(drift_ids)},
+            payload_allowlist=RUN_ADVANCE_PAYLOAD_ALLOWLIST["reconcile"],
+            mutate_projection=mutate_projection,
+            scope_kind=None,
+            scope_id=None,
+            connection=connection,
         )
 
-    mutate_entity(
-        db=db,
-        aggregate_type="permission_reconciliation_run",
-        aggregate_id=str(run_id),
-        request=_make_request(
-            expected_version=expected_version,
-            actor=actor,
-            request_surface=(
-                f"api:/api/v1/permission-reconciliation/runs/{run_id}/snapshots"
+    def _advance_run_failed(
+        self,
+        *,
+        run_id: UUID,
+        actor: ActorIdentity,
+        failure_reason: str,
+    ) -> None:
+        db = self.permissions_repo.db
+        now = _current_time()
+        current = self.read_reconciliation_run(run_id)
+        prior_status = current.status
+        if prior_status not in ("requested", "snapshot_submitted"):
+            return
+        expected_version = _read_head_version(db, run_id)
+        snapshot_submitted_override = (
+            now if current.snapshot_submitted_at is None else None
+        )
+
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            self.permissions_repo._update_reconciliation_run_status_on(
+                active_connection,
+                run_id=run_id,
+                status="failed",
+                snapshot_submitted_at=snapshot_submitted_override,
+                failed_at=now,
+                failure_reason=failure_reason,
+            )
+            return StateChangeDraft(
+                change_type=RUN_CHANGE_TYPE["fail"],
+                payload_json={
+                    "status": "failed",
+                    "failed_at": now.isoformat(),
+                    "failure_reason": failure_reason,
+                },
+                diff_json={"from": prior_status, "to": "failed"},
+            )
+
+        self.mutations_callable(
+            aggregate_type="permission_reconciliation_run",
+            aggregate_id=str(run_id),
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface=(
+                    f"api:/api/v1/permission-reconciliation/runs/{run_id}/snapshots"
+                ),
             ),
-        ),
-        action_type=RUN_ACTION_TYPE["fail"],
-        action_payload={"failure_reason": failure_reason},
-        payload_allowlist=RUN_ADVANCE_PAYLOAD_ALLOWLIST["fail"],
-        mutate_projection=mutate_projection,
-        scope_kind=None,
-        scope_id=None,
-    )
+            action_type=RUN_ACTION_TYPE["fail"],
+            action_payload={"failure_reason": failure_reason},
+            payload_allowlist=RUN_ADVANCE_PAYLOAD_ALLOWLIST["fail"],
+            mutate_projection=mutate_projection,
+            scope_kind=None,
+            scope_id=None,
+        )
+
+    def _record_drift_created_on(
+        self,
+        connection: Connection[Any],
+        *,
+        drift_id: UUID,
+        drift_row: dict[str, Any],
+        actor: ActorIdentity,
+    ) -> None:
+        action_payload = {
+            "drift_id": str(drift_id),
+            "reconciliation_run_id": (
+                None
+                if drift_row["reconciliation_run_id"] is None
+                else str(drift_row["reconciliation_run_id"])
+            ),
+            "permission_intent_id": (
+                None
+                if drift_row["permission_intent_id"] is None
+                else str(drift_row["permission_intent_id"])
+            ),
+            "intent_version": drift_row["intent_version"],
+            "scope_kind": drift_row["scope_kind"],
+            "scope_id": drift_row["scope_id"],
+            "role_id": drift_row["role_id"],
+            "channel_id": drift_row["channel_id"],
+            "kind": drift_row["kind"],
+            "status": drift_row["status"],
+        }
+
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            return StateChangeDraft(
+                change_type="permission_drift.created",
+                payload_json={
+                    **action_payload,
+                    "actual_bits": drift_row.get("actual_bits"),
+                    "actual_allow_bits": drift_row.get("actual_allow_bits"),
+                    "actual_deny_bits": drift_row.get("actual_deny_bits"),
+                    "intended_bits": drift_row.get("intended_bits"),
+                    "intended_allow_bits": drift_row.get("intended_allow_bits"),
+                    "intended_deny_bits": drift_row.get("intended_deny_bits"),
+                },
+            )
+
+        self.mutations_callable(
+            db=None,  # type: ignore[arg-type]
+            aggregate_type="permission_drift",
+            aggregate_id=str(drift_id),
+            request=_make_request(
+                expected_version=0,
+                actor=actor,
+                request_surface="service:permission_reconciliation._record_drift_created",
+            ),
+            action_type="permission_drift.create",
+            action_payload=action_payload,
+            payload_allowlist=DRIFT_CREATE_PAYLOAD_ALLOWLIST,
+            mutate_projection=mutate_projection,
+            scope_kind=drift_row["scope_kind"],
+            scope_id=drift_row["scope_id"],
+            connection=connection,
+        )
+
+    def submit_reconciliation_snapshot(
+        self,
+        *,
+        run_id: UUID,
+        entries: list[PermissionSnapshotEntry],
+        actor: ActorIdentity,
+    ) -> tuple[PermissionReconciliationRunRead, MutationResult]:
+        db = self.permissions_repo.db
+        existing = self.read_reconciliation_run(run_id)
+
+        _require_scoped_authority(
+            "permission_reconciliation_run.write",
+            scope_kind=existing.scope_kind,
+            scope_id=existing.scope_id,
+            actor=actor,
+            db=db,
+        )
+
+        if existing.status in RUN_TERMINAL_STATUSES:
+            if existing.status == "reconciled":
+                head_version = _read_head_version(db, run_id)
+                return existing, MutationResult(
+                    version=head_version,
+                    etag=f'"{head_version}"',
+                )
+            raise ReconciliationRunConflictError(
+                run_id=run_id, status=existing.status,
+            )
+        if existing.status != "requested":
+            raise ReconciliationRunConflictError(
+                run_id=run_id, status=existing.status,
+            )
+
+        try:
+            with db.transaction() as connection:
+                submit_expected = _read_head_version(db, run_id)
+                self._advance_run_submit_on(
+                    connection,
+                    run_id=run_id,
+                    actor=actor,
+                    entry_count=len(entries),
+                    expected_version=submit_expected,
+                )
+                drift_rows = _build_drift_rows(
+                    connection,
+                    permissions_repo=self.permissions_repo,
+                    run=existing,
+                    entries=entries,
+                )
+                new_drift_ids = self.permissions_repo._insert_permission_drift_batch_on(
+                    connection, rows=drift_rows,
+                )
+                for drift_id in new_drift_ids:
+                    self._record_drift_created_on(
+                        connection,
+                        drift_id=drift_id,
+                        drift_row=_drift_row_by_id(drift_rows, drift_id),
+                        actor=actor,
+                    )
+                run_drift_ids = self.permissions_repo._list_drift_ids_by_run_on(
+                    connection, run_id,
+                )
+                reconcile_expected = submit_expected + 1
+                self._advance_run_reconciled_on(
+                    connection,
+                    run_id=run_id,
+                    actor=actor,
+                    drift_ids=run_drift_ids,
+                    expected_version=reconcile_expected,
+                )
+        except Exception as error:
+            self._advance_run_failed(
+                run_id=run_id,
+                actor=actor,
+                failure_reason=repr(error)[:500],
+            )
+            raise
+
+        head_version = _read_head_version(db, run_id)
+        return self.read_reconciliation_run(run_id), MutationResult(
+            version=head_version,
+            etag=f'"{head_version}"',
+        )
 
 
 def _entry_channel_id(entry: PermissionSnapshotEntry) -> str | None:
     return getattr(entry, "channel_id", None)
-
 
 def _entry_masks(entry: PermissionSnapshotEntry) -> dict[str, str | None]:
     if isinstance(entry, GuildRolePermissionSnapshotEntry):
@@ -383,7 +533,6 @@ def _entry_masks(entry: PermissionSnapshotEntry) -> dict[str, str | None]:
         }
     raise TypeError(f"unknown snapshot entry kind: {type(entry)!r}")
 
-
 def _intent_masks(intent: dict[str, Any]) -> dict[str, str | None]:
     if intent["kind"] == "guild_role":
         return {
@@ -396,7 +545,6 @@ def _intent_masks(intent: dict[str, Any]) -> dict[str, str | None]:
         "intended_allow_bits": intent.get("allow_bits"),
         "intended_deny_bits": intent.get("deny_bits"),
     }
-
 
 def _cleared_actual_masks(kind: str) -> dict[str, str | None]:
     if kind == "guild_role":
@@ -411,7 +559,6 @@ def _cleared_actual_masks(kind: str) -> dict[str, str | None]:
         "actual_deny_bits": "0",
     }
 
-
 def _masks_equal(
     intent_masks: dict[str, str | None],
     entry_masks: dict[str, str | None],
@@ -423,7 +570,6 @@ def _masks_equal(
         and intent_masks.get("intended_deny_bits")
         == entry_masks.get("actual_deny_bits")
     )
-
 
 def _intent_head_version(
     connection: Connection[Any],
@@ -456,14 +602,14 @@ def _intent_head_version(
         return 0
     return int(row["current_seq"])
 
-
 def _build_drift_rows(
     connection: Connection[Any],
     *,
+    permissions_repo: PermissionsRepository,
     run: PermissionReconciliationRunRead,
     entries: list[PermissionSnapshotEntry],
 ) -> list[dict[str, Any]]:
-    intents = permission_repo.list_permission_intents(
+    intents = permissions_repo._list_permission_intents_on(
         connection,
         scope_kind=run.scope_kind,
         scope_id=run.scope_id,
@@ -567,7 +713,6 @@ def _build_drift_rows(
             )
     return rows
 
-
 def _drift_row_by_id(
     drift_rows: list[dict[str, Any]],
     drift_id: UUID,
@@ -576,146 +721,3 @@ def _drift_row_by_id(
         if row["id"] == drift_id:
             return row
     raise LookupError(f"drift row {drift_id} not found in batch")
-
-
-def _record_drift_created(
-    connection: Connection[Any],
-    *,
-    drift_id: UUID,
-    drift_row: dict[str, Any],
-    actor: ActorIdentity,
-) -> None:
-    action_payload = {
-        "drift_id": str(drift_id),
-        "reconciliation_run_id": (
-            None
-            if drift_row["reconciliation_run_id"] is None
-            else str(drift_row["reconciliation_run_id"])
-        ),
-        "permission_intent_id": (
-            None
-            if drift_row["permission_intent_id"] is None
-            else str(drift_row["permission_intent_id"])
-        ),
-        "intent_version": drift_row["intent_version"],
-        "scope_kind": drift_row["scope_kind"],
-        "scope_id": drift_row["scope_id"],
-        "role_id": drift_row["role_id"],
-        "channel_id": drift_row["channel_id"],
-        "kind": drift_row["kind"],
-        "status": drift_row["status"],
-    }
-
-    def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
-        return StateChangeDraft(
-            change_type="permission_drift.created",
-            payload_json={
-                **action_payload,
-                "actual_bits": drift_row.get("actual_bits"),
-                "actual_allow_bits": drift_row.get("actual_allow_bits"),
-                "actual_deny_bits": drift_row.get("actual_deny_bits"),
-                "intended_bits": drift_row.get("intended_bits"),
-                "intended_allow_bits": drift_row.get("intended_allow_bits"),
-                "intended_deny_bits": drift_row.get("intended_deny_bits"),
-            },
-        )
-
-    mutate_entity(
-        db=None,  # type: ignore[arg-type]
-        aggregate_type="permission_drift",
-        aggregate_id=str(drift_id),
-        request=_make_request(
-            expected_version=0,
-            actor=actor,
-            request_surface="service:permission_reconciliation._record_drift_created",
-        ),
-        action_type="permission_drift.create",
-        action_payload=action_payload,
-        payload_allowlist=DRIFT_CREATE_PAYLOAD_ALLOWLIST,
-        mutate_projection=mutate_projection,
-        scope_kind=drift_row["scope_kind"],
-        scope_id=drift_row["scope_id"],
-        connection=connection,
-    )
-
-
-def submit_reconciliation_snapshot(
-    db: PostgresDatabase,
-    *,
-    run_id: UUID,
-    entries: list[PermissionSnapshotEntry],
-    actor: ActorIdentity,
-) -> tuple[PermissionReconciliationRunRead, MutationResult]:
-    existing = read_reconciliation_run(db, run_id)
-
-    _require_scoped_authority(
-        "permission_reconciliation_run.write",
-        scope_kind=existing.scope_kind,
-        scope_id=existing.scope_id,
-        actor=actor,
-        db=db,
-    )
-
-    if existing.status in RUN_TERMINAL_STATUSES:
-        if existing.status == "reconciled":
-            head_version = _read_head_version(db, run_id)
-            return existing, MutationResult(
-                version=head_version,
-                etag=f'"{head_version}"',
-            )
-        raise ReconciliationRunConflictError(
-            run_id=run_id, status=existing.status,
-        )
-    if existing.status != "requested":
-        raise ReconciliationRunConflictError(
-            run_id=run_id, status=existing.status,
-        )
-
-    try:
-        with db.transaction() as connection:
-            submit_expected = _read_head_version(db, run_id)
-            _advance_run_submit(
-                connection,
-                run_id=run_id,
-                actor=actor,
-                entry_count=len(entries),
-                expected_version=submit_expected,
-            )
-            drift_rows = _build_drift_rows(
-                connection, run=existing, entries=entries,
-            )
-            new_drift_ids = permission_repo.insert_permission_drift_batch(
-                connection, rows=drift_rows,
-            )
-            for drift_id in new_drift_ids:
-                _record_drift_created(
-                    connection,
-                    drift_id=drift_id,
-                    drift_row=_drift_row_by_id(drift_rows, drift_id),
-                    actor=actor,
-                )
-            run_drift_ids = permission_repo.list_drift_ids_by_run(
-                connection, run_id,
-            )
-            reconcile_expected = submit_expected + 1
-            _advance_run_reconciled(
-                connection,
-                run_id=run_id,
-                actor=actor,
-                drift_ids=run_drift_ids,
-                expected_version=reconcile_expected,
-            )
-    except Exception as error:
-        _advance_run_failed(
-            db,
-            run_id=run_id,
-            actor=actor,
-            failure_reason=repr(error)[:500],
-        )
-        raise
-
-    head_version = _read_head_version(db, run_id)
-    return read_reconciliation_run(db, run_id), MutationResult(
-        version=head_version,
-        etag=f'"{head_version}"',
-    )
