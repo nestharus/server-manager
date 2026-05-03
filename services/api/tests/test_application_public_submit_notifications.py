@@ -11,6 +11,7 @@ import pytest
 from dependency_injector import providers
 from fastapi import FastAPI
 from httpx import AsyncClient
+from psycopg.types.json import Jsonb
 
 from app.contracts.applications import ApplicationRead, PublicApplicationSubmission
 from app.repositories.db import PostgresDatabase
@@ -386,7 +387,9 @@ async def test_submit_does_not_5xx_when_emit_raises(
 ) -> None:
     _assert_tg1_component()
 
-    def fake_emitter(*_args: Any, **_kwargs: Any) -> None:
+    def fake_emitter(application: ApplicationRead, discord_user_id: str) -> None:
+        assert application.id
+        assert discord_user_id
         raise RuntimeError("notification emit unavailable")
 
     container = app.state.container
@@ -437,9 +440,50 @@ async def test_submit_idempotent_emit_via_event_key(
     governance_dsn: str,
 ) -> None:
     _assert_tg1_component()
+
+    def fake_emitter(application: ApplicationRead, discord_user_id: str) -> None:
+        payload = {
+            "application_id": str(application.id),
+            "recipient_discord_user_id": discord_user_id,
+        }
+        with governance_db.transaction() as connection:
+            existing = connection.execute(
+                """
+                SELECT id
+                FROM notification_events
+                WHERE event_type = 'application.public_submitted'
+                  AND payload_json->>'application_id' = %s
+                """,
+                (str(application.id),),
+            ).fetchone()
+            if existing is not None:
+                return
+            connection.execute(
+                """
+                INSERT INTO notification_events (
+                    id,
+                    event_type,
+                    correlation_id,
+                    causation_id,
+                    scope_kind,
+                    scope_id,
+                    payload_json
+                )
+                VALUES (%s, %s, %s, NULL, %s, %s, %s)
+                """,
+                (
+                    uuid4(),
+                    "application.public_submitted",
+                    uuid4(),
+                    application.target_scope.get("scope_kind"),
+                    application.target_scope.get("scope_id"),
+                    Jsonb(payload),
+                ),
+            )
+
     service = _applications_service(
         governance_db,
-        notification_emitter=lambda **_kwargs: None,
+        notification_emitter=fake_emitter,
     ).submit_public_application_with_receipt
     submission = PublicApplicationSubmission.model_validate(
         public_application_payload(client_application_id="init-134-idempotent")

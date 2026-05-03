@@ -18,19 +18,11 @@ from app.contracts.notifications import (
 )
 from app.core.settings import Settings
 from app.repositories.chapters import ChaptersRepository
-from app.repositories.db import PostgresDatabase
-from app.repositories.notifications import (
-    fetch_notification_rule,
-    fetch_notification_rule_for_update,
-    insert_notification_rule,
-    list_notification_rules as list_notification_rule_rows,
-    update_notification_rule,
-)
+from app.repositories.notifications import NotificationsRepository
 from app.services.application_public_submit_notifications import (
     build_application_public_submit_payload,
 )
-from app.services import notification_events
-from app.services.mutations import mutate_entity
+from app.services.notification_events import NotificationEventsService
 
 RULE_PAYLOAD_FIELDS = {
     "trigger_json",
@@ -102,193 +94,202 @@ def _rule_from_row(row: dict[str, Any]) -> NotificationRuleRead:
     )
 
 
-def emit_application_public_submitted_event(
-    db: PostgresDatabase,
-    *,
-    application: ApplicationRead,
-    discord_user_id: str,
-    connection: Connection[Any] | None = None,
-    settings: Settings | None = None,
-) -> None:
-    if settings is None:
+class NotificationsService:
+    def __init__(
+        self,
+        notifications_repo: NotificationsRepository,
+        notification_events_service: NotificationEventsService,
+        mutations_callable,
+    ) -> None:
+        self._notifications_repo = notifications_repo
+        self._notification_events_service = notification_events_service
+        self._mutations_callable = mutations_callable
+
+    def emit_application_public_submitted_event(
+        self,
+        *,
+        application: ApplicationRead,
+        discord_user_id: str,
+    ) -> None:
         settings = Settings()
-    chapter_discord_resources: dict[str, Any] | None = None
-    scope_kind = application.target_scope.scope_kind
-    scope_id = application.target_scope.scope_id
+        db = self._notifications_repo.db
+        chapter_discord_resources: dict[str, Any] | None = None
+        scope_kind = application.target_scope.scope_kind
+        scope_id = application.target_scope.scope_id
 
-    try:
-        if scope_kind == "chapter" and scope_id is not None:
-            chapters_repo = ChaptersRepository(db)
-            if connection is not None:
-                chapter = chapters_repo._fetch_chapter_on(
-                    connection,
-                    chapter_id=scope_id,
+        try:
+            with db.transaction() as connection:
+                if scope_kind == "chapter" and scope_id is not None:
+                    chapter = ChaptersRepository(db)._fetch_chapter_on(
+                        connection,
+                        chapter_id=scope_id,
+                    )
+                    if chapter is not None:
+                        chapter_discord_resources = chapter["discord_resources"]
+
+                payload = build_application_public_submit_payload(
+                    application=application,
+                    recipient_discord_user_id=discord_user_id,
+                    web_public_base_url=settings.web_public_base_url,
+                    global_applications_review_channel_id=settings.global_applications_review_channel_id,
+                    global_application_managers_role_id=settings.global_application_managers_role_id,
+                    global_primary_guild_channel_url=settings.global_primary_guild_channel_url,
+                    chapter_discord_resources=chapter_discord_resources,
                 )
-            else:
-                chapter = chapters_repo.fetch_chapter(chapter_id=scope_id)
-            if chapter is not None:
-                chapter_discord_resources = chapter["discord_resources"]
+                if payload is None:
+                    return
 
-        payload = build_application_public_submit_payload(
-            application=application,
-            recipient_discord_user_id=discord_user_id,
-            web_public_base_url=settings.web_public_base_url,
-            global_applications_review_channel_id=settings.global_applications_review_channel_id,
-            global_application_managers_role_id=settings.global_application_managers_role_id,
-            global_primary_guild_channel_url=settings.global_primary_guild_channel_url,
-            chapter_discord_resources=chapter_discord_resources,
-        )
-        if payload is None:
-            return
+                self._notification_events_service.emit(
+                    connection,
+                    event=NotificationEventDraft(
+                        event_type="application.public_submitted",
+                        scope_kind=scope_kind,
+                        scope_id=scope_id,
+                        payload_json=payload,
+                    ),
+                    actor=ActorIdentity(actor_kind="service", actor_id="notifications"),
+                    payload_allowlist=APPLICATION_PUBLIC_SUBMITTED_PAYLOAD_ALLOWLIST,
+                )
+        except PsycopgError as error:
+            raise NotificationEmitError(
+                "application public-submit notification emit failed"
+            ) from error
 
-        notification_events.emit(
-            db,
-            event=NotificationEventDraft(
-                event_type="application.public_submitted",
-                scope_kind=scope_kind,
-                scope_id=scope_id,
-                payload_json=payload,
+    def create_notification_rule(
+        self,
+        *,
+        request: NotificationRuleCreate,
+        actor: ActorIdentity,
+    ) -> tuple[NotificationRuleRead, MutationResult]:
+        rule_id = uuid4()
+        persisted = request.model_dump(mode="python")
+
+        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+            self._notifications_repo._insert_notification_rule_on(
+                connection,
+                row={"id": rule_id, **persisted},
+            )
+            return StateChangeDraft(
+                change_type="notification_rule.created",
+                payload_json={
+                    "rule_id": str(rule_id),
+                    **request.model_dump(mode="json"),
+                },
+            )
+
+        result = self._mutations_callable(
+            aggregate_type="notification_rule",
+            aggregate_id=str(rule_id),
+            request=_make_request(
+                expected_version=0,
+                actor=actor,
+                request_surface="api:/api/v1/notification-rules",
             ),
-            actor=ActorIdentity(actor_kind="service", actor_id="notifications"),
-            connection=connection,
-            payload_allowlist=APPLICATION_PUBLIC_SUBMITTED_PAYLOAD_ALLOWLIST,
+            action_type="notification_rule.create",
+            action_payload=request.model_dump(mode="json"),
+            payload_allowlist=RULE_PAYLOAD_FIELDS,
+            mutate_projection=mutate_projection,
+            scope_kind=request.scope_kind,
+            scope_id=request.scope_id,
         )
-    except PsycopgError as error:
-        raise NotificationEmitError(
-            "application public-submit notification emit failed"
-        ) from error
+        read = _rule_from_row(self._fetch_rule_row(rule_id))
+        return read, result
 
+    def read_notification_rule(
+        self, *, rule_id: UUID
+    ) -> tuple[NotificationRuleRead, str]:
+        read = _rule_from_row(self._fetch_rule_row(rule_id))
+        return read, f'"{read.version}"'
 
-def _fetch_rule_row(connection: Connection[Any], rule_id: UUID) -> dict[str, Any]:
-    row = fetch_notification_rule(connection, rule_id)
-    if row is None:
-        raise NotificationRuleNotFoundError(rule_id)
-    return row
-
-
-def create_notification_rule(
-    db: PostgresDatabase,
-    *,
-    request: NotificationRuleCreate,
-    actor: ActorIdentity,
-) -> tuple[NotificationRuleRead, MutationResult]:
-    rule_id = uuid4()
-    persisted = request.model_dump(mode="python")
-
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        insert_notification_rule(connection, row={"id": rule_id, **persisted})
-        return StateChangeDraft(
-            change_type="notification_rule.created",
-            payload_json={"rule_id": str(rule_id), **request.model_dump(mode="json")},
-        )
-
-    result = mutate_entity(
-        db=db,
-        aggregate_type="notification_rule",
-        aggregate_id=str(rule_id),
-        request=_make_request(
-            expected_version=0,
-            actor=actor,
-            request_surface="api:/api/v1/notification-rules",
-        ),
-        action_type="notification_rule.create",
-        action_payload=request.model_dump(mode="json"),
-        payload_allowlist=RULE_PAYLOAD_FIELDS,
-        mutate_projection=mutate_projection,
-        scope_kind=request.scope_kind,
-        scope_id=request.scope_id,
-    )
-    with db.connection() as connection:
-        read = _rule_from_row(_fetch_rule_row(connection, rule_id))
-    return read, result
-
-
-def read_notification_rule(
-    db: PostgresDatabase,
-    *,
-    rule_id: UUID,
-) -> tuple[NotificationRuleRead, str]:
-    with db.connection() as connection:
-        read = _rule_from_row(_fetch_rule_row(connection, rule_id))
-    return read, f'"{read.version}"'
-
-
-def list_notification_rules(
-    db: PostgresDatabase,
-    *,
-    scope_kind: str | None = None,
-    scope_id: str | None = None,
-) -> NotificationRuleListRead:
-    with db.connection() as connection:
-        rows = list_notification_rule_rows(
-            connection,
+    def list_notification_rules(
+        self,
+        *,
+        scope_kind: str | None = None,
+        scope_id: str | None = None,
+    ) -> NotificationRuleListRead:
+        rows = self._notifications_repo.list_notification_rules(
             scope_kind=scope_kind,
             scope_id=scope_id,
         )
-    return NotificationRuleListRead(items=[_rule_from_row(row) for row in rows])
+        return NotificationRuleListRead(items=[_rule_from_row(row) for row in rows])
 
+    def patch_notification_rule(
+        self,
+        *,
+        rule_id: UUID,
+        patch: NotificationRulePatch,
+        actor: ActorIdentity,
+        expected_version: int,
+    ) -> tuple[NotificationRuleRead, MutationResult]:
+        current = _rule_from_row(self._fetch_rule_row(rule_id))
+        patch_data = patch.model_dump(mode="python", exclude_unset=True)
+        merged = current.model_dump(mode="python")
+        merged.update(patch_data)
+        merged.pop("id", None)
+        merged.pop("created_at", None)
+        merged.pop("updated_at", None)
+        merged.pop("version", None)
 
-def patch_notification_rule(
-    db: PostgresDatabase,
-    *,
-    rule_id: UUID,
-    patch: NotificationRulePatch,
-    actor: ActorIdentity,
-    expected_version: int,
-) -> tuple[NotificationRuleRead, MutationResult]:
-    with db.connection() as connection:
-        current_row = _fetch_rule_row(connection, rule_id)
-    current = _rule_from_row(current_row)
-    patch_data = patch.model_dump(mode="python", exclude_unset=True)
-    merged = current.model_dump(mode="python")
-    merged.update(patch_data)
-    merged.pop("id", None)
-    merged.pop("created_at", None)
-    merged.pop("updated_at", None)
-    merged.pop("version", None)
+        def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
+            locked_row = (
+                self._notifications_repo._fetch_notification_rule_for_update_on(
+                    connection,
+                    rule_id,
+                )
+            )
+            if locked_row is None:
+                raise NotificationRuleNotFoundError(rule_id)
+            updated_row = self._notifications_repo._update_notification_rule_on(
+                connection,
+                rule_id=rule_id,
+                patch_row=merged,
+            )
+            if updated_row is None:
+                raise NotificationRuleNotFoundError(rule_id)
+            updated_read = NotificationRuleRead(
+                id=rule_id,
+                **merged,
+                created_at=locked_row["created_at"],
+                updated_at=updated_row["updated_at"],
+                version=int(locked_row["version"]) + 1,
+            )
+            return StateChangeDraft(
+                change_type="notification_rule.updated",
+                payload_json={
+                    "rule_id": str(rule_id),
+                    **updated_read.model_dump(mode="json", by_alias=True),
+                },
+            )
 
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        locked_row = fetch_notification_rule_for_update(connection, rule_id)
-        if locked_row is None:
+        result = self._mutations_callable(
+            aggregate_type="notification_rule",
+            aggregate_id=str(rule_id),
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface=f"api:/api/v1/notification-rules/{rule_id}",
+            ),
+            action_type="notification_rule.patch",
+            action_payload=NotificationRuleCreate.model_validate(merged).model_dump(
+                mode="json"
+            ),
+            payload_allowlist=RULE_PAYLOAD_FIELDS,
+            mutate_projection=mutate_projection,
+            scope_kind=merged["scope_kind"],
+            scope_id=merged.get("scope_id"),
+        )
+        read = _rule_from_row(self._fetch_rule_row(rule_id))
+        return read, result
+
+    def _fetch_rule_row(self, rule_id: UUID) -> dict[str, Any]:
+        row = self._notifications_repo.fetch_notification_rule(rule_id)
+        if row is None:
             raise NotificationRuleNotFoundError(rule_id)
-        updated_row = update_notification_rule(
-            connection, rule_id=rule_id, patch_row=merged
-        )
-        if updated_row is None:
-            raise NotificationRuleNotFoundError(rule_id)
-        updated_read = NotificationRuleRead(
-            id=rule_id,
-            **merged,
-            created_at=locked_row["created_at"],
-            updated_at=updated_row["updated_at"],
-            version=int(locked_row["version"]) + 1,
-        )
-        return StateChangeDraft(
-            change_type="notification_rule.updated",
-            payload_json={
-                "rule_id": str(rule_id),
-                **updated_read.model_dump(mode="json", by_alias=True),
-            },
-        )
+        return row
 
-    result = mutate_entity(
-        db=db,
-        aggregate_type="notification_rule",
-        aggregate_id=str(rule_id),
-        request=_make_request(
-            expected_version=expected_version,
-            actor=actor,
-            request_surface=f"api:/api/v1/notification-rules/{rule_id}",
-        ),
-        action_type="notification_rule.patch",
-        action_payload=NotificationRuleCreate.model_validate(merged).model_dump(
-            mode="json"
-        ),
-        payload_allowlist=RULE_PAYLOAD_FIELDS,
-        mutate_projection=mutate_projection,
-        scope_kind=merged["scope_kind"],
-        scope_id=merged.get("scope_id"),
-    )
-    with db.connection() as connection:
-        read = _rule_from_row(_fetch_rule_row(connection, rule_id))
-    return read, result
+
+__all__ = [
+    "APPLICATION_PUBLIC_SUBMITTED_PAYLOAD_ALLOWLIST",
+    "NotificationEmitError",
+    "NotificationsService",
+]

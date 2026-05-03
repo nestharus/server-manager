@@ -22,7 +22,7 @@ from app.contracts.tickets import (
 )
 from app.core.context import get_current_audit_context, use_audit_context
 from app.repositories.ticket_sla import TicketSlaRepository
-from app.services import notification_events
+from app.services.notification_events import NotificationEventsService
 from app.services.ticket_categories import find_state_path
 from app.services.tickets import TicketsService
 
@@ -178,11 +178,11 @@ class TicketSlaService:
         self,
         ticket_sla_repo: TicketSlaRepository,
         tickets_service: TicketsService,
-        notification_events_module,
+        notification_events_service: NotificationEventsService,
     ) -> None:
         self.ticket_sla_repo = ticket_sla_repo
         self.tickets_service = tickets_service
-        self.notification_events_module = notification_events_module
+        self._notification_events_service = notification_events_service
 
     def _derive_state_entered_at(
         self,
@@ -250,8 +250,8 @@ class TicketSlaService:
             return None
 
         routing_scope = ticket.category_snapshot.routing_scope
-        event = self.notification_events_module.emit(
-            self.ticket_sla_repo.db,
+        event = self._notification_events_service.emit(
+            connection,
             event=NotificationEventDraft(
                 event_type="ticket.sla.flag_for_review",
                 scope_kind=routing_scope.scope_kind,
@@ -263,7 +263,6 @@ class TicketSlaService:
                 ),
             ),
             actor=actor,
-            connection=connection,
             payload_allowlist=SLA_NOTIFICATION_PAYLOAD_ALLOWLIST,
         )
         updated_summary = {
@@ -299,16 +298,17 @@ class TicketSlaService:
             return None
 
         routing_scope = ticket.category_snapshot.routing_scope
-        event = self.notification_events_module.emit(
-            self.ticket_sla_repo.db,
+        event = self._notification_events_service.emit(
+            connection,
             event=NotificationEventDraft(
                 event_type=event_type,
                 scope_kind=routing_scope.scope_kind,
                 scope_id=routing_scope.scope_id,
-                payload_json=_notification_payload(ticket, threshold, consequence=consequence),
+                payload_json=_notification_payload(
+                    ticket, threshold, consequence=consequence
+                ),
             ),
             actor=actor,
-            connection=connection,
             payload_allowlist=SLA_NOTIFICATION_PAYLOAD_ALLOWLIST,
         )
         return _trigger_from_row(
@@ -399,7 +399,9 @@ class TicketSlaService:
             )
 
         path = find_state_path(
-            ticket.category_snapshot.state_machine.model_dump(mode="json", by_alias=True),
+            ticket.category_snapshot.state_machine.model_dump(
+                mode="json", by_alias=True
+            ),
             ticket.state,
             target_state,
         )

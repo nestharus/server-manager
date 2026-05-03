@@ -5,8 +5,8 @@ Pins D3 (dequeue-time precondition gate), D4 (lease/claim reclaim), D5
 (explicit ``subsystem`` column), D6 (idempotency_key UNIQUE), D7 (widened
 ``DegradedStateSummaryRead``), and D9 (attempts/retry journaling).
 
-Worker behavior is exercised through ``deferred_effect_worker_tick`` —
-the single-tick seam dispatched by ``SchedulerLoop`` — instead of
+Worker behavior is exercised through ``DeferredEffectsService.deferred_effect_worker_tick`` —
+the single-tick seam dispatched by ``SchedulerService`` — instead of
 spinning up the asyncio supervision loop.
 """
 
@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -33,18 +34,13 @@ from app.contracts.scheduler import (
 )
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.deferred_effects import (
-    deferred_effect_worker_tick,
-    enqueue_effect,
-    list_deferred_effects_by_subsystem,
-    mark_precondition_invalid,
-    mark_precondition_valid,
-    read_deferred_effect,
-    read_degraded_state_summary,
-)
+from app.repositories.deferred_effects import DeferredEffectsRepository
+from app.repositories.scheduler import SchedulerRepository
+from app.services.deferred_effects import DeferredEffectsService
+from app.services.mutations import mutate_entity
 from app.services.scheduler import (
     DEFAULT_MAX_ATTEMPTS,
-    register_scheduled_job,
+    SchedulerService,
     register_scheduler_handler,
 )
 
@@ -141,6 +137,21 @@ def _simulate_stale_claim(
         )
 
 
+def _deferred_effects_service(db: PostgresDatabase) -> DeferredEffectsService:
+    return DeferredEffectsService(
+        deferred_effects_repo=DeferredEffectsRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
+def _scheduler_service(db: PostgresDatabase) -> SchedulerService:
+    return SchedulerService(
+        scheduler_repo=SchedulerRepository(db),
+        db=db,
+        worker_id="test-scheduler",
+    )
+
+
 @pytest.fixture()
 def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
     db = PostgresDatabase(dsn=governance_dsn)
@@ -207,7 +218,7 @@ def test_enqueue_effect_persists_row(
 
     request = _make_create(subsystem="persist-sub")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
     assert isinstance(read, DeferredEffectRead)
     assert read.subsystem == "persist-sub"
@@ -231,8 +242,8 @@ def test_enqueue_effect_is_idempotent_by_idempotency_key(
     second = _make_create(idempotency_key=idk)
 
     with use_audit_context(_make_audit_context()):
-        first_read = enqueue_effect(governance_db, first)
-        second_read = enqueue_effect(governance_db, second)
+        first_read = _deferred_effects_service(governance_db).enqueue_effect(first)
+        second_read = _deferred_effects_service(governance_db).enqueue_effect(second)
 
     assert first_read.idempotency_key == second_read.idempotency_key == idk
     assert first_read.id == second_read.id
@@ -248,7 +259,7 @@ def test_enqueue_effect_default_precondition_state_is_unchecked(
 
     request = _make_create(consequence_level="consequential")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
     assert read.precondition_state == "unchecked"
     assert read.status == "queued"
@@ -269,9 +280,9 @@ def test_mark_precondition_valid_transitions_state(
 
     request = _make_create(consequence_level="consequential")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
-    mark_precondition_valid(governance_db, read.id)
+    _deferred_effects_service(governance_db).mark_precondition_valid(read.id)
 
     row = _fetch_effect_row(governance_dsn, read.id)
     assert row is not None
@@ -288,9 +299,9 @@ def test_mark_precondition_invalid_transitions_state(
 
     request = _make_create(consequence_level="consequential")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
-    mark_precondition_invalid(governance_db, read.id)
+    _deferred_effects_service(governance_db).mark_precondition_invalid(read.id)
 
     row = _fetch_effect_row(governance_dsn, read.id)
     assert row is not None
@@ -307,12 +318,12 @@ def test_precondition_state_only_transitions_from_unchecked(
 
     request = _make_create(consequence_level="consequential")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
-    mark_precondition_valid(governance_db, read.id)
+    _deferred_effects_service(governance_db).mark_precondition_valid(read.id)
 
     with pytest.raises(InvalidPreconditionStateTransitionError):
-        mark_precondition_valid(governance_db, read.id)
+        _deferred_effects_service(governance_db).mark_precondition_valid(read.id)
 
 
 # ---------------------------------------------------------------------------
@@ -340,9 +351,9 @@ def test_worker_skips_consequential_effect_without_valid_precondition(
         consequence_level="consequential",
     )
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
-    deferred_effect_worker_tick(governance_db, worker_id="test-worker")
+    _deferred_effects_service(governance_db).deferred_effect_worker_tick(worker_id="test-worker")
 
     assert calls == []
     row = _fetch_effect_row(governance_dsn, read.id)
@@ -371,10 +382,10 @@ def test_worker_executes_consequential_effect_with_valid_precondition(
         consequence_level="consequential",
     )
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
-    mark_precondition_valid(governance_db, read.id)
-    deferred_effect_worker_tick(governance_db, worker_id="test-worker")
+    _deferred_effects_service(governance_db).mark_precondition_valid(read.id)
+    _deferred_effects_service(governance_db).deferred_effect_worker_tick(worker_id="test-worker")
 
     assert len(calls) == 1
     row = _fetch_effect_row(governance_dsn, read.id)
@@ -399,9 +410,9 @@ def test_worker_executes_safe_effects_regardless_of_precondition_state(
 
     request = _make_create(effect_type=effect_type, consequence_level="safe")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
-    deferred_effect_worker_tick(governance_db, worker_id="test-worker")
+    _deferred_effects_service(governance_db).deferred_effect_worker_tick(worker_id="test-worker")
 
     assert len(calls) == 1
     row = _fetch_effect_row(governance_dsn, read.id)
@@ -435,17 +446,17 @@ def test_deferred_effects_queryable_independently_from_scheduled_jobs(
     )
 
     with use_audit_context(_make_audit_context()):
-        effect_read = enqueue_effect(governance_db, effect_request)
-        register_scheduled_job(governance_db, job_request)
+        effect_read = _deferred_effects_service(governance_db).enqueue_effect(effect_request)
+        _scheduler_service(governance_db).register_scheduled_job(job_request)
 
-    listed_effects = list_deferred_effects_by_subsystem(governance_db, subsystem)
+    listed_effects = _deferred_effects_service(governance_db).list_deferred_effects_by_subsystem(subsystem)
     listed_ids = [e.id for e in listed_effects]
     assert effect_read.id in listed_ids
     # Effects listing is NOT polluted with scheduled-job rows.
     assert all(isinstance(e, DeferredEffectRead) for e in listed_effects)
 
     # Reading by effect id never returns the scheduled job.
-    by_id = read_deferred_effect(governance_db, effect_read.id)
+    by_id = _deferred_effects_service(governance_db).read_deferred_effect(effect_read.id)
     assert by_id is not None
     assert by_id.id == effect_read.id
 
@@ -465,10 +476,9 @@ def test_degraded_state_summary_returns_per_subsystem_counts(
     subsystem = _unique("sub-sum")
 
     with use_audit_context(_make_audit_context()):
-        enqueue_effect(governance_db, _make_create(subsystem=subsystem))
-        enqueue_effect(governance_db, _make_create(subsystem=subsystem))
-        register_scheduled_job(
-            governance_db,
+        _deferred_effects_service(governance_db).enqueue_effect(_make_create(subsystem=subsystem))
+        _deferred_effects_service(governance_db).enqueue_effect(_make_create(subsystem=subsystem))
+        _scheduler_service(governance_db).register_scheduled_job(
             ScheduledJobCreate.model_validate(
                 {
                     "job_key": _unique("job-sum"),
@@ -480,7 +490,7 @@ def test_degraded_state_summary_returns_per_subsystem_counts(
             ),
         )
 
-    summary = read_degraded_state_summary(governance_db)
+    summary = _deferred_effects_service(governance_db).read_degraded_state_summary()
     matching = [entry for entry in summary if entry.subsystem == subsystem]
 
     assert len(matching) == 1
@@ -507,8 +517,7 @@ def test_degraded_state_summary_does_not_block_concurrent_writes(
         try:
             while not stop.is_set():
                 with use_audit_context(_make_audit_context()):
-                    enqueue_effect(
-                        governance_db,
+                    _deferred_effects_service(governance_db).enqueue_effect(
                         _make_create(subsystem=subsystem),
                     )
         except BaseException as exc:  # pragma: no cover — surfaced via assertion
@@ -519,7 +528,7 @@ def test_degraded_state_summary_does_not_block_concurrent_writes(
     try:
         start = time.monotonic()
         for _ in range(100):
-            read_degraded_state_summary(governance_db)
+            _deferred_effects_service(governance_db).read_degraded_state_summary()
         elapsed = time.monotonic() - start
     finally:
         stop.set()
@@ -555,7 +564,7 @@ def test_effect_crash_safe_re_execution(
 
     request = _make_create(effect_type=effect_type, consequence_level="safe")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
     # Simulate worker-1 claimed the row but crashed; lease is in the past.
     expired = datetime.now(tz=UTC) - timedelta(seconds=1)
@@ -566,7 +575,7 @@ def test_effect_crash_safe_re_execution(
         lease_until=expired,
     )
 
-    deferred_effect_worker_tick(governance_db, worker_id="worker-2")
+    _deferred_effects_service(governance_db).deferred_effect_worker_tick(worker_id="worker-2")
 
     assert len(calls) == 1
     row = _fetch_effect_row(governance_dsn, read.id)
@@ -595,9 +604,9 @@ def test_effect_attempts_increment_on_failure(
 
     request = _make_create(effect_type=effect_type, consequence_level="safe")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
-    deferred_effect_worker_tick(governance_db, worker_id="worker-fail")
+    _deferred_effects_service(governance_db).deferred_effect_worker_tick(worker_id="worker-fail")
 
     row = _fetch_effect_row(governance_dsn, read.id)
     assert row is not None
@@ -624,13 +633,13 @@ def test_effect_reaches_failed_permanently_at_max_attempts(
 
     request = _make_create(effect_type=effect_type, consequence_level="safe")
     with use_audit_context(_make_audit_context()):
-        read = enqueue_effect(governance_db, request)
+        read = _deferred_effects_service(governance_db).enqueue_effect(request)
 
     # Hammer the tick until the row terminates or we exceed the cap.
     # After each failure, the worker re-queues the row (setting status
     # back to ``queued`` with cleared lease) so the next tick can claim.
     for _ in range(DEFAULT_MAX_ATTEMPTS):
-        deferred_effect_worker_tick(governance_db, worker_id="worker-fail")
+        _deferred_effects_service(governance_db).deferred_effect_worker_tick(worker_id="worker-fail")
 
     row = _fetch_effect_row(governance_dsn, read.id)
     assert row is not None

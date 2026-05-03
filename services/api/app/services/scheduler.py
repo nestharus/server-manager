@@ -14,15 +14,7 @@ from app.contracts.scheduler import (
 )
 from app.core.context import resolve_register_correlation, use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.repositories.scheduler import (
-    claim_due_scheduled_jobs,
-    extend_job_lease,
-    fetch_scheduled_job,
-    mark_scheduled_job_abandoned,
-    mark_scheduled_job_completed,
-    mark_scheduled_job_failed,
-    register_scheduled_job as insert_scheduled_job,
-)
+from app.repositories.scheduler import SchedulerRepository
 
 LEASE_SECONDS = 300
 POLL_INTERVAL_SECONDS = 5
@@ -69,7 +61,9 @@ class HandlerRegistry:
     def __init__(self) -> None:
         self._handlers: dict[str, SchedulerHandler] = {}
 
-    def register(self, handler_name: str, handler: SchedulerHandler) -> SchedulerHandler:
+    def register(
+        self, handler_name: str, handler: SchedulerHandler
+    ) -> SchedulerHandler:
         if handler_name in self._handlers:
             raise SchedulerHandlerConflictError(handler_name)
         self._handlers[handler_name] = handler
@@ -82,7 +76,9 @@ class HandlerRegistry:
 _HANDLER_REGISTRY = HandlerRegistry()
 
 
-def register_scheduler_handler(handler_name: str) -> Callable[[SchedulerHandler], SchedulerHandler]:
+def register_scheduler_handler(
+    handler_name: str,
+) -> Callable[[SchedulerHandler], SchedulerHandler]:
     def decorator(handler: SchedulerHandler) -> SchedulerHandler:
         return _HANDLER_REGISTRY.register(handler_name, handler)
 
@@ -93,44 +89,10 @@ def _lookup_handler(handler_name: str) -> SchedulerHandler | None:
     return _HANDLER_REGISTRY.lookup(handler_name)
 
 
-def register_scheduled_job(
-    db: PostgresDatabase,
-    request: ScheduledJobCreate,
-) -> ScheduledJobRead:
-    ctx = resolve_register_correlation(request.correlation_id, allow_new_root=True)
-    with db.connection() as connection:
-        row = insert_scheduled_job(
-            connection,
-            job=request,
-            correlation_id=ctx.correlation_id,
-        )
-    return _scheduled_job_from_row(row)
-
-
-def read_scheduled_job(
-    db: PostgresDatabase,
-    job_key: str,
-) -> ScheduledJobRead | None:
-    with db.connection() as connection:
-        row = fetch_scheduled_job(connection, job_key)
-    if row is None:
-        return None
-    return _scheduled_job_from_row(row)
-
-
-def extend_lease(
-    db: PostgresDatabase,
-    job_key: str,
-    *,
-    extra_seconds: int,
-) -> None:
-    with db.connection() as connection:
-        extend_job_lease(connection, job_key=job_key, extra_seconds=extra_seconds)
-
-
-class SchedulerLoop:
+class SchedulerService:
     def __init__(
         self,
+        scheduler_repo: SchedulerRepository,
         db: PostgresDatabase,
         *,
         worker_id: str,
@@ -138,6 +100,7 @@ class SchedulerLoop:
         poll_interval_seconds: int = POLL_INTERVAL_SECONDS,
         claim_batch_size: int = CLAIM_BATCH_SIZE,
     ) -> None:
+        self._scheduler_repo = scheduler_repo
         self._db = db
         self._worker_id = worker_id
         self._lease_seconds = lease_seconds
@@ -158,8 +121,25 @@ class SchedulerLoop:
     async def stop(self) -> None:
         self._stop_event.set()
 
+    def register_scheduled_job(self, request: ScheduledJobCreate) -> ScheduledJobRead:
+        ctx = resolve_register_correlation(request.correlation_id, allow_new_root=True)
+        row = self._scheduler_repo.register_scheduled_job(
+            job=request,
+            correlation_id=ctx.correlation_id,
+        )
+        return _scheduled_job_from_row(row)
+
+    def read_scheduled_job(self, job_key: str) -> ScheduledJobRead | None:
+        row = self._scheduler_repo.fetch_scheduled_job(job_key)
+        if row is None:
+            return None
+        return _scheduled_job_from_row(row)
+
     def extend_lease(self, job_key: str, *, extra_seconds: int) -> None:
-        extend_lease(self._db, job_key, extra_seconds=extra_seconds)
+        self._scheduler_repo.extend_job_lease(
+            job_key=job_key,
+            extra_seconds=extra_seconds,
+        )
 
     async def run(self) -> None:
         self._is_running = True
@@ -188,10 +168,17 @@ class SchedulerLoop:
             await asyncio.to_thread(self._dispatch_claimed_job, job)
 
         await self._run_chapter_archive_if_due(now)
-        from app.services.deferred_effects import deferred_effect_worker_tick
+        from functools import partial
+
+        from app.repositories.deferred_effects import DeferredEffectsRepository
+        from app.services.deferred_effects import DeferredEffectsService
+        from app.services.mutations import mutate_entity
+
         await asyncio.to_thread(
-            deferred_effect_worker_tick,
-            self._db,
+            DeferredEffectsService(
+                deferred_effects_repo=DeferredEffectsRepository(db=self._db),
+                mutations_callable=partial(mutate_entity, db=self._db),
+            ).deferred_effect_worker_tick,
             worker_id=self._worker_id,
         )
         await self._run_ticket_sla_if_due(now)
@@ -287,7 +274,9 @@ class SchedulerLoop:
 
         self._last_compliance_evaluation_tick_at = now
         try:
-            await asyncio.to_thread(compliance_evaluation_worker_tick, self._db, now=now)
+            await asyncio.to_thread(
+                compliance_evaluation_worker_tick, self._db, now=now
+            )
         except Exception:
             logger.exception(
                 "compliance evaluation worker tick failed for worker %s",
@@ -296,7 +285,7 @@ class SchedulerLoop:
 
     def _claim_due_jobs(self, now: datetime) -> list[ScheduledJobRead]:
         with self._db.connection() as connection:
-            rows = claim_due_scheduled_jobs(
+            rows = self._scheduler_repo._claim_due_scheduled_jobs_on(
                 connection,
                 worker_id=self._worker_id,
                 now=now,
@@ -309,7 +298,7 @@ class SchedulerLoop:
         handler = _lookup_handler(job.handler_name)
         if handler is None:
             with self._db.connection() as connection:
-                mark_scheduled_job_abandoned(
+                self._scheduler_repo._mark_scheduled_job_abandoned_on(
                     connection,
                     job_key=job.job_key,
                     reason="handler_not_found",
@@ -323,17 +312,16 @@ class SchedulerLoop:
                     asyncio.run(result)
         except Exception as error:
             with self._db.connection() as connection:
-                failed_row = mark_scheduled_job_failed(
+                failed_row = self._scheduler_repo._mark_scheduled_job_failed_on(
                     connection,
                     job_key=job.job_key,
                     worker_id=self._worker_id,
                     error=error,
                 )
-                if (
-                    failed_row is not None
-                    and int(failed_row["attempts"]) >= int(failed_row["max_attempts"])
+                if failed_row is not None and int(failed_row["attempts"]) >= int(
+                    failed_row["max_attempts"]
                 ):
-                    mark_scheduled_job_abandoned(
+                    self._scheduler_repo._mark_scheduled_job_abandoned_on(
                         connection,
                         job_key=job.job_key,
                         reason="max_attempts_exhausted",
@@ -341,7 +329,7 @@ class SchedulerLoop:
             return
 
         with self._db.connection() as connection:
-            mark_scheduled_job_completed(
+            self._scheduler_repo._mark_scheduled_job_completed_on(
                 connection,
                 job_key=job.job_key,
                 worker_id=self._worker_id,
@@ -352,8 +340,12 @@ def build_scheduler_loop(
     db: PostgresDatabase,
     *,
     worker_id: str,
-) -> SchedulerLoop:
-    return SchedulerLoop(db, worker_id=worker_id)
+) -> SchedulerService:
+    return SchedulerService(
+        scheduler_repo=SchedulerRepository(db),
+        db=db,
+        worker_id=worker_id,
+    )
 
 
 __all__ = [
@@ -366,12 +358,9 @@ __all__ = [
     "PERMISSION_EXPIRY_INTERVAL_SECONDS",
     "POLL_INTERVAL_SECONDS",
     "READ_MODEL_TICK_INTERVAL_SECONDS",
-    "SchedulerLoop",
+    "SchedulerService",
     "TICKET_SLA_INTERVAL_SECONDS",
     "_lookup_handler",
     "build_scheduler_loop",
-    "extend_lease",
-    "read_scheduled_job",
-    "register_scheduled_job",
     "register_scheduler_handler",
 ]

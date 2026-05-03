@@ -42,7 +42,12 @@ from app.contracts.applications import (
     PublicApplicationSubmission,
 )
 from app.contracts.authority import AuthorityRequirement
-from app.contracts.mutations import MutationRequest, MutationResult, StaleMutationError, StateChangeDraft
+from app.contracts.mutations import (
+    MutationRequest,
+    MutationResult,
+    StaleMutationError,
+    StateChangeDraft,
+)
 from app.core.context import get_current_audit_context, use_audit_context
 from app.repositories.application_messages import ApplicationMessagesRepository
 from app.repositories.applications import ApplicationsRepository
@@ -51,14 +56,15 @@ from app.repositories.db import PostgresDatabase
 from app.repositories.forms import FormsRepository
 from app.repositories.members import MembersRepository
 from app.repositories.public_chapters import PublicChaptersRepository
-from app.services.authority import current_time, evaluate, _row_to_read as _grant_row_to_read
+from app.services.authority import (
+    current_time,
+    evaluate,
+    _row_to_read as _grant_row_to_read,
+)
 from app.services.form_visibility import evaluate_visibility
 from app.services.file_upload import FileUploadService, parse_object_key
 from app.services.members import MembersService, is_synthetic_member
-from app.services.notifications import (
-    NotificationEmitError,
-    emit_application_public_submitted_event,
-)
+from app.services.notifications import NotificationEmitError
 
 
 logger = logging.getLogger(__name__)
@@ -261,7 +267,9 @@ def _fetch_application_row(
     connection: Connection[Any],
     application_id: UUID,
 ) -> dict[str, Any]:
-    row = applications_repo._get_application_on(connection, application_id=application_id)
+    row = applications_repo._get_application_on(
+        connection, application_id=application_id
+    )
     if row is None:
         raise ApplicationNotFoundError(application_id)
     return row
@@ -424,7 +432,9 @@ def _validate_application_responses_impl(
     connection: Connection[Any] | None = None,
     submitted_scope: dict[str, Any] | None = None,
 ) -> None:
-    field_list = [_APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw) for raw in fields]
+    field_list = [
+        _APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw) for raw in fields
+    ]
     field_map = {field.id: field for field in field_list}
     response_keys = set(responses)
     unknown = response_keys - set(field_map)
@@ -443,7 +453,9 @@ def _validate_application_responses_impl(
     missing = sorted(
         field_id
         for field_id, field in field_map.items()
-        if visibility.get(field_id, False) and field.required and field_id not in responses
+        if visibility.get(field_id, False)
+        and field.required
+        and field_id not in responses
     )
     if missing:
         raise InvalidApplicationResponseError(
@@ -464,7 +476,9 @@ def _validate_application_responses_impl(
                 raise InvalidApplicationResponseError(f"{field_id} must be a number")
         elif field.type == "select":
             if not isinstance(value, str) or value not in (field.options or []):
-                raise InvalidApplicationResponseError(f"{field_id} must be a configured option")
+                raise InvalidApplicationResponseError(
+                    f"{field_id} must be a configured option"
+                )
         elif field.type == "multi_select":
             if not isinstance(value, list):
                 raise InvalidApplicationResponseError(f"{field_id} must be a list")
@@ -476,15 +490,21 @@ def _validate_application_responses_impl(
                         f"{field_id} entries must be strings"
                     )
             if len(value) != len(set(value)):
-                raise InvalidApplicationResponseError(f"{field_id} must not contain duplicates")
+                raise InvalidApplicationResponseError(
+                    f"{field_id} must not contain duplicates"
+                )
             options = set(field.options or [])
             if any(item not in options for item in value):
-                raise InvalidApplicationResponseError(f"{field_id} must contain configured options")
+                raise InvalidApplicationResponseError(
+                    f"{field_id} must contain configured options"
+                )
         elif field.type == "boolean" and not isinstance(value, bool):
             raise InvalidApplicationResponseError(f"{field_id} must be a boolean")
         elif field.type == "chapter_select":
             if not isinstance(value, str):
-                raise InvalidApplicationResponseError(f"{field_id} must be a chapter id")
+                raise InvalidApplicationResponseError(
+                    f"{field_id} must be a chapter id"
+                )
             chapter_id = value.strip()
             if not chapter_id:
                 raise InvalidApplicationResponseError(f"{field_id} is required")
@@ -500,7 +520,9 @@ def _validate_application_responses_impl(
                 connection is not None
                 and public_chapters_repo.fetch_active_public_chapter(chapter_id) is None
             ):
-                raise InvalidApplicationResponseError(f"{field_id} must be an active chapter")
+                raise InvalidApplicationResponseError(
+                    f"{field_id} must be an active chapter"
+                )
         elif field.type == "file":
             try:
                 file_response = FormFileResponse.model_validate(value)
@@ -543,7 +565,9 @@ def _resolve_application_id(
     responses: dict[str, Any],
     fields: list[dict[str, Any]],
 ) -> UUID:
-    field_list = [_APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw) for raw in fields]
+    field_list = [
+        _APPLICATION_FORM_FIELD_ADAPTER.validate_python(raw) for raw in fields
+    ]
     visibility = evaluate_visibility(field_list, responses)
     application_ids: set[UUID] = set()
     for field in field_list:
@@ -609,7 +633,10 @@ def _chapter_selector_override(
 
     selected_chapter_id = submitted_scope.get("scope_id")
     response_chapter_id = responses.get(chapter_field_id)
-    if not isinstance(response_chapter_id, str) or response_chapter_id.strip() != selected_chapter_id:
+    if (
+        not isinstance(response_chapter_id, str)
+        or response_chapter_id.strip() != selected_chapter_id
+    ):
         raise InvalidApplicationResponseError(
             "chapter_select response must match submitted chapter scope"
         )
@@ -668,7 +695,9 @@ def validate_required_transition_fields(
     if action == "reassign" and request.new_owner_id is None:
         raise ValueError("new_owner_id is required for reassign")
     if action in {"approve", "deny"}:
-        reason = None if request.decision_reason is None else request.decision_reason.strip()
+        reason = (
+            None if request.decision_reason is None else request.decision_reason.strip()
+        )
         if not reason:
             raise ApplicationDecisionReasonRequiredError(action)
     if action == "review":
@@ -754,7 +783,11 @@ def _maybe_idempotent_interview(
 ) -> dict[str, Any] | None:
     stored_thread_id = current.get("interview_thread_id")
     requested_thread_id = request.thread_id
-    if stored_thread_id and requested_thread_id and stored_thread_id != requested_thread_id:
+    if (
+        stored_thread_id
+        and requested_thread_id
+        and stored_thread_id != requested_thread_id
+    ):
         raise ApplicationInterviewThreadMismatchError(
             current_thread_id=str(stored_thread_id),
             requested_thread_id=requested_thread_id,
@@ -794,20 +827,6 @@ class ApplicationsService:
         self._mutations_callable = mutations_callable
         self._notification_emitter = notification_emitter
 
-    def _public_submitted_event_exists(self, application_id: UUID) -> bool:
-        with self._applications_repo.db.connection() as connection:
-            row = connection.execute(
-                """
-                SELECT 1
-                FROM notification_events
-                WHERE event_type = 'application.public_submitted'
-                  AND payload_json->>'application_id' = %s
-                LIMIT 1
-                """,
-                (str(application_id),),
-            ).fetchone()
-        return row is not None
-
     def require_transition_authority(
         self,
         *,
@@ -815,7 +834,9 @@ class ApplicationsService:
         action: str,
         target_scope: dict[str, Any],
     ) -> None:
-        permission = "application.review" if action == "reassign" else f"application.{action}"
+        permission = (
+            "application.review" if action == "reassign" else f"application.{action}"
+        )
         _require_authority(
             self._applications_repo.db,
             actor=actor,
@@ -830,7 +851,9 @@ class ApplicationsService:
         actor: ActorIdentity,
         application: ApplicationRead,
     ) -> None:
-        if actor.actor_kind == "user" and actor.actor_id == str(application.applicant_id):
+        if actor.actor_kind == "user" and actor.actor_id == str(
+            application.applicant_id
+        ):
             return
         target_scope = application.form_snapshot["target_scope"]
         authority_repo = AuthorityRepository(self._applications_repo.db)
@@ -907,7 +930,9 @@ class ApplicationsService:
         *,
         submitted_scope: dict[str, Any] | None = None,
     ) -> None:
-        needs_connection = any(field.get("type") == "chapter_select" for field in fields)
+        needs_connection = any(
+            field.get("type") == "chapter_select" for field in fields
+        )
         if not needs_connection:
             return self._validate_application_responses_on(
                 None,
@@ -997,10 +1022,12 @@ class ApplicationsService:
             raise FormDefinitionNotFoundError(validated.scope)
 
         if validated.client_application_id is not None:
-            existing = self._applications_repo._get_application_by_client_application_id_on(
-                connection,
-                applicant_id=validated.applicant_id,
-                client_application_id=validated.client_application_id,
+            existing = (
+                self._applications_repo._get_application_by_client_application_id_on(
+                    connection,
+                    applicant_id=validated.applicant_id,
+                    client_application_id=validated.client_application_id,
+                )
             )
             if existing is not None:
                 raise DuplicateApplicationCreateError(_row_to_read(existing))
@@ -1016,7 +1043,9 @@ class ApplicationsService:
         snapshot = build_form_snapshot(form_row)
         if target_scope_override is not None:
             snapshot["target_scope"] = target_scope_override
-        application_id = _resolve_application_id(validated.responses, snapshot["fields"])
+        application_id = _resolve_application_id(
+            validated.responses, snapshot["fields"]
+        )
         self._validate_application_responses_on(
             connection,
             snapshot["fields"],
@@ -1154,12 +1183,6 @@ class ApplicationsService:
                     application=created.read,
                     discord_user_id=discord_user_id,
                 )
-                if not self._public_submitted_event_exists(created.read.id):
-                    emit_application_public_submitted_event(
-                        self._applications_repo.db,
-                        application=created.read,
-                        discord_user_id=discord_user_id,
-                    )
             except (NotificationEmitError, RuntimeError):
                 logger.exception(
                     "notification emit failed for application %s; submit row remains durably committed",
@@ -1227,7 +1250,11 @@ class ApplicationsService:
         payload_allowlist: set[str],
         request_surface: str,
     ) -> MutationResult:
-        action = request.action.value if hasattr(request.action, "value") else str(request.action)
+        action = (
+            request.action.value
+            if hasattr(request.action, "value")
+            else str(request.action)
+        )
         review_id = uuid4()
 
         def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
@@ -1258,7 +1285,9 @@ class ApplicationsService:
             if action in {"request_interview", "waitlist", "reactivate"}:
                 notes = reason
             decision_reason = (
-                None if request.decision_reason is None else request.decision_reason.strip()
+                None
+                if request.decision_reason is None
+                else request.decision_reason.strip()
             )
             updated = dict(current)
             updated["state"] = next_state
@@ -1350,9 +1379,15 @@ class ApplicationsService:
             }
             if action == "request_interview":
                 payload_json["thread_id"] = request.thread_id
-            if action in {"reassign", "reactivate"} and request.new_owner_id is not None:
+            if (
+                action in {"reassign", "reactivate"}
+                and request.new_owner_id is not None
+            ):
                 payload_json["new_owner_id"] = str(request.new_owner_id)
-            if action in {"request_interview", "waitlist", "reactivate"} and reason is not None:
+            if (
+                action in {"request_interview", "waitlist", "reactivate"}
+                and reason is not None
+            ):
                 payload_json["reason"] = reason
 
             return StateChangeDraft(
@@ -1453,7 +1488,9 @@ class ApplicationsService:
                     version=int(idempotent["version"]),
                     etag=f'"{int(idempotent["version"])}"',
                 )
-        originating_actor_kind, originating_actor_id = _originating_actor(request, actor)
+        originating_actor_kind, originating_actor_id = _originating_actor(
+            request, actor
+        )
         resolved_action_payload = action_payload or {
             "action": action,
             "reviewer_id": None if reviewer_id is None else str(reviewer_id),
@@ -1461,7 +1498,9 @@ class ApplicationsService:
             "decision_reason": request.decision_reason,
             "thread_id": request.thread_id,
             "reason": request.reason,
-            "new_owner_id": None if request.new_owner_id is None else str(request.new_owner_id),
+            "new_owner_id": None
+            if request.new_owner_id is None
+            else str(request.new_owner_id),
             "originating_actor_kind": originating_actor_kind,
             "originating_actor_id": originating_actor_id,
         }
@@ -1473,7 +1512,8 @@ class ApplicationsService:
                 request=request,
                 actor=actor,
                 action_payload=resolved_action_payload,
-                payload_allowlist=payload_allowlist or TRANSITION_PAYLOAD_ALLOWLIST[action],
+                payload_allowlist=payload_allowlist
+                or TRANSITION_PAYLOAD_ALLOWLIST[action],
                 request_surface=request_surface
                 or f"api:/api/v1/applications/{application_id}/transitions",
             )
@@ -1487,7 +1527,9 @@ class ApplicationsService:
                     application_id,
                 )
             if live["state"] != "queued" or live["owner_id"] is not None:
-                raise ApplicationAlreadyClaimedError(application=_row_to_read(live)) from error
+                raise ApplicationAlreadyClaimedError(
+                    application=_row_to_read(live)
+                ) from error
             raise
 
         if action_payload is not None:
