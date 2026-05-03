@@ -55,21 +55,6 @@ ARCHIVE_WORKER_ACTOR = ActorIdentity(
 ARCHIVE_TICK_INTERVAL_SECONDS = 60
 _PENDING_APPLICATION_STATES = {"submitted", "queued", "claimed", "in_review"}
 
-_DB: PostgresDatabase | None = None
-
-
-def configure_archive_worker(*, db: PostgresDatabase) -> None:
-    global _DB
-    _DB = db
-
-
-def get_archive_db() -> PostgresDatabase:
-    global _DB
-    if _DB is None:
-        _DB = PostgresDatabase()
-    return _DB
-
-
 def _build_tickets_service(db: PostgresDatabase) -> TicketsService:
     tickets_repo = TicketsRepository(db)
     ticket_messages_repo = TicketMessagesRepository(db)
@@ -353,8 +338,7 @@ def _validate_archive_effects(
             )
 
 
-def archive_worker_tick() -> list[Any]:
-    db = get_archive_db()
+def archive_worker_tick(db: PostgresDatabase) -> list[Any]:
     chapters_service = _build_chapters_service(db)
     statuses = []
     for archive_run in chapters_service.list_active_archive_runs():
@@ -384,8 +368,13 @@ def archive_worker_tick() -> list[Any]:
     return statuses
 
 
-def _record_authority_denied(effect: DeferredEffectRead, permission: str) -> None:
-    chapters_service = _build_chapters_service(get_archive_db())
+def _record_authority_denied(
+    effect: DeferredEffectRead,
+    permission: str,
+    *,
+    db: PostgresDatabase,
+) -> None:
+    chapters_service = _build_chapters_service(db)
     chapters_service.record_archive_manual_review_items(
         archive_run_id=UUID(str(effect.payload_json["archive_run_id"])),
         items=[
@@ -400,8 +389,11 @@ def _record_authority_denied(effect: DeferredEffectRead, permission: str) -> Non
 
 
 @register_scheduler_handler(ARCHIVE_EFFECT_APPLICATION_WITHDRAW)
-def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
-    db = get_archive_db()
+def handle_archive_application_withdraw(
+    effect: DeferredEffectRead,
+    *,
+    db: PostgresDatabase,
+) -> None:
     applications_repo, applications_service = _build_applications_service(db)
     chapters_service = _build_chapters_service(db)
     payload = effect.payload_json
@@ -414,7 +406,7 @@ def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
             actor=ARCHIVE_WORKER_ACTOR,
         )
     except AuthorityDenied:
-        _record_authority_denied(effect, permission)
+        _record_authority_denied(effect, permission, db=db)
         return
 
     with db.transaction() as connection:
@@ -440,8 +432,11 @@ def handle_archive_application_withdraw(effect: DeferredEffectRead) -> None:
 
 
 @register_scheduler_handler(ARCHIVE_EFFECT_TICKET_CLOSE)
-def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
-    db = get_archive_db()
+def handle_archive_ticket_close(
+    effect: DeferredEffectRead,
+    *,
+    db: PostgresDatabase,
+) -> None:
     tickets_repo = TicketsRepository(db)
     chapters_service = _build_chapters_service(db)
     payload = effect.payload_json
@@ -454,7 +449,7 @@ def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
             actor=ARCHIVE_WORKER_ACTOR,
         )
     except AuthorityDenied:
-        _record_authority_denied(effect, permission)
+        _record_authority_denied(effect, permission, db=db)
         return
 
     with db.connection() as connection:
@@ -493,8 +488,11 @@ def handle_archive_ticket_close(effect: DeferredEffectRead) -> None:
 
 
 @register_scheduler_handler(ARCHIVE_EFFECT_AUTHORITY_REVOKE)
-def handle_archive_authority_revoke(effect: DeferredEffectRead) -> None:
-    db = get_archive_db()
+def handle_archive_authority_revoke(
+    effect: DeferredEffectRead,
+    *,
+    db: PostgresDatabase,
+) -> None:
     chapters_service = _build_chapters_service(db)
     payload = effect.payload_json
     permission = "authority.revoke"
@@ -506,7 +504,7 @@ def handle_archive_authority_revoke(effect: DeferredEffectRead) -> None:
             actor=ARCHIVE_WORKER_ACTOR,
         )
     except AuthorityDenied:
-        _record_authority_denied(effect, permission)
+        _record_authority_denied(effect, permission, db=db)
         return
 
     with db.connection() as connection:
@@ -537,9 +535,12 @@ def handle_archive_authority_revoke(effect: DeferredEffectRead) -> None:
 
 
 @register_scheduler_handler(ARCHIVE_EFFECT_DEFERRED_EFFECT_CANCEL)
-def handle_archive_deferred_effect_cancel(effect: DeferredEffectRead) -> None:
+def handle_archive_deferred_effect_cancel(
+    effect: DeferredEffectRead,
+    *,
+    db: PostgresDatabase,
+) -> None:
     payload = effect.payload_json
-    db = get_archive_db()
     deferred_effects_repo = DeferredEffectsRepository(db)
     with db.connection() as connection:
         deferred_effects_repo._mark_unclaimed_deferred_effect_skipped_on(
@@ -554,6 +555,4 @@ __all__ = [
     "ARCHIVE_WORKER_ACTOR",
     "CHAPTER_ARCHIVER_ID",
     "archive_worker_tick",
-    "configure_archive_worker",
-    "get_archive_db",
 ]

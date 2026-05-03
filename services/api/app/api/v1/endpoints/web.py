@@ -51,7 +51,7 @@ from app.services.application_transcript import ApplicationTranscriptService
 from app.services.applications import ApplicationsService
 from app.services.members import MembersService, NonDiscordMemberError
 from app.services.mutations import mutate_entity
-from app.services.web import list_web_admin_chapters
+from app.services.web import WebService
 
 
 router = APIRouter(prefix="/api/v1/web")
@@ -62,11 +62,12 @@ def _db(request: Request) -> PostgresDatabase:
 
 
 @router.get("/admin/chapters", response_model=AdminChapterListRead)
+@inject
 def admin_chapters(
     _principal: CurrentPrincipalRead = Depends(get_pomerium_principal),
-    db: PostgresDatabase = Depends(_db),
+    service: WebService = Depends(Provide[ApiContainer.services.web]),
 ) -> AdminChapterListRead:
-    return list_web_admin_chapters(db)
+    return service.list_web_admin_chapters()
 
 
 def _parse_state_query(state: str | None) -> frozenset[str] | None:

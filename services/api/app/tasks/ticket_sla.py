@@ -16,21 +16,6 @@ from app.services.ticket_messages import TicketMessagesService
 from app.services.ticket_sla import TicketSlaService
 from app.services.tickets import TicketsService
 
-_DB: PostgresDatabase | None = None
-
-
-def configure_ticket_sla(*, db: PostgresDatabase) -> None:
-    global _DB
-    _DB = db
-
-
-def get_ticket_sla_db() -> PostgresDatabase:
-    global _DB
-    if _DB is None:
-        _DB = PostgresDatabase()
-    return _DB
-
-
 def _build_ticket_sla_service(db: PostgresDatabase) -> TicketSlaService:
     tickets_repo = TicketsRepository(db)
     ticket_messages_repo = TicketMessagesRepository(db)
@@ -56,5 +41,5 @@ def _build_ticket_sla_service(db: PostgresDatabase) -> TicketSlaService:
     )
 
 
-def ticket_sla_worker_tick() -> list[SlaTriggerRead]:
-    return _build_ticket_sla_service(get_ticket_sla_db()).evaluate_ticket_sla()
+def ticket_sla_worker_tick(db: PostgresDatabase) -> list[SlaTriggerRead]:
+    return _build_ticket_sla_service(db).evaluate_ticket_sla()

@@ -9,12 +9,12 @@ from app.infrastructure.authz import CedarAuthorizationClient
 from app.infrastructure.ocr import StubOcrProvider
 from app.repositories import _claim as claim_repo
 from app.repositories import activity as activity_repo
-from app.repositories import audit as audit_repo
 from app.repositories import deferred_effects as deferred_effects_repo
 from app.repositories import mutations as mutations_repo
 from app.repositories import notification_events as notification_events_repo
 from app.repositories import notifications as notifications_repo
 from app.repositories import read_models as read_models_repo
+from app.repositories.audit import AuditRepository
 from app.repositories import scheduler as scheduler_repo
 from app.repositories.application_messages import ApplicationMessagesRepository
 from app.repositories.applications import ApplicationsRepository
@@ -30,7 +30,7 @@ from app.repositories.ticket_sla import TicketSlaRepository
 from app.repositories.tickets import TicketsRepository
 from app.repositories.permissions import PermissionsRepository
 from app.repositories.trust import TrustRepository
-from app.repositories import web as web_repo
+from app.repositories.web import WebRepository
 from app.repositories.archive_queries import ArchiveQueriesRepository
 from app.repositories.archive_runs import ArchiveRunsRepository
 from app.repositories.chapter_roles import ChapterRolesRepository
@@ -43,9 +43,9 @@ from app.services import applicant_discord_auth as applicant_discord_auth_servic
 from app.services import (
     application_public_submit_notifications as application_public_submit_notifications_service,
 )
-from app.services import audit as audit_service
-from app.services import audit_overrides as audit_overrides_service
-from app.services import audit_queries as audit_queries_service
+from app.services.audit import AuditService
+from app.services.audit_overrides import AuditOverridesService
+from app.services.audit_queries import AuditQueriesService
 from app.services import authorization as authorization_service
 from app.services.compliance import ComplianceService
 from app.services.compliance_corrections import ComplianceCorrectionsService
@@ -81,7 +81,7 @@ from app.services.roster import RosterService
 from app.services import scheduler as scheduler_service
 from app.services import ticket_categories as ticket_categories_service
 from app.services.trust import TrustService
-from app.services import web as web_service
+from app.services.web import WebService
 from app.services.mutations import mutate_entity
 from app.services.ticket_messages import TicketMessagesService
 from app.services.ticket_sla import TicketSlaService
@@ -89,7 +89,6 @@ from app.services.tickets import TicketsService
 from app.services.scheduler import build_scheduler_loop
 from app.tasks import archive as archive_task_module
 from app.tasks import compliance as compliance_task_module
-from app.tasks import configure_task_runtime
 from app.tasks import notifications_deliver as notifications_deliver_task_module
 from app.tasks import notifications_materialize as notifications_materialize_task_module
 from app.tasks import permission_expiry as permission_expiry_task_module
@@ -137,7 +136,7 @@ class ReposContainer(containers.DeclarativeContainer):
     applications = providers.Factory(ApplicationsRepository, db=db)
     archive_queries = providers.Factory(ArchiveQueriesRepository, db=db)
     archive_runs = providers.Factory(ArchiveRunsRepository, db=db)
-    audit = providers.Object(audit_repo)
+    audit = providers.Factory(AuditRepository, db=db)
     authority = providers.Factory(AuthorityRepository, db=db)
     chapter_roles = providers.Factory(ChapterRolesRepository, db=db)
     chapter_templates = providers.Factory(ChapterTemplatesRepository, db=db)
@@ -166,7 +165,7 @@ class ReposContainer(containers.DeclarativeContainer):
     ticket_sla = providers.Factory(TicketSlaRepository, db=db)
     tickets = providers.Factory(TicketsRepository, db=db)
     trust = providers.Factory(TrustRepository, db=db)
-    web = providers.Object(web_repo)
+    web = providers.Factory(WebRepository, db=db)
 
 
 class ServicesContainer(containers.DeclarativeContainer):
@@ -236,9 +235,20 @@ class ServicesContainer(containers.DeclarativeContainer):
         mutations_callable=mutations_callable.provider,
         notification_emitter=application_notification_emitter,
     )
-    audit = providers.Object(audit_service)
-    audit_overrides = providers.Object(audit_overrides_service)
-    audit_queries = providers.Object(audit_queries_service)
+    audit = providers.Factory(
+        AuditService,
+        audit_repo=repos.audit,
+        mutations_callable=mutations_callable.provider,
+    )
+    audit_overrides = providers.Factory(
+        AuditOverridesService,
+        audit_repo=repos.audit,
+        mutations_callable=mutations_callable.provider,
+    )
+    audit_queries = providers.Factory(
+        AuditQueriesService,
+        audit_repo=repos.audit,
+    )
     authority = providers.Factory(
         AuthorityService,
         authority_repo=repos.authority,
@@ -377,7 +387,11 @@ class ServicesContainer(containers.DeclarativeContainer):
         policies_repo=repos.policies,
         mutations_callable=mutations_callable.provider,
     )
-    web = providers.Object(web_service)
+    web = providers.Factory(
+        WebService,
+        web_repo=repos.web,
+        mutations_callable=mutations_callable.provider,
+    )
 
 
 class TasksContainer(containers.DeclarativeContainer):
@@ -392,7 +406,6 @@ class TasksContainer(containers.DeclarativeContainer):
     scheduler_loop = providers.Singleton(
         build_scheduler_loop, db, worker_id="api:primary"
     )
-    configure_task_runtime = providers.Object(configure_task_runtime)
 
 
 class ApiContainer(containers.DeclarativeContainer):

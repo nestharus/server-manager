@@ -28,7 +28,7 @@ COMPLIANCE_EVALUATION_INTERVAL_SECONDS = 3600
 
 logger = logging.getLogger(__name__)
 
-SchedulerHandler = Callable[[Any], Any]
+SchedulerHandler = Callable[..., Any]
 
 
 def _scheduled_job_from_row(row: dict[str, Any]) -> ScheduledJobRead:
@@ -87,6 +87,28 @@ def register_scheduler_handler(
 
 def _lookup_handler(handler_name: str) -> SchedulerHandler | None:
     return _HANDLER_REGISTRY.lookup(handler_name)
+
+
+def _handler_accepts_db(handler: SchedulerHandler) -> bool:
+    try:
+        signature = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD or name == "db"
+        for name, parameter in signature.parameters.items()
+    )
+
+
+def _invoke_handler_with_db(
+    handler: SchedulerHandler,
+    payload: Any,
+    *,
+    db: PostgresDatabase,
+) -> Any:
+    if _handler_accepts_db(handler):
+        return handler(payload, db=db)
+    return handler(payload)
 
 
 class SchedulerService:
@@ -198,7 +220,7 @@ class SchedulerService:
 
         self._last_archive_tick_at = now
         try:
-            await asyncio.to_thread(archive_worker_tick)
+            await asyncio.to_thread(archive_worker_tick, db=self._db)
         except Exception:
             logger.exception(
                 "chapter archive worker tick failed for worker %s",
@@ -217,7 +239,7 @@ class SchedulerService:
 
         self._last_ticket_sla_tick_at = now
         try:
-            await asyncio.to_thread(ticket_sla_worker_tick)
+            await asyncio.to_thread(ticket_sla_worker_tick, db=self._db)
         except Exception:
             logger.exception(
                 "ticket SLA worker tick failed for worker %s",
@@ -236,7 +258,7 @@ class SchedulerService:
 
         self._last_read_model_tick_at = now
         try:
-            await asyncio.to_thread(read_model_worker_tick, self._db, now=now)
+            await asyncio.to_thread(read_model_worker_tick, db=self._db, now=now)
         except Exception:
             logger.exception(
                 "read-model worker tick failed for worker %s",
@@ -255,7 +277,11 @@ class SchedulerService:
 
         self._last_permission_expiry_tick_at = now
         try:
-            await asyncio.to_thread(permission_expiry_worker_tick, now=now)
+            await asyncio.to_thread(
+                permission_expiry_worker_tick,
+                db=self._db,
+                now=now,
+            )
         except Exception:
             logger.exception(
                 "permission-expiry worker tick failed for worker %s",
@@ -275,7 +301,7 @@ class SchedulerService:
         self._last_compliance_evaluation_tick_at = now
         try:
             await asyncio.to_thread(
-                compliance_evaluation_worker_tick, self._db, now=now
+                compliance_evaluation_worker_tick, db=self._db, now=now
             )
         except Exception:
             logger.exception(
@@ -307,7 +333,7 @@ class SchedulerService:
 
         try:
             with use_audit_context(_reconstruct_audit_context(job.correlation_id)):
-                result = handler(job)
+                result = _invoke_handler_with_db(handler, job, db=self._db)
                 if inspect.isawaitable(result):
                     asyncio.run(result)
         except Exception as error:

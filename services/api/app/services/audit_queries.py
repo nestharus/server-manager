@@ -3,11 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.contracts.audit import AUDIT_CHAIN_MAX_ROWS, AuditEntryListRead
-from app.repositories.audit import (
-    fetch_audit_entry,
-    list_audit_entries_by_correlation,
-)
-from app.repositories.db import PostgresDatabase
+from app.repositories.audit import AuditRepository
 from app.services.audit import _build_audit_entry_read
 
 
@@ -33,38 +29,36 @@ def _build_audit_entry_list(
     return AuditEntryListRead(items=items, total=len(items))
 
 
-def get_audit_entries_by_correlation(
-    db: PostgresDatabase,
-    correlation_id: UUID,
-) -> AuditEntryListRead:
-    with db.connection() as connection:
-        rows = list_audit_entries_by_correlation(
-            connection,
+class AuditQueriesService:
+    def __init__(self, audit_repo: AuditRepository) -> None:
+        self._audit_repo = audit_repo
+
+    def get_audit_entries_by_correlation(
+        self,
+        correlation_id: UUID,
+    ) -> AuditEntryListRead:
+        rows = self._audit_repo.list_audit_entries_by_correlation(
             correlation_id=correlation_id,
             limit=AUDIT_CHAIN_MAX_ROWS + 1,
         )
-    return _build_audit_entry_list(correlation_id=correlation_id, rows=rows)
+        return _build_audit_entry_list(correlation_id=correlation_id, rows=rows)
 
-
-def get_audit_entry_chain(
-    db: PostgresDatabase,
-    entry_id: int,
-) -> AuditEntryListRead:
-    with db.connection() as connection:
-        row = fetch_audit_entry(connection, entry_id)
+    def get_audit_entry_chain(
+        self,
+        entry_id: int,
+    ) -> AuditEntryListRead:
+        row = self._audit_repo.fetch_audit_entry(entry_id)
         if row is None:
             raise LookupError(f"audit entry {entry_id} was not found")
         correlation_id = row["correlation_id"]
-        rows = list_audit_entries_by_correlation(
-            connection,
+        rows = self._audit_repo.list_audit_entries_by_correlation(
             correlation_id=correlation_id,
             limit=AUDIT_CHAIN_MAX_ROWS + 1,
         )
-    return _build_audit_entry_list(correlation_id=correlation_id, rows=rows)
+        return _build_audit_entry_list(correlation_id=correlation_id, rows=rows)
 
 
 __all__ = [
     "AuditChainTooLargeError",
-    "get_audit_entries_by_correlation",
-    "get_audit_entry_chain",
+    "AuditQueriesService",
 ]

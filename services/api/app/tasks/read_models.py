@@ -14,27 +14,12 @@ from app.services.read_models import (
 
 logger = logging.getLogger(__name__)
 
-_DB: PostgresDatabase | None = None
-
-
-def configure_read_models(*, db: PostgresDatabase) -> None:
-    global _DB
-    _DB = db
-
-
-def get_read_models_db() -> PostgresDatabase:
-    global _DB
-    if _DB is None:
-        _DB = PostgresDatabase()
-    return _DB
-
-
 def read_model_worker_tick(
-    db: PostgresDatabase | None = None,
+    db: PostgresDatabase,
     *,
     now: datetime | None = None,
 ) -> ReadModelCursorRead | None:
-    resolved_db = db if db is not None else get_read_models_db()
+    resolved_db = db
     resolved_now = now if now is not None else datetime.now(tz=UTC)
     try:
         return advance_operational_overview_cursor(
@@ -52,4 +37,4 @@ def read_model_worker_tick(
         return None
 
 
-__all__ = ["configure_read_models", "get_read_models_db", "read_model_worker_tick"]
+__all__ = ["read_model_worker_tick"]

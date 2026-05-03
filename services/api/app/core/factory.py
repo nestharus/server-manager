@@ -24,7 +24,6 @@ from app.core.settings import Settings, load_settings
 from app.infrastructure.authz import CedarAuthorizationClient
 from app.infrastructure.ocr import OcrProvider
 from app.repositories.db import PostgresDatabase
-from app.tasks import configure_task_runtime
 
 
 def create_api_app(
@@ -128,6 +127,7 @@ def create_api_app(
             "app.api.v1.endpoints.trust.recompute",
             "app.api.v1.endpoints.trust.signals",
             "app.core.dependencies",
+            "app.api.v1.endpoints.audit",
             "app.api.v1.endpoints.public_application_forms",
             "app.api.v1.endpoints.public_chapters",
             "app.api.v1.endpoints.web",
@@ -138,14 +138,11 @@ def create_api_app(
             "app.api.v1.endpoints.tickets.transitions",
         ],
     )
-    # transitional: removed in INIT-142d (synthesis R7d)
     app.state.settings = resolved_settings
     app.state.db = resolved_db
     app.state.cedar_authorizer = resolved_cedar_authorizer
     app.state.ocr_provider = resolved_ocr_provider
     app.state.scheduler_loop = scheduler_loop
-
-    configure_task_runtime(db=resolved_db)
 
     app.include_router(v1_router)
     return app

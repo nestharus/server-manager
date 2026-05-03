@@ -14,27 +14,14 @@ from app.services.mutations import mutate_entity
 from app.services.notifications_materialize import NotificationsMaterializeService
 from app.services.scheduler import register_scheduler_handler
 
-_DB: PostgresDatabase | None = None
-
-
-def configure_notifications_materialize(*, db: PostgresDatabase) -> None:
-    global _DB
-    _DB = db
-
-
-def get_materialize_db() -> PostgresDatabase:
-    global _DB
-    if _DB is None:
-        _DB = PostgresDatabase()
-    return _DB
-
 
 @register_scheduler_handler("notifications_materialize")
 def materialize_notification_envelopes(
     effect: DeferredEffectRead,
+    *,
+    db: PostgresDatabase,
 ) -> NotificationMaterializationResult:
     event_id = UUID(str(effect.payload_json["event_id"]))
-    db = get_materialize_db()
     return NotificationsMaterializeService(
         notifications_repo=NotificationsRepository(db),
         notification_events_repo=NotificationEventsRepository(db),

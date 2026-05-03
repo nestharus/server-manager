@@ -10,6 +10,7 @@ contract the code agent must satisfy.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -31,8 +32,9 @@ from app.contracts.mutations import (
     StateChangeDraft,
 )
 from app.core.context import get_current_audit_context, use_audit_context
+from app.repositories.audit import AuditRepository
 from app.repositories.db import PostgresDatabase
-from app.services.audit import get_audit_entry
+from app.services.audit import AuditService
 from app.services.mutations import mutate_entity
 
 
@@ -373,7 +375,7 @@ def test_audit_entry_read_is_one_to_one_projection_of_activity_actions(
     governance_db: PostgresDatabase,
     governance_dsn: str,
 ) -> None:
-    """``get_audit_entry(db, id)`` must return an ``AuditEntryRead`` whose
+    """``AuditService.get_audit_entry(id)`` must return an ``AuditEntryRead`` whose
     fields mirror the ``activity_actions`` row exactly. This pins the
     projection-vs-second-authority boundary from synthesis D1."""
 
@@ -396,7 +398,11 @@ def test_audit_entry_read_is_one_to_one_projection_of_activity_actions(
     assert len(actions) == 1
     raw = actions[0]
 
-    entry = get_audit_entry(governance_db, raw["id"])
+    service = AuditService(
+        audit_repo=AuditRepository(governance_db),
+        mutations_callable=partial(mutate_entity, db=governance_db),
+    )
+    entry = service.get_audit_entry(raw["id"])
 
     assert isinstance(entry, AuditEntryRead)
     assert entry.id == raw["id"]
