@@ -3,28 +3,11 @@ from __future__ import annotations
 import re
 from collections import deque
 from typing import Any
-from uuid import UUID, uuid4
 
-from psycopg import Connection
-
-from app.contracts.actor import ActorIdentity
-from app.contracts.mutations import MutationRequest, MutationResult, StateChangeDraft
 from app.contracts.ticket_categories import (
     InvalidTicketSlaRulesError,
     InvalidTicketStateMachineError,
-    TicketCategoryCreate,
-    TicketCategoryNotFoundError,
-    TicketCategoryPatch,
-    TicketCategoryRead,
 )
-from app.repositories.db import PostgresDatabase
-from app.repositories.ticket_categories import (
-    get_ticket_category,
-    get_ticket_category_for_update,
-    insert_ticket_category,
-    update_ticket_category as update_ticket_category_projection,
-)
-from app.services.mutations import mutate_entity
 
 STATE_KEY_PATTERN = re.compile(r"^[a-z0-9_]+$")
 CATEGORY_PAYLOAD_ALLOWLIST = {
@@ -34,45 +17,6 @@ CATEGORY_PAYLOAD_ALLOWLIST = {
     "state_machine",
     "sla_rules",
 }
-
-
-def _make_request(
-    *,
-    expected_version: int,
-    actor: ActorIdentity,
-    request_surface: str,
-) -> MutationRequest:
-    return MutationRequest(
-        expected_version=expected_version,
-        actor_kind=actor.actor_kind,
-        actor_id=actor.actor_id,
-        reason_text=None,
-        request_surface=request_surface,
-    )
-
-
-def _row_to_read(row: dict[str, Any]) -> TicketCategoryRead:
-    return TicketCategoryRead(
-        id=row["id"],
-        name=row["name"],
-        routing_scope=row["routing_scope"],
-        privacy_level=row["privacy_level"],
-        state_machine=row["state_machine"],
-        sla_rules=row["sla_rules"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-        version=int(row["version"]),
-    )
-
-
-def _fetch_category_row(
-    connection: Connection[Any],
-    category_id: UUID,
-) -> dict[str, Any]:
-    row = get_ticket_category(connection, category_id)
-    if row is None:
-        raise TicketCategoryNotFoundError(category_id)
-    return row
 
 
 def _build_changed_fields(current: dict[str, Any], updated: dict[str, Any]) -> dict[str, Any]:
@@ -289,109 +233,3 @@ def validate_sla_rules(
                 )
 
     return sla_rules
-
-
-def create_ticket_category(
-    db: PostgresDatabase,
-    request: TicketCategoryCreate,
-    actor: ActorIdentity,
-) -> tuple[TicketCategoryRead, MutationResult]:
-    category_id = uuid4()
-    validated = TicketCategoryCreate.model_validate(request)
-    payload = validated.model_dump(mode="python", by_alias=True)
-    validate_state_machine(payload["state_machine"])
-    validate_sla_rules(payload["sla_rules"], payload["state_machine"])
-
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        insert_ticket_category(connection, row={"id": category_id, **payload})
-        return StateChangeDraft(
-            change_type="ticket_category.created",
-            payload_json={
-                "ticket_category_id": str(category_id),
-                **validated.model_dump(mode="json", by_alias=True),
-            },
-        )
-
-    result = mutate_entity(
-        db=db,
-        aggregate_type="ticket_category",
-        aggregate_id=str(category_id),
-        request=_make_request(
-            expected_version=0,
-            actor=actor,
-            request_surface="api:/api/v1/ticket-categories",
-        ),
-        action_type="ticket_category.create",
-        action_payload=validated.model_dump(mode="json", by_alias=True),
-        payload_allowlist=CATEGORY_PAYLOAD_ALLOWLIST,
-        mutate_projection=mutate_projection,
-        scope_kind="global",
-        scope_id=None,
-    )
-    with db.connection() as connection:
-        read = _row_to_read(_fetch_category_row(connection, category_id))
-    return read, result
-
-
-def update_ticket_category(
-    db: PostgresDatabase,
-    category_id: UUID,
-    expected_version: int,
-    request: TicketCategoryPatch,
-    actor: ActorIdentity,
-) -> tuple[TicketCategoryRead, MutationResult]:
-    with db.connection() as connection:
-        current = _row_to_read(_fetch_category_row(connection, category_id))
-
-    patch_data = request.model_dump(mode="python", by_alias=True, exclude_unset=True)
-    merged = current.model_dump(mode="python", by_alias=True)
-    merged.update(patch_data)
-    merged.pop("id", None)
-    merged.pop("created_at", None)
-    merged.pop("updated_at", None)
-    merged.pop("version", None)
-    validated = TicketCategoryCreate.model_validate(merged)
-    persisted = validated.model_dump(mode="python", by_alias=True)
-    validate_state_machine(persisted["state_machine"])
-    validate_sla_rules(persisted["sla_rules"], persisted["state_machine"])
-
-    def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        locked = get_ticket_category_for_update(connection, category_id)
-        if locked is None:
-            raise TicketCategoryNotFoundError(category_id)
-        updated = update_ticket_category_projection(
-            connection,
-            category_id=category_id,
-            patch_row=persisted,
-        )
-        if updated is None:
-            raise TicketCategoryNotFoundError(category_id)
-        diff = _build_changed_fields(locked, persisted)
-        return StateChangeDraft(
-            change_type="ticket_category.updated",
-            payload_json={
-                "ticket_category_id": str(category_id),
-                **validated.model_dump(mode="json", by_alias=True),
-            },
-            diff_json=diff or None,
-        )
-
-    result = mutate_entity(
-        db=db,
-        aggregate_type="ticket_category",
-        aggregate_id=str(category_id),
-        request=_make_request(
-            expected_version=expected_version,
-            actor=actor,
-            request_surface=f"api:/api/v1/ticket-categories/{category_id}",
-        ),
-        action_type="ticket_category.patch",
-        action_payload=validated.model_dump(mode="json", by_alias=True),
-        payload_allowlist=CATEGORY_PAYLOAD_ALLOWLIST,
-        mutate_projection=mutate_projection,
-        scope_kind="global",
-        scope_id=None,
-    )
-    with db.connection() as connection:
-        read = _row_to_read(_fetch_category_row(connection, category_id))
-    return read, result

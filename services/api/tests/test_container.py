@@ -137,6 +137,35 @@ def test_container_db_override_replaces_resolution(test_settings):
         container.shutdown_resources()
 
 
+def test_container_resolves_ticket_factories(test_settings):
+    """TG-4: Container resolves ticket repos and services as Factory
+    instances (post-142b shape), not as module references.
+    """
+    from app.repositories.ticket_categories import TicketCategoriesRepository
+    from app.repositories.ticket_messages import TicketMessagesRepository
+    from app.repositories.ticket_sla import TicketSlaRepository
+    from app.repositories.tickets import TicketsRepository
+    from app.services.ticket_messages import TicketMessagesService
+    from app.services.ticket_sla import TicketSlaService
+    from app.services.tickets import TicketsService
+
+    container = ApiContainer(settings=test_settings)
+    container.init_resources()
+    try:
+        assert isinstance(container.repos.tickets(), TicketsRepository)
+        assert isinstance(
+            container.repos.ticket_categories(),
+            TicketCategoriesRepository,
+        )
+        assert isinstance(container.repos.ticket_messages(), TicketMessagesRepository)
+        assert isinstance(container.repos.ticket_sla(), TicketSlaRepository)
+        assert isinstance(container.services.tickets(), TicketsService)
+        assert isinstance(container.services.ticket_messages(), TicketMessagesService)
+        assert isinstance(container.services.ticket_sla(), TicketSlaService)
+    finally:
+        container.shutdown_resources()
+
+
 def test_container_missing_settings_raises():
     with pytest.raises(Exception, match=r"Dependency|defined"):
         ApiContainer().core.settings()

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from dependency_injector import providers
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -21,12 +22,11 @@ from app.contracts.ticket_messages import TicketMessageAppendRequest
 from app.contracts.tickets import TicketCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.ticket_categories import create_ticket_category
 from app.services.ticket_sla import (
     SLA_NOTIFICATION_PAYLOAD_ALLOWLIST,
-    evaluate_ticket_sla,
+    TicketSlaService,
 )
-from app.services.tickets import create_ticket
+from app.services.tickets import TicketsService
 
 
 def _audit_context() -> AuditContextRead:
@@ -130,20 +130,18 @@ def _ticket_payload(category_id: UUID) -> TicketCreate:
 
 
 def _create_ticket_with_sla(
-    db: PostgresDatabase,
+    tickets_service: TicketsService,
     *,
     sla_rules: dict[str, Any],
 ) -> UUID:
     with use_audit_context(_audit_context()):
-        category, _ = create_ticket_category(
-            db,
+        category, _ = tickets_service.create_category(
             TicketCategoryCreate.model_validate(
                 _category_payload(sla_rules=sla_rules)
             ),
             _actor(),
         )
-        created, _ = create_ticket(
-            db,
+        created, _ = tickets_service.create_ticket(
             _ticket_payload(category.id),
             ActorIdentity(actor_kind="service", actor_id="discord-ticket-bot"),
         )
@@ -232,13 +230,40 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         db.close()
 
 
+@pytest.fixture()
+def ticket_services(
+    governance_dsn: str,  # noqa: ARG001 — resets tables before resolving the app container
+    ticket_app_with_overrides: tuple[Any, Any],
+) -> tuple[TicketsService, TicketSlaService]:
+    _app, container = ticket_app_with_overrides
+    return container.services.tickets(), container.services.ticket_sla()
+
+
+@pytest.fixture()
+def tickets_service(
+    ticket_services: tuple[TicketsService, TicketSlaService],
+) -> TicketsService:
+    tickets, _ticket_sla = ticket_services
+    return tickets
+
+
+@pytest.fixture()
+def ticket_sla_service(
+    ticket_services: tuple[TicketsService, TicketSlaService],
+) -> TicketSlaService:
+    _tickets, ticket_sla = ticket_services
+    return ticket_sla
+
+
 def test_thresholds_fire_ascending_without_skipping(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    tickets_service: TicketsService,
+    ticket_sla_service: TicketSlaService,
 ) -> None:
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
-        governance_db,
+        tickets_service,
         sla_rules={
             "schema_version": 1,
             "rules": [
@@ -262,7 +287,7 @@ def test_thresholds_fire_ascending_without_skipping(
     )
     _age_ticket(governance_dsn, ticket_id, created_at=now - timedelta(seconds=1000))
 
-    applied = evaluate_ticket_sla(governance_db, now=now)
+    applied = ticket_sla_service.evaluate_ticket_sla(now=now)
 
     assert [(item.rule_key, item.threshold_seconds) for item in applied] == [
         ("owner", 300),
@@ -283,10 +308,12 @@ def test_thresholds_fire_ascending_without_skipping(
 def test_auto_escalate_reachable_target_transitions_ticket(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    tickets_service: TicketsService,
+    ticket_sla_service: TicketSlaService,
 ) -> None:
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
-        governance_db,
+        tickets_service,
         sla_rules={
             "schema_version": 1,
             "rules": [
@@ -307,7 +334,7 @@ def test_auto_escalate_reachable_target_transitions_ticket(
     )
     _age_ticket(governance_dsn, ticket_id, created_at=now - timedelta(minutes=5))
 
-    applied = evaluate_ticket_sla(governance_db, now=now)
+    applied = ticket_sla_service.evaluate_ticket_sla(now=now)
 
     assert len(applied) == 1
     assert applied[0].consequence == "auto_escalate"
@@ -325,10 +352,12 @@ def test_auto_escalate_reachable_target_transitions_ticket(
 def test_auto_escalate_multihop_target_flags_for_review(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    tickets_service: TicketsService,
+    ticket_sla_service: TicketSlaService,
 ) -> None:
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
-        governance_db,
+        tickets_service,
         sla_rules={
             "schema_version": 1,
             "rules": [
@@ -348,7 +377,7 @@ def test_auto_escalate_multihop_target_flags_for_review(
     )
     _age_ticket(governance_dsn, ticket_id, created_at=now - timedelta(minutes=5))
 
-    applied = evaluate_ticket_sla(governance_db, now=now)
+    applied = ticket_sla_service.evaluate_ticket_sla(now=now)
 
     assert len(applied) == 1
     assert applied[0].consequence == "auto_escalate"
@@ -365,10 +394,12 @@ def test_auto_escalate_multihop_target_flags_for_review(
 def test_rerun_does_not_duplicate_triggers_events_or_transitions(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    tickets_service: TicketsService,
+    ticket_sla_service: TicketSlaService,
 ) -> None:
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
-        governance_db,
+        tickets_service,
         sla_rules={
             "schema_version": 1,
             "rules": [
@@ -384,8 +415,8 @@ def test_rerun_does_not_duplicate_triggers_events_or_transitions(
     )
     _age_ticket(governance_dsn, ticket_id, created_at=now - timedelta(minutes=5))
 
-    first = evaluate_ticket_sla(governance_db, now=now)
-    second = evaluate_ticket_sla(governance_db, now=now + timedelta(minutes=1))
+    first = ticket_sla_service.evaluate_ticket_sla(now=now)
+    second = ticket_sla_service.evaluate_ticket_sla(now=now + timedelta(minutes=1))
 
     assert len(first) == 1
     assert second == []
@@ -398,10 +429,12 @@ def test_notifications_are_published_through_notification_events_emit(
     governance_db: PostgresDatabase,
     governance_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
+    tickets_service: TicketsService,
+    ticket_sla_service: TicketSlaService,
 ) -> None:
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
-        governance_db,
+        tickets_service,
         sla_rules={
             "schema_version": 1,
             "rules": [
@@ -429,7 +462,7 @@ def test_notifications_are_published_through_notification_events_emit(
 
     monkeypatch.setattr(ticket_sla_module.notification_events, "emit", spy_emit)
 
-    evaluate_ticket_sla(governance_db, now=now)
+    ticket_sla_service.evaluate_ticket_sla(now=now)
 
     assert len(calls) == 1
     kwargs = calls[0]["kwargs"]
@@ -445,10 +478,12 @@ def test_notifications_are_published_through_notification_events_emit(
 def test_notify_owner_with_no_owner_records_fallback_summary(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    tickets_service: TicketsService,
+    ticket_sla_service: TicketSlaService,
 ) -> None:
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
-        governance_db,
+        tickets_service,
         sla_rules={
             "schema_version": 1,
             "rules": [
@@ -464,7 +499,7 @@ def test_notify_owner_with_no_owner_records_fallback_summary(
     )
     _age_ticket(governance_dsn, ticket_id, created_at=now - timedelta(minutes=5))
 
-    applied = evaluate_ticket_sla(governance_db, now=now)
+    applied = ticket_sla_service.evaluate_ticket_sla(now=now)
 
     assert len(applied) == 1
     assert applied[0].consequence == "notify_owner"
@@ -485,12 +520,13 @@ def test_notify_owner_with_no_owner_records_fallback_summary(
 def test_concurrent_auto_escalate_stale_version_skips_cycle(
     governance_db: PostgresDatabase,
     governance_dsn: str,
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    tickets_service: TicketsService,
+    ticket_app_with_overrides: tuple[Any, Any],
 ) -> None:
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
-        governance_db,
+        tickets_service,
         sla_rules={
             "schema_version": 1,
             "rules": [
@@ -510,20 +546,29 @@ def test_concurrent_auto_escalate_stale_version_skips_cycle(
     )
     _age_ticket(governance_dsn, ticket_id, created_at=now - timedelta(minutes=5))
 
-    import app.services.ticket_sla as ticket_sla_module
+    class FakeTicketsService:
+        def _raise_stale(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise StaleMutationError(
+                aggregate_type="ticket",
+                aggregate_id=str(ticket_id),
+                expected_version=1,
+                current_version=2,
+            )
 
-    def stale_transition(*_args: Any, **_kwargs: Any) -> Any:
-        raise StaleMutationError(
-            aggregate_type="ticket",
-            aggregate_id=str(ticket_id),
-            expected_version=1,
-            current_version=2,
-        )
+        def transition_ticket(self, *_args: Any, **_kwargs: Any) -> Any:
+            return self._raise_stale(*_args, **_kwargs)
 
-    monkeypatch.setattr(ticket_sla_module, "transition_ticket", stale_transition)
+        def _transition_ticket_on(self, *_args: Any, **_kwargs: Any) -> Any:
+            return self._raise_stale(*_args, **_kwargs)
 
-    with caplog.at_level(logging.INFO, logger="app.services.ticket_sla"):
-        applied = evaluate_ticket_sla(governance_db, now=now)
+    _app, container = ticket_app_with_overrides
+    container.services.tickets.override(providers.Object(FakeTicketsService()))
+    try:
+        ticket_sla_service = container.services.ticket_sla()
+        with caplog.at_level(logging.INFO, logger="app.services.ticket_sla"):
+            applied = ticket_sla_service.evaluate_ticket_sla(now=now)
+    finally:
+        container.services.tickets.reset_override()
 
     assert applied == []
     assert _fetch_triggers(governance_dsn, ticket_id) == []
@@ -535,10 +580,12 @@ def test_concurrent_auto_escalate_stale_version_skips_cycle(
 def test_latest_transition_to_current_state_sets_state_entered_at(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    tickets_service: TicketsService,
+    ticket_sla_service: TicketSlaService,
 ) -> None:
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
-        governance_db,
+        tickets_service,
         sla_rules={
             "schema_version": 1,
             "rules": [
@@ -567,7 +614,7 @@ def test_latest_transition_to_current_state_sets_state_entered_at(
             (uuid4(), ticket_id, latest_state_entry),
         )
 
-    applied = evaluate_ticket_sla(governance_db, now=now)
+    applied = ticket_sla_service.evaluate_ticket_sla(now=now)
 
     assert applied == []
     assert _fetch_triggers(governance_dsn, ticket_id) == []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from uuid import UUID
 
 from app.contracts.actor import ActorIdentity
@@ -7,14 +8,34 @@ from app.contracts.authority import HandoffFailure, HandoffResult, LeadershipHan
 from app.contracts.mutations import StaleMutationError
 from app.contracts.tickets import InvalidTicketTransitionError, TicketNotFoundError, TicketTransitionRequest
 from app.repositories.db import PostgresDatabase
-from app.repositories.tickets import list_open_tickets_for_owner_ids
+from app.repositories.ticket_categories import TicketCategoriesRepository
+from app.repositories.ticket_messages import TicketMessagesRepository
+from app.repositories.tickets import TicketsRepository
 from app.services.authority import (
     _collect_member_aliases,
     _normalize_holder_id,
     _require_scoped_authority,
     get_authority_grant,
 )
-from app.services.tickets import transition_ticket
+from app.services.mutations import mutate_entity
+from app.services.ticket_messages import TicketMessagesService
+from app.services.tickets import TicketsService
+
+
+def _build_tickets_service(db: PostgresDatabase) -> TicketsService:
+    tickets_repo = TicketsRepository(db)
+    ticket_messages_repo = TicketMessagesRepository(db)
+    ticket_messages_service = TicketMessagesService(
+        tickets_repo=tickets_repo,
+        ticket_messages_repo=ticket_messages_repo,
+    )
+    return TicketsService(
+        tickets_repo=tickets_repo,
+        ticket_categories_repo=TicketCategoriesRepository(db),
+        ticket_messages_repo=ticket_messages_repo,
+        ticket_messages_service=ticket_messages_service,
+        mutations_callable=partial(mutate_entity, db=db),
+    )
 
 
 def _failure_reason(error: Exception) -> str:
@@ -56,7 +77,7 @@ def execute_handoff(
             connection,
             [successor_member_id],
         )
-        ticket_rows = list_open_tickets_for_owner_ids(
+        ticket_rows = TicketsRepository(db)._list_open_tickets_for_owner_ids_on(
             connection,
             owner_ids=sorted(set(predecessor_text_aliases) | set(successor_text_aliases)),
             scope_kind=grant.scope_kind,
@@ -66,6 +87,7 @@ def execute_handoff(
     transferred: list[UUID] = []
     already_owned: list[UUID] = []
     failed: list[HandoffFailure] = []
+    tickets_service = _build_tickets_service(db)
 
     for row in ticket_rows:
         owner_id = str(row["owner_id"])
@@ -75,8 +97,7 @@ def execute_handoff(
         if owner_id not in predecessor_text_aliases:
             continue
         try:
-            transition_ticket(
-                db,
+            tickets_service.transition_ticket(
                 ticket_id=row["id"],
                 expected_version=int(row["version"]),
                 request=TicketTransitionRequest(

@@ -35,10 +35,6 @@ from app.services.authority import current_time, evaluate, list_grants_for_grant
 MIN_STRONG_ETAG_LENGTH = 3
 
 
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
-
-
 def parse_if_match_strong(request: Request) -> int:
     if_match = request.headers.get("If-Match")
     if if_match is None:
