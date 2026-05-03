@@ -25,14 +25,9 @@ from app.contracts.applications import (
     InvalidApplicationTransitionError,
 )
 from app.contracts.mutations import MissingAggregateError, StaleMutationError
-from app.repositories.db import PostgresDatabase
 
 
 MIN_STRONG_ETAG_LENGTH = 3
-
-
-def get_db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
 
 
 def parse_if_match_strong(request: Request) -> int:

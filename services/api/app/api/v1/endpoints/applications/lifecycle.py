@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.contracts.actor import ActorIdentity, ActorIdentityMissingError
@@ -13,18 +14,12 @@ from app.contracts.applications import (
     ApplicationSubmission,
     ApplicationTransitionRequest,
 )
+from app.core.container import ApiContainer
 from app.core.dependencies import get_current_actor
 from app.core.context import get_current_actor as get_context_actor
-from app.repositories.db import PostgresDatabase
-from app.services.applications import (
-    list_applications,
-    read_application,
-    require_application_read_authority,
-    submit_application,
-    transition_application,
-)
+from app.services.applications import ApplicationsService
 
-from ._shared import get_db, parse_if_match_strong, raise_known_application_error, set_etag
+from ._shared import parse_if_match_strong, raise_known_application_error, set_etag
 
 
 router = APIRouter(prefix="/api/v1/applications")
@@ -46,14 +41,15 @@ def get_submit_actor() -> ActorIdentity:
 
 
 @router.post("", response_model=ApplicationRead, status_code=HTTPStatus.CREATED)
+@inject
 def submit_application_endpoint(
     body: ApplicationSubmission,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
     actor: ActorIdentity = Depends(get_submit_actor),
 ) -> ApplicationRead:
     try:
-        read, result = submit_application(db, body, actor)
+        read, result = service.submit_application(body, actor)
     except Exception as error:
         raise_known_application_error(error)
     set_etag(response, result.etag)
@@ -80,6 +76,7 @@ def _parse_application_states(state: str | None) -> frozenset[str] | None:
 
 
 @router.get("", response_model=ApplicationListRead)
+@inject
 def list_applications_endpoint(
     state: str | None = None,
     scope_kind: str | None = None,
@@ -87,13 +84,12 @@ def list_applications_endpoint(
     owner_id: UUID | None = None,
     limit: int = 50,
     after_id: UUID | None = None,
-    db: PostgresDatabase = Depends(get_db),
+    service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ApplicationListRead:
     states = _parse_application_states(state)
     try:
-        return list_applications(
-            db,
+        return service.list_applications(
             actor=actor,
             states=states,
             scope_kind=scope_kind,
@@ -107,15 +103,16 @@ def list_applications_endpoint(
 
 
 @router.get("/{application_id}", response_model=ApplicationRead)
+@inject
 def get_application_endpoint(
     application_id: UUID,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ApplicationRead:
     try:
-        read, etag = read_application(db, application_id=application_id)
-        require_application_read_authority(db, actor=actor, application=read)
+        read, etag = service.read_application(application_id=application_id)
+        service.require_application_read_authority(actor=actor, application=read)
     except Exception as error:
         raise_known_application_error(error)
     set_etag(response, etag)
@@ -123,18 +120,18 @@ def get_application_endpoint(
 
 
 @router.post("/{application_id}/transitions", response_model=ApplicationRead)
+@inject
 def transition_application_endpoint(
     application_id: UUID,
     body: ApplicationTransitionRequest,
     request: Request,
     response: Response,
-    db: PostgresDatabase = Depends(get_db),
+    service: ApplicationsService = Depends(Provide[ApiContainer.services.applications]),
     actor: ActorIdentity = Depends(get_current_actor),
 ) -> ApplicationRead:
     expected_version = parse_if_match_strong(request)
     try:
-        read, result = transition_application(
-            db,
+        read, result = service.transition_application(
             application_id=application_id,
             expected_version=expected_version,
             request=body,

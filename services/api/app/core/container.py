@@ -9,8 +9,6 @@ from app.infrastructure.authz import CedarAuthorizationClient
 from app.infrastructure.ocr import StubOcrProvider
 from app.repositories import _claim as claim_repo
 from app.repositories import activity as activity_repo
-from app.repositories import application_messages as application_messages_repo
-from app.repositories import applications as applications_repo
 from app.repositories import archive_queries as archive_queries_repo
 from app.repositories import archive_runs as archive_runs_repo
 from app.repositories import audit as audit_repo
@@ -21,16 +19,18 @@ from app.repositories import chapter_transitions as chapter_transitions_repo
 from app.repositories import chapters as chapters_repo
 from app.repositories import compliance as compliance_repo
 from app.repositories import deferred_effects as deferred_effects_repo
-from app.repositories import forms as forms_repo
 from app.repositories import members as members_repo
 from app.repositories import mutations as mutations_repo
 from app.repositories import notification_events as notification_events_repo
 from app.repositories import notifications as notifications_repo
 from app.repositories import policies as policies_repo
-from app.repositories import public_chapters as public_chapters_repo
 from app.repositories import read_models as read_models_repo
 from app.repositories import roster as roster_repo
 from app.repositories import scheduler as scheduler_repo
+from app.repositories.application_messages import ApplicationMessagesRepository
+from app.repositories.applications import ApplicationsRepository
+from app.repositories.forms import FormsRepository
+from app.repositories.public_chapters import PublicChaptersRepository
 from app.repositories.ticket_categories import TicketCategoriesRepository
 from app.repositories.ticket_messages import TicketMessagesRepository
 from app.repositories.ticket_sla import TicketSlaRepository
@@ -40,13 +40,10 @@ from app.repositories import trust as trust_repo
 from app.repositories import web as web_repo
 from app.repositories.db import PostgresDatabase
 from app.services import applicant_discord_auth as applicant_discord_auth_service
-from app.services import application_messages as application_messages_service
 from app.services import (
     application_public_submit_notifications
     as application_public_submit_notifications_service,
 )
-from app.services import application_transcript as application_transcript_service
-from app.services import applications as applications_service
 from app.services import audit as audit_service
 from app.services import audit_overrides as audit_overrides_service
 from app.services import audit_queries as audit_queries_service
@@ -60,9 +57,7 @@ from app.services import compliance_corrections as compliance_corrections_servic
 from app.services import compliance_extraction as compliance_extraction_service
 from app.services import compliance_review as compliance_review_service
 from app.services import deferred_effects as deferred_effects_service
-from app.services import file_upload as file_upload_service
 from app.services import form_visibility as form_visibility_service
-from app.services import forms as forms_service
 from app.services import (
     leadership_handoff_applications as leadership_handoff_applications_service,
 )
@@ -73,10 +68,16 @@ from app.services import notification_events as notification_events_service
 from app.services import notifications as notifications_service
 from app.services import notifications_delivery as notifications_delivery_service
 from app.services import notifications_materialize as notifications_materialize_service
+from app.services.application_messages import ApplicationMessagesService
+from app.services.application_transcript import ApplicationTranscriptService
+from app.services.applications import ApplicationsService
+from app.services.file_upload import FileUploadService, build_s3_client
+from app.services.forms import FormsService
+from app.services.notifications import emit_application_public_submitted_event
 from app.services.permission_reconciliation import PermissionReconciliationService
 from app.services.permissions import PermissionsService
 from app.services import policies as policies_service
-from app.services import public_chapters as public_chapters_service
+from app.services.public_chapters import PublicChaptersService
 from app.services import read_models as read_models_service
 from app.services import roster as roster_service
 from app.services import scheduler as scheduler_service
@@ -121,6 +122,7 @@ class InfraContainer(containers.DeclarativeContainer):
         base_url=settings.provided.cedar_authorization_url,
     )
     ocr_provider = providers.Singleton(StubOcrProvider)
+    s3_client = providers.Singleton(build_s3_client, settings=settings)
 
 
 class ReposContainer(containers.DeclarativeContainer):
@@ -128,8 +130,8 @@ class ReposContainer(containers.DeclarativeContainer):
 
     claim = providers.Object(claim_repo)
     activity = providers.Object(activity_repo)
-    application_messages = providers.Object(application_messages_repo)
-    applications = providers.Object(applications_repo)
+    application_messages = providers.Factory(ApplicationMessagesRepository, db=db)
+    applications = providers.Factory(ApplicationsRepository, db=db)
     archive_queries = providers.Object(archive_queries_repo)
     archive_runs = providers.Object(archive_runs_repo)
     audit = providers.Object(audit_repo)
@@ -140,14 +142,14 @@ class ReposContainer(containers.DeclarativeContainer):
     chapters = providers.Object(chapters_repo)
     compliance = providers.Object(compliance_repo)
     deferred_effects = providers.Object(deferred_effects_repo)
-    forms = providers.Object(forms_repo)
+    forms = providers.Factory(FormsRepository, db=db)
     members = providers.Object(members_repo)
     mutations = providers.Object(mutations_repo)
     notification_events = providers.Object(notification_events_repo)
     notifications = providers.Object(notifications_repo)
     permissions = providers.Factory(PermissionsRepository, db=db)
     policies = providers.Object(policies_repo)
-    public_chapters = providers.Object(public_chapters_repo)
+    public_chapters = providers.Factory(PublicChaptersRepository, db=db)
     read_models = providers.Object(read_models_repo)
     roster = providers.Object(roster_repo)
     scheduler = providers.Object(scheduler_repo)
@@ -160,16 +162,54 @@ class ReposContainer(containers.DeclarativeContainer):
 
 
 class ServicesContainer(containers.DeclarativeContainer):
+    core = providers.DependenciesContainer()
+    infra = providers.DependenciesContainer()
     repos = providers.DependenciesContainer()
     mutations_callable = providers.Dependency()
 
     applicant_discord_auth = providers.Object(applicant_discord_auth_service)
-    application_messages = providers.Object(application_messages_service)
     application_public_submit_notifications = providers.Object(
         application_public_submit_notifications_service,
     )
-    application_transcript = providers.Object(application_transcript_service)
-    applications = providers.Object(applications_service)
+    application_notification_emitter = providers.Callable(
+        emit_application_public_submitted_event,
+        db=core.db,
+    )
+    file_upload = providers.Factory(
+        FileUploadService,
+        s3_client=infra.s3_client,
+        settings=core.settings,
+    )
+    forms = providers.Factory(
+        FormsService,
+        forms_repo=repos.forms,
+        mutations_callable=mutations_callable.provider,
+    )
+    public_chapters = providers.Factory(
+        PublicChaptersService,
+        public_chapters_repo=repos.public_chapters,
+    )
+    application_messages = providers.Factory(
+        ApplicationMessagesService,
+        applications_repo=repos.applications,
+        application_messages_repo=repos.application_messages,
+        mutations_callable=mutations_callable.provider,
+    )
+    application_transcript = providers.Factory(
+        ApplicationTranscriptService,
+        applications_repo=repos.applications,
+        application_messages_service=application_messages,
+    )
+    applications = providers.Factory(
+        ApplicationsService,
+        applications_repo=repos.applications,
+        application_messages_repo=repos.application_messages,
+        forms_repo=repos.forms,
+        public_chapters_repo=repos.public_chapters,
+        file_upload_service=file_upload,
+        mutations_callable=mutations_callable.provider,
+        notification_emitter=application_notification_emitter.provider,
+    )
     audit = providers.Object(audit_service)
     audit_overrides = providers.Object(audit_overrides_service)
     audit_queries = providers.Object(audit_queries_service)
@@ -183,9 +223,7 @@ class ServicesContainer(containers.DeclarativeContainer):
     compliance_extraction = providers.Object(compliance_extraction_service)
     compliance_review = providers.Object(compliance_review_service)
     deferred_effects = providers.Object(deferred_effects_service)
-    file_upload = providers.Object(file_upload_service)
     form_visibility = providers.Object(form_visibility_service)
-    forms = providers.Object(forms_service)
     leadership_handoff_applications = providers.Object(
         leadership_handoff_applications_service,
     )
@@ -207,7 +245,6 @@ class ServicesContainer(containers.DeclarativeContainer):
         mutations_callable=mutations_callable.provider,
     )
     policies = providers.Object(policies_service)
-    public_chapters = providers.Object(public_chapters_service)
     read_models = providers.Object(read_models_service)
     roster = providers.Object(roster_service)
     scheduler = providers.Object(scheduler_service)
@@ -256,6 +293,8 @@ class ApiContainer(containers.DeclarativeContainer):
     repos = providers.Container(ReposContainer, db=core.db)
     services = providers.Container(
         ServicesContainer,
+        core=core,
+        infra=infra,
         repos=repos,
         mutations_callable=providers.Callable(mutate_entity, db=core.db),
     )

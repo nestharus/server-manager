@@ -15,7 +15,7 @@ from app.contracts.read_models import (
     ReadModelCursorRead,
     StaleHandoffEntry,
 )
-from app.repositories.applications import list_open_applications_for_owner_ids
+from app.repositories.applications import ApplicationsRepository
 from app.repositories.authority import fetch_grants_by_ids, list_active_grants_for_grantee_ids
 from app.repositories.db import PostgresDatabase
 from app.repositories.read_models import (
@@ -253,7 +253,8 @@ def read_leadership_context(
             row["id"]: row
             for row in fetch_grants_by_ids(connection, grant_ids=predecessor_ids)
         }
-        current_application_rows = list_open_applications_for_owner_ids(
+        applications_repo = ApplicationsRepository(db)
+        current_application_rows = applications_repo._list_open_applications_for_owner_ids_on(
             connection,
             owner_ids=member_uuid_aliases,
             states=sorted(OPEN_APPLICATION_STATES),
@@ -286,7 +287,7 @@ def read_leadership_context(
                 [predecessor["grantee_id"]],
                 synthetic_policy="reject",
             )
-            pending_application_rows = list_open_applications_for_owner_ids(
+            pending_application_rows = applications_repo._list_open_applications_for_owner_ids_on(
                 connection,
                 owner_ids=predecessor_uuid_aliases,
                 states=sorted(OPEN_APPLICATION_STATES),

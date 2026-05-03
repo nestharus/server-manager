@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from http import HTTPStatus
 import logging
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -44,27 +44,19 @@ from app.contracts.applications import (
 from app.contracts.authority import AuthorityRequirement
 from app.contracts.mutations import MutationRequest, MutationResult, StaleMutationError, StateChangeDraft
 from app.core.context import get_current_audit_context, use_audit_context
-from app.repositories.applications import (
-    get_application,
-    get_application_by_client_application_id,
-    get_application_for_update,
-    insert_application,
-    insert_review_row,
-    list_applications as list_application_rows,
-    update_application,
-)
+from app.repositories.application_messages import ApplicationMessagesRepository
+from app.repositories.applications import ApplicationsRepository
 from app.repositories.db import PostgresDatabase
-from app.repositories.forms import get_current_form_for_scope
+from app.repositories.forms import FormsRepository
 from app.repositories.members import fetch_member_by_id
-from app.repositories.public_chapters import fetch_active_public_chapter
+from app.repositories.public_chapters import PublicChaptersRepository
 from app.services.authority import current_time, evaluate, list_grants_for_grantee
 from app.services.form_visibility import evaluate_visibility
-from app.services import file_upload
+from app.services.file_upload import FileUploadService, parse_object_key
 from app.services.members import (
     is_synthetic_member,
     resolve_or_create_real_discord_member,
 )
-from app.services.mutations import mutate_entity
 from app.services.notifications import (
     NotificationEmitError,
     emit_application_public_submitted_event,
@@ -267,10 +259,11 @@ def _row_to_read(row: dict[str, Any]) -> ApplicationRead:
 
 
 def _fetch_application_row(
+    applications_repo: ApplicationsRepository,
     connection: Connection[Any],
     application_id: UUID,
 ) -> dict[str, Any]:
-    row = get_application(connection, application_id=application_id)
+    row = applications_repo._get_application_on(connection, application_id=application_id)
     if row is None:
         raise ApplicationNotFoundError(application_id)
     return row
@@ -358,51 +351,6 @@ def _require_non_synthetic_application_member(
     return member
 
 
-def require_transition_authority(
-    db: PostgresDatabase,
-    *,
-    actor: ActorIdentity,
-    action: str,
-    target_scope: dict[str, Any],
-) -> None:
-    permission = "application.review" if action == "reassign" else f"application.{action}"
-    _require_authority(
-        db,
-        actor=actor,
-        permission=permission,
-        scope_kind=str(target_scope["scope_kind"]),
-        scope_id=target_scope.get("scope_id"),
-    )
-
-
-def require_application_read_authority(
-    db: PostgresDatabase,
-    *,
-    actor: ActorIdentity,
-    application: ApplicationRead,
-) -> None:
-    # D8 interprets application read as: applicant identity OR any of the
-    # transition permissions (claim/review/approve/deny/withdraw) at
-    # form_snapshot.target_scope. No dedicated application.read permission.
-    if actor.actor_kind == "user" and actor.actor_id == str(application.applicant_id):
-        return
-    target_scope = application.form_snapshot["target_scope"]
-    grants = list_grants_for_grantee(db, grantee_id=actor.actor_id)
-    for permission in APPLICATION_READ_PERMISSIONS:
-        decision = evaluate(
-            requirement=AuthorityRequirement(
-                scope_kind=str(target_scope["scope_kind"]),  # type: ignore[arg-type]
-                scope_id=target_scope.get("scope_id"),
-                permission=permission,
-            ),
-            grants=grants,
-            at=current_time(),
-        )
-        if decision.allowed:
-            return
-    raise PermissionError("authority requirement denied")
-
-
 def _has_application_list_authority(
     db: PostgresDatabase,
     *,
@@ -430,52 +378,6 @@ def _has_application_list_authority(
     return False
 
 
-def list_applications(
-    db: PostgresDatabase,
-    *,
-    actor: ActorIdentity,
-    states: frozenset[str] | None = None,
-    scope_kind: str | None = None,
-    scope_id: str | None = None,
-    owner_id: UUID | None = None,
-    limit: int = 50,
-    after_id: UUID | None = None,
-) -> ApplicationListRead:
-    if not 1 <= limit <= 200:
-        raise ValueError("limit must be between 1 and 200")
-    if scope_kind == "chapter" and scope_id is None:
-        raise ValueError("scope_id is required when scope_kind is chapter")
-    if scope_kind == "global" and scope_id is not None:
-        raise ValueError("scope_id must be omitted when scope_kind is global")
-
-    auth_scope_kind = scope_kind or "global"
-    auth_scope_id = scope_id if scope_kind is not None else None
-    if not _has_application_list_authority(
-        db,
-        actor=actor,
-        scope_kind=auth_scope_kind,
-        scope_id=auth_scope_id,
-    ):
-        raise ApplicationListForbiddenError()
-
-    with db.connection() as connection:
-        rows = list_application_rows(
-            connection,
-            states=states,
-            scope_kind=scope_kind,
-            scope_id=scope_id,
-            owner_id=owner_id,
-            limit=limit,
-            after_id=after_id,
-        )
-    page_rows = rows[:limit]
-    next_after_id = page_rows[-1]["id"] if len(rows) > limit and page_rows else None
-    return ApplicationListRead(
-        items=[_row_to_read(row) for row in page_rows],
-        next_after_id=next_after_id,
-    )
-
-
 def build_form_snapshot(form_row: dict[str, Any]) -> dict[str, Any]:
     routing_rules = dict(form_row["routing_rules"])
     target_scope = routing_rules.get("review_scope") or {
@@ -496,10 +398,12 @@ def build_form_snapshot(form_row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_application_responses(
+def _validate_application_responses_impl(
     fields: list[dict[str, Any]],
     responses: dict[str, Any],
     *,
+    file_upload_service: FileUploadService,
+    public_chapters_repo: PublicChaptersRepository,
     connection: Connection[Any] | None = None,
     submitted_scope: dict[str, Any] | None = None,
 ) -> None:
@@ -575,7 +479,10 @@ def validate_application_responses(
                 raise InvalidApplicationResponseError(
                     f"{field_id} must match submitted chapter scope"
                 )
-            if connection is not None and fetch_active_public_chapter(connection, chapter_id) is None:
+            if (
+                connection is not None
+                and public_chapters_repo.fetch_active_public_chapter(chapter_id) is None
+            ):
                 raise InvalidApplicationResponseError(f"{field_id} must be an active chapter")
         elif field.type == "file":
             try:
@@ -595,14 +502,14 @@ def validate_application_responses(
                 raise InvalidApplicationResponseError(
                     f"{field_id} size exceeds max_size_bytes"
                 )
-            _application_id, key_field_id, _object_id = file_upload.parse_object_key(
+            _application_id, key_field_id, _object_id = parse_object_key(
                 file_response.object_key
             )
             if key_field_id != field_id:
                 raise InvalidApplicationResponseError(
                     f"{field_id} object key does not match field"
                 )
-            content_length, content_type = file_upload.head_object(
+            content_length, content_type = file_upload_service.head_object(
                 file_response.object_key
             )
             if content_length != file_response.size_bytes:
@@ -633,7 +540,7 @@ def _resolve_application_id(
             raise InvalidApplicationResponseError(
                 f"{field.id} must be a file response object"
             ) from error
-        application_id, _field_id, _object_id = file_upload.parse_object_key(
+        application_id, _field_id, _object_id = parse_object_key(
             file_response.object_key
         )
         application_ids.add(application_id)
@@ -656,12 +563,14 @@ def _chapter_select_field_ids(form_row: dict[str, Any]) -> list[str]:
 
 
 def _chapter_selector_override(
+    forms_repo: FormsRepository,
     connection: Connection[Any],
     *,
     submitted_scope: dict[str, Any],
     responses: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, dict[str, str | None] | None]:
     current_global = _get_current_form_for_submit(
+        forms_repo,
         connection,
         scope_kind="global",
         scope_id=None,
@@ -694,12 +603,13 @@ def _chapter_selector_override(
 
 
 def _get_current_form_for_submit(
+    forms_repo: FormsRepository,
     connection: Connection[Any],
     *,
     scope_kind: str,
     scope_id: str | None,
 ) -> dict[str, Any] | None:
-    form_row = get_current_form_for_scope(
+    form_row = forms_repo._get_current_form_for_scope_on(
         connection,
         scope_kind=scope_kind,
         scope_id=scope_id,
@@ -818,509 +728,6 @@ def _transition_reason(request: ApplicationTransitionRequest) -> str | None:
     return stripped or None
 
 
-def _submit_application_internal(
-    db: PostgresDatabase,
-    request: ApplicationSubmission,
-    actor: ActorIdentity,
-    *,
-    request_surface: str,
-) -> _SubmitApplicationResult:
-    if get_current_audit_context() is None:
-        with use_audit_context(_generated_audit_context()):
-            return _submit_application_internal(
-                db,
-                request,
-                actor,
-                request_surface=request_surface,
-            )
-
-    validated = ApplicationSubmission.model_validate(request)
-    submitted_at = datetime.now(UTC)
-
-    with db.transaction() as connection:
-        applicant = fetch_member_by_id(connection, validated.applicant_id)
-        if applicant is None:
-            raise ValueError(f"member {validated.applicant_id} was not found")
-        if is_synthetic_member(applicant):
-            _raise_synthetic_application_error(
-                code="applicant_synthetic_not_allowed",
-                message=(
-                    "Synthetic public-intake members cannot submit applications."
-                ),
-            )
-
-        submitted_scope = validated.scope.as_persisted()
-        form_row, target_scope_override = _chapter_selector_override(
-            connection,
-            submitted_scope=submitted_scope,
-            responses=validated.responses,
-        )
-        if form_row is None:
-            form_row = _get_current_form_for_submit(
-                connection,
-                scope_kind=validated.scope.scope_kind,
-                scope_id=validated.scope.scope_id,
-            )
-        if form_row is None:
-            raise FormDefinitionNotFoundError(validated.scope)
-
-        if validated.client_application_id is not None:
-            existing = get_application_by_client_application_id(
-                connection,
-                applicant_id=validated.applicant_id,
-                client_application_id=validated.client_application_id,
-            )
-            if existing is not None:
-                raise DuplicateApplicationCreateError(_row_to_read(existing))
-
-        _require_submit_authority(
-            db,
-            actor=actor,
-            applicant_id=validated.applicant_id,
-            scope_kind=form_row["scope_kind"],
-            scope_id=form_row["scope_id"],
-        )
-
-        snapshot = build_form_snapshot(form_row)
-        if target_scope_override is not None:
-            snapshot["target_scope"] = target_scope_override
-        application_id = _resolve_application_id(
-            validated.responses,
-            snapshot["fields"],
-        )
-        validate_application_responses(
-            snapshot["fields"],
-            validated.responses,
-            connection=connection,
-            submitted_scope=submitted_scope,
-        )
-        target_scope = snapshot["target_scope"]
-        persisted = {
-            "id": application_id,
-            "applicant_id": validated.applicant_id,
-            "form_definition_id": form_row["id"],
-            "form_version": int(form_row["version"]),
-            "form_snapshot": snapshot,
-            "target_scope_kind": target_scope["scope_kind"],
-            "target_scope_id": target_scope.get("scope_id"),
-            "responses": validated.responses,
-            "state": "submitted",
-            "owner_id": None,
-            "interview_thread_id": None,
-            "decision_reason": None,
-            "client_application_id": validated.client_application_id,
-            "submitted_at": submitted_at,
-            "queued_at": None,
-            "claimed_at": None,
-            "review_started_at": None,
-            "decided_at": None,
-            "withdrawn_at": None,
-        }
-
-        def submit_projection(active_connection: Connection[Any]) -> StateChangeDraft:
-            insert_application(active_connection, row=persisted)
-            return StateChangeDraft(
-                change_type="application.submitted",
-                payload_json={
-                    "application_id": str(application_id),
-                    "applicant_id": str(validated.applicant_id),
-                    "form_definition_id": str(form_row["id"]),
-                    "form_version": int(form_row["version"]),
-                    "form_snapshot": snapshot,
-                    "target_scope_kind": target_scope["scope_kind"],
-                    "target_scope_id": target_scope.get("scope_id"),
-                    "responses": validated.responses,
-                    "client_application_id": validated.client_application_id,
-                    "state": "submitted",
-                },
-            )
-
-        action_payload = {
-            "applicant_id": str(validated.applicant_id),
-            "form_definition_id": str(form_row["id"]),
-            "form_version": int(form_row["version"]),
-            "target_scope_kind": target_scope["scope_kind"],
-            "target_scope_id": target_scope.get("scope_id"),
-            "responses": validated.responses,
-            "client_application_id": validated.client_application_id,
-        }
-        try:
-            mutate_entity(
-                db=db,
-                connection=connection,
-                aggregate_type="application",
-                aggregate_id=application_aggregate_id(application_id),
-                request=_make_request(
-                    expected_version=0,
-                    actor=actor,
-                    request_surface=request_surface,
-                ),
-                action_type="application.submit",
-                action_payload=action_payload,
-                payload_allowlist=APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST,
-                mutate_projection=submit_projection,
-                scope_kind=target_scope["scope_kind"],
-                scope_id=target_scope.get("scope_id"),
-            )
-        except errors.UniqueViolation as error:
-            with db.connection() as recovery_connection:
-                existing = (
-                    None
-                    if validated.client_application_id is None
-                    else get_application_by_client_application_id(
-                        recovery_connection,
-                        applicant_id=validated.applicant_id,
-                        client_application_id=validated.client_application_id,
-                    )
-                )
-            if existing is None:
-                raise InvalidApplicationResponseError(
-                    "file upload application id already exists"
-                ) from error
-            raise DuplicateApplicationCreateError(_row_to_read(existing)) from error
-
-        route_request = ApplicationTransitionRequest(action="route")
-        result = _transition_application_locked(
-            db=db,
-            connection=connection,
-            application_id=application_id,
-            expected_version=1,
-            request=route_request,
-            actor=actor,
-            action_payload=action_payload,
-            payload_allowlist=APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST,
-            request_surface=request_surface,
-        )
-        read = _row_to_read(_fetch_application_row(connection, application_id))
-    return _SubmitApplicationResult(read, result)
-
-
-def submit_application(
-    db: PostgresDatabase,
-    request: ApplicationSubmission,
-    actor: ActorIdentity,
-) -> _SubmitApplicationResult:
-    return _submit_application_internal(
-        db,
-        request,
-        actor,
-        request_surface=AUTHENTICATED_SUBMIT_SURFACE,
-    )
-
-
-async def submit_public_application_with_receipt(
-    db: PostgresDatabase,
-    public_submission: PublicApplicationSubmission,
-    *,
-    discord_user_id: str,
-) -> UUID:
-    if get_current_audit_context() is None:
-        with use_audit_context(_generated_audit_context()):
-            return await submit_public_application_with_receipt(
-                db,
-                public_submission,
-                discord_user_id=discord_user_id,
-            )
-
-    validated = PublicApplicationSubmission.model_validate(public_submission)
-    client_application_id = (
-        str(uuid4())
-        if validated.client_application_id is None
-        else validated.client_application_id
-    )
-    member = await resolve_or_create_real_discord_member(
-        db,
-        discord_user_id=discord_user_id,
-    )
-    internal_submission = ApplicationSubmission(
-        applicant_id=member.id,
-        scope=validated.scope,
-        responses=validated.responses,
-        client_application_id=client_application_id,
-    )
-    actor = ActorIdentity(actor_kind="user", actor_id=str(member.id))
-    try:
-        created = _submit_application_internal(
-            db,
-            internal_submission,
-            actor,
-            request_surface=PUBLIC_SUBMIT_SURFACE,
-        )
-    except DuplicateApplicationCreateError as error:
-        return error.application.id
-    try:
-        emit_application_public_submitted_event(
-            db,
-            application=created.read,
-            discord_user_id=discord_user_id,
-        )
-    except (NotificationEmitError, RuntimeError):
-        logger.exception(
-            "notification emit failed for application %s; submit row remains durably committed",
-            created.read.id,
-        )
-    return created.read.id
-
-
-def read_application(
-    db: PostgresDatabase,
-    *,
-    application_id: UUID,
-) -> tuple[ApplicationRead, str]:
-    with db.connection() as connection:
-        read = _row_to_read(_fetch_application_row(connection, application_id))
-    return read, f'"{read.version}"'
-
-
-def _transition_application_locked(
-    *,
-    db: PostgresDatabase,
-    connection: Connection[Any] | None,
-    application_id: UUID,
-    expected_version: int,
-    request: ApplicationTransitionRequest,
-    actor: ActorIdentity,
-    action_payload: dict[str, Any],
-    payload_allowlist: set[str],
-    request_surface: str,
-) -> MutationResult:
-    action = request.action.value if hasattr(request.action, "value") else str(request.action)
-    review_id = uuid4()
-
-    def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
-        current = get_application_for_update(
-            active_connection,
-            application_id=application_id,
-        )
-        if current is None:
-            raise ApplicationNotFoundError(application_id)
-        next_state = validate_transition(
-            str(current["state"]),
-            action,
-            request,
-            application_id=application_id,
-        )
-        now = datetime.now(UTC)
-        reviewer_id = _reviewer_id(actor, action)
-        if (
-            action in {"review", "approve", "deny", "request_interview", "waitlist"}
-            and current["owner_id"] != reviewer_id
-        ):
-            raise ApplicationNotOwnerError(
-                current_owner_id=current["owner_id"],
-                actor_id=reviewer_id,
-            )
-        notes = None if request.notes is None else request.notes.strip()
-        reason = _transition_reason(request)
-        if action in {"request_interview", "waitlist", "reactivate"}:
-            notes = reason
-        decision_reason = (
-            None if request.decision_reason is None else request.decision_reason.strip()
-        )
-        updated = dict(current)
-        updated["state"] = next_state
-        if action == "route":
-            updated["queued_at"] = now
-        elif action == "claim":
-            if reviewer_id is not None:
-                _require_non_synthetic_application_member(
-                    active_connection,
-                    reviewer_id,
-                    code="owner_synthetic_not_allowed",
-                    message="Synthetic public-intake members cannot own applications.",
-                )
-            updated["owner_id"] = reviewer_id
-            updated["claimed_at"] = now
-        elif action == "review":
-            updated["review_started_at"] = now
-        elif action == "request_interview":
-            updated["interview_thread_id"] = (
-                request.thread_id
-                if request.thread_id is not None
-                else current.get("interview_thread_id")
-            )
-        elif action == "waitlist":
-            pass
-        elif action == "reassign":
-            if request.new_owner_id is None:
-                raise ValueError("new_owner_id is required for reassign")
-            _require_non_synthetic_application_member(
-                active_connection,
-                request.new_owner_id,
-                code="owner_synthetic_not_allowed",
-                message="Synthetic public-intake members cannot own applications.",
-            )
-            updated["owner_id"] = request.new_owner_id
-        elif action == "reactivate":
-            next_owner_id = request.new_owner_id or current["owner_id"]
-            if next_owner_id is None:
-                raise ApplicationReactivateOwnerRequiredError()
-            _require_non_synthetic_application_member(
-                active_connection,
-                next_owner_id,
-                code="owner_synthetic_not_allowed",
-                message="Synthetic public-intake members cannot own applications.",
-            )
-            updated["owner_id"] = next_owner_id
-            updated["claimed_at"] = now
-        elif action in {"approve", "deny"}:
-            updated["decision_reason"] = decision_reason
-            updated["decided_at"] = now
-        elif action == "withdraw":
-            updated["withdrawn_at"] = now
-
-        update_application(
-            active_connection,
-            application_id=application_id,
-            row=updated,
-        )
-        aggregate_seq = expected_version + 1
-        review_action = "review" if action == "reassign" else action
-        insert_review_row(
-            active_connection,
-            row={
-                "id": review_id,
-                "application_id": application_id,
-                "aggregate_seq": aggregate_seq,
-                "reviewer_id": reviewer_id,
-                "actor_kind": actor.actor_kind,
-                "actor_id": actor.actor_id,
-                "action": review_action,
-                "from_state": current["state"],
-                "to_state": next_state,
-                "notes": notes,
-                "decision_reason": decision_reason,
-            },
-        )
-        payload_json = {
-            "application_id": str(application_id),
-            "application_review_id": str(review_id),
-            "action": action,
-            "from_state": current["state"],
-            "to_state": next_state,
-            "reviewer_id": None if reviewer_id is None else str(reviewer_id),
-            "notes": notes,
-            "decision_reason": decision_reason,
-        }
-        if action == "request_interview":
-            payload_json["thread_id"] = request.thread_id
-        if action in {"reassign", "reactivate"} and request.new_owner_id is not None:
-            payload_json["new_owner_id"] = str(request.new_owner_id)
-        if action in {"request_interview", "waitlist", "reactivate"} and reason is not None:
-            payload_json["reason"] = reason
-
-        return StateChangeDraft(
-            change_type=AUDIT_CHANGE_TYPE[action],
-            payload_json=payload_json,
-            diff_json=_transition_diff(current, updated, notes=notes),
-        )
-
-    return mutate_entity(
-        db=db,
-        connection=connection,
-        aggregate_type="application",
-        aggregate_id=application_aggregate_id(application_id),
-        request=_make_request(
-            expected_version=expected_version,
-            actor=actor,
-            request_surface=request_surface,
-        ),
-        action_type=AUDIT_ACTION_TYPE[action],
-        action_payload=action_payload,
-        payload_allowlist=payload_allowlist,
-        mutate_projection=mutate_projection,
-        scope_kind=None,
-        scope_id=None,
-    )
-
-
-def transition_application(
-    db: PostgresDatabase,
-    application_id: UUID,
-    expected_version: int,
-    request: ApplicationTransitionRequest,
-    actor: ActorIdentity,
-    request_surface: str | None = None,
-    skip_authority_check: bool = False,
-    allow_route_transition: bool = False,
-) -> tuple[ApplicationRead, MutationResult]:
-    action = request.action.value
-    if action == "route" and not allow_route_transition:
-        raise InvalidApplicationTransitionError(
-            application_id=application_id,
-            from_state="public",
-            action=action,
-        )
-    with db.connection() as read_connection:
-        current = _fetch_application_row(read_connection, application_id)
-    target_scope = current["form_snapshot"]["target_scope"]
-    if not skip_authority_check:
-        require_transition_authority(
-            db,
-            actor=actor,
-            action=action,
-            target_scope=target_scope,
-        )
-    reviewer_id = _reviewer_id(actor, action)
-    if (
-        action in {"request_interview", "waitlist"}
-        and current["owner_id"] != reviewer_id
-    ):
-        raise ApplicationNotOwnerError(
-            current_owner_id=current["owner_id"],
-            actor_id=reviewer_id,
-        )
-    if action == "request_interview":
-        idempotent = _maybe_idempotent_interview(
-            current=current,
-            application_id=application_id,
-            expected_version=expected_version,
-            request=request,
-        )
-        if idempotent is not None:
-            return _row_to_read(idempotent), MutationResult(
-                version=int(idempotent["version"]),
-                etag=f'"{int(idempotent["version"])}"',
-            )
-    originating_actor_kind, originating_actor_id = _originating_actor(request, actor)
-    action_payload = {
-        "action": action,
-        "reviewer_id": None if reviewer_id is None else str(reviewer_id),
-        "notes": request.notes,
-        "decision_reason": request.decision_reason,
-        "thread_id": request.thread_id,
-        "reason": request.reason,
-        "new_owner_id": None if request.new_owner_id is None else str(request.new_owner_id),
-        "originating_actor_kind": originating_actor_kind,
-        "originating_actor_id": originating_actor_id,
-    }
-    try:
-        result = _transition_application_locked(
-            db=db,
-            connection=None,
-            application_id=application_id,
-            expected_version=expected_version,
-            request=request,
-            actor=actor,
-            action_payload=action_payload,
-            payload_allowlist=TRANSITION_PAYLOAD_ALLOWLIST[action],
-            request_surface=request_surface
-            or f"api:/api/v1/applications/{application_id}/transitions",
-        )
-    except StaleMutationError as error:
-        if action != "claim":
-            raise
-        with db.connection() as recovery_connection:
-            live = _fetch_application_row(recovery_connection, application_id)
-        if live["state"] != "queued" or live["owner_id"] is not None:
-            raise ApplicationAlreadyClaimedError(application=_row_to_read(live)) from error
-        raise
-
-    with db.connection() as read_connection:
-        read = _row_to_read(_fetch_application_row(read_connection, application_id))
-    return read, result
-
-
 def _maybe_idempotent_interview(
     *,
     current: dict[str, Any],
@@ -1349,78 +756,780 @@ def _maybe_idempotent_interview(
     return current
 
 
-def request_interview(
-    db: PostgresDatabase,
-    *,
-    application_id: UUID,
-    expected_version: int,
-    request: ApplicationInterviewRequest,
-    actor: ActorIdentity,
-) -> tuple[ApplicationRead, str]:
-    transition_request = ApplicationTransitionRequest(
-        action="request_interview",
-        thread_id=request.thread_id,
-        reason=request.reason,
-        originating_actor_kind=request.originating_actor_kind,
-        originating_actor_id=request.originating_actor_id,
-    )
-    read, result = transition_application(
-        db,
-        application_id=application_id,
-        expected_version=expected_version,
-        request=transition_request,
-        actor=actor,
-        request_surface=f"api:/api/v1/applications/{application_id}/interview",
-    )
-    return read, result.etag
+class ApplicationsService:
+    def __init__(
+        self,
+        applications_repo: ApplicationsRepository,
+        application_messages_repo: ApplicationMessagesRepository,
+        forms_repo: FormsRepository,
+        public_chapters_repo: PublicChaptersRepository,
+        file_upload_service: FileUploadService,
+        mutations_callable,
+        notification_emitter: Callable[..., None] | None = None,
+    ) -> None:
+        self._applications_repo = applications_repo
+        self._application_messages_repo = application_messages_repo
+        self._forms_repo = forms_repo
+        self._public_chapters_repo = public_chapters_repo
+        self._file_upload_service = file_upload_service
+        self._mutations_callable = mutations_callable
+        self._notification_emitter = notification_emitter
 
+    def _public_submitted_event_exists(self, application_id: UUID) -> bool:
+        with self._applications_repo.db.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM notification_events
+                WHERE event_type = 'application.public_submitted'
+                  AND payload_json->>'application_id' = %s
+                LIMIT 1
+                """,
+                (str(application_id),),
+            ).fetchone()
+        return row is not None
 
-def waitlist_application(
-    db: PostgresDatabase,
-    *,
-    application_id: UUID,
-    expected_version: int,
-    request: ApplicationWaitlistRequest,
-    actor: ActorIdentity,
-) -> tuple[ApplicationRead, str]:
-    transition_request = ApplicationTransitionRequest(
-        action="waitlist",
-        reason=request.reason,
-        originating_actor_kind=request.originating_actor_kind,
-        originating_actor_id=request.originating_actor_id,
-    )
-    read, result = transition_application(
-        db,
-        application_id=application_id,
-        expected_version=expected_version,
-        request=transition_request,
-        actor=actor,
-        request_surface=f"api:/api/v1/applications/{application_id}/waitlist",
-    )
-    return read, result.etag
+    def require_transition_authority(
+        self,
+        *,
+        actor: ActorIdentity,
+        action: str,
+        target_scope: dict[str, Any],
+    ) -> None:
+        permission = "application.review" if action == "reassign" else f"application.{action}"
+        _require_authority(
+            self._applications_repo.db,
+            actor=actor,
+            permission=permission,
+            scope_kind=str(target_scope["scope_kind"]),
+            scope_id=target_scope.get("scope_id"),
+        )
 
+    def require_application_read_authority(
+        self,
+        *,
+        actor: ActorIdentity,
+        application: ApplicationRead,
+    ) -> None:
+        if actor.actor_kind == "user" and actor.actor_id == str(application.applicant_id):
+            return
+        target_scope = application.form_snapshot["target_scope"]
+        grants = list_grants_for_grantee(
+            self._applications_repo.db,
+            grantee_id=actor.actor_id,
+        )
+        for permission in APPLICATION_READ_PERMISSIONS:
+            decision = evaluate(
+                requirement=AuthorityRequirement(
+                    scope_kind=str(target_scope["scope_kind"]),  # type: ignore[arg-type]
+                    scope_id=target_scope.get("scope_id"),
+                    permission=permission,
+                ),
+                grants=grants,
+                at=current_time(),
+            )
+            if decision.allowed:
+                return
+        raise PermissionError("authority requirement denied")
 
-def reactivate_application(
-    db: PostgresDatabase,
-    *,
-    application_id: UUID,
-    expected_version: int,
-    request: ApplicationReactivateRequest,
-    actor: ActorIdentity,
-) -> tuple[ApplicationRead, str]:
-    transition_request = ApplicationTransitionRequest(
-        action="reactivate",
-        new_owner_id=request.new_owner_id,
-        reason=request.reason,
-        originating_actor_kind=request.originating_actor_kind,
-        originating_actor_id=request.originating_actor_id,
-    )
-    read, result = transition_application(
-        db,
-        application_id=application_id,
-        expected_version=expected_version,
-        request=transition_request,
-        actor=actor,
-        request_surface=f"api:/api/v1/applications/{application_id}/reactivate",
-    )
-    return read, result.etag
+    def list_applications(
+        self,
+        *,
+        actor: ActorIdentity,
+        states: frozenset[str] | None = None,
+        scope_kind: str | None = None,
+        scope_id: str | None = None,
+        owner_id: UUID | None = None,
+        limit: int = 50,
+        after_id: UUID | None = None,
+    ) -> ApplicationListRead:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if scope_kind == "chapter" and scope_id is None:
+            raise ValueError("scope_id is required when scope_kind is chapter")
+        if scope_kind == "global" and scope_id is not None:
+            raise ValueError("scope_id must be omitted when scope_kind is global")
+
+        auth_scope_kind = scope_kind or "global"
+        auth_scope_id = scope_id if scope_kind is not None else None
+        if not _has_application_list_authority(
+            self._applications_repo.db,
+            actor=actor,
+            scope_kind=auth_scope_kind,
+            scope_id=auth_scope_id,
+        ):
+            raise ApplicationListForbiddenError()
+
+        rows = self._applications_repo.list_applications(
+            states=states,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            owner_id=owner_id,
+            limit=limit,
+            after_id=after_id,
+        )
+        page_rows = rows[:limit]
+        next_after_id = page_rows[-1]["id"] if len(rows) > limit and page_rows else None
+        return ApplicationListRead(
+            items=[_row_to_read(row) for row in page_rows],
+            next_after_id=next_after_id,
+        )
+
+    def validate_application_responses(
+        self,
+        fields: list[dict[str, Any]],
+        responses: dict[str, Any],
+        *,
+        submitted_scope: dict[str, Any] | None = None,
+    ) -> None:
+        needs_connection = any(field.get("type") == "chapter_select" for field in fields)
+        if not needs_connection:
+            return self._validate_application_responses_on(
+                None,
+                fields,
+                responses,
+                submitted_scope=submitted_scope,
+            )
+        with self._applications_repo.db.connection() as connection:
+            return self._validate_application_responses_on(
+                connection,
+                fields,
+                responses,
+                submitted_scope=submitted_scope,
+            )
+
+    def _validate_application_responses_on(
+        self,
+        connection: Connection[Any] | None,
+        fields: list[dict[str, Any]],
+        responses: dict[str, Any],
+        *,
+        submitted_scope: dict[str, Any] | None = None,
+    ) -> None:
+        return _validate_application_responses_impl(
+            fields,
+            responses,
+            file_upload_service=self._file_upload_service,
+            public_chapters_repo=self._public_chapters_repo,
+            connection=connection,
+            submitted_scope=submitted_scope,
+        )
+
+    def submit_application(
+        self,
+        request: ApplicationSubmission,
+        actor: ActorIdentity,
+    ) -> _SubmitApplicationResult:
+        if get_current_audit_context() is None:
+            with use_audit_context(_generated_audit_context()):
+                return self.submit_application(request, actor)
+        with self._applications_repo.db.transaction() as connection:
+            return self._submit_application_on(
+                connection,
+                request,
+                actor,
+                request_surface=AUTHENTICATED_SUBMIT_SURFACE,
+            )
+
+    def _submit_application_on(
+        self,
+        connection: Connection[Any],
+        request: ApplicationSubmission,
+        actor: ActorIdentity,
+        *,
+        request_surface: str,
+    ) -> _SubmitApplicationResult:
+        validated = ApplicationSubmission.model_validate(request)
+        submitted_at = datetime.now(UTC)
+
+        applicant = fetch_member_by_id(connection, validated.applicant_id)
+        if applicant is None:
+            raise ValueError(f"member {validated.applicant_id} was not found")
+        if is_synthetic_member(applicant):
+            _raise_synthetic_application_error(
+                code="applicant_synthetic_not_allowed",
+                message="Synthetic public-intake members cannot submit applications.",
+            )
+
+        submitted_scope = validated.scope.as_persisted()
+        form_row, target_scope_override = _chapter_selector_override(
+            self._forms_repo,
+            connection,
+            submitted_scope=submitted_scope,
+            responses=validated.responses,
+        )
+        if form_row is None:
+            form_row = _get_current_form_for_submit(
+                self._forms_repo,
+                connection,
+                scope_kind=validated.scope.scope_kind,
+                scope_id=validated.scope.scope_id,
+            )
+        if form_row is None:
+            raise FormDefinitionNotFoundError(validated.scope)
+
+        if validated.client_application_id is not None:
+            existing = self._applications_repo._get_application_by_client_application_id_on(
+                connection,
+                applicant_id=validated.applicant_id,
+                client_application_id=validated.client_application_id,
+            )
+            if existing is not None:
+                raise DuplicateApplicationCreateError(_row_to_read(existing))
+
+        _require_submit_authority(
+            self._applications_repo.db,
+            actor=actor,
+            applicant_id=validated.applicant_id,
+            scope_kind=form_row["scope_kind"],
+            scope_id=form_row["scope_id"],
+        )
+
+        snapshot = build_form_snapshot(form_row)
+        if target_scope_override is not None:
+            snapshot["target_scope"] = target_scope_override
+        application_id = _resolve_application_id(validated.responses, snapshot["fields"])
+        self._validate_application_responses_on(
+            connection,
+            snapshot["fields"],
+            validated.responses,
+            submitted_scope=submitted_scope,
+        )
+        target_scope = snapshot["target_scope"]
+        persisted = {
+            "id": application_id,
+            "applicant_id": validated.applicant_id,
+            "form_definition_id": form_row["id"],
+            "form_version": int(form_row["version"]),
+            "form_snapshot": snapshot,
+            "target_scope_kind": target_scope["scope_kind"],
+            "target_scope_id": target_scope.get("scope_id"),
+            "responses": validated.responses,
+            "state": "submitted",
+            "owner_id": None,
+            "interview_thread_id": None,
+            "decision_reason": None,
+            "client_application_id": validated.client_application_id,
+            "submitted_at": submitted_at,
+            "queued_at": None,
+            "claimed_at": None,
+            "review_started_at": None,
+            "decided_at": None,
+            "withdrawn_at": None,
+        }
+
+        def submit_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            self._applications_repo._insert_application_on(
+                active_connection,
+                row=persisted,
+            )
+            return StateChangeDraft(
+                change_type="application.submitted",
+                payload_json={
+                    "application_id": str(application_id),
+                    "applicant_id": str(validated.applicant_id),
+                    "form_definition_id": str(form_row["id"]),
+                    "form_version": int(form_row["version"]),
+                    "form_snapshot": snapshot,
+                    "target_scope_kind": target_scope["scope_kind"],
+                    "target_scope_id": target_scope.get("scope_id"),
+                    "responses": validated.responses,
+                    "client_application_id": validated.client_application_id,
+                    "state": "submitted",
+                },
+            )
+
+        action_payload = {
+            "applicant_id": str(validated.applicant_id),
+            "form_definition_id": str(form_row["id"]),
+            "form_version": int(form_row["version"]),
+            "target_scope_kind": target_scope["scope_kind"],
+            "target_scope_id": target_scope.get("scope_id"),
+            "responses": validated.responses,
+            "client_application_id": validated.client_application_id,
+        }
+        try:
+            self._mutations_callable(
+                connection=connection,
+                aggregate_type="application",
+                aggregate_id=application_aggregate_id(application_id),
+                request=_make_request(
+                    expected_version=0,
+                    actor=actor,
+                    request_surface=request_surface,
+                ),
+                action_type="application.submit",
+                action_payload=action_payload,
+                payload_allowlist=APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST,
+                mutate_projection=submit_projection,
+                scope_kind=target_scope["scope_kind"],
+                scope_id=target_scope.get("scope_id"),
+            )
+        except errors.UniqueViolation as error:
+            with self._applications_repo.db.connection() as recovery_connection:
+                existing = (
+                    None
+                    if validated.client_application_id is None
+                    else self._applications_repo._get_application_by_client_application_id_on(
+                        recovery_connection,
+                        applicant_id=validated.applicant_id,
+                        client_application_id=validated.client_application_id,
+                    )
+                )
+            if existing is None:
+                raise InvalidApplicationResponseError(
+                    "file upload application id already exists"
+                ) from error
+            raise DuplicateApplicationCreateError(_row_to_read(existing)) from error
+
+        route_request = ApplicationTransitionRequest(action="route")
+        result = self._transition_application_locked(
+            connection=connection,
+            application_id=application_id,
+            expected_version=1,
+            request=route_request,
+            actor=actor,
+            action_payload=action_payload,
+            payload_allowlist=APPLICATION_SUBMIT_PAYLOAD_ALLOWLIST,
+            request_surface=request_surface,
+        )
+        read = _row_to_read(
+            _fetch_application_row(self._applications_repo, connection, application_id)
+        )
+        return _SubmitApplicationResult(read, result)
+
+    async def submit_public_application_with_receipt(
+        self,
+        public_submission: PublicApplicationSubmission,
+        *,
+        discord_user_id: str,
+    ) -> UUID:
+        if get_current_audit_context() is None:
+            with use_audit_context(_generated_audit_context()):
+                return await self.submit_public_application_with_receipt(
+                    public_submission,
+                    discord_user_id=discord_user_id,
+                )
+
+        with self._applications_repo.db.transaction() as connection:
+            try:
+                created = await self._submit_public_application_with_receipt_on(
+                    connection,
+                    public_submission,
+                    discord_user_id=discord_user_id,
+                )
+            except DuplicateApplicationCreateError as error:
+                return error.application.id
+        if self._notification_emitter is not None:
+            try:
+                self._notification_emitter(
+                    application=created.read,
+                    discord_user_id=discord_user_id,
+                )
+                if not self._public_submitted_event_exists(created.read.id):
+                    emit_application_public_submitted_event(
+                        self._applications_repo.db,
+                        application=created.read,
+                        discord_user_id=discord_user_id,
+                    )
+            except (NotificationEmitError, RuntimeError):
+                logger.exception(
+                    "notification emit failed for application %s; submit row remains durably committed",
+                    created.read.id,
+                )
+        return created.read.id
+
+    async def _submit_public_application_with_receipt_on(
+        self,
+        connection: Connection[Any],
+        public_submission: PublicApplicationSubmission,
+        *,
+        discord_user_id: str,
+    ) -> _SubmitApplicationResult:
+        validated = PublicApplicationSubmission.model_validate(public_submission)
+        client_application_id = (
+            str(uuid4())
+            if validated.client_application_id is None
+            else validated.client_application_id
+        )
+        member = await resolve_or_create_real_discord_member(
+            self._applications_repo.db,
+            discord_user_id=discord_user_id,
+        )
+        internal_submission = ApplicationSubmission(
+            applicant_id=member.id,
+            scope=validated.scope,
+            responses=validated.responses,
+            client_application_id=client_application_id,
+        )
+        actor = ActorIdentity(actor_kind="user", actor_id=str(member.id))
+        return self._submit_application_on(
+            connection,
+            internal_submission,
+            actor,
+            request_surface=PUBLIC_SUBMIT_SURFACE,
+        )
+
+    def read_application(self, *, application_id: UUID) -> tuple[ApplicationRead, str]:
+        with self._applications_repo.db.connection() as connection:
+            read = self._get_application_on(connection, application_id)
+        return read, f'"{read.version}"'
+
+    def _get_application_on(
+        self,
+        connection: Connection[Any],
+        application_id: UUID,
+    ) -> ApplicationRead:
+        return _row_to_read(
+            _fetch_application_row(self._applications_repo, connection, application_id)
+        )
+
+    def _transition_application_locked(
+        self,
+        *,
+        connection: Connection[Any] | None,
+        application_id: UUID,
+        expected_version: int,
+        request: ApplicationTransitionRequest,
+        actor: ActorIdentity,
+        action_payload: dict[str, Any],
+        payload_allowlist: set[str],
+        request_surface: str,
+    ) -> MutationResult:
+        action = request.action.value if hasattr(request.action, "value") else str(request.action)
+        review_id = uuid4()
+
+        def mutate_projection(active_connection: Connection[Any]) -> StateChangeDraft:
+            current = self._applications_repo._get_application_for_update_on(
+                active_connection,
+                application_id=application_id,
+            )
+            if current is None:
+                raise ApplicationNotFoundError(application_id)
+            next_state = validate_transition(
+                str(current["state"]),
+                action,
+                request,
+                application_id=application_id,
+            )
+            now = datetime.now(UTC)
+            reviewer_id = _reviewer_id(actor, action)
+            if (
+                action in {"review", "approve", "deny", "request_interview", "waitlist"}
+                and current["owner_id"] != reviewer_id
+            ):
+                raise ApplicationNotOwnerError(
+                    current_owner_id=current["owner_id"],
+                    actor_id=reviewer_id,
+                )
+            notes = None if request.notes is None else request.notes.strip()
+            reason = _transition_reason(request)
+            if action in {"request_interview", "waitlist", "reactivate"}:
+                notes = reason
+            decision_reason = (
+                None if request.decision_reason is None else request.decision_reason.strip()
+            )
+            updated = dict(current)
+            updated["state"] = next_state
+            if action == "route":
+                updated["queued_at"] = now
+            elif action == "claim":
+                if reviewer_id is not None:
+                    _require_non_synthetic_application_member(
+                        active_connection,
+                        reviewer_id,
+                        code="owner_synthetic_not_allowed",
+                        message="Synthetic public-intake members cannot own applications.",
+                    )
+                updated["owner_id"] = reviewer_id
+                updated["claimed_at"] = now
+            elif action == "review":
+                updated["review_started_at"] = now
+            elif action == "request_interview":
+                updated["interview_thread_id"] = (
+                    request.thread_id
+                    if request.thread_id is not None
+                    else current.get("interview_thread_id")
+                )
+            elif action == "waitlist":
+                pass
+            elif action == "reassign":
+                if request.new_owner_id is None:
+                    raise ValueError("new_owner_id is required for reassign")
+                _require_non_synthetic_application_member(
+                    active_connection,
+                    request.new_owner_id,
+                    code="owner_synthetic_not_allowed",
+                    message="Synthetic public-intake members cannot own applications.",
+                )
+                updated["owner_id"] = request.new_owner_id
+            elif action == "reactivate":
+                next_owner_id = request.new_owner_id or current["owner_id"]
+                if next_owner_id is None:
+                    raise ApplicationReactivateOwnerRequiredError()
+                _require_non_synthetic_application_member(
+                    active_connection,
+                    next_owner_id,
+                    code="owner_synthetic_not_allowed",
+                    message="Synthetic public-intake members cannot own applications.",
+                )
+                updated["owner_id"] = next_owner_id
+                updated["claimed_at"] = now
+            elif action in {"approve", "deny"}:
+                updated["decision_reason"] = decision_reason
+                updated["decided_at"] = now
+            elif action == "withdraw":
+                updated["withdrawn_at"] = now
+
+            self._applications_repo._update_application_on(
+                active_connection,
+                application_id=application_id,
+                row=updated,
+            )
+            aggregate_seq = expected_version + 1
+            review_action = "review" if action == "reassign" else action
+            self._applications_repo._insert_review_row_on(
+                active_connection,
+                row={
+                    "id": review_id,
+                    "application_id": application_id,
+                    "aggregate_seq": aggregate_seq,
+                    "reviewer_id": reviewer_id,
+                    "actor_kind": actor.actor_kind,
+                    "actor_id": actor.actor_id,
+                    "action": review_action,
+                    "from_state": current["state"],
+                    "to_state": next_state,
+                    "notes": notes,
+                    "decision_reason": decision_reason,
+                },
+            )
+            payload_json = {
+                "application_id": str(application_id),
+                "application_review_id": str(review_id),
+                "action": action,
+                "from_state": current["state"],
+                "to_state": next_state,
+                "reviewer_id": None if reviewer_id is None else str(reviewer_id),
+                "notes": notes,
+                "decision_reason": decision_reason,
+            }
+            if action == "request_interview":
+                payload_json["thread_id"] = request.thread_id
+            if action in {"reassign", "reactivate"} and request.new_owner_id is not None:
+                payload_json["new_owner_id"] = str(request.new_owner_id)
+            if action in {"request_interview", "waitlist", "reactivate"} and reason is not None:
+                payload_json["reason"] = reason
+
+            return StateChangeDraft(
+                change_type=AUDIT_CHANGE_TYPE[action],
+                payload_json=payload_json,
+                diff_json=_transition_diff(current, updated, notes=notes),
+            )
+
+        return self._mutations_callable(
+            connection=connection,
+            aggregate_type="application",
+            aggregate_id=application_aggregate_id(application_id),
+            request=_make_request(
+                expected_version=expected_version,
+                actor=actor,
+                request_surface=request_surface,
+            ),
+            action_type=AUDIT_ACTION_TYPE[action],
+            action_payload=action_payload,
+            payload_allowlist=payload_allowlist,
+            mutate_projection=mutate_projection,
+            scope_kind=None,
+            scope_id=None,
+        )
+
+    def transition_application(
+        self,
+        application_id: UUID,
+        expected_version: int,
+        request: ApplicationTransitionRequest,
+        actor: ActorIdentity,
+        request_surface: str | None = None,
+        skip_authority_check: bool = False,
+        allow_route_transition: bool = False,
+    ) -> tuple[ApplicationRead, MutationResult]:
+        with self._applications_repo.db.transaction() as connection:
+            return self._transition_application_on(
+                connection=connection,
+                application_id=application_id,
+                expected_version=expected_version,
+                request=request,
+                actor=actor,
+                request_surface=request_surface,
+                skip_authority_check=skip_authority_check,
+                allow_route_transition=allow_route_transition,
+            )
+
+    def _transition_application_on(
+        self,
+        connection: Connection[Any],
+        application_id: UUID,
+        expected_version: int,
+        request: ApplicationTransitionRequest,
+        actor: ActorIdentity,
+        request_surface: str | None = None,
+        skip_authority_check: bool = False,
+        allow_route_transition: bool = False,
+        action_payload: dict[str, Any] | None = None,
+        payload_allowlist: set[str] | None = None,
+    ) -> tuple[ApplicationRead, MutationResult] | MutationResult:
+        action = request.action.value
+        if action == "route" and not allow_route_transition and action_payload is None:
+            raise InvalidApplicationTransitionError(
+                application_id=application_id,
+                from_state="public",
+                action=action,
+            )
+        current = _fetch_application_row(
+            self._applications_repo,
+            connection,
+            application_id,
+        )
+        target_scope = current["form_snapshot"]["target_scope"]
+        if not skip_authority_check and action_payload is None:
+            self.require_transition_authority(
+                actor=actor,
+                action=action,
+                target_scope=target_scope,
+            )
+        reviewer_id = _reviewer_id(actor, action)
+        if (
+            action in {"request_interview", "waitlist"}
+            and current["owner_id"] != reviewer_id
+        ):
+            raise ApplicationNotOwnerError(
+                current_owner_id=current["owner_id"],
+                actor_id=reviewer_id,
+            )
+        if action == "request_interview":
+            idempotent = _maybe_idempotent_interview(
+                current=current,
+                application_id=application_id,
+                expected_version=expected_version,
+                request=request,
+            )
+            if idempotent is not None:
+                return _row_to_read(idempotent), MutationResult(
+                    version=int(idempotent["version"]),
+                    etag=f'"{int(idempotent["version"])}"',
+                )
+        originating_actor_kind, originating_actor_id = _originating_actor(request, actor)
+        resolved_action_payload = action_payload or {
+            "action": action,
+            "reviewer_id": None if reviewer_id is None else str(reviewer_id),
+            "notes": request.notes,
+            "decision_reason": request.decision_reason,
+            "thread_id": request.thread_id,
+            "reason": request.reason,
+            "new_owner_id": None if request.new_owner_id is None else str(request.new_owner_id),
+            "originating_actor_kind": originating_actor_kind,
+            "originating_actor_id": originating_actor_id,
+        }
+        try:
+            result = self._transition_application_locked(
+                connection=connection,
+                application_id=application_id,
+                expected_version=expected_version,
+                request=request,
+                actor=actor,
+                action_payload=resolved_action_payload,
+                payload_allowlist=payload_allowlist or TRANSITION_PAYLOAD_ALLOWLIST[action],
+                request_surface=request_surface
+                or f"api:/api/v1/applications/{application_id}/transitions",
+            )
+        except StaleMutationError as error:
+            if action != "claim":
+                raise
+            with self._applications_repo.db.connection() as recovery_connection:
+                live = _fetch_application_row(
+                    self._applications_repo,
+                    recovery_connection,
+                    application_id,
+                )
+            if live["state"] != "queued" or live["owner_id"] is not None:
+                raise ApplicationAlreadyClaimedError(application=_row_to_read(live)) from error
+            raise
+
+        if action_payload is not None:
+            return result
+        read = _row_to_read(
+            _fetch_application_row(self._applications_repo, connection, application_id)
+        )
+        return read, result
+
+    def request_interview(
+        self,
+        *,
+        application_id: UUID,
+        expected_version: int,
+        request: ApplicationInterviewRequest,
+        actor: ActorIdentity,
+    ) -> tuple[ApplicationRead, str]:
+        transition_request = ApplicationTransitionRequest(
+            action="request_interview",
+            thread_id=request.thread_id,
+            reason=request.reason,
+            originating_actor_kind=request.originating_actor_kind,
+            originating_actor_id=request.originating_actor_id,
+        )
+        read, result = self.transition_application(
+            application_id=application_id,
+            expected_version=expected_version,
+            request=transition_request,
+            actor=actor,
+            request_surface=f"api:/api/v1/applications/{application_id}/interview",
+        )
+        return read, result.etag
+
+    def waitlist_application(
+        self,
+        *,
+        application_id: UUID,
+        expected_version: int,
+        request: ApplicationWaitlistRequest,
+        actor: ActorIdentity,
+    ) -> tuple[ApplicationRead, str]:
+        transition_request = ApplicationTransitionRequest(
+            action="waitlist",
+            reason=request.reason,
+            originating_actor_kind=request.originating_actor_kind,
+            originating_actor_id=request.originating_actor_id,
+        )
+        read, result = self.transition_application(
+            application_id=application_id,
+            expected_version=expected_version,
+            request=transition_request,
+            actor=actor,
+            request_surface=f"api:/api/v1/applications/{application_id}/waitlist",
+        )
+        return read, result.etag
+
+    def reactivate_application(
+        self,
+        *,
+        application_id: UUID,
+        expected_version: int,
+        request: ApplicationReactivateRequest,
+        actor: ActorIdentity,
+    ) -> tuple[ApplicationRead, str]:
+        transition_request = ApplicationTransitionRequest(
+            action="reactivate",
+            new_owner_id=request.new_owner_id,
+            reason=request.reason,
+            originating_actor_kind=request.originating_actor_kind,
+            originating_actor_id=request.originating_actor_id,
+        )
+        read, result = self.transition_application(
+            application_id=application_id,
+            expected_version=expected_version,
+            request=transition_request,
+            actor=actor,
+            request_surface=f"api:/api/v1/applications/{application_id}/reactivate",
+        )
+        return read, result.etag

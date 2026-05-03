@@ -12,7 +12,7 @@ from httpx import AsyncClient
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.applications import validate_application_responses
+from app.services.applications import _validate_application_responses_impl
 from app.services.authority import grant_authority
 
 
@@ -868,7 +868,12 @@ def test_validate_application_responses_uses_typeadapter_for_union() -> None:
         "chapter": "chapter-1",
     }
 
-    validate_application_responses(reparsed_fields, responses)
+    _validate_application_responses_impl(
+        reparsed_fields,
+        responses,
+        file_upload_service=object(),  # no file fields in this fixture
+        public_chapters_repo=object(),  # connection=None preserves pure validation
+    )
 
     assert responses == {
         "short_answer": "Kalec",

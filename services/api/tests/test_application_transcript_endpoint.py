@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from functools import partial
 from http import HTTPStatus
 from typing import Any
 from uuid import UUID, uuid4
@@ -16,9 +17,9 @@ from app.contracts.authority import DuplicateActiveGrantError
 from app.contracts.members import MemberCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
-from app.services.application_messages import append_application_message
 from app.services.authority import grant_authority
 from app.services.members import create_or_get_member
+from app.services.mutations import mutate_entity
 
 
 FORMS_URL = "/api/v1/application-forms"
@@ -143,6 +144,18 @@ async def _create_application(
     return response.json()
 
 
+def _messages_service(db: PostgresDatabase):
+    from app.repositories.applications import ApplicationsRepository
+    from app.repositories.application_messages import ApplicationMessagesRepository
+    from app.services.application_messages import ApplicationMessagesService
+
+    return ApplicationMessagesService(
+        applications_repo=ApplicationsRepository(db),
+        application_messages_repo=ApplicationMessagesRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
 def _append_message(
     db: PostgresDatabase,
     *,
@@ -152,8 +165,7 @@ def _append_message(
     body_markdown: str,
 ) -> None:
     with use_audit_context(_audit_context()):
-        append_application_message(
-            db,
+        _messages_service(db).append_application_message(
             application_id=UUID(application_id),
             request=ApplicationMessageAppendRequest(
                 body_markdown=body_markdown,

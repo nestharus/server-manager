@@ -9,9 +9,8 @@ from app.contracts.applications_transcript import (
     ApplicationTranscriptRead,
     ApplicationTranscriptStateChangeEntry,
 )
-from app.repositories.applications import list_application_state_changes
-from app.repositories.db import PostgresDatabase
-from app.services.application_messages import read_application_messages
+from app.repositories.applications import ApplicationsRepository
+from app.services.application_messages import ApplicationMessagesService
 
 
 def _state_diff(row: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -46,33 +45,37 @@ def _message_to_entry(message: Any) -> ApplicationTranscriptMessageEntry:
     )
 
 
-def read_application_transcript(
-    db: PostgresDatabase,
-    *,
-    application_id: UUID,
-    viewer_actor_kind: str,
-    viewer_actor_id: str,
-) -> ApplicationTranscriptRead:
-    messages = read_application_messages(
-        db,
-        application_id=application_id,
-        viewer_actor_kind=viewer_actor_kind,
-        viewer_actor_id=viewer_actor_id,
-    )
-    with db.connection() as connection:
-        state_change_rows = list_application_state_changes(
-            connection,
+class ApplicationTranscriptService:
+    def __init__(
+        self,
+        applications_repo: ApplicationsRepository,
+        application_messages_service: ApplicationMessagesService,
+    ) -> None:
+        self._applications_repo = applications_repo
+        self._application_messages_service = application_messages_service
+
+    def read_application_transcript(
+        self,
+        *,
+        application_id: UUID,
+        viewer_actor_kind: str,
+        viewer_actor_id: str,
+    ) -> ApplicationTranscriptRead:
+        messages = self._application_messages_service.read_application_messages(
+            application_id=application_id,
+            viewer_actor_kind=viewer_actor_kind,
+            viewer_actor_id=viewer_actor_id,
+        )
+        state_change_rows = self._applications_repo.list_application_state_changes(
             application_id=application_id,
         )
 
-    entries: list[ApplicationTranscriptEntry] = [
-        *[_state_change_to_entry(row) for row in state_change_rows],
-        *[_message_to_entry(message) for message in messages],
-    ]
-    entries.sort(key=lambda entry: entry.occurred_at)
-    return ApplicationTranscriptRead(application_id=application_id, entries=entries)
+        entries: list[ApplicationTranscriptEntry] = [
+            *[_state_change_to_entry(row) for row in state_change_rows],
+            *[_message_to_entry(message) for message in messages],
+        ]
+        entries.sort(key=lambda entry: entry.occurred_at)
+        return ApplicationTranscriptRead(application_id=application_id, entries=entries)
 
 
-__all__ = [
-    "read_application_transcript",
-]
+__all__ = ["ApplicationTranscriptService"]
