@@ -9,7 +9,11 @@ from psycopg.rows import dict_row
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from tests._authority_helpers import grant_authority
-from app.services.deferred_effects import deferred_effect_worker_tick
+from functools import partial
+
+from app.repositories.deferred_effects import DeferredEffectsRepository
+from app.services.deferred_effects import DeferredEffectsService
+from app.services.mutations import mutate_entity
 from app.tasks.archive import archive_worker_tick, configure_archive_worker
 
 from .chapter_governance_helpers import (
@@ -35,7 +39,9 @@ def _archive_rows(db: PostgresDatabase) -> list[dict[str, object]]:
             ).fetchall()
 
 
-def _archive_effects(db: PostgresDatabase, archive_run_id: UUID) -> list[dict[str, object]]:
+def _archive_effects(
+    db: PostgresDatabase, archive_run_id: UUID
+) -> list[dict[str, object]]:
     with db.connection() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
             return cursor.execute(
@@ -177,9 +183,15 @@ def test_archive_worker_regenerates_stale_effects_and_finalizes_when_clear(
         for effect in effects_after_validation
     )
 
-    deferred_effect_worker_tick(governance_db, worker_id="archive-test")
+    DeferredEffectsService(
+        deferred_effects_repo=DeferredEffectsRepository(governance_db),
+        mutations_callable=partial(mutate_entity, db=governance_db),
+    ).deferred_effect_worker_tick(worker_id="archive-test")
     archive_worker_tick()
-    deferred_effect_worker_tick(governance_db, worker_id="archive-test")
+    DeferredEffectsService(
+        deferred_effects_repo=DeferredEffectsRepository(governance_db),
+        mutations_callable=partial(mutate_entity, db=governance_db),
+    ).deferred_effect_worker_tick(worker_id="archive-test")
     archive_worker_tick()
 
     status = client.get(

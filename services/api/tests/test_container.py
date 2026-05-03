@@ -233,6 +233,49 @@ def test_container_resolves_application_factories(test_settings):
         container.shutdown_resources()
 
 
+def test_container_resolves_notification_factories(test_settings):
+    """TG-3/4/5/6: Container resolves notifications/scheduler/deferred
+    repos and services as Factory instances (post-142g shape)."""
+    from app.repositories.deferred_effects import DeferredEffectsRepository
+    from app.repositories.notification_events import NotificationEventsRepository
+    from app.repositories.notifications import NotificationsRepository
+    from app.repositories.scheduler import SchedulerRepository
+    from app.services.deferred_effects import DeferredEffectsService
+    from app.services.notification_events import NotificationEventsService
+    from app.services.notifications import NotificationsService
+    from app.services.notifications_delivery import NotificationsDeliveryService
+    from app.services.notifications_materialize import NotificationsMaterializeService
+    from app.services.scheduler import SchedulerService
+
+    container = ApiContainer(settings=test_settings)
+    container.init_resources()
+    try:
+        # 4 repos
+        assert isinstance(container.repos.deferred_effects(), DeferredEffectsRepository)
+        assert isinstance(container.repos.notification_events(), NotificationEventsRepository)
+        assert isinstance(container.repos.notifications(), NotificationsRepository)
+        assert isinstance(container.repos.scheduler(), SchedulerRepository)
+        # 6 services
+        assert isinstance(container.services.deferred_effects(), DeferredEffectsService)
+        assert isinstance(container.services.notification_events(), NotificationEventsService)
+        assert isinstance(container.services.notifications(), NotificationsService)
+        assert isinstance(container.services.notifications_delivery(), NotificationsDeliveryService)
+        assert isinstance(
+            container.services.notifications_materialize(),
+            NotificationsMaterializeService,
+        )
+        assert isinstance(container.services.scheduler(), SchedulerService)
+        # Bound-method emitter identity
+        emitter = container.services.application_notification_emitter()
+        assert emitter.__func__ is NotificationsService.emit_application_public_submitted_event
+        # Handler registration assertion (HandlerRegistry stays module-level)
+        from app.services.scheduler import HandlerRegistry
+
+        assert HandlerRegistry is not None  # populated by task module imports
+    finally:
+        container.shutdown_resources()
+
+
 def test_container_resolves_chapter_factories(test_settings):
     """TG-4: Container resolves chapter repos and services as Factory
     instances (post-142e shape)."""

@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from uuid import UUID
 
+from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.contracts.actor import ActorIdentity
@@ -15,21 +16,12 @@ from app.contracts.notifications import (
     NotificationRulePatchEmptyError,
     NotificationRuleRead,
 )
+from app.core.container import ApiContainer
 from app.core.dependencies import RequireAuthority, get_current_actor
-from app.repositories.db import PostgresDatabase
-from app.services.notifications import (
-    create_notification_rule,
-    list_notification_rules,
-    patch_notification_rule,
-    read_notification_rule,
-)
+from app.services.notifications import NotificationsService
 
 
 router = APIRouter(prefix="/api/v1/notification-rules")
-
-
-def _db(request: Request) -> PostgresDatabase:
-    return request.app.state.db
 
 
 def _parse_if_match(request: Request) -> int:
@@ -87,15 +79,17 @@ def _raise_known(error: Exception) -> None:
     status_code=HTTPStatus.CREATED,
     dependencies=[Depends(RequireAuthority("notification.write", "global"))],
 )
+@inject
 def create_notification_rule_endpoint(
     body: NotificationRuleCreate,
     response: Response,
-    request: Request,
     actor: ActorIdentity = Depends(get_current_actor),
+    service: NotificationsService = Depends(
+        Provide[ApiContainer.services.notifications]
+    ),
 ) -> NotificationRuleRead:
     try:
-        created, result = create_notification_rule(
-            _db(request),
+        created, result = service.create_notification_rule(
             request=body,
             actor=actor,
         )
@@ -110,13 +104,15 @@ def create_notification_rule_endpoint(
     response_model=NotificationRuleListRead,
     dependencies=[Depends(RequireAuthority("notification.read", "global"))],
 )
+@inject
 def list_notification_rules_endpoint(
-    request: Request,
     scope_kind: str | None = Query(default=None),
     scope_id: str | None = Query(default=None),
+    service: NotificationsService = Depends(
+        Provide[ApiContainer.services.notifications]
+    ),
 ) -> NotificationRuleListRead:
-    return list_notification_rules(
-        _db(request),
+    return service.list_notification_rules(
         scope_kind=scope_kind,
         scope_id=scope_id,
     )
@@ -127,13 +123,16 @@ def list_notification_rules_endpoint(
     response_model=NotificationRuleRead,
     dependencies=[Depends(RequireAuthority("notification.read", "global"))],
 )
+@inject
 def get_notification_rule_endpoint(
     rule_id: UUID,
-    request: Request,
     response: Response,
+    service: NotificationsService = Depends(
+        Provide[ApiContainer.services.notifications]
+    ),
 ) -> NotificationRuleRead:
     try:
-        read, etag = read_notification_rule(_db(request), rule_id=rule_id)
+        read, etag = service.read_notification_rule(rule_id=rule_id)
     except Exception as error:
         _raise_known(error)
     _set_etag(response, etag)
@@ -145,17 +144,20 @@ def get_notification_rule_endpoint(
     response_model=NotificationRuleRead,
     dependencies=[Depends(RequireAuthority("notification.write", "global"))],
 )
+@inject
 def patch_notification_rule_endpoint(
     rule_id: UUID,
     body: NotificationRulePatch,
     request: Request,
     response: Response,
     actor: ActorIdentity = Depends(get_current_actor),
+    service: NotificationsService = Depends(
+        Provide[ApiContainer.services.notifications]
+    ),
 ) -> NotificationRuleRead:
     expected_version = _parse_if_match(request)
     try:
-        read, result = patch_notification_rule(
-            _db(request),
+        read, result = service.patch_notification_rule(
             rule_id=rule_id,
             patch=body,
             actor=actor,

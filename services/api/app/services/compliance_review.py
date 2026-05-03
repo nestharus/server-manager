@@ -19,6 +19,7 @@ from app.contracts.mutations import MutationRequest, MutationResult, StateChange
 from app.contracts.roster import RosterEntryTransitionRequest
 from app.repositories import compliance as compliance_repo
 from app.repositories.db import PostgresDatabase
+from app.repositories.deferred_effects import DeferredEffectsRepository
 from app.repositories.members import MembersRepository
 from app.repositories.roster import RosterRepository
 from app.services._helpers.authority import _require_scoped_authority
@@ -208,13 +209,18 @@ def review_evaluation(
                 limit=None,
             )
             roster_member = next(
-                (member for member in roster_members if member["member_id"] == row["member_id"]),
+                (
+                    member
+                    for member in roster_members
+                    if member["member_id"] == row["member_id"]
+                ),
                 None,
             )
             if roster_member is not None:
                 roster_service = RosterService(
                     roster_repo=RosterRepository(db),
                     members_repo=MembersRepository(db),
+                    deferred_effects_repo=DeferredEffectsRepository(db),
                     mutations_callable=partial(mutate_entity, db=db),
                 )
                 roster_entry, _etag = roster_service._get_roster_entry_on(

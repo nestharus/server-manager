@@ -22,12 +22,7 @@ from app.repositories.chapter_roles import ChapterRolesRepository
 from app.repositories.chapter_transitions import ChapterTransitionsRepository
 from app.repositories.chapters import ChaptersRepository
 from app.repositories.db import PostgresDatabase
-from app.repositories.deferred_effects import (
-    fetch_deferred_effect,
-    list_archive_effects,
-    mark_unclaimed_deferred_effect_skipped,
-    update_precondition_state,
-)
+from app.repositories.deferred_effects import DeferredEffectsRepository
 from app.repositories.ticket_categories import TicketCategoriesRepository
 from app.repositories.ticket_messages import TicketMessagesRepository
 from app.repositories.tickets import TicketsRepository
@@ -117,6 +112,7 @@ def _build_chapters_service(db: PostgresDatabase) -> ChaptersService:
         chapter_transitions_repo=ChapterTransitionsRepository(db=db),
         archive_queries_repo=ArchiveQueriesRepository(db=db),
         archive_runs_repo=ArchiveRunsRepository(db=db),
+        deferred_effects_repo=DeferredEffectsRepository(db=db),
         mutations_callable=partial(mutate_entity, db=db),
     )
 
@@ -178,9 +174,13 @@ def _manual_item(
     }
 
 
-def _mark_valid(connection, effect_id: UUID) -> None:
+def _mark_valid(
+    deferred_effects_repo: DeferredEffectsRepository,
+    connection,
+    effect_id: UUID,
+) -> None:
     try:
-        update_precondition_state(
+        deferred_effects_repo._update_precondition_state_on(
             connection,
             effect_id=effect_id,
             new_state="valid",
@@ -189,8 +189,13 @@ def _mark_valid(connection, effect_id: UUID) -> None:
         return
 
 
-def _skip_effect(connection, effect_id: UUID, reason: str) -> None:
-    mark_unclaimed_deferred_effect_skipped(
+def _skip_effect(
+    deferred_effects_repo: DeferredEffectsRepository,
+    connection,
+    effect_id: UUID,
+    reason: str,
+) -> None:
+    deferred_effects_repo._mark_unclaimed_deferred_effect_skipped_on(
         connection,
         effect_id=effect_id,
         reason=reason,
@@ -203,8 +208,9 @@ def _validate_archive_effects(
     applications_repo, _applications_service = _build_applications_service(db)
     chapters_service = _build_chapters_service(db)
     tickets_repo = TicketsRepository(db)
+    deferred_effects_repo = DeferredEffectsRepository(db)
     with db.transaction() as connection:
-        effects = list_archive_effects(
+        effects = deferred_effects_repo._list_archive_effects_on(
             connection,
             archive_run_id=archive_run["id"],
             statuses={"queued", "failed"},
@@ -226,18 +232,33 @@ def _validate_archive_effects(
                     application is None
                     or application["state"] not in _PENDING_APPLICATION_STATES
                 ):
-                    _skip_effect(connection, effect["id"], "already_resolved")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "already_resolved",
+                    )
                 elif (
                     int(application["version"]) == expected_version
                     and application["state"] == expected_state
                 ):
-                    _mark_valid(connection, effect["id"])
+                    _mark_valid(deferred_effects_repo, connection, effect["id"])
                 else:
-                    _skip_effect(connection, effect["id"], "stale_precondition")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "stale_precondition",
+                    )
             elif target_kind == "ticket":
                 ticket = tickets_repo._get_ticket_on(connection, UUID(target_id))
                 if ticket is None or ticket["terminal_at"] is not None:
-                    _skip_effect(connection, effect["id"], "already_resolved")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "already_resolved",
+                    )
                     continue
                 if _find_close_edge(ticket) is None:
                     manual_items.append(
@@ -248,14 +269,24 @@ def _validate_archive_effects(
                             metadata={"state": ticket["state"]},
                         )
                     )
-                    _skip_effect(connection, effect["id"], "manual_review_required")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "manual_review_required",
+                    )
                 elif (
                     int(ticket["version"]) == expected_version
                     and ticket["state"] == expected_state
                 ):
-                    _mark_valid(connection, effect["id"])
+                    _mark_valid(deferred_effects_repo, connection, effect["id"])
                 else:
-                    _skip_effect(connection, effect["id"], "stale_precondition")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "stale_precondition",
+                    )
             elif target_kind == "authority_grant":
                 grant = AuthorityRepository(db)._fetch_grant_on(
                     connection,
@@ -269,21 +300,38 @@ def _validate_archive_effects(
                         and grant["expires_at"] <= current_time()
                     )
                 ):
-                    _skip_effect(connection, effect["id"], "already_resolved")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "already_resolved",
+                    )
                 elif int(grant["current_seq"]) == expected_version:
-                    _mark_valid(connection, effect["id"])
+                    _mark_valid(deferred_effects_repo, connection, effect["id"])
                 else:
-                    _skip_effect(connection, effect["id"], "stale_precondition")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "stale_precondition",
+                    )
             elif target_kind == "deferred_effect":
-                target = fetch_deferred_effect(connection, UUID(target_id))
+                target = deferred_effects_repo._fetch_deferred_effect_on(
+                    connection, UUID(target_id)
+                )
                 if target is None or target["status"] in {"completed", "skipped"}:
-                    _skip_effect(connection, effect["id"], "already_resolved")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "already_resolved",
+                    )
                 elif target["status"] in {"queued", "failed"} or (
                     target["status"] == "claimed"
                     and target["lease_until"] is not None
                     and target["lease_until"] < datetime.now(UTC)
                 ):
-                    _mark_valid(connection, effect["id"])
+                    _mark_valid(deferred_effects_repo, connection, effect["id"])
                 else:
                     manual_items.append(
                         _manual_item(
@@ -292,7 +340,12 @@ def _validate_archive_effects(
                             reason="deferred_effect_in_flight",
                         )
                     )
-                    _skip_effect(connection, effect["id"], "manual_review_required")
+                    _skip_effect(
+                        deferred_effects_repo,
+                        connection,
+                        effect["id"],
+                        "manual_review_required",
+                    )
         if manual_items:
             chapters_service.record_archive_manual_review_items(
                 archive_run_id=archive_run["id"],
@@ -486,8 +539,10 @@ def handle_archive_authority_revoke(effect: DeferredEffectRead) -> None:
 @register_scheduler_handler(ARCHIVE_EFFECT_DEFERRED_EFFECT_CANCEL)
 def handle_archive_deferred_effect_cancel(effect: DeferredEffectRead) -> None:
     payload = effect.payload_json
-    with get_archive_db().connection() as connection:
-        mark_unclaimed_deferred_effect_skipped(
+    db = get_archive_db()
+    deferred_effects_repo = DeferredEffectsRepository(db)
+    with db.connection() as connection:
+        deferred_effects_repo._mark_unclaimed_deferred_effect_skipped_on(
             connection,
             effect_id=UUID(str(payload["target_id"])),
             reason=f"chapter archived: {payload['archive_reason']}",

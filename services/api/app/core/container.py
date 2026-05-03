@@ -67,10 +67,11 @@ from app.services.chapter_templates import ChapterTemplatesService
 from app.services.chapters import ChaptersService
 from app.services.file_upload import FileUploadService, build_s3_client
 from app.services.forms import FormsService
-from app.services.leadership_handoff_applications import LeadershipHandoffApplicationsService
+from app.services.leadership_handoff_applications import (
+    LeadershipHandoffApplicationsService,
+)
 from app.services.leadership_handoff_tickets import LeadershipHandoffTicketsService
 from app.services.members import MembersService
-from app.services.notifications import emit_application_public_submitted_event
 from app.services.permission_reconciliation import PermissionReconciliationService
 from app.services.permissions import PermissionsService
 from app.services.policies import PoliciesService
@@ -94,6 +95,11 @@ from app.tasks import notifications_materialize as notifications_materialize_tas
 from app.tasks import permission_expiry as permission_expiry_task_module
 from app.tasks import read_models as read_models_task_module
 from app.tasks import ticket_sla as ticket_sla_task_module
+
+
+class _UnconfiguredNotificationDeliveryPort:
+    def deliver(self, _command):
+        raise RuntimeError("notifications delivery port is not configured")
 
 
 def _postgres_database_resource(dsn: str) -> Iterator[PostgresDatabase]:
@@ -138,18 +144,23 @@ class ReposContainer(containers.DeclarativeContainer):
     chapter_transitions = providers.Factory(ChapterTransitionsRepository, db=db)
     chapters = providers.Factory(ChaptersRepository, db=db)
     compliance = providers.Object(compliance_repo)
-    deferred_effects = providers.Object(deferred_effects_repo)
+    deferred_effects = providers.Factory(
+        deferred_effects_repo.DeferredEffectsRepository, db=db
+    )
     forms = providers.Factory(FormsRepository, db=db)
     members = providers.Factory(MembersRepository, db=db)
     mutations = providers.Object(mutations_repo)
-    notification_events = providers.Object(notification_events_repo)
-    notifications = providers.Object(notifications_repo)
+    notification_events = providers.Factory(
+        notification_events_repo.NotificationEventsRepository,
+        db=db,
+    )
+    notifications = providers.Factory(notifications_repo.NotificationsRepository, db=db)
     permissions = providers.Factory(PermissionsRepository, db=db)
     policies = providers.Factory(PoliciesRepository, db=db)
     public_chapters = providers.Factory(PublicChaptersRepository, db=db)
     read_models = providers.Object(read_models_repo)
     roster = providers.Factory(RosterRepository, db=db)
-    scheduler = providers.Object(scheduler_repo)
+    scheduler = providers.Factory(scheduler_repo.SchedulerRepository, db=db)
     ticket_categories = providers.Factory(TicketCategoriesRepository, db=db)
     ticket_messages = providers.Factory(TicketMessagesRepository, db=db)
     ticket_sla = providers.Factory(TicketSlaRepository, db=db)
@@ -168,9 +179,26 @@ class ServicesContainer(containers.DeclarativeContainer):
     application_public_submit_notifications = providers.Object(
         application_public_submit_notifications_service,
     )
-    application_notification_emitter = providers.Callable(
-        emit_application_public_submitted_event,
-        db=core.db,
+    deferred_effects = providers.Factory(
+        deferred_effects_service.DeferredEffectsService,
+        deferred_effects_repo=repos.deferred_effects,
+        mutations_callable=mutations_callable.provider,
+    )
+    notification_events = providers.Factory(
+        notification_events_service.NotificationEventsService,
+        notification_events_repo=repos.notification_events,
+        deferred_effects_repo=repos.deferred_effects,
+        mutations_callable=mutations_callable.provider,
+    )
+    notifications = providers.Factory(
+        notifications_service.NotificationsService,
+        notifications_repo=repos.notifications,
+        notification_events_service=notification_events,
+        mutations_callable=mutations_callable.provider,
+    )
+    application_notification_emitter = providers.Factory(
+        lambda svc: svc.emit_application_public_submitted_event,
+        svc=notifications,
     )
     file_upload = providers.Factory(
         FileUploadService,
@@ -206,7 +234,7 @@ class ServicesContainer(containers.DeclarativeContainer):
         members_repo=repos.members,
         file_upload_service=file_upload,
         mutations_callable=mutations_callable.provider,
-        notification_emitter=application_notification_emitter.provider,
+        notification_emitter=application_notification_emitter,
     )
     audit = providers.Object(audit_service)
     audit_overrides = providers.Object(audit_overrides_service)
@@ -238,13 +266,13 @@ class ServicesContainer(containers.DeclarativeContainer):
         chapter_transitions_repo=repos.chapter_transitions,
         archive_queries_repo=repos.archive_queries,
         archive_runs_repo=repos.archive_runs,
+        deferred_effects_repo=repos.deferred_effects,
         mutations_callable=mutations_callable.provider,
     )
     compliance = providers.Object(compliance_service)
     compliance_corrections = providers.Object(compliance_corrections_service)
     compliance_extraction = providers.Object(compliance_extraction_service)
     compliance_review = providers.Object(compliance_review_service)
-    deferred_effects = providers.Object(deferred_effects_service)
     form_visibility = providers.Object(form_visibility_service)
     members = providers.Factory(
         MembersService,
@@ -252,10 +280,18 @@ class ServicesContainer(containers.DeclarativeContainer):
         mutations_callable=mutations_callable.provider,
     )
     mutations = providers.Object(mutations_service)
-    notification_events = providers.Object(notification_events_service)
-    notifications = providers.Object(notifications_service)
-    notifications_delivery = providers.Object(notifications_delivery_service)
-    notifications_materialize = providers.Object(notifications_materialize_service)
+    notifications_delivery = providers.Factory(
+        notifications_delivery_service.NotificationsDeliveryService,
+        notifications_repo=repos.notifications,
+        delivery_port=providers.Factory(_UnconfiguredNotificationDeliveryPort),
+    )
+    notifications_materialize = providers.Factory(
+        notifications_materialize_service.NotificationsMaterializeService,
+        notifications_repo=repos.notifications,
+        notification_events_repo=repos.notification_events,
+        deferred_effects_repo=repos.deferred_effects,
+        mutations_callable=mutations_callable.provider,
+    )
     permission_reconciliation = providers.Factory(
         PermissionReconciliationService,
         permissions_repo=repos.permissions,
@@ -276,9 +312,15 @@ class ServicesContainer(containers.DeclarativeContainer):
         RosterService,
         roster_repo=repos.roster,
         members_repo=repos.members,
+        deferred_effects_repo=repos.deferred_effects,
         mutations_callable=mutations_callable.provider,
     )
-    scheduler = providers.Object(scheduler_service)
+    scheduler = providers.Factory(
+        scheduler_service.SchedulerService,
+        scheduler_repo=repos.scheduler,
+        db=core.db,
+        worker_id="api:primary",
+    )
     ticket_categories = providers.Object(ticket_categories_service)
     ticket_messages = providers.Factory(
         TicketMessagesService,
@@ -307,7 +349,7 @@ class ServicesContainer(containers.DeclarativeContainer):
         TicketSlaService,
         ticket_sla_repo=repos.ticket_sla,
         tickets_service=tickets,
-        notification_events_module=providers.Object(notification_events_service),
+        notification_events_service=notification_events,
     )
     trust = providers.Factory(
         TrustService,

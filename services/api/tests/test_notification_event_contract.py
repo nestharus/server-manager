@@ -14,11 +14,13 @@ without forking.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from dependency_injector import providers
 from psycopg import Connection
 from psycopg.rows import dict_row
 
@@ -30,11 +32,13 @@ from app.contracts.mutations import (
     StateChangeDraft,
 )
 from app.contracts.notifications import NotificationEventDraft, NotificationEventRead
+from app.core.container import ApiContainer
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
+from app.repositories.deferred_effects import DeferredEffectsRepository
+from app.repositories.notification_events import NotificationEventsRepository
 from app.services.mutations import mutate_entity
-from app.services.notification_events import emit as emit_notification_event
-from app.services.notification_events import replay as replay_notification_events
+from app.services.notification_events import NotificationEventsService
 
 
 AGGREGATE_TYPE = "test_notification_aggregate"
@@ -110,6 +114,30 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
         db.close()
 
 
+def _notification_events_service(db: PostgresDatabase) -> NotificationEventsService:
+    return NotificationEventsService(
+        notification_events_repo=NotificationEventsRepository(db),
+        deferred_effects_repo=DeferredEffectsRepository(db),
+        mutations_callable=partial(mutate_entity, db=db),
+    )
+
+
+@pytest.fixture()
+def notification_events_service(
+    governance_db: PostgresDatabase,
+    test_settings,
+) -> Iterator[NotificationEventsService]:
+    service = _notification_events_service(governance_db)
+    container = ApiContainer(settings=test_settings)
+    container.core.db.override(providers.Object(governance_db))
+    container.services.notification_events.override(providers.Object(service))
+    try:
+        yield container.services.notification_events()
+    finally:
+        container.services.notification_events.reset_override()
+        container.core.db.reset_override()
+
+
 # ---------------------------------------------------------------------------
 # emit() inside mutate_projection — writes in the authoritative transaction
 # ---------------------------------------------------------------------------
@@ -118,6 +146,7 @@ def governance_db(governance_dsn: str) -> Iterator[PostgresDatabase]:
 def test_emit_persists_replayable_envelope_with_correlation_context(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    notification_events_service: NotificationEventsService,
 ) -> None:
     """Inside a ``mutate_entity()`` call that resolves correlation to X,
     ``emit(db, event=..., connection=..., payload_allowlist={...})`` must
@@ -129,14 +158,13 @@ def test_emit_persists_replayable_envelope_with_correlation_context(
     correlation_id = uuid4()
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        emit_notification_event(
-            None,
+        notification_events_service.emit(
+            connection,
             event=_make_draft(
                 event_type="test.notification.emitted",
                 payload_json={"key": "value", "secret": "x"},
             ),
             actor=ACTOR,
-            connection=connection,
             payload_allowlist=frozenset({"key"}),
         )
         return StateChangeDraft(
@@ -173,6 +201,7 @@ def test_emit_persists_replayable_envelope_with_correlation_context(
 def test_notification_event_emit_redacts_payload_without_allowlist(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    notification_events_service: NotificationEventsService,
 ) -> None:
     """``payload_allowlist=None`` persists ``{}`` — the safe-by-default
     polarity that matches ``mutate_entity()``'s redaction seam."""
@@ -182,11 +211,10 @@ def test_notification_event_emit_redacts_payload_without_allowlist(
 
     with use_audit_context(ctx):
         with governance_db.transaction() as connection:
-            emit_notification_event(
-                None,
+            notification_events_service.emit(
+                connection,
                 event=draft,
                 actor=ACTOR,
-                connection=connection,
                 payload_allowlist=None,
             )
 
@@ -198,6 +226,7 @@ def test_notification_event_emit_redacts_payload_without_allowlist(
 def test_notification_event_emit_allows_explicit_keys(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    notification_events_service: NotificationEventsService,
 ) -> None:
     """A non-empty allowlist persists exactly those keys from the draft
     payload; everything else is dropped before insert."""
@@ -207,11 +236,10 @@ def test_notification_event_emit_allows_explicit_keys(
 
     with use_audit_context(ctx):
         with governance_db.transaction() as connection:
-            emit_notification_event(
-                None,
+            notification_events_service.emit(
+                connection,
                 event=draft,
                 actor=ACTOR,
-                connection=connection,
                 payload_allowlist=frozenset({"safe"}),
             )
 
@@ -239,27 +267,25 @@ def test_replay_is_semantically_equivalent_after_fresh_database_instance(
 
     db = PostgresDatabase(dsn=governance_dsn)
     try:
+        service = _notification_events_service(db)
         with use_audit_context(ctx):
             with db.transaction() as connection:
-                emit_notification_event(
-                    None,
+                service.emit(
+                    connection,
                     event=_make_draft(event_type="test.event.a", payload_json={"n": 1}),
                     actor=ACTOR,
-                    connection=connection,
                     payload_allowlist=frozenset({"n"}),
                 )
-                emit_notification_event(
-                    None,
+                service.emit(
+                    connection,
                     event=_make_draft(event_type="test.event.b", payload_json={"n": 2}),
                     actor=ACTOR,
-                    connection=connection,
                     payload_allowlist=frozenset({"n"}),
                 )
-                emit_notification_event(
-                    None,
+                service.emit(
+                    connection,
                     event=_make_draft(event_type="test.event.c", payload_json={"n": 3}),
                     actor=ACTOR,
-                    connection=connection,
                     payload_allowlist=frozenset({"n"}),
                 )
     finally:
@@ -268,7 +294,7 @@ def test_replay_is_semantically_equivalent_after_fresh_database_instance(
     # Simulate process restart: fresh database client at the same DSN.
     fresh_db = PostgresDatabase(dsn=governance_dsn)
     try:
-        replayed = replay_notification_events(fresh_db, correlation_id)
+        replayed = _notification_events_service(fresh_db).replay(correlation_id)
     finally:
         fresh_db.close()
 
@@ -300,6 +326,7 @@ def test_replay_is_semantically_equivalent_after_fresh_database_instance(
 
 def test_notification_event_emit_outside_audit_context_raises(
     governance_db: PostgresDatabase,
+    notification_events_service: NotificationEventsService,
 ) -> None:
     """Without an active ContextVar and without a surrounding
     ``use_audit_context(...)``, ``emit()`` must raise
@@ -307,11 +334,10 @@ def test_notification_event_emit_outside_audit_context_raises(
 
     with governance_db.transaction() as connection:
         with pytest.raises(MissingCorrelationContextError):
-            emit_notification_event(
-                None,
+            notification_events_service.emit(
+                connection,
                 event=_make_draft(payload_json={"k": "v"}),
                 actor=ACTOR,
-                connection=connection,
                 payload_allowlist=None,
             )
 
@@ -324,6 +350,7 @@ def test_notification_event_emit_outside_audit_context_raises(
 def test_notification_emit_inside_mutate_projection_uses_mutation_correlation(
     governance_db: PostgresDatabase,
     governance_dsn: str,
+    notification_events_service: NotificationEventsService,
 ) -> None:
     """When the caller passes ``MutationRequest.correlation_id=X`` (overriding
     any outer ContextVar), a notification emitted inside
@@ -335,11 +362,10 @@ def test_notification_emit_inside_mutate_projection_uses_mutation_correlation(
     override_correlation = uuid4()
 
     def mutate_projection(connection: Connection[Any]) -> StateChangeDraft:
-        emit_notification_event(
-            None,
+        notification_events_service.emit(
+            connection,
             event=_make_draft(event_type="test.override", payload_json={"k": "v"}),
             actor=ACTOR,
-            connection=connection,
             payload_allowlist=frozenset({"k"}),
         )
         return StateChangeDraft(

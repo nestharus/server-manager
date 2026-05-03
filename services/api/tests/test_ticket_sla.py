@@ -16,7 +16,7 @@ from psycopg.types.json import Jsonb
 from app.contracts.actor import ActorIdentity
 from app.contracts.audit import AuditContextRead, CorrelationHeadersRead
 from app.contracts.mutations import StaleMutationError
-from app.contracts.notifications import NotificationEventDraft
+from app.contracts.notifications import NotificationEventDraft, NotificationEventRead
 from app.contracts.ticket_categories import TicketCategoryCreate
 from app.contracts.ticket_messages import TicketMessageAppendRequest
 from app.contracts.tickets import TicketCreate
@@ -428,10 +428,10 @@ def test_rerun_does_not_duplicate_triggers_events_or_transitions(
 def test_notifications_are_published_through_notification_events_emit(
     governance_db: PostgresDatabase,
     governance_dsn: str,
-    monkeypatch: pytest.MonkeyPatch,
-    tickets_service: TicketsService,
-    ticket_sla_service: TicketSlaService,
+    ticket_app_with_overrides: tuple[Any, Any],
 ) -> None:
+    _app, container = ticket_app_with_overrides
+    tickets_service = container.services.tickets()
     now = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
     ticket_id = _create_ticket_with_sla(
         tickets_service,
@@ -451,27 +451,50 @@ def test_notifications_are_published_through_notification_events_emit(
     _set_owner(governance_dsn, ticket_id, "owner-1")
     _age_ticket(governance_dsn, ticket_id, created_at=now - timedelta(minutes=5))
 
-    import app.services.ticket_sla as ticket_sla_module
+    class SpyNotificationEventsService:
+        def __init__(self, wrapped: Any) -> None:
+            self.wrapped = wrapped
+            self.calls: list[dict[str, Any]] = []
 
-    calls: list[dict[str, Any]] = []
-    real_emit = ticket_sla_module.notification_events.emit
+        def emit(
+            self,
+            connection: Any | None = None,
+            *,
+            event: NotificationEventDraft,
+            actor: ActorIdentity,
+            payload_allowlist: frozenset[str] | None = None,
+        ) -> NotificationEventRead:
+            self.calls.append(
+                {
+                    "connection": connection,
+                    "event": event,
+                    "actor": actor,
+                    "payload_allowlist": payload_allowlist,
+                }
+            )
+            return self.wrapped.emit(
+                connection,
+                event=event,
+                actor=actor,
+                payload_allowlist=payload_allowlist,
+            )
 
-    def spy_emit(*args: Any, **kwargs: Any) -> Any:
-        calls.append({"args": args, "kwargs": kwargs})
-        return real_emit(*args, **kwargs)
+    spy = SpyNotificationEventsService(container.services.notification_events())
+    container.services.notification_events.override(providers.Object(spy))
+    try:
+        ticket_sla_service = container.services.ticket_sla()
+        ticket_sla_service.evaluate_ticket_sla(now=now)
+    finally:
+        container.services.notification_events.reset_override()
 
-    monkeypatch.setattr(ticket_sla_module.notification_events, "emit", spy_emit)
-
-    ticket_sla_service.evaluate_ticket_sla(now=now)
-
-    assert len(calls) == 1
-    kwargs = calls[0]["kwargs"]
-    assert isinstance(kwargs["event"], NotificationEventDraft)
-    assert kwargs["event"].event_type == "ticket.sla.notify_owner"
-    assert kwargs["event"].scope_kind == "chapter"
-    assert kwargs["event"].scope_id == "chapter-1"
-    assert kwargs["actor"] == ActorIdentity(actor_kind="service", actor_id="sla-worker")
-    assert kwargs["payload_allowlist"] == SLA_NOTIFICATION_PAYLOAD_ALLOWLIST
+    assert len(spy.calls) == 1
+    call = spy.calls[0]
+    assert isinstance(call["event"], NotificationEventDraft)
+    assert call["event"].event_type == "ticket.sla.notify_owner"
+    assert call["event"].scope_kind == "chapter"
+    assert call["event"].scope_id == "chapter-1"
+    assert call["actor"] == ActorIdentity(actor_kind="service", actor_id="sla-worker")
+    assert call["payload_allowlist"] == SLA_NOTIFICATION_PAYLOAD_ALLOWLIST
     assert _fetch_events(governance_dsn)[0]["payload_json"]["owner_id"] == "owner-1"
 
 

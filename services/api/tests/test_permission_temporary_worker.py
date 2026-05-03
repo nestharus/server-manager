@@ -17,7 +17,8 @@ from app.contracts.permissions import GuildRolePermissionIntentCreate
 from app.core.context import use_audit_context
 from app.repositories.db import PostgresDatabase
 from tests._authority_helpers import grant_authority
-from app.services.scheduler import SchedulerLoop
+from app.repositories.scheduler import SchedulerRepository
+from app.services.scheduler import SchedulerService
 from app.tasks.permission_expiry import permission_expiry_worker_tick
 
 
@@ -269,7 +270,9 @@ def test_worker_ignores_non_temporary_and_future_intents(
     assert result.drift_ids == []
     assert _fetch_drift_count(governance_dsn) == 0
     permissions_service = app.state.container.services.permissions()
-    assert permissions_service.read_permission_intent(non_temporary.id).expired_at is None
+    assert (
+        permissions_service.read_permission_intent(non_temporary.id).expired_at is None
+    )
     assert permissions_service.read_permission_intent(future.id).expired_at is None
 
 
@@ -398,7 +401,9 @@ def test_scheduler_invokes_permission_expiry_worker_on_interval(
     """AC3: scheduler wiring runs the permission expiry worker when due and skips the immediate repeat."""
     calls: list[datetime] = []
 
-    def _permission_expiry_tick(*, now: datetime, batch_size: int | None = None) -> None:
+    def _permission_expiry_tick(
+        *, now: datetime, batch_size: int | None = None
+    ) -> None:
         assert batch_size is None
         calls.append(now)
 
@@ -407,10 +412,6 @@ def test_scheduler_invokes_permission_expiry_worker_on_interval(
         _permission_expiry_tick,
     )
     monkeypatch.setattr("app.tasks.archive.archive_worker_tick", lambda: None)
-    monkeypatch.setattr(
-        "app.services.deferred_effects.deferred_effect_worker_tick",
-        lambda *_args, **_kwargs: None,
-    )
     monkeypatch.setattr("app.tasks.ticket_sla.ticket_sla_worker_tick", lambda: [])
     monkeypatch.setattr(
         "app.tasks.read_models.read_model_worker_tick",
@@ -418,7 +419,11 @@ def test_scheduler_invokes_permission_expiry_worker_on_interval(
     )
 
     async def _run() -> None:
-        loop = SchedulerLoop(governance_db, worker_id="worker-expiry")
+        loop = SchedulerService(
+            scheduler_repo=SchedulerRepository(governance_db),
+            db=governance_db,
+            worker_id="worker-expiry",
+        )
         first = datetime(2026, 4, 21, 12, 0, tzinfo=UTC)
         second = first + timedelta(seconds=5)
         third = first + timedelta(seconds=61)

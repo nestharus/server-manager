@@ -45,7 +45,7 @@ from app.repositories.authority import AuthorityRepository
 from app.repositories.chapter_templates import ChapterTemplatesRepository
 from app.repositories.chapter_transitions import ChapterTransitionsRepository
 from app.repositories.chapters import ChaptersRepository
-from app.repositories.deferred_effects import enqueue_effect, list_archive_effects
+from app.repositories.deferred_effects import DeferredEffectsRepository
 from app.services.authority import current_time, evaluate, _row_to_read
 from app.services.scheduler import DEFAULT_MAX_ATTEMPTS
 
@@ -187,6 +187,7 @@ def _merge_resources(
 
 
 def _enqueue_failed_provisioning_effect(
+    deferred_effects_repo: DeferredEffectsRepository,
     connection: Connection[Any],
     *,
     chapter_id: str,
@@ -214,7 +215,7 @@ def _enqueue_failed_provisioning_effect(
         correlation_id=ctx.correlation_id,
         causation_id=ctx.causation_id,
     )
-    return enqueue_effect(
+    return deferred_effects_repo._enqueue_effect_on(
         connection,
         effect=effect,
         correlation_id=ctx.correlation_id,
@@ -298,6 +299,7 @@ def _archive_context(correlation_id: Any, causation_id: Any) -> AuditContextRead
 
 
 def _enqueue_archive_effect(
+    deferred_effects_repo: DeferredEffectsRepository,
     connection: Connection[Any],
     *,
     archive_run_id: Any,
@@ -331,7 +333,7 @@ def _enqueue_archive_effect(
         correlation_id=correlation_id,
         causation_id=causation_id,
     )
-    return enqueue_effect(
+    return deferred_effects_repo._enqueue_effect_on(
         connection,
         effect=effect,
         correlation_id=correlation_id,
@@ -394,12 +396,14 @@ class ChaptersService:
         chapter_transitions_repo: ChapterTransitionsRepository,
         archive_queries_repo: ArchiveQueriesRepository,
         archive_runs_repo: ArchiveRunsRepository,
+        deferred_effects_repo: DeferredEffectsRepository,
         mutations_callable,
     ) -> None:
         self._chapters_repo = chapters_repo
         self._chapter_transitions_repo = chapter_transitions_repo
         self._archive_queries_repo = archive_queries_repo
         self._archive_runs_repo = archive_runs_repo
+        self._deferred_effects_repo = deferred_effects_repo
         self._chapter_templates_repo = ChapterTemplatesRepository(chapters_repo.db)
         self._mutations_callable = mutations_callable
 
@@ -591,6 +595,7 @@ class ChaptersService:
                 updated = dict(row)
                 updated["state"] = request.to_state
                 effect_row = _enqueue_failed_provisioning_effect(
+                    self._deferred_effects_repo,
                     connection,
                     chapter_id=chapter_id,
                     chapter_transition_id=transition_id,
@@ -862,6 +867,7 @@ class ChaptersService:
             connection, chapter_id=chapter_id
         ):
             row = _enqueue_archive_effect(
+                self._deferred_effects_repo,
                 connection,
                 archive_run_id=archive_run_id,
                 chapter_id=chapter_id,
@@ -893,6 +899,7 @@ class ChaptersService:
                 )
                 continue
             row = _enqueue_archive_effect(
+                self._deferred_effects_repo,
                 connection,
                 archive_run_id=archive_run_id,
                 chapter_id=chapter_id,
@@ -911,6 +918,7 @@ class ChaptersService:
             connection, chapter_id=chapter_id
         ):
             row = _enqueue_archive_effect(
+                self._deferred_effects_repo,
                 connection,
                 archive_run_id=archive_run_id,
                 chapter_id=chapter_id,
@@ -933,6 +941,7 @@ class ChaptersService:
             exclude_archive_run_id=str(archive_run_id),
         ):
             row = _enqueue_archive_effect(
+                self._deferred_effects_repo,
                 connection,
                 archive_run_id=archive_run_id,
                 chapter_id=chapter_id,
@@ -1156,7 +1165,7 @@ class ChaptersService:
             )
             if fresh_run is None or fresh_run["status"] != "in_progress":
                 return None
-            archive_effects = list_archive_effects(
+            archive_effects = self._deferred_effects_repo._list_archive_effects_on(
                 connection,
                 archive_run_id=fresh_run["id"],
                 statuses={"queued", "claimed", "failed"},

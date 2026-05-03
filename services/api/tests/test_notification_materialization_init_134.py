@@ -12,7 +12,7 @@ from .public_intake_fixtures import assert_risk_annotation
 from .test_notification_materialization import (
     _insert_event,
     _insert_rule,
-    _load_materialize_event,
+    _materialize_service,
 )
 
 
@@ -134,7 +134,7 @@ def test_officer_rule_renders_designated_channel_envelope_with_embed(
     governance_dsn: str,
 ) -> None:
     _assert_tg2()
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     _insert_rule(
         governance_dsn,
         trigger_json={"event_type": APPLICATION_EVENT_TYPE},
@@ -150,7 +150,7 @@ def test_officer_rule_renders_designated_channel_envelope_with_embed(
         scope_id=None,
     )
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes_with_embed(governance_dsn, source_event_id=event_id)
     assert len(envelopes) == 1
@@ -176,7 +176,7 @@ def test_applicant_rule_renders_dm_envelope(
     governance_dsn: str,
 ) -> None:
     _assert_tg2()
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     _insert_rule(
         governance_dsn,
         trigger_json={"event_type": APPLICATION_EVENT_TYPE},
@@ -192,7 +192,7 @@ def test_applicant_rule_renders_dm_envelope(
         scope_id=None,
     )
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelopes = _fetch_envelopes_with_embed(governance_dsn, source_event_id=event_id)
     assert len(envelopes) == 1
@@ -211,7 +211,7 @@ def test_missing_channel_id_skips_officer_envelope_with_reason(
     governance_dsn: str,
 ) -> None:
     _assert_tg2()
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     _insert_rule(
         governance_dsn,
         trigger_json={"event_type": APPLICATION_EVENT_TYPE},
@@ -227,7 +227,7 @@ def test_missing_channel_id_skips_officer_envelope_with_reason(
         scope_id=None,
     )
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelope = _fetch_envelopes_with_embed(governance_dsn, source_event_id=event_id)[0]
     assert envelope["delivery_status"] == "skipped"
@@ -239,7 +239,7 @@ def test_missing_role_id_skips_officer_envelope_with_reason(
     governance_dsn: str,
 ) -> None:
     _assert_tg2()
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     _insert_rule(
         governance_dsn,
         trigger_json={"event_type": APPLICATION_EVENT_TYPE},
@@ -255,7 +255,7 @@ def test_missing_role_id_skips_officer_envelope_with_reason(
         scope_id=None,
     )
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelope = _fetch_envelopes_with_embed(governance_dsn, source_event_id=event_id)[0]
     assert envelope["delivery_status"] == "skipped"
@@ -267,7 +267,7 @@ def test_missing_guild_url_skips_applicant_envelope_with_reason(
     governance_dsn: str,
 ) -> None:
     _assert_tg2()
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     _insert_rule(
         governance_dsn,
         trigger_json={"event_type": APPLICATION_EVENT_TYPE},
@@ -283,7 +283,7 @@ def test_missing_guild_url_skips_applicant_envelope_with_reason(
         scope_id=None,
     )
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     envelope = _fetch_envelopes_with_embed(governance_dsn, source_event_id=event_id)[0]
     assert envelope["delivery_status"] == "skipped"
@@ -296,7 +296,7 @@ def test_embed_non_string_fields_pass_through_unchanged(
     governance_dsn: str,
 ) -> None:
     _assert_tg2()
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     _insert_rule(
         governance_dsn,
         trigger_json={"event_type": APPLICATION_EVENT_TYPE},
@@ -312,7 +312,7 @@ def test_embed_non_string_fields_pass_through_unchanged(
         scope_id=None,
     )
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     embed = _fetch_envelopes_with_embed(governance_dsn, source_event_id=event_id)[0][
         "rendered_embed_json"
@@ -328,7 +328,7 @@ def test_template_substitution_applied_only_to_string_fields(
     governance_dsn: str,
 ) -> None:
     _assert_tg2()
-    materialize_event = _load_materialize_event()
+    service = _materialize_service(governance_db)
     template = _officer_template()
     template["embed"]["color"] = 11259375
     template["embed"]["fields"] = [
@@ -350,7 +350,7 @@ def test_template_substitution_applied_only_to_string_fields(
         scope_id=None,
     )
 
-    materialize_event(governance_db, event_id, worker_id="notification-dispatcher")
+    service.materialize_event(event_id, worker_id="notification-dispatcher")
 
     embed = _fetch_envelopes_with_embed(governance_dsn, source_event_id=event_id)[0][
         "rendered_embed_json"
