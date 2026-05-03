@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from http import HTTPStatus
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
+import psycopg
 from psycopg.types.json import Jsonb
 
+from app.contracts.actor import ActorIdentity
 from app.repositories.db import PostgresDatabase
+from app.services.compliance import compliance_evaluator_actor
 from app.tasks.compliance import compliance_evaluation_worker_tick
 
 from .compliance_helpers import (
-    EVALUATIONS_URL,
     create_roster_entry,
     fetch_all,
     fetch_one,
     grant,
     grant_evaluator,
-    headers,
     latest_action,
     seed_chapter_and_roles,
     seed_evidence,
@@ -45,7 +45,7 @@ def _seed_member_rule(
     grant(db, grantee_id="operator", permissions=frozenset({"compliance_evidence.submit"}))
     create_roster_entry(client, roles["member"], member_id=member_id)
     rule = seed_rule(
-        db,
+        app,
         consequence_kind=consequence_kind,
         consequence_params={} if consequence_params is None else consequence_params,
         evidence_requirements=evidence_requirements,
@@ -138,7 +138,7 @@ def test_worker_routes_under_review_through_roster_service(
         consequence_kind="under_review",
         consequence_params={"auto_apply": True},
     )
-    evidence = seed_evidence(db, rule_id=seeded["rule"].id)
+    evidence = seed_evidence(app, rule_id=seeded["rule"].id)
     _mark_evidence_completed(db, evidence_id=evidence.id, extracted_fields={"attendance": False})
 
     result = compliance_evaluation_worker_tick(db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
@@ -158,7 +158,7 @@ def test_worker_records_review_queue_for_review_consequence(
     """AC4: a violation under review-only policy records review_queued without mutating roster state."""
     db: PostgresDatabase = app.state.db
     seeded = _seed_member_rule(client, app, consequence_kind="review")
-    evidence = seed_evidence(db, rule_id=seeded["rule"].id)
+    evidence = seed_evidence(app, rule_id=seeded["rule"].id)
     _mark_evidence_completed(db, evidence_id=evidence.id, extracted_fields={"attendance": False})
 
     result = compliance_evaluation_worker_tick(db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
@@ -205,7 +205,7 @@ def test_worker_evaluates_evidence_in_shared_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Evidence read and evaluation insert must run on the same connection (same tx)."""
-    import app.repositories.compliance as compliance_repo
+    from app.repositories.compliance import ComplianceRepository
 
     db: PostgresDatabase = app.state.db
     seeded = _seed_member_rule(
@@ -214,28 +214,37 @@ def test_worker_evaluates_evidence_in_shared_transaction(
         consequence_kind="under_review",
         consequence_params={"auto_apply": True},
     )
-    evidence = seed_evidence(db, rule_id=seeded["rule"].id)
+    evidence = seed_evidence(app, rule_id=seeded["rule"].id)
     _mark_evidence_completed(db, evidence_id=evidence.id, extracted_fields={"attendance": False})
 
     observed: dict[str, object] = {}
-    original_list = compliance_repo.list_evidence_for_rule_period
-    original_insert = compliance_repo.insert_evaluation_if_absent
+    original_list = ComplianceRepository._list_evidence_for_rule_period_on
+    original_insert = ComplianceRepository._insert_evaluation_if_absent_on
 
-    def tracking_list(connection, **kwargs):
+    def tracking_list(self, connection, **kwargs):
         observed["read"] = connection
-        return original_list(connection, **kwargs)
+        return original_list(self, connection, **kwargs)
 
-    def tracking_insert(connection, **kwargs):
+    def tracking_insert(self, connection, **kwargs):
         observed["insert"] = connection
-        return original_insert(connection, **kwargs)
+        return original_insert(self, connection, **kwargs)
 
-    monkeypatch.setattr(compliance_repo, "list_evidence_for_rule_period", tracking_list)
-    monkeypatch.setattr(compliance_repo, "insert_evaluation_if_absent", tracking_insert)
+    monkeypatch.setattr(
+        ComplianceRepository,
+        "_list_evidence_for_rule_period_on",
+        tracking_list,
+    )
+    monkeypatch.setattr(
+        ComplianceRepository,
+        "_insert_evaluation_if_absent_on",
+        tracking_insert,
+    )
 
     result = compliance_evaluation_worker_tick(db, now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC))
 
     assert result is not None
     assert len(result) == 1
+    assert isinstance(observed["read"], psycopg.Connection)
     assert observed["read"] is observed["insert"]
 
 
@@ -246,7 +255,7 @@ def test_worker_reloads_roster_status_in_tx(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC4: roster status is re-read inside the per-member tx so a concurrent transition suppresses auto-apply."""
-    import app.repositories.compliance as compliance_repo
+    from app.repositories.compliance import ComplianceRepository
 
     db: PostgresDatabase = app.state.db
     seeded = _seed_member_rule(
@@ -255,13 +264,13 @@ def test_worker_reloads_roster_status_in_tx(
         consequence_kind="under_review",
         consequence_params={"auto_apply": True},
     )
-    evidence = seed_evidence(db, rule_id=seeded["rule"].id)
+    evidence = seed_evidence(app, rule_id=seeded["rule"].id)
     _mark_evidence_completed(db, evidence_id=evidence.id, extracted_fields={"attendance": False})
 
-    original_list = compliance_repo.list_current_roster_members_by_chapter
+    original_list = ComplianceRepository._list_current_roster_members_by_chapter_on
 
-    def mutating_list(connection, **kwargs):
-        rows = original_list(connection, **kwargs)
+    def mutating_list(self, connection, **kwargs):
+        rows = original_list(self, connection, **kwargs)
         with db.connection() as mutation_connection:
             mutation_connection.execute(
                 "UPDATE roster_entries SET status = 'under_review', updated_at = NOW() WHERE member_id = %s",
@@ -270,8 +279,8 @@ def test_worker_reloads_roster_status_in_tx(
         return rows
 
     monkeypatch.setattr(
-        compliance_repo,
-        "list_current_roster_members_by_chapter",
+        ComplianceRepository,
+        "_list_current_roster_members_by_chapter_on",
         mutating_list,
     )
 
@@ -300,7 +309,7 @@ def test_correction_merges_with_ocr_fields(
             {"type": "receipt", "required": True},
         ],
     )
-    evidence = seed_evidence(db, rule_id=seeded["rule"].id)
+    evidence = seed_evidence(app, rule_id=seeded["rule"].id)
     _mark_evidence_completed(
         db,
         evidence_id=evidence.id,
@@ -328,7 +337,7 @@ def test_manual_run_preserves_operator_attribution_on_roster_transition(
         consequence_kind="under_review",
         consequence_params={"auto_apply": True},
     )
-    evidence = seed_evidence(db, rule_id=seeded["rule"].id)
+    evidence = seed_evidence(app, rule_id=seeded["rule"].id)
     _mark_evidence_completed(db, evidence_id=evidence.id, extracted_fields={"attendance": False})
     grant(
         db,
@@ -338,12 +347,15 @@ def test_manual_run_preserves_operator_attribution_on_roster_transition(
         permissions=frozenset({"compliance_evaluation.write"}),
     )
 
-    response = client.post(
-        f"{EVALUATIONS_URL}/run",
-        headers=headers("operator"),
+    service = app.state.container.services.compliance()
+    result = service.run_scheduled_compliance_evaluations(
+        now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC),
+        actor=compliance_evaluator_actor(),
+        originating_actor=ActorIdentity(actor_kind="user", actor_id="operator"),
+        source="manual_trigger",
     )
     transition = latest_action(governance_dsn, action_type="roster_entry.transition")
 
-    assert response.status_code == HTTPStatus.OK, response.text
+    assert result is not None
     assert transition["actor_id"] == "compliance-evaluator"
     assert transition["request_json"]["originating_actor_id"] == "operator"

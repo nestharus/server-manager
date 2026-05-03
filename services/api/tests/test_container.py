@@ -276,6 +276,57 @@ def test_container_resolves_notification_factories(test_settings):
         container.shutdown_resources()
 
 
+def test_container_resolves_compliance_factories(test_settings):
+    """TG-3: Container resolves compliance repo and 4 services as
+    Factory instances (post-142h shape)."""
+    from app.repositories.compliance import ComplianceRepository
+    from app.services.compliance import ComplianceService
+    from app.services.compliance_corrections import ComplianceCorrectionsService
+    from app.services.compliance_extraction import ComplianceExtractionService
+    from app.services.compliance_review import ComplianceReviewService
+
+    container = ApiContainer(settings=test_settings)
+    container.init_resources()
+    try:
+        # 1 repo
+        assert isinstance(container.repos.compliance(), ComplianceRepository)
+        # 4 services
+        assert isinstance(container.services.compliance(), ComplianceService)
+        assert isinstance(container.services.compliance_corrections(), ComplianceCorrectionsService)
+        assert isinstance(container.services.compliance_extraction(), ComplianceExtractionService)
+        assert isinstance(container.services.compliance_review(), ComplianceReviewService)
+    finally:
+        container.shutdown_resources()
+
+
+def test_no_production_imports_compliance_free_functions(tmp_path):
+    """Anti-pattern grep assertion (A14): no production code imports
+    deleted compliance free functions."""
+    from pathlib import Path
+    import subprocess
+
+    forbidden = [
+        "create_rule",
+        "submit_evidence",
+        "run_scheduled_compliance_evaluations",
+        "get_evidence_submission",
+        "get_rule_read",
+        "list_rules",
+        "update_rule",
+    ]
+    pattern = r"from app\.services\.compliance import \(?(?:" + "|".join(forbidden) + ")"
+    result = subprocess.run(
+        ["rg", "-l", pattern, "app/", "--type", "py"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    assert result.returncode == 1, (
+        f"Production code still imports deleted compliance functions: "
+        f"{result.stdout}"
+    )
+
+
 def test_container_resolves_chapter_factories(test_settings):
     """TG-4: Container resolves chapter repos and services as Factory
     instances (post-142e shape)."""

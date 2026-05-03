@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.repositories.db import PostgresDatabase
-from app.services.compliance import compliance_evaluator_actor, run_scheduled_compliance_evaluations
+from app.services.compliance import compliance_evaluator_actor
 
 from psycopg.types.json import Jsonb
 
@@ -46,9 +46,9 @@ def _seed_pending_review_evaluation(
         consequence_params={"auto_apply": True, "require_review": True},
     )
     grant_evaluator(db)
+    service = app.state.container.services.compliance()
     with use_audit_context(audit_context()):
-        evaluations = run_scheduled_compliance_evaluations(
-            db,
+        evaluations = service.run_scheduled_compliance_evaluations(
             now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC),
             actor=compliance_evaluator_actor(),
         )
@@ -181,7 +181,7 @@ def _seed_pending_violation_under_review(
         consequence_kind="under_review",
         consequence_params={"auto_apply": False, "require_review": True},
     )
-    evidence = seed_evidence(db, rule_id=rule["id"], member_id=member_id)
+    evidence = seed_evidence(app, rule_id=rule["id"], member_id=member_id)
     with db.connection() as connection:
         connection.execute(
             """
@@ -202,9 +202,9 @@ def _seed_pending_violation_under_review(
             ),
         )
     grant_evaluator(db)
+    service = app.state.container.services.compliance()
     with use_audit_context(audit_context()):
-        evaluations = run_scheduled_compliance_evaluations(
-            db,
+        evaluations = service.run_scheduled_compliance_evaluations(
             now=datetime(2026, 4, 22, 12, 0, tzinfo=UTC),
             actor=compliance_evaluator_actor(),
         )
