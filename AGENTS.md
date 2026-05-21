@@ -312,7 +312,7 @@ Applies to: executive roadmap, pitch deck, and any future public documents.
 7. Rubric 3: Flow and cohesion (`claude-opus`, `writing rubric agent.md`)
 8. Rubric 4: Adversarial robustness (`claude-opus`, `writing rubric agent.md`)
 9. Tempo and editorial (`claude-opus`, `writing editorial agent.md`)
-10. Restart check — if major edits, re-run from step 4. Max 3 cycles.
+10. Restart check — if major edits, re-run from step 4 until the writing gate passes or the loop halts for a blocking condition.
 
 **Phase C: Quality Gate**
 11. Quality gate (`claude-opus`, `writing quality gate agent.md`)
