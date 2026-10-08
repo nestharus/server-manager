@@ -426,7 +426,7 @@ IDENTITY_ID="$(find_identity)"
 
 prepare_project_path "server-manager" "$ENVIRONMENT_SLUG" "/runtime/local"
 set_secret_if_absent "DISCORD_BOT_TOKEN" "${DISCORD_BOT_TOKEN:-e2e.synthetic.discord.token}"
-set_secret_if_absent "DISCORD_GUILD_ID" "${DISCORD_GUILD_ID:-900000000000000001}"
+set_secret_if_absent "DISCORD_GUILD_ID" "${DISCORD_GUILD_ID:?set DISCORD_GUILD_ID to the Discord server (guild) id this deployment manages}"
 set_secret_if_absent "SUPABASE_SERVICE_KEY" "${SUPABASE_SERVICE_KEY:-e2e-local-supabase-service-key}"
 set_secret_if_absent "APPLICANT_OIDC_CLIENT_ID" "${APPLICANT_OIDC_CLIENT_ID:-humility-local-server-manager-applicant}"
 set_secret_if_absent "APPLICANT_OIDC_CLIENT_SECRET" "${APPLICANT_OIDC_CLIENT_SECRET:-$(generate_secret)}"

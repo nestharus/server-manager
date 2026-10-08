@@ -815,7 +815,7 @@ Phase 4 rollback is provisioning-run specific. If a create run fails, the operat
 
 - Full moderation system. Research and decisions explicitly put moderation outside the first build; moderator tickets are in scope, but a full moderation bot is not.
 - Web reviewer dashboards. Discord is the operator surface in v1; adding a web UI creates extra surface area before the core workflows are proven.
-- Multi-guild tenancy. The daemon is for Humility guild `900000000000000001`, not a generic SaaS.
+- Multi-guild tenancy. The daemon is for Humility guild `<guild id>`, not a generic SaaS.
 - Arbitrary OCR provider plug-in marketplace. The OCR boundary should be clean, but v1 only needs Google Vision primary and Gemini fallback.
 - Automatic punishments or kicks from activity rules. v1 flags members for officer review; it does not auto-enforce.
 - Cross-chapter transfer workflow. Officers can manually resolve transfers in v1; dedicated transfer flows can come later if they become a real pain point.

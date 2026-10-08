@@ -266,7 +266,7 @@ Exact shape:
 
 ```json
 {
-  "id": 900000000000000001,
+  "id": <guild id>,
   "type": "channel"
 }
 ```

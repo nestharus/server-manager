@@ -94,7 +94,7 @@ lacking defaults) are:
 Both `test_factory.py:REQUIRED_ENV_VARS` and
 `test_settings.py:_set_required_env` set exactly these four. The values
 are safe test placeholders (`test-token-value`,
-`900000000000000001`, `postgresql://user:pass@localhost:5432/db`,
+`<guild id>`, `postgresql://user:pass@localhost:5432/db`,
 `test-service-key`). None are real credentials.
 
 `test_settings.py:ALL_SETTINGS_ENV_VARS` lists all 13 env vars

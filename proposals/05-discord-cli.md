@@ -4,7 +4,7 @@ Date: 2026-04-12
 
 ## Goal
 
-Define `discord_cli.py` as a thin, one-shot CLI around `discord.py` for inspecting the Humility guild (`900000000000000001`).
+Define `discord_cli.py` as a thin, one-shot CLI around `discord.py` for inspecting the Humility guild (`<guild id>`).
 
 The tool should:
 
@@ -74,7 +74,7 @@ Use a consistent top-level envelope for every command:
 {
   "ok": true,
   "command": "overview",
-  "guild_id": 900000000000000001,
+  "guild_id": <guild id>,
   "data": {}
 }
 ```
@@ -85,7 +85,7 @@ For failures:
 {
   "ok": false,
   "command": "read",
-  "guild_id": 900000000000000001,
+  "guild_id": <guild id>,
   "error": {
     "type": "channel_not_found",
     "message": "No channel matched 'support'",

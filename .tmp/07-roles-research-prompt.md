@@ -9,7 +9,7 @@ return, focusing on role metadata available WITHOUT calling
 ## Context
 
 `discord_cli.py` is a one-shot Discord inspection CLI for the Humility
-guild (ID 900000000000000001). It connects to Discord's gateway, runs a
+guild (ID <guild id>). It connects to Discord's gateway, runs a
 command handler, and prints JSON output. Current commands: overview,
 bots, channels, find-channel, read, integrations.
 

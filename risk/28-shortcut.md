@@ -63,7 +63,7 @@ matches the actual codebase state.
 - **Criterion**: 3 (hardcoded values that should be configurable)
 - **Description**: The `required_env` fixture sets four env vars to
   fixed test values: `DISCORD_BOT_TOKEN="test-token-value"`,
-  `DISCORD_GUILD_ID="900000000000000001"`,
+  `DISCORD_GUILD_ID="<guild id>"`,
   `SUPABASE_DB_URL="postgresql://user:pass@localhost:5432/db"`,
   `SUPABASE_SERVICE_KEY="test-service-key"`. These are test-only
   dummy values that satisfy `Settings` validation. They are not

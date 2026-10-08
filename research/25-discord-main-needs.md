@@ -6,7 +6,7 @@ Source: `research/25-discord-main.md`
 
 The Discord service is one of three services in the monorepo. It runs
 as a persistent daemon on Railway, connecting to the Humility guild
-(`900000000000000001`) and optionally the beta guild. The entry point
+(`<guild id>`) and optionally the beta guild. The entry point
 must work reliably under Railway's process supervisor which sends
 SIGTERM for graceful shutdown.
 

@@ -819,7 +819,7 @@ Phase 4 rollback is explicit cleanup, not hidden orchestration. If a create run 
 - Real-time ticket transcript mirroring plus reconciliation. V1 uses close-time full-history fetch only.
 - Automatic provisioning resume engines and generic rollback orchestration. V1 records created IDs and uses explicit cleanup instead.
 - General web reviewer dashboards. Discord is the operator surface in v1. The only web surface that may enter v1 is the narrow application-form fallback if required Discord components are unavailable through `discord.py`.
-- Multi-guild tenancy. The daemon is for Humility guild `900000000000000001`, not a generic SaaS.
+- Multi-guild tenancy. The daemon is for Humility guild `<guild id>`, not a generic SaaS.
 - SQLite or local-first fallback. Postgres is the system of record.
 - YAML as the production source of truth. YAML may be used as import or operator input only.
 - Compatibility shims, dual-write paths, feature flags for old behavior, or other transitional support layers.

@@ -4,7 +4,7 @@
 Document the problem space for building a Discord guild inspection and management CLI tool. Do NOT design solutions — only research and document the problem space with evidence.
 
 ## Context
-- We are building a one-shot CLI tool (`discord_cli.py`) that wraps `discord.py` to inspect and manage the "Humility" Discord guild (ID: `900000000000000001`).
+- We are building a one-shot CLI tool (`discord_cli.py`) that wraps `discord.py` to inspect and manage the "Humility" Discord guild (ID: `<guild id>`).
 - The tool uses a bot token and guild ID from a `.env` file.
 - It needs to support subcommands for: overview, listing bots, listing channels, finding channels by name, reading messages from channels, and listing integrations.
 - Each subcommand opens a gateway session, runs once, prints JSON to stdout, and exits.

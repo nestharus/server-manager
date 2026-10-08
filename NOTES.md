@@ -5,8 +5,8 @@ Last updated: 2026-04-15
 ## Guild
 
 - Name: Humility
-- ID: `900000000000000001`
-- Owner: `nestharus` (user id `900000000000000002`)
+- ID: `<guild id>`
+- Owner: `nestharus` (user id `<owner user id>`)
 - Created: 2022-04-04
 - Member count during the original sweep: 83
 - Premium tier: 1

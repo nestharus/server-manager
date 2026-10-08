@@ -8,7 +8,7 @@ Research: `research/12-read-components.md`
 
 The Humility Discord server has exactly one interactive panel that matters
 right now: the `#support` channel contains a `HumilityTicketBot#7529`
-message (ID `900000000000000003`, posted `2023-12-22`) with an embed
+message (ID `<message id>`, posted `2023-12-22`) with an embed
 titled "Click to open a ticket" and a description "Click on the button
 corresponding to the type of ticket you wish to open." The `#panels`
 channel has a similar "General Support" panel from `2022-04-04`.

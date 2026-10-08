@@ -8,7 +8,7 @@ adapted for Discord server management.
 
 ## Project
 
-Discord server management for the "Humility" guild (id `900000000000000001`).
+Discord server management for the "Humility" guild (id `<guild id>`).
 Long-term goal: a cloud-hosted daemon that handles applications,
 tickets, moderation, role management, and server organization — with
 Claude Code as the orchestrating interface.
@@ -518,7 +518,7 @@ From `ui-designer`:
 
 | Item | Value |
 |------|-------|
-| Guild ID | `900000000000000001` |
+| Guild ID | `<guild id>` |
 | Guild name | Humility |
 
 ### Hosting

@@ -129,7 +129,7 @@
 - The canonical required env values already match the proposal in both
   existing env-aware test modules:
   - `DISCORD_BOT_TOKEN=test-token-value`
-  - `DISCORD_GUILD_ID=900000000000000001`
+  - `DISCORD_GUILD_ID=<guild id>`
   - `SUPABASE_DB_URL=postgresql://user:pass@localhost:5432/db`
   - `SUPABASE_SERVICE_KEY=test-service-key`
   (`services/api/tests/test_endpoints_chapters_stubs.py:16`,

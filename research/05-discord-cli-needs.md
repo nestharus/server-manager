@@ -1,7 +1,7 @@
 # Synthesized Needs: Discord CLI Tool
 
 ## Context
-The user is bootstrapping a bot-backed interface to inspect and manage the Humility guild (ID `900000000000000001`). The server has several bots, broken integrations (notably `support`), templates, and roles. HumilityTicketBot is a custom-named bot (likely Tickets/ticketsbot.net). The user chose Python and wants a local CLI tool — not a persistent daemon.
+The user is bootstrapping a bot-backed interface to inspect and manage the Humility guild (ID `<guild id>`). The server has several bots, broken integrations (notably `support`), templates, and roles. HumilityTicketBot is a custom-named bot (likely Tickets/ticketsbot.net). The user chose Python and wants a local CLI tool — not a persistent daemon.
 
 ## Mapping Research to Humility's Needs
 
